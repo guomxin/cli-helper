@@ -269,6 +269,8 @@ class McpServerTests(unittest.TestCase):
             system="oa",
             name="template-section",
             description="Template section projection",
+            access="read",
+            risk="low",
             request={"method": "GET", "url": "http://oa.example.test/ajax.do"},
             inspection={
                 "data_shape": "Data.items[]",

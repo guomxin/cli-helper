@@ -35,6 +35,8 @@ class DiscoveredApiStoreTests(unittest.TestCase):
 
             self.assertEqual([api.name for api in apis], ["template-section"])
             self.assertEqual(loaded.description, "Template section projection")
+            self.assertEqual(loaded.access, "read")
+            self.assertEqual(loaded.risk, "low")
             self.assertEqual(loaded.request["method"], "GET")
             self.assertEqual(loaded.tool_name, "oa__discovered__template_section")
             self.assertEqual(loaded.command_name, "discovered:template-section")

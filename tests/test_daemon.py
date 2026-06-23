@@ -1459,6 +1459,8 @@ class DaemonTests(unittest.TestCase):
             self.assertTrue(saved_path.exists())
             saved = json.loads(saved_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["name"], "template-section")
+            self.assertEqual(saved["access"], "read")
+            self.assertEqual(saved["risk"], "low")
             self.assertEqual(saved["request"]["url"], api_url)
             self.assertEqual(saved["inspection"]["data_shape"], "Data.items[]")
             self.assertEqual(response.body["result"]["saved_path"], str(saved_path))
@@ -1540,6 +1542,163 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["api"]["name"], "template-section")
             self.assertEqual(response.body["result"]["inspection"]["data_shape"], "Data.items[]")
             self.assertEqual(response.body["result"]["replay"]["json"]["Data"]["items"][0]["title"], "Seal request")
+
+    def test_run_command_records_trace_and_returns_run_id(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "dom_snapshot")
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                            "title": "OA",
+                            "text": "home",
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "current_page_snapshot",
+                    "args": {},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertRegex(response.body["run_id"], r"^[0-9a-f-]{36}$")
+            trace = state.handle("GET", f"/extension/results/missing")
+            self.assertEqual(trace.status, 404)
+            runs = state.trace_store.list_runs()
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["id"], response.body["run_id"])
+            self.assertEqual(runs[0]["command"], "current_page_snapshot")
+            self.assertEqual(runs[0]["status"], "ok")
+            self.assertEqual(runs[0]["result"]["ok"], True)
+            self.assertNotIn("home", json.dumps(runs[0]["result"], ensure_ascii=False))
+
+    def test_run_discovered_api_rejects_origin_outside_system_profile(self):
+        with TemporaryDirectory() as tmp:
+            api_dir = Path(tmp) / "discovered" / "oa" / "apis"
+            api_dir.mkdir(parents=True)
+            (api_dir / "external.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "bscli.discovered_api.v1",
+                        "name": "external",
+                        "system": "oa",
+                        "request": {"method": "GET", "url": "http://example.test/api"},
+                        "inspection": {"data_shape": "json{}"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "discovered_run",
+                    "args": {"name": "external"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 403)
+            self.assertIn("origin", response.body["error"])
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
+    def test_run_discovered_api_rejects_non_get_without_confirmation_model(self):
+        with TemporaryDirectory() as tmp:
+            api_dir = Path(tmp) / "discovered" / "oa" / "apis"
+            api_dir.mkdir(parents=True)
+            (api_dir / "submit.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "bscli.discovered_api.v1",
+                        "name": "submit",
+                        "system": "oa",
+                        "access": "write",
+                        "risk": "medium",
+                        "request": {
+                            "method": "POST",
+                            "url": "http://10.10.50.110/seeyon/ajax.do",
+                        },
+                        "inspection": {"data_shape": "json{}"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "discovered_run",
+                    "args": {"name": "submit"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 403)
+            self.assertIn("read-only", response.body["error"])
 
 
 if __name__ == "__main__":

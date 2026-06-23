@@ -16,6 +16,8 @@ class DiscoveredApi:
     system: str
     name: str
     description: str
+    access: str
+    risk: str
     request: dict[str, Any]
     inspection: dict[str, Any]
     path: Path
@@ -68,6 +70,8 @@ class DiscoveredApiStore:
             system=system,
             name=name,
             description=str(data.get("description") or ""),
+            access=str(data.get("access") or "read"),
+            risk=str(data.get("risk") or "low"),
             request=request,
             inspection=inspection if isinstance(inspection, dict) else {},
             path=path,

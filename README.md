@@ -56,6 +56,14 @@ Check whether the daemon sees a connected OA browser tab:
 python -m bscli.cli.main --home .bscli command run oa session_status --timeout 5
 ```
 
+Every daemon command run returns a `run_id` and writes an audit record to
+`.bscli/trace.db`. Inspect recent runs with:
+
+```bash
+python -m bscli.cli.main --home .bscli trace list
+python -m bscli.cli.main --home .bscli trace show <run_id>
+```
+
 The Chrome extension registers each open HTTP/HTTPS tab as a separate bridge
 client, so the OA tab does not have to be the active foreground tab. When
 several browser tabs are registered, BSCLI routes each task only to a tab whose
@@ -227,6 +235,11 @@ Run a saved discovered API through the logged-in browser page context:
 python -m bscli.cli.main --home .bscli discovered run oa template-section --timeout 30
 ```
 
+In v1, discovered API runtime is intentionally read-only: only low-risk `GET`
+APIs whose URL origin matches the target system profile are allowed to run.
+Other methods or cross-origin URLs are rejected before a task is delivered to
+the browser.
+
 Discovered APIs are also exported in the tool manifest as dynamic read tools,
 for example `oa__discovered__template_section`.
 
@@ -255,6 +268,8 @@ Implemented:
 - API response shape inspection
 - Local discovered API metadata store
 - Dynamic discovered API runtime
+- Command execution trace records with `run_id`
+- Read-only discovered API policy checks
 - CLI `command run oa current_page_snapshot`
 - CLI `command run oa api_inspect`
 - CLI `command run oa api_replay`

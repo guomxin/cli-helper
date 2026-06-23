@@ -22,6 +22,7 @@ from bscli.adapters.seeyon_home import (
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApiStore
+from bscli.core.trace import TraceStore
 
 COMMAND_TASKS = {
     ("oa", "api_inspect"): "page_fetch",
@@ -53,6 +54,7 @@ class DaemonState:
     def __init__(self, config_store: ConfigStore):
         self.config_store = config_store
         self.bridge = ExtensionBridge()
+        self.trace_store = TraceStore(config_store.root / "trace.db")
 
     def handle(
         self,
@@ -133,9 +135,42 @@ class DaemonState:
             return DaemonResponse(200, {"task_id": task_id})
 
         if method == "POST" and path == "/commands/run":
-            return self._run_command(body)
+            return self._run_command_with_trace(body)
 
         return DaemonResponse(404, {"error": "not found"})
+
+    def _run_command_with_trace(self, body: dict[str, Any]) -> DaemonResponse:
+        system = body.get("system") or ""
+        command = body.get("command") or ""
+        args = body.get("args") or {}
+        metadata = self._trace_metadata(system, command, args)
+        run_id = self.trace_store.start_run(
+            system=system,
+            command=command,
+            args=args,
+            access=metadata["access"],
+            strategy=metadata["strategy"],
+        )
+        try:
+            response = self._run_command(body)
+        except Exception as exc:
+            self.trace_store.finish_run(run_id, status="error", error=str(exc))
+            raise
+        response_body = {**response.body, "run_id": run_id}
+        if 200 <= response.status < 400 and response_body.get("ok", True) is not False:
+            self.trace_store.finish_run(
+                run_id,
+                status="ok",
+                result=_trace_result_summary(response_body),
+            )
+        else:
+            self.trace_store.finish_run(
+                run_id,
+                status="error",
+                result=_trace_result_summary(response_body),
+                error=str(response_body.get("error") or f"HTTP {response.status}"),
+            )
+        return DaemonResponse(response.status, response_body)
 
     def _run_command(self, body: dict[str, Any]) -> DaemonResponse:
         system = body.get("system")
@@ -433,6 +468,9 @@ class DaemonState:
                 },
             )
         api = DiscoveredApiStore(self.config_store.root).load_api(system, name)
+        policy_error = self._validate_discovered_api_policy(system, api)
+        if policy_error:
+            return DaemonResponse(403, {"ok": False, "error": policy_error})
         replay_response = self._run_page_fetch(
             system,
             target_client_id,
@@ -453,6 +491,8 @@ class DaemonState:
                         "name": api.name,
                         "description": api.description,
                         "tool_name": api.tool_name,
+                        "access": api.access,
+                        "risk": api.risk,
                     },
                     "request": api.request,
                     "inspection": inspect_api_response(replay),
@@ -489,6 +529,8 @@ class DaemonState:
             "name": name,
             "system": system,
             "description": str(args.get("description") or ""),
+            "access": "read" if self._api_request_from_args(args)["method"] == "GET" else "write",
+            "risk": "low" if self._api_request_from_args(args)["method"] == "GET" else "medium",
             "created_at": datetime.now(UTC).isoformat(),
             "request": self._api_request_from_args(args),
             "inspection": inspection,
@@ -559,6 +601,32 @@ class DaemonState:
             "headers": args.get("headers", {}),
             "body": args.get("body"),
         }
+
+    def _validate_discovered_api_policy(self, system: str, api) -> str:
+        request = api.request or {}
+        method = str(request.get("method") or "GET").upper()
+        if api.access != "read" or api.risk != "low" or method != "GET":
+            return "discovered API runtime is read-only in v1; only low-risk GET APIs are allowed"
+        profile = self._load_system_profile(system)
+        parsed = urlparse(str(request.get("url") or ""))
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if profile is None or origin not in profile.allowed_origins:
+                return f"discovered API origin is not allowed for system {system}: {origin}"
+        return ""
+
+    def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
+        if command == "discovered_run":
+            try:
+                api = DiscoveredApiStore(self.config_store.root).load_api(system, str(args.get("name") or ""))
+                return {"access": api.access, "strategy": "page_fetch"}
+            except Exception:
+                return {"access": "read", "strategy": "page_fetch"}
+        if command == "session_status":
+            return {"access": "read", "strategy": "daemon_api"}
+        task_kind = COMMAND_TASKS.get((system, command), "unknown")
+        strategy = "page_fetch" if task_kind == "section_api_replay" else task_kind
+        return {"access": "read", "strategy": strategy}
 
     def _find_section_resource_url(self, snapshot: dict[str, Any], section_bean_id: str) -> str:
         encoded_marker = f"sectionBeanId%22%3A%22{section_bean_id}"
@@ -710,3 +778,37 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
 def _safe_discovery_name(value: str) -> str:
     value = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip())
     return value.strip(".-_")
+
+
+def _trace_result_summary(response_body: dict[str, Any]) -> dict[str, Any]:
+    result = response_body.get("result")
+    summary: dict[str, Any] = {
+        "ok": response_body.get("ok"),
+        "task_id": response_body.get("task_id"),
+    }
+    if response_body.get("error"):
+        summary["error"] = response_body["error"]
+    if isinstance(result, dict):
+        summary["result_keys"] = sorted(result.keys())
+        for key in ("count", "total", "name", "source", "connected", "client_count"):
+            if key in result:
+                summary[key] = result[key]
+        if isinstance(result.get("items"), list):
+            summary["item_count"] = len(result["items"])
+        inspection = result.get("inspection")
+        if isinstance(inspection, dict):
+            summary["inspection"] = {
+                key: inspection.get(key)
+                for key in ("response_type", "data_shape", "item_count", "status")
+                if key in inspection
+            }
+        api = result.get("api")
+        if isinstance(api, dict):
+            summary["api"] = {
+                key: api.get(key)
+                for key in ("system", "name", "access", "risk", "tool_name")
+                if key in api
+            }
+    elif result is not None:
+        summary["result_type"] = type(result).__name__
+    return summary
