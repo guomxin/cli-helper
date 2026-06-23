@@ -1,0 +1,321 @@
+import json
+import unittest
+
+from bscli.adapters.seeyon_home import (
+    parse_navigation_inventory,
+    parse_pending_list,
+    parse_pending_projection,
+    parse_sent_projection,
+    parse_template_list,
+    parse_template_projection,
+)
+
+
+class SeeyonHomeParserTests(unittest.TestCase):
+    def test_parse_pending_list_extracts_structured_rows(self):
+        html = """
+        <div id="section_556815601453123423">
+          <table>
+            <tr>
+              <td>
+                <a class="cellContentText" title="Weekly report"
+                   onclick="checkAndOpenLink('/collaboration/collaboration.do?method=summary&amp;affairId=abc-123&amp;showTab=true')">
+                  <span class="titleText">Weekly report</span>
+                </a>
+              </td>
+              <td>Alice</td>
+              <td>Today 08:57</td>
+              <td>Collaboration</td>
+            </tr>
+            <tr class="AlreadyRead">
+              <td>
+                <a class="cellContentText" title="Contract archive"
+                   onclick="checkAndOpenLink('/collaboration/collaboration.do?method=summary&amp;affairId=def-456&amp;showTab=true')">
+                  <span class="titleText">Contract archive</span>
+                </a>
+              </td>
+              <td>Bob</td>
+              <td>2026-06-15</td>
+              <td>Collaboration</td>
+            </tr>
+          </table>
+        </div>
+        """
+
+        result = parse_pending_list(html, base_url="http://10.10.50.110/seeyon/main.do?method=main")
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["items"][0]["title"], "Weekly report")
+        self.assertEqual(result["items"][0]["sender"], "Alice")
+        self.assertEqual(result["items"][0]["date"], "Today 08:57")
+        self.assertEqual(result["items"][0]["category"], "Collaboration")
+        self.assertEqual(result["items"][0]["affair_id"], "abc-123")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
+        )
+        self.assertFalse(result["items"][0]["read"])
+        self.assertTrue(result["items"][1]["read"])
+
+    def test_parse_pending_projection_extracts_rows_from_section_api(self):
+        projection = {
+            "Name": "全部待办",
+            "Data": {
+                "dataCount": 1,
+                "pageNo": 1,
+                "rows": [
+                    {
+                        "cells": [
+                            {
+                                "cellContentHTML": "Weekly report",
+                                "id": "abc-123",
+                                "linkURL": "/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
+                                "className": "ReadDifferFromNotRead",
+                            },
+                            {"cellContentHTML": "Alice", "alt": "Alice"},
+                            {"cellContentHTML": "Today 08:57"},
+                            {"cellContentHTML": "Collaboration"},
+                        ]
+                    }
+                ],
+            },
+        }
+
+        result = parse_pending_projection(
+            projection,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["source"], "section_api")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "Weekly report")
+        self.assertEqual(result["items"][0]["sender"], "Alice")
+        self.assertEqual(result["items"][0]["date"], "Today 08:57")
+        self.assertEqual(result["items"][0]["category"], "Collaboration")
+        self.assertEqual(result["items"][0]["affair_id"], "abc-123")
+        self.assertFalse(result["items"][0]["read"])
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
+        )
+
+    def test_parse_sent_projection_extracts_rows_from_section_api(self):
+        projection = {
+            "Name": "已发事项",
+            "Data": {
+                "dataCount": 1,
+                "pageNo": 1,
+                "rows": [
+                    {
+                        "cells": [
+                            {
+                                "cellContentHTML": "Seal request",
+                                "id": "sent-123",
+                                "linkURL": "/collaboration/collaboration.do?method=summary&openFrom=listSent&affairId=sent-123&showTab=true",
+                            },
+                            {"cellContentHTML": "已结束"},
+                            {"cellContentHTML": "2026-06-15"},
+                            {"cellContentHTML": "协同"},
+                        ]
+                    }
+                ],
+            },
+        }
+
+        result = parse_sent_projection(
+            projection,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["source"], "section_api")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "Seal request")
+        self.assertEqual(result["items"][0]["status"], "已结束")
+        self.assertEqual(result["items"][0]["date"], "2026-06-15")
+        self.assertEqual(result["items"][0]["category"], "协同")
+        self.assertEqual(result["items"][0]["affair_id"], "sent-123")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=summary&openFrom=listSent&affairId=sent-123&showTab=true",
+        )
+
+    def test_parse_template_list_extracts_template_ids(self):
+        html = """
+        <div id="section_-6503951670357636432">
+          <table class="chessboardtable" title="Seal request">
+            <tr><td class="text_overflow hand"
+              onclick="javascript:_openDataLink({'url':'/collaboration/collaboration.do?method=newColl&amp;from=templateNewColl&amp;templateId=-6511139737225050501&amp;showTab=true','obj':this},event)">
+              <a>Seal request</a>
+            </td></tr>
+          </table>
+          <table class="chessboardtable" title="Purchase approval">
+            <tr><td class="text_overflow hand"
+              onclick="javascript:_openDataLink({'url':'/collaboration/collaboration.do?method=newColl&amp;from=templateNewColl&amp;templateId=3492618929488609812&amp;showTab=true','obj':this},event)">
+              <a>Purchase approval</a>
+            </td></tr>
+          </table>
+        </div>
+        """
+
+        result = parse_template_list(html, base_url="http://10.10.50.110/seeyon/main.do?method=main")
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["items"][0]["title"], "Seal request")
+        self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
+        self.assertEqual(result["items"][1]["template_id"], "3492618929488609812")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+        )
+
+    def test_parse_template_projection_extracts_rows_from_section_api(self):
+        projection = {
+            "Name": "我的模板",
+            "Data": {
+                "dataCount": 1,
+                "pageNo": 1,
+                "rows": [
+                    {
+                        "cells": [
+                            {
+                                "cellContentHTML": "<span>Seal request</span>",
+                                "id": "template-row-1",
+                                "linkURL": "/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+                            }
+                        ]
+                    }
+                ],
+            },
+        }
+
+        result = parse_template_projection(
+            projection,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["source"], "section_api")
+        self.assertEqual(result["name"], "我的模板")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "Seal request")
+        self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+        )
+
+    def test_parse_template_projection_extracts_chessboard_items_from_section_api(self):
+        projection = {
+            "Name": "我的模板",
+            "Data": {
+                "dataNum": 1,
+                "pageNo": 0,
+                "items": [
+                    {
+                        "title": "【用印】用印申请单",
+                        "name": "【用印】用印申请单",
+                        "link": "/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+                        "openType": "4",
+                    }
+                ],
+            },
+        }
+
+        result = parse_template_projection(
+            projection,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["source"], "section_api")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "【用印】用印申请单")
+        self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
+        self.assertEqual(result["items"][0]["open_type"], "4")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+        )
+
+    def test_parse_template_list_accepts_playwright_saved_string_result(self):
+        html = json.dumps(
+            """
+            <div id="section_-6503951670357636432">
+              <table class="chessboardtable" title="Seal request">
+                <tr><td onclick="javascript:_openDataLink({'url':'/collaboration/collaboration.do?method=newColl&amp;templateId=-6511139737225050501'},event)">
+                  <a>Seal request</a>
+                </td></tr>
+              </table>
+            </div>
+            """
+        )
+
+        result = parse_template_list(html, base_url="http://10.10.50.110/seeyon/main.do?method=main")
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
+
+    def test_parse_navigation_inventory_extracts_portals_shortcuts_and_sections(self):
+        html = """
+        <ul id="topNav">
+          <li id="spaceLi_5834172664846108460" title="个人空间" class="current"
+              onclick="javascript:vPortalMainFrameElements.topCenterNav.showNavigation(0,this)">
+            <span>个人空间</span>
+          </li>
+          <li id="spaceLi_3582122093491471500" title="公司空间"
+              onclick="javascript:vPortalMainFrameElements.topCenterNav.showNavigation(1,this)">
+            <span>公司空间</span>
+          </li>
+        </ul>
+        <ul id="leftNav">
+          <li class="lev1Li">
+            <div class="lev1Title navTitleName" title="综合查询"
+              onclick="javascript:onSeeyonTopNavMenuClick('/seeyon/isearch.do?method=index','-8434000500218049565','mainfrm','F12_isearch',this)">
+              <div class="navText">综合查询</div>
+            </div>
+          </li>
+          <li class="lev1Li">
+            <div class="lev1Title navTitleName" title="通讯录"
+              onclick="javascript:onSeeyonTopNavMenuClick('/seeyon/addressbook.do?method=homeEntry','-567434236207741830','newWindow','F12_addressbook',this)">
+              <div class="navText">通讯录</div>
+            </div>
+          </li>
+        </ul>
+        <div id="section_556815601453123423">
+          <li id="sectionName_-5754227701614689741" title="全部待办"
+              onclick="javascript:changeTabAndReloadSection(&quot;556815601453123423&quot;,&quot;-5754227701614689741&quot;)">
+            全部待办(5)
+          </li>
+          <li id="sectionName_1570596005091691914" title="表单审批">表单审批(4)</li>
+        </div>
+        """
+
+        result = parse_navigation_inventory(
+            html,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["portal_count"], 2)
+        self.assertEqual(result["portals"][0]["name"], "个人空间")
+        self.assertEqual(result["portals"][0]["portal_id"], "5834172664846108460")
+        self.assertTrue(result["portals"][0]["active"])
+        self.assertEqual(result["portals"][1]["navigation_index"], "1")
+        self.assertEqual(result["shortcut_count"], 2)
+        self.assertEqual(result["shortcuts"][0]["name"], "综合查询")
+        self.assertEqual(result["shortcuts"][0]["menu_id"], "-8434000500218049565")
+        self.assertEqual(result["shortcuts"][0]["target"], "mainfrm")
+        self.assertEqual(
+            result["shortcuts"][0]["href"],
+            "http://10.10.50.110/seeyon/isearch.do?method=index",
+        )
+        self.assertTrue(result["shortcuts"][1]["opens_new_window"])
+        self.assertEqual(result["section_count"], 1)
+        self.assertEqual(result["sections"][0]["section_id"], "556815601453123423")
+        self.assertEqual(result["sections"][0]["tabs"][0]["name"], "全部待办")
+        self.assertEqual(result["sections"][0]["tabs"][0]["count"], 5)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "BSCLI Browser Bridge",
+  "version": "0.1.0",
+  "description": "Bridge logged-in Chrome pages to the local BSCLI daemon.",
+  "permissions": [
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://10.10.50.110/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://10.10.50.110/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "BSCLI Bridge"
+  }
+}

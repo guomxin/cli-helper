@@ -1,0 +1,2 @@
+"""BSCLI Python package."""
+
