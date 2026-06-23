@@ -106,7 +106,7 @@ class BscliMcpServer:
         metadata = tool["metadata"]
         arguments = self._validate_arguments(tool, params.get("arguments") or {})
         if metadata.get("discovered_api"):
-            arguments = {"name": metadata["discovered_api"]}
+            arguments = {"name": metadata["discovered_api"], **arguments}
         try:
             result = self.command_runner(
                 metadata["system"],

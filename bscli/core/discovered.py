@@ -31,6 +31,14 @@ class DiscoveredApi:
     def tool_name(self) -> str:
         return f"{self.system}__discovered__{_tool_slug(self.name)}"
 
+    @property
+    def method(self) -> str:
+        return str(self.request.get("method") or "GET").upper()
+
+    @property
+    def requires_confirmation(self) -> bool:
+        return self.access != "read" or self.risk != "low" or self.method != "GET"
+
 
 class DiscoveredApiStore:
     def __init__(self, root: Path):

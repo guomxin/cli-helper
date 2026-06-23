@@ -1653,7 +1653,7 @@ class DaemonTests(unittest.TestCase):
             self.assertIn("origin", response.body["error"])
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
 
-    def test_run_discovered_api_rejects_non_get_without_confirmation_model(self):
+    def test_run_discovered_api_requires_confirmation_for_non_get(self):
         with TemporaryDirectory() as tmp:
             api_dir = Path(tmp) / "discovered" / "oa" / "apis"
             api_dir.mkdir(parents=True)
@@ -1697,8 +1697,103 @@ class DaemonTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(response.status, 403)
-            self.assertIn("read-only", response.body["error"])
+            self.assertEqual(response.status, 409)
+            self.assertEqual(response.body["ok"], False)
+            self.assertEqual(response.body["requires_confirmation"], True)
+            self.assertIn("requires explicit confirmation", response.body["error"])
+            self.assertEqual(
+                state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"}).body[
+                    "tasks"
+                ],
+                [],
+            )
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
+    def test_run_discovered_api_allows_confirmed_non_get(self):
+        with TemporaryDirectory() as tmp:
+            api_dir = Path(tmp) / "discovered" / "oa" / "apis"
+            api_dir.mkdir(parents=True)
+            api_url = "http://10.10.50.110/seeyon/ajax.do"
+            (api_dir / "submit.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "bscli.discovered_api.v1",
+                        "name": "submit",
+                        "system": "oa",
+                        "access": "write",
+                        "risk": "medium",
+                        "request": {
+                            "method": "POST",
+                            "url": api_url,
+                            "headers": {"content-type": "application/json"},
+                            "body": "{\"approved\":true}",
+                        },
+                        "inspection": {"data_shape": "json{}"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "page_fetch")
+                self.assertEqual(tasks[0]["payload"]["method"], "POST")
+                self.assertEqual(tasks[0]["payload"]["url"], api_url)
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "status": 200,
+                            "ok": True,
+                            "url": api_url,
+                            "json": {"saved": True},
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "discovered_run",
+                    "args": {"name": "submit", "confirm": True},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["api"]["name"], "submit")
+            self.assertEqual(response.body["result"]["api"]["access"], "write")
+            self.assertEqual(response.body["result"]["replay"]["json"], {"saved": True})
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
 
 if __name__ == "__main__":

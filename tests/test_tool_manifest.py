@@ -1,6 +1,7 @@
 import unittest
 
 from bscli.adapters.seeyon import register_seeyon_commands
+from bscli.core.discovered import DiscoveredApi
 from bscli.core.registry import CommandRegistry
 from bscli.core.tool_manifest import export_tool_manifest
 
@@ -41,6 +42,41 @@ class ToolManifestTests(unittest.TestCase):
                 "requires_confirmation": False,
             },
         )
+
+    def test_discovered_write_api_manifest_requires_confirm_argument(self):
+        api = DiscoveredApi(
+            system="oa",
+            name="submit",
+            description="Submit one OA action",
+            access="write",
+            risk="medium",
+            request={"method": "POST", "url": "http://oa.example.test/ajax.do"},
+            inspection={"data_shape": "json{}"},
+            path=None,
+            raw={},
+        )
+
+        manifest = export_tool_manifest(CommandRegistry(), system="oa", discovered_apis=[api])
+        tool = manifest["tools"][0]
+
+        self.assertEqual(tool["name"], "oa__discovered__submit")
+        self.assertEqual(
+            tool["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be true to explicitly confirm this non-read or higher-risk API call.",
+                    }
+                },
+                "required": ["confirm"],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(tool["metadata"]["requires_confirmation"], True)
+        self.assertEqual(tool["metadata"]["access"], "write")
+        self.assertEqual(tool["metadata"]["risk"], "medium")
 
 
 if __name__ == "__main__":

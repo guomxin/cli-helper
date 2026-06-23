@@ -255,6 +255,70 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
         self.assertIn("Unexpected argument 'unexpected'", result["error"]["message"])
 
+    def test_risky_discovered_tool_requires_confirm_argument(self):
+        calls = []
+        server = self._server(
+            runner=lambda *args: calls.append(args) or {},
+            discovered_apis=[self._discovered_submit_api()],
+        )
+
+        listed = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/list",
+                "params": {},
+            }
+        )
+        tools = {tool["name"]: tool for tool in listed["result"]["tools"]}
+        self.assertEqual(
+            tools["oa__discovered__submit"]["inputSchema"]["required"],
+            ["confirm"],
+        )
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__discovered__submit",
+                    "arguments": {},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["error"]["code"], -32602)
+        self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
+
+    def test_call_risky_discovered_tool_passes_confirm_to_discovered_run(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"api": {"name": arguments["name"]}, "confirmed": arguments["confirm"]}
+
+        server = self._server(
+            runner=runner,
+            discovered_apis=[self._discovered_submit_api()],
+        )
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__discovered__submit",
+                    "arguments": {"confirm": True},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "discovered_run", {"name": "submit", "confirm": True})])
+        self.assertEqual(result["result"]["structuredContent"]["confirmed"], True)
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)
@@ -277,6 +341,19 @@ class McpServerTests(unittest.TestCase):
                 "item_count": 36,
                 "sample_fields": ["title", "link"],
             },
+            path=None,
+            raw={},
+        )
+
+    def _discovered_submit_api(self):
+        return DiscoveredApi(
+            system="oa",
+            name="submit",
+            description="Submit one OA action",
+            access="write",
+            risk="medium",
+            request={"method": "POST", "url": "http://oa.example.test/ajax.do"},
+            inspection={"data_shape": "json{}"},
             path=None,
             raw={},
         )

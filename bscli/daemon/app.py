@@ -468,9 +468,13 @@ class DaemonState:
                 },
             )
         api = DiscoveredApiStore(self.config_store.root).load_api(system, name)
-        policy_error = self._validate_discovered_api_policy(system, api)
-        if policy_error:
-            return DaemonResponse(403, {"ok": False, "error": policy_error})
+        policy_response = self._validate_discovered_api_policy(
+            system,
+            api,
+            confirmed=args.get("confirm") is True,
+        )
+        if policy_response:
+            return policy_response
         replay_response = self._run_page_fetch(
             system,
             target_client_id,
@@ -602,18 +606,47 @@ class DaemonState:
             "body": args.get("body"),
         }
 
-    def _validate_discovered_api_policy(self, system: str, api) -> str:
+    def _validate_discovered_api_policy(
+        self,
+        system: str,
+        api,
+        *,
+        confirmed: bool,
+    ) -> DaemonResponse | None:
         request = api.request or {}
-        method = str(request.get("method") or "GET").upper()
-        if api.access != "read" or api.risk != "low" or method != "GET":
-            return "discovered API runtime is read-only in v1; only low-risk GET APIs are allowed"
         profile = self._load_system_profile(system)
         parsed = urlparse(str(request.get("url") or ""))
         if parsed.scheme and parsed.netloc:
             origin = f"{parsed.scheme}://{parsed.netloc}"
             if profile is None or origin not in profile.allowed_origins:
-                return f"discovered API origin is not allowed for system {system}: {origin}"
-        return ""
+                return DaemonResponse(
+                    403,
+                    {
+                        "ok": False,
+                        "requires_confirmation": False,
+                        "error": f"discovered API origin is not allowed for system {system}: {origin}",
+                    },
+                )
+        if api.requires_confirmation and not confirmed:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "error": (
+                        "discovered API requires explicit confirmation; rerun with confirm=true "
+                        f"after reviewing method={api.method}, access={api.access}, risk={api.risk}"
+                    ),
+                    "api": {
+                        "system": api.system,
+                        "name": api.name,
+                        "method": api.method,
+                        "access": api.access,
+                        "risk": api.risk,
+                    },
+                },
+            )
+        return None
 
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
         if command == "discovered_run":

@@ -41,14 +41,22 @@ def _discovered_api_to_tool(api: DiscoveredApi) -> dict[str, Any]:
     shape = inspection.get("data_shape") or "unknown response shape"
     count = inspection.get("item_count")
     count_text = f", last observed item count {count}" if count is not None else ""
+    properties = {}
+    required = []
+    if api.requires_confirmation:
+        properties["confirm"] = {
+            "type": "boolean",
+            "description": "Must be true to explicitly confirm this non-read or higher-risk API call.",
+        }
+        required.append("confirm")
     return {
         "name": api.tool_name,
         "description": api.description
         or f"Run discovered API '{api.name}' ({shape}{count_text}).",
         "input_schema": {
             "type": "object",
-            "properties": {},
-            "required": [],
+            "properties": properties,
+            "required": required,
             "additionalProperties": False,
         },
         "metadata": {
@@ -58,7 +66,7 @@ def _discovered_api_to_tool(api: DiscoveredApi) -> dict[str, Any]:
             "access": api.access,
             "risk": api.risk,
             "strategy": "page_fetch",
-            "requires_confirmation": False,
+            "requires_confirmation": api.requires_confirmation,
             "data_shape": shape,
             "sample_fields": inspection.get("sample_fields") or [],
         },

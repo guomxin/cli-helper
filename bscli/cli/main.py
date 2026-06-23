@@ -117,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     discovered_run = discovered_sub.add_parser("run")
     discovered_run.add_argument("system")
     discovered_run.add_argument("name")
+    discovered_run.add_argument("--confirm", action="store_true")
     discovered_run.add_argument("--timeout", type=float, default=30.0)
     discovered_run.add_argument("--daemon-url", default="http://127.0.0.1:8765")
 
@@ -246,12 +247,15 @@ def handle_discovered(args: argparse.Namespace, home: Path) -> int:
         print_json(store.load_api(args.system, args.name).raw)
         return 0
     if args.action == "run":
+        run_args = {"name": args.name}
+        if args.confirm:
+            run_args["confirm"] = True
         result = post_json(
             f"{args.daemon_url}/commands/run",
             {
                 "system": args.system,
                 "command": "discovered_run",
-                "args": {"name": args.name},
+                "args": run_args,
                 "timeout_seconds": args.timeout,
             },
         )
@@ -332,6 +336,9 @@ def _discovered_api_summary(api: DiscoveredApi) -> dict:
         "description": api.description,
         "method": api.request.get("method", "GET"),
         "url": api.request.get("url", ""),
+        "access": api.access,
+        "risk": api.risk,
+        "requires_confirmation": api.requires_confirmation,
         "data_shape": inspection.get("data_shape", ""),
         "item_count": inspection.get("item_count"),
         "sample_fields": inspection.get("sample_fields") or [],

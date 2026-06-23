@@ -105,6 +105,9 @@ calls to the local daemon, which then uses the logged-in browser bridge.
 Saved discovered APIs are exposed too, for example
 `oa__discovered__template_section`, and are mapped internally to
 `discovered_run`.
+Discovered tools that are not low-risk `GET` calls expose a required boolean
+`confirm` argument; the daemon will run them only when that argument is exactly
+`true`.
 Tool arguments are validated against each tool's JSON Schema before any daemon
 call is made.
 Backend execution failures, such as a stopped daemon or disconnected browser
@@ -235,13 +238,20 @@ Run a saved discovered API through the logged-in browser page context:
 python -m bscli.cli.main --home .bscli discovered run oa template-section --timeout 30
 ```
 
-In v1, discovered API runtime is intentionally read-only: only low-risk `GET`
-APIs whose URL origin matches the target system profile are allowed to run.
-Other methods or cross-origin URLs are rejected before a task is delivered to
-the browser.
+Low-risk `GET` APIs run without extra confirmation when their URL origin
+matches the target system profile. Non-GET, non-read, or higher-risk APIs are
+blocked before a task is delivered to the browser unless the caller explicitly
+confirms the run:
 
-Discovered APIs are also exported in the tool manifest as dynamic read tools,
-for example `oa__discovered__template_section`.
+```bash
+python -m bscli.cli.main --home .bscli discovered run oa submit --confirm --timeout 30
+```
+
+Confirmation never bypasses the system origin allowlist. Cross-origin saved
+APIs are still rejected before browser execution.
+
+Discovered APIs are also exported in the tool manifest as dynamic tools, for
+example `oa__discovered__template_section`.
 
 The extension polls the daemon and submits task results back to:
 
@@ -269,7 +279,7 @@ Implemented:
 - Local discovered API metadata store
 - Dynamic discovered API runtime
 - Command execution trace records with `run_id`
-- Read-only discovered API policy checks
+- Discovered API origin policy checks and confirmation gate
 - CLI `command run oa current_page_snapshot`
 - CLI `command run oa api_inspect`
 - CLI `command run oa api_replay`
