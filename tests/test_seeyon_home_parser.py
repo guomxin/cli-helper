@@ -55,6 +55,46 @@ class SeeyonHomeParserTests(unittest.TestCase):
         )
         self.assertEqual(result["workflow"][0]["text"], "Node Manager approval Opinion: approved")
 
+    def test_parse_oa_detail_extracts_write_actions_from_page_script(self):
+        html = """
+        <html>
+          <body>
+            <h1 id="summarySubject">Contract archive</h1>
+            <script>
+              var jsonArrBase = '[{"codes":["ContinueSubmit"],"label":"提交","id":"ContinueSubmit"},{"codes":["Opinion"],"label":"意见","id":"Opinion"},{"codes":["Archive"],"label":"处理后归档","id":"Archive"}]';
+              var CSRFTOKEN = 'csrf-from-page';
+            </script>
+            <input type="hidden" name="contentAffairId" value="affair-1">
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(html, base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do")
+
+        self.assertEqual(result["action_count"], 3)
+        self.assertEqual(
+            result["actions"][0],
+            {
+                "code": "ContinueSubmit",
+                "label": "提交",
+                "id": "ContinueSubmit",
+                "access": "write",
+                "risk": "high",
+                "requires_confirmation": True,
+                "supports_dry_run": True,
+                "source": "jsonArrBase",
+            },
+        )
+        self.assertEqual(result["actions"][1]["code"], "Opinion")
+        self.assertEqual(result["actions"][1]["risk"], "medium")
+        self.assertEqual(
+            result["write_hints"],
+            {
+                "csrf_tokens": [{"name": "CSRFTOKEN", "value_present": True}],
+                "hidden_fields": [{"name": "contentAffairId", "value_present": True}],
+            },
+        )
+
     def test_parse_pending_list_extracts_structured_rows(self):
         html = """
         <div id="section_556815601453123423">

@@ -7,6 +7,8 @@ import re
 from typing import Iterable
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
+from bscli.adapters.seeyon_write import write_action_risk
+
 
 @dataclass
 class _Node:
@@ -308,6 +310,7 @@ def parse_oa_detail(html: str, *, base_url: str) -> dict:
     fields = _parse_detail_fields(root)
     attachments = _parse_detail_attachments(root, base_url=base_url)
     workflow = _parse_detail_workflow(root)
+    actions = _parse_detail_write_actions(html)
     return {
         "title": title,
         "url": base_url,
@@ -317,6 +320,9 @@ def parse_oa_detail(html: str, *, base_url: str) -> dict:
         "attachment_count": len(attachments),
         "workflow": workflow,
         "workflow_count": len(workflow),
+        "actions": actions,
+        "action_count": len(actions),
+        "write_hints": _parse_detail_write_hints(root, html),
     }
 
 
@@ -427,6 +433,68 @@ def _parse_detail_workflow(root: _Node) -> list[dict]:
         if len(workflow) >= 100:
             break
     return workflow
+
+
+def _parse_detail_write_actions(html: str) -> list[dict]:
+    actions = []
+    seen = set()
+    for item in _extract_json_arr_base_items(html):
+        if not isinstance(item, dict):
+            continue
+        codes = item.get("codes") if isinstance(item.get("codes"), list) else []
+        code = str((codes[0] if codes else item.get("id")) or "").strip()
+        label = _clean(str(item.get("label") or code), 100)
+        if not code and not label:
+            continue
+        key = (code, label)
+        if key in seen:
+            continue
+        seen.add(key)
+        actions.append(
+            {
+                "code": code,
+                "label": label,
+                "id": str(item.get("id") or code),
+                "access": "write",
+                "risk": write_action_risk(code, label),
+                "requires_confirmation": True,
+                "supports_dry_run": True,
+                "source": "jsonArrBase",
+            }
+        )
+    return actions
+
+
+def _extract_json_arr_base_items(html: str) -> list:
+    items = []
+    for match in re.finditer(r"jsonArrBase\s*=\s*'((?:\\'|[^'])*)'", str(html or "")):
+        raw_json = match.group(1).replace("\\'", "'").replace('\\"', '"')
+        try:
+            decoded = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, list):
+            items.extend(decoded)
+    return items
+
+
+def _parse_detail_write_hints(root: _Node, html: str) -> dict:
+    csrf_tokens = []
+    if re.search(r"\bCSRFTOKEN\b\s*=", str(html or "")):
+        csrf_tokens.append({"name": "CSRFTOKEN", "value_present": True})
+    hidden_fields = []
+    seen = set()
+    for node in root.descendants():
+        if node.tag != "input" or node.attr("type").lower() != "hidden":
+            continue
+        name = node.attr("name") or node.attr("id")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        hidden_fields.append({"name": name, "value_present": bool(node.attr("value"))})
+        if len(hidden_fields) >= 100:
+            break
+    return {"csrf_tokens": csrf_tokens, "hidden_fields": hidden_fields}
 
 
 def _parse_portals(root: _Node) -> list[dict]:

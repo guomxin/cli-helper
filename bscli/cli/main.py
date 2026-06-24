@@ -17,6 +17,7 @@ from bscli.adapters.seeyon_home import (
     parse_pending_list,
     parse_template_list,
 )
+from bscli.adapters.seeyon_write import append_oa_write_audit, build_oa_write_plan
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
 from bscli.core.registry import CommandRegistry
@@ -181,7 +182,7 @@ def _build_oa_parser(oa_sub) -> None:
     _add_detail_options(detail_read)
     _add_daemon_options(detail_read)
     _add_output_options(detail_read)
-    for action in ("attachments", "workflow"):
+    for action in ("attachments", "workflow", "actions"):
         detail_projection = detail_sub.add_parser(action)
         detail_projection.set_defaults(oa_command="detail_read", oa_detail_projection=action)
         detail_projection.add_argument("--url", required=True)
@@ -265,6 +266,19 @@ def _build_oa_parser(oa_sub) -> None:
     _add_daemon_options(discovered_run)
     _add_output_options(discovered_run)
 
+    write = oa_sub.add_parser("write")
+    write_sub = write.add_subparsers(dest="oa_action", required=True)
+    for mode in ("draft", "dry-run", "execute"):
+        write_cmd = write_sub.add_parser(mode)
+        write_cmd.set_defaults(oa_write_mode=mode)
+        write_cmd.add_argument("--affair-id", required=True)
+        write_cmd.add_argument("--action", required=True)
+        write_cmd.add_argument("--opinion", default="")
+        write_cmd.add_argument("--source-url", default="")
+        if mode == "execute":
+            write_cmd.add_argument("--confirm", action="store_true")
+        _add_output_options(write_cmd)
+
 
 def _add_collection_parser(
     subparsers,
@@ -282,7 +296,7 @@ def _add_collection_parser(
             parser.add_argument("--keyword")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="csv" if action == "export" else "json")
-    for action in ("details", "attachments", "workflow"):
+    for action in ("details", "attachments", "workflow", "actions"):
         parser = subparsers.add_parser(action)
         parser.set_defaults(oa_command=list_command, oa_batch_kind=action)
         parser.add_argument("--keyword")
@@ -479,6 +493,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
 
 
 def handle_oa(args: argparse.Namespace, home: Path) -> int:
+    if getattr(args, "oa_write_mode", None):
+        return handle_oa_write(args, home)
     command = args.oa_command
     if command == "discovered_list":
         apis = [_discovered_api_summary(api) for api in DiscoveredApiStore(home).list_apis("oa")]
@@ -539,6 +555,8 @@ def handle_oa_batch(args: argparse.Namespace) -> int:
             indexed_items.extend(_index_detail_entries(source_item, detail, "attachments"))
         elif batch_kind == "workflow":
             indexed_items.extend(_index_detail_entries(source_item, detail, "workflow"))
+        elif batch_kind == "actions":
+            indexed_items.extend(_index_detail_entries(source_item, detail, "actions"))
 
     items = detail_items if batch_kind == "details" else indexed_items
     response = {
@@ -551,6 +569,33 @@ def handle_oa_batch(args: argparse.Namespace) -> int:
     }
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
+    plan = build_oa_write_plan(
+        affair_id=args.affair_id,
+        action=args.action,
+        opinion=args.opinion,
+        mode=args.oa_write_mode,
+        source_url=args.source_url,
+    )
+    if args.oa_write_mode == "dry-run":
+        append_oa_write_audit(home, plan)
+        emit_cli_value(plan, args)
+        return 0
+    if args.oa_write_mode == "execute":
+        blocked = {
+            "ok": False,
+            "error": "oa write execute is not implemented for production writes",
+            "requires_confirmation": True,
+            "confirmed": bool(getattr(args, "confirm", False)),
+            "plan": plan,
+        }
+        append_oa_write_audit(home, plan)
+        emit_cli_value(blocked, args)
+        return 0
+    emit_cli_value(plan, args)
     return 0
 
 
@@ -653,7 +698,7 @@ def _project_detail_response(response: dict, args: argparse.Namespace) -> dict:
     if not isinstance(detail, dict):
         return response
     projection = getattr(args, "oa_detail_projection", None)
-    if projection in {"attachments", "workflow"}:
+    if projection in {"attachments", "workflow", "actions"}:
         items = detail.get(projection) if isinstance(detail.get(projection), list) else []
         return {
             **response,

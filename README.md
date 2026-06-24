@@ -150,12 +150,14 @@ Read an OA detail page from a URL found in list output:
 python -m bscli.cli.main --home .bscli oa detail read --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
 python -m bscli.cli.main --home .bscli oa detail attachments --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
 python -m bscli.cli.main --home .bscli oa detail workflow --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+python -m bscli.cli.main --home .bscli oa detail actions --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
 ```
 
 The detail reader opens the target URL in a temporary inactive Chrome tab,
 waits for the page to render, captures HTML inside the logged-in browser
 context, and extracts page text, table-like form fields, attachment download
-links, and workflow/opinion hints.
+links, workflow/opinion hints, and candidate write actions. Candidate actions
+are discovery metadata only; they do not execute page writes.
 
 Pending, sent, and template objects:
 
@@ -166,6 +168,7 @@ python -m bscli.cli.main --home .bscli oa pending show -7317807227272018131
 python -m bscli.cli.main --home .bscli oa pending details --limit 10 --include title,text,attachments --text-limit 2000
 python -m bscli.cli.main --home .bscli oa pending attachments --limit 20 --format csv --fields source_title,name,href
 python -m bscli.cli.main --home .bscli oa pending workflow --limit 20 --format table --fields source_title,text
+python -m bscli.cli.main --home .bscli oa pending actions --limit 20 --format table --fields source_title,code,label,risk
 python -m bscli.cli.main --home .bscli oa pending export --format csv --fields title,affair_id
 
 python -m bscli.cli.main --home .bscli oa sent list
@@ -207,6 +210,19 @@ Batch detail commands first read the corresponding list, then call
 `detail_read` for each row with an `href`. Use `--include` to choose detail
 sections (`title,text,fields,attachments,workflow`) and `--text-limit` to cap
 large page text.
+
+Safe write planning is available, but production execution is intentionally
+blocked at this stage:
+
+```bash
+python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
+python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
+python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
+```
+
+`draft` and `dry-run` never contact the daemon or browser. `dry-run` writes a
+sanitized audit row under `.bscli/audit/oa-write-plans.jsonl`. `execute` is a
+reserved command and returns a blocked plan even when `--confirm` is provided.
 
 Read the structured pending list from the OA home page:
 

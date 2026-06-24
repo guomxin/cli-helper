@@ -269,6 +269,83 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"][0]["name"], "seal-plan.pdf")
 
+    def test_oa_detail_actions_projects_single_detail_actions(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "title": "Seal request",
+                    "actions": [
+                        {
+                            "code": "ContinueSubmit",
+                            "label": "提交",
+                            "risk": "high",
+                            "requires_confirmation": True,
+                        }
+                    ],
+                },
+            }
+        )
+        detail_url = "http://oa.example.test/detail?a=1"
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "detail",
+                "actions",
+                "--url",
+                detail_url,
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "detail_read")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["code"], "ContinueSubmit")
+
+    def test_oa_pending_actions_indexes_detail_actions(self):
+        server, _seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Budget approval", "href": "http://oa.example.test/detail/a1"},
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "result": {
+                        "actions": [
+                            {
+                                "code": "ContinueSubmit",
+                                "label": "提交",
+                                "risk": "high",
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "actions",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["source_title"], "Budget approval")
+        self.assertEqual(payload["result"]["items"][0]["code"], "ContinueSubmit")
+
     def test_oa_sent_export_csv_prints_items_as_csv(self):
         server, _seen_payloads = self._start_daemon(
             {
@@ -327,6 +404,84 @@ class CliOaTests(unittest.TestCase):
                 "description": "Pending page",
             },
         )
+
+    def test_oa_write_draft_builds_non_executing_plan_without_daemon(self):
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "draft",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "同意",
+            )
+
+            payload = json.loads(result.stdout)
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_exists = audit_path.exists()
+
+        self.assertEqual(payload["schema_version"], "bscli.oa_write_plan.v1")
+        self.assertEqual(payload["mode"], "draft")
+        self.assertFalse(payload["safety"]["will_execute"])
+        self.assertTrue(payload["safety"]["requires_confirmation"])
+        self.assertEqual(payload["target"]["affair_id"], "affair-1")
+        self.assertEqual(payload["action"]["code"], "ContinueSubmit")
+        self.assertEqual(payload["opinion"]["text"], "同意")
+        self.assertEqual(payload["request"]["status"], "not_built")
+        self.assertFalse(audit_exists)
+
+    def test_oa_write_dry_run_records_sanitized_audit_plan(self):
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "dry-run",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "同意",
+            )
+
+            payload = json.loads(result.stdout)
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(payload["mode"], "dry-run")
+        self.assertFalse(payload["safety"]["will_execute"])
+        self.assertEqual(payload["request"]["status"], "not_sent")
+        self.assertEqual(len(audit_rows), 1)
+        self.assertEqual(audit_rows[0]["target"]["affair_id"], "affair-1")
+        self.assertEqual(audit_rows[0]["action"]["code"], "ContinueSubmit")
+        self.assertEqual(audit_rows[0]["opinion"]["length"], 2)
+        self.assertNotIn("同意", json.dumps(audit_rows[0], ensure_ascii=False))
+
+    def test_oa_write_execute_is_blocked_even_with_confirm_for_now(self):
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "execute",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "同意",
+                "--confirm",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "oa write execute is not implemented for production writes")
+        self.assertFalse(payload["plan"]["safety"]["will_execute"])
 
     def test_oa_discovered_list_uses_local_store(self):
         with TemporaryDirectory() as tmp:
