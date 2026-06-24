@@ -41,6 +41,48 @@ class DiscoveredApiStoreTests(unittest.TestCase):
             self.assertEqual(loaded.tool_name, "oa__discovered__template_section")
             self.assertEqual(loaded.command_name, "discovered:template-section")
 
+    def test_load_api_exposes_parameter_schema(self):
+        with TemporaryDirectory() as tmp:
+            api_dir = Path(tmp) / "discovered" / "oa" / "apis"
+            api_dir.mkdir(parents=True)
+            (api_dir / "search.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "bscli.discovered_api.v1",
+                        "name": "search",
+                        "system": "oa",
+                        "request": {
+                            "method": "GET",
+                            "url": "http://oa.example.test/ajax.do?q={{keyword}}&page={{page}}",
+                        },
+                        "parameters": {
+                            "keyword": {
+                                "type": "string",
+                                "required": True,
+                                "description": "Search keyword",
+                            },
+                            "page": {"type": "integer"},
+                        },
+                        "inspection": {"data_shape": "Data.items[]"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = DiscoveredApiStore(Path(tmp)).load_api("oa", "search")
+
+            self.assertEqual(
+                loaded.parameters,
+                {
+                    "keyword": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Search keyword",
+                    },
+                    "page": {"type": "integer"},
+                },
+            )
+
     def test_load_api_rejects_path_traversal_names(self):
         with TemporaryDirectory() as tmp:
             store = DiscoveredApiStore(Path(tmp))

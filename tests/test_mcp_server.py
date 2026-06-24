@@ -232,6 +232,46 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(calls, [("oa", "discovered_run", {"name": "template-section"})])
         self.assertEqual(result["result"]["structuredContent"], {"api": {"name": "template-section"}})
 
+    def test_call_parameterized_discovered_tool_passes_arguments(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"api": {"name": arguments["name"]}, "keyword": arguments["keyword"]}
+
+        server = self._server(
+            runner=runner,
+            discovered_apis=[
+                DiscoveredApi(
+                    system="oa",
+                    name="search",
+                    description="Search OA records",
+                    access="read",
+                    risk="low",
+                    request={"method": "GET", "url": "http://oa.example.test/ajax.do?q={{keyword}}"},
+                    parameters={"keyword": {"type": "string", "required": True}},
+                    inspection={"data_shape": "Data.items[]"},
+                    path=None,
+                    raw={},
+                )
+            ],
+        )
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 18,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__discovered__search",
+                    "arguments": {"keyword": "budget"},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "discovered_run", {"name": "search", "keyword": "budget"})])
+        self.assertEqual(result["result"]["structuredContent"]["keyword"], "budget")
+
     def test_call_discovered_tool_rejects_extra_arguments(self):
         calls = []
         server = self._server(

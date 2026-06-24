@@ -78,6 +78,47 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(tool["metadata"]["access"], "write")
         self.assertEqual(tool["metadata"]["risk"], "medium")
 
+    def test_discovered_api_manifest_exports_parameter_schema(self):
+        api = DiscoveredApi(
+            system="oa",
+            name="search",
+            description="Search OA records",
+            access="read",
+            risk="low",
+            request={"method": "GET", "url": "http://oa.example.test/ajax.do?q={{keyword}}"},
+            parameters={
+                "keyword": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Search keyword",
+                },
+                "page": {"type": "integer"},
+            },
+            inspection={"data_shape": "Data.items[]"},
+            path=None,
+            raw={},
+        )
+
+        manifest = export_tool_manifest(CommandRegistry(), system="oa", discovered_apis=[api])
+        tool = manifest["tools"][0]
+
+        self.assertEqual(tool["name"], "oa__discovered__search")
+        self.assertEqual(
+            tool["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "Search keyword",
+                    },
+                    "page": {"type": "integer"},
+                },
+                "required": ["keyword"],
+                "additionalProperties": False,
+            },
+        )
+
     def test_oa_write_execute_tool_requires_confirm_argument(self):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

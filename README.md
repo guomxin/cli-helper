@@ -357,6 +357,31 @@ Run a saved discovered API through the logged-in browser page context:
 python -m bscli.cli.main --home .bscli discovered run oa template-section --timeout 30
 ```
 
+Discovered APIs may declare parameter schemas in their saved metadata:
+
+```json
+{
+  "parameters": {
+    "keyword": {"type": "string", "required": true},
+    "page": {"type": "integer"}
+  },
+  "request": {
+    "method": "GET",
+    "url": "http://10.10.50.110/seeyon/ajax.do?q={{keyword}}&page={{page}}"
+  }
+}
+```
+
+Run a parameterized discovered API with:
+
+```bash
+python -m bscli.cli.main --home .bscli discovered run oa search --json "{\"keyword\":\"budget\",\"page\":1}" --timeout 30
+```
+
+The same parameter schema is exported to MCP tools, so
+`oa__discovered__search` receives `keyword` and `page` as normal tool
+arguments instead of requiring a fixed replay request.
+
 Low-risk `GET` APIs run without extra confirmation when their URL origin
 matches the target system profile. Non-GET, non-read, or higher-risk APIs are
 blocked before a task is delivered to the browser unless the caller explicitly

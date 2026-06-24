@@ -114,6 +114,49 @@ class CliDiscoveredTests(unittest.TestCase):
             {"name": "submit", "confirm": True},
         )
 
+    def test_cli_discovered_run_posts_json_arguments_to_daemon(self):
+        seen_payloads = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["content-length"])).decode("utf-8"))
+                seen_payloads.append(body)
+                response = {"ok": True, "result": {"keyword": body["args"]["keyword"]}}
+                payload = json.dumps(response).encode("utf-8")
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "discovered",
+                "run",
+                "oa",
+                "search",
+                "--json",
+                '{"keyword":"budget","page":2}',
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(json.loads(result.stdout)["result"], {"keyword": "budget"})
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"name": "search", "keyword": "budget", "page": 2},
+        )
+
     def test_tool_manifest_includes_discovered_tools(self):
         with TemporaryDirectory() as tmp:
             self._write_api(tmp)

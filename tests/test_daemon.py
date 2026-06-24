@@ -1611,6 +1611,94 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["inspection"]["data_shape"], "Data.items[]")
             self.assertEqual(response.body["result"]["replay"]["json"]["Data"]["items"][0]["title"], "Seal request")
 
+    def test_run_discovered_api_renders_parameterized_request(self):
+        with TemporaryDirectory() as tmp:
+            api_dir = Path(tmp) / "discovered" / "oa" / "apis"
+            api_dir.mkdir(parents=True)
+            (api_dir / "search.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "bscli.discovered_api.v1",
+                        "name": "search",
+                        "system": "oa",
+                        "description": "Search projection",
+                        "request": {
+                            "method": "GET",
+                            "url": "http://10.10.50.110/seeyon/ajax.do?q={{keyword}}&page={{page}}",
+                        },
+                        "parameters": {
+                            "keyword": {"type": "string", "required": True},
+                            "page": {"type": "integer"},
+                        },
+                        "inspection": {"data_shape": "Data.items[]"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "page_fetch")
+                self.assertEqual(
+                    tasks[0]["payload"]["url"],
+                    "http://10.10.50.110/seeyon/ajax.do?q=budget&page=2",
+                )
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "status": 200,
+                            "ok": True,
+                            "url": tasks[0]["payload"]["url"],
+                            "json": {"Data": {"items": []}},
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "discovered_run",
+                    "args": {"name": "search", "keyword": "budget", "page": 2},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                response.body["result"]["request"]["url"],
+                "http://10.10.50.110/seeyon/ajax.do?q=budget&page=2",
+            )
+
     def test_run_command_records_trace_and_returns_run_id(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

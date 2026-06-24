@@ -28,7 +28,7 @@ from bscli.adapters.seeyon_write import (
 )
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
-from bscli.core.discovered import DiscoveredApiStore
+from bscli.core.discovered import DiscoveredApiStore, render_discovered_request
 from bscli.core.trace import TraceStore
 
 COMMAND_TASKS = {
@@ -496,10 +496,11 @@ class DaemonState:
         )
         if policy_response:
             return policy_response
+        request = render_discovered_request(api, args)
         replay_response = self._run_page_fetch(
             system,
             target_client_id,
-            api.request,
+            request,
             float(body.get("timeout_seconds", 30)),
         )
         if replay_response.status != 200:
@@ -519,7 +520,7 @@ class DaemonState:
                         "access": api.access,
                         "risk": api.risk,
                     },
-                    "request": api.request,
+                    "request": request,
                     "inspection": inspect_api_response(replay),
                     "replay": replay,
                 },

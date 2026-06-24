@@ -41,8 +41,9 @@ def _discovered_api_to_tool(api: DiscoveredApi) -> dict[str, Any]:
     shape = inspection.get("data_shape") or "unknown response shape"
     count = inspection.get("item_count")
     count_text = f", last observed item count {count}" if count is not None else ""
-    properties = {}
-    required = []
+    schema = _args_to_json_schema(api.parameters)
+    properties = dict(schema["properties"])
+    required = list(schema["required"])
     if api.requires_confirmation:
         properties["confirm"] = {
             "type": "boolean",

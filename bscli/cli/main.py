@@ -122,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     discovered_run = discovered_sub.add_parser("run")
     discovered_run.add_argument("system")
     discovered_run.add_argument("name")
+    discovered_run.add_argument("--json", default="{}")
     discovered_run.add_argument("--confirm", action="store_true")
     discovered_run.add_argument("--timeout", type=float, default=30.0)
     discovered_run.add_argument("--daemon-url", default="http://127.0.0.1:8765")
@@ -271,6 +272,7 @@ def _build_oa_parser(oa_sub) -> None:
     discovered_run = discovered_sub.add_parser("run")
     discovered_run.set_defaults(oa_command="discovered_run")
     discovered_run.add_argument("name")
+    discovered_run.add_argument("--json", default="{}")
     discovered_run.add_argument("--confirm", action="store_true")
     _add_daemon_options(discovered_run)
     _add_output_options(discovered_run)
@@ -442,7 +444,7 @@ def handle_discovered(args: argparse.Namespace, home: Path) -> int:
         print_json(store.load_api(args.system, args.name).raw)
         return 0
     if args.action == "run":
-        run_args = {"name": args.name}
+        run_args = _discovered_run_args_from_cli(args)
         if args.confirm:
             run_args["confirm"] = True
         result = post_json(
@@ -688,11 +690,21 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
         api_args["description"] = args.description
         return api_args
     if command == "discovered_run":
-        run_args = {"name": args.name}
+        run_args = _discovered_run_args_from_cli(args)
         if args.confirm:
             run_args["confirm"] = True
         return run_args
     return {}
+
+
+def _discovered_run_args_from_cli(args: argparse.Namespace) -> dict:
+    extra = json.loads(getattr(args, "json", "{}") or "{}")
+    if not isinstance(extra, dict):
+        raise ValueError("--json must decode to an object")
+    for reserved in ("name", "confirm"):
+        if reserved in extra:
+            raise ValueError(f"--json cannot contain reserved discovered argument: {reserved}")
+    return {"name": args.name, **extra}
 
 
 def _api_args_from_oa_cli(args: argparse.Namespace) -> dict:
