@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _build_oa_parser(oa_sub) -> None:
     status = oa_sub.add_parser("status")
-    status.set_defaults(oa_command="status")
+    status.set_defaults(oa_command="session_status")
     _add_daemon_options(status)
 
     page = oa_sub.add_parser("page")
@@ -178,8 +178,15 @@ def _build_oa_parser(oa_sub) -> None:
     detail_read = detail_sub.add_parser("read")
     detail_read.set_defaults(oa_command="detail_read")
     detail_read.add_argument("--url", required=True)
+    _add_detail_options(detail_read)
     _add_daemon_options(detail_read)
     _add_output_options(detail_read)
+    for action in ("attachments", "workflow"):
+        detail_projection = detail_sub.add_parser(action)
+        detail_projection.set_defaults(oa_command="detail_read", oa_detail_projection=action)
+        detail_projection.add_argument("--url", required=True)
+        _add_daemon_options(detail_projection)
+        _add_output_options(detail_projection)
 
     pending = oa_sub.add_parser("pending")
     pending_sub = pending.add_subparsers(dest="oa_action", required=True)
@@ -275,6 +282,13 @@ def _add_collection_parser(
             parser.add_argument("--keyword")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="csv" if action == "export" else "json")
+    for action in ("details", "attachments", "workflow"):
+        parser = subparsers.add_parser(action)
+        parser.set_defaults(oa_command=list_command, oa_batch_kind=action)
+        parser.add_argument("--keyword")
+        _add_detail_options(parser)
+        _add_daemon_options(parser)
+        _add_output_options(parser, default_format="json")
     if show_command and show_arg_name:
         show = subparsers.add_parser("show")
         show.set_defaults(oa_command=show_command)
@@ -292,6 +306,11 @@ def _add_output_options(parser, *, default_format: str = "json") -> None:
     parser.add_argument("--format", choices=["json", "table", "csv"], default=default_format)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--fields")
+
+
+def _add_detail_options(parser) -> None:
+    parser.add_argument("--include", default="title,text,fields,attachments,workflow")
+    parser.add_argument("--text-limit", type=int, default=3000)
 
 
 def handle_system(args: argparse.Namespace, store: ConfigStore) -> int:
@@ -468,9 +487,79 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
     if command == "discovered_show":
         emit_cli_value(DiscoveredApiStore(home).load_api("oa", args.name).raw, args)
         return 0
+    if getattr(args, "oa_batch_kind", None):
+        return handle_oa_batch(args)
 
     command_args = _oa_command_args(args)
-    response = post_json(
+    response = run_oa_daemon_command(args, command, command_args)
+    if not response.get("ok", False):
+        print_json(response)
+        return 0
+    response = _apply_response_options(response, args)
+    response = _project_detail_response(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_batch(args: argparse.Namespace) -> int:
+    list_response = run_oa_daemon_command(args, args.oa_command, {})
+    if not list_response.get("ok", False):
+        print_json(list_response)
+        return 0
+    result = list_response.get("result") or {}
+    source_items = result.get("items") if isinstance(result, dict) else []
+    if not isinstance(source_items, list):
+        source_items = []
+    source_items = _apply_collection_options(source_items, args, apply_fields=False)
+
+    batch_kind = args.oa_batch_kind
+    detail_items = []
+    indexed_items = []
+    for source_item in source_items:
+        if not isinstance(source_item, dict) or not source_item.get("href"):
+            continue
+        detail_response = run_oa_daemon_command(
+            args,
+            "detail_read",
+            {"url": source_item["href"]},
+        )
+        detail = detail_response.get("result") if detail_response.get("ok") else {
+            "error": detail_response.get("error") or "detail_read failed"
+        }
+        if not isinstance(detail, dict):
+            detail = {"value": detail}
+        if batch_kind == "details":
+            detail_items.append(
+                {
+                    "source_item": source_item,
+                    "detail": _project_detail(detail, args),
+                }
+            )
+        elif batch_kind == "attachments":
+            indexed_items.extend(_index_detail_entries(source_item, detail, "attachments"))
+        elif batch_kind == "workflow":
+            indexed_items.extend(_index_detail_entries(source_item, detail, "workflow"))
+
+    items = detail_items if batch_kind == "details" else indexed_items
+    response = {
+        "ok": True,
+        "result": {
+            "source_count": len(source_items),
+            "count": len(items),
+            "items": items,
+        },
+    }
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def run_oa_daemon_command(
+    args: argparse.Namespace,
+    command: str,
+    command_args: dict,
+) -> dict:
+    return post_json(
         f"{args.daemon_url}/commands/run",
         {
             "system": "oa",
@@ -479,12 +568,6 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
             "timeout_seconds": args.timeout,
         },
     )
-    if not response.get("ok", False):
-        print_json(response)
-        return 0
-    response = _apply_response_options(response, args)
-    emit_cli_value(response, args)
-    return 0
 
 
 def _oa_command_args(args: argparse.Namespace) -> dict:
@@ -535,7 +618,12 @@ def _apply_response_options(response: dict, args: argparse.Namespace) -> dict:
     return {**response, "result": updated_result}
 
 
-def _apply_collection_options(items: list, args: argparse.Namespace) -> list:
+def _apply_collection_options(
+    items: list,
+    args: argparse.Namespace,
+    *,
+    apply_fields: bool = True,
+) -> list:
     filtered = list(items)
     keyword = getattr(args, "keyword", None)
     if keyword:
@@ -548,13 +636,71 @@ def _apply_collection_options(items: list, args: argparse.Namespace) -> list:
     limit = getattr(args, "limit", None)
     if limit is not None:
         filtered = filtered[: max(limit, 0)]
-    fields = _fields_from_args(args)
+    fields = _fields_from_args(args) if apply_fields else []
     if fields:
         filtered = [
             {field: item.get(field) for field in fields if isinstance(item, dict)}
             for item in filtered
         ]
     return filtered
+
+
+def _project_detail_response(response: dict, args: argparse.Namespace) -> dict:
+    if response.get("ok") is not True or args.oa_command != "detail_read":
+        return response
+    detail = response.get("result")
+    if not isinstance(detail, dict):
+        return response
+    projection = getattr(args, "oa_detail_projection", None)
+    if projection in {"attachments", "workflow"}:
+        items = detail.get(projection) if isinstance(detail.get(projection), list) else []
+        return {
+            **response,
+            "result": {
+                "title": detail.get("title", ""),
+                "url": detail.get("url", ""),
+                "count": len(items),
+                "items": items,
+            },
+        }
+    return {**response, "result": _project_detail(detail, args)}
+
+
+def _project_detail(detail: dict, args: argparse.Namespace) -> dict:
+    include = _include_from_args(args)
+    projected = {}
+    for key in include:
+        if key not in detail:
+            continue
+        value = detail[key]
+        if key == "text" and isinstance(value, str):
+            limit = max(getattr(args, "text_limit", 3000), 0)
+            value = value[:limit]
+        projected[key] = value
+    return projected
+
+
+def _include_from_args(args: argparse.Namespace) -> list[str]:
+    value = getattr(args, "include", "title,text,fields,attachments,workflow")
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _index_detail_entries(source_item: dict, detail: dict, key: str) -> list[dict]:
+    entries = detail.get(key)
+    if not isinstance(entries, list):
+        return []
+    indexed = []
+    for entry in entries:
+        row = {
+            "source_title": source_item.get("title", ""),
+            "source_href": source_item.get("href", ""),
+        }
+        if isinstance(entry, dict):
+            row.update(entry)
+        else:
+            row["text"] = str(entry)
+        indexed.append(row)
+    return indexed
 
 
 def emit_cli_value(value, args: argparse.Namespace) -> None:

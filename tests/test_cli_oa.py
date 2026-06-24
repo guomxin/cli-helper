@@ -109,6 +109,166 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_pending_details_reads_list_then_each_detail_with_cropping(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Budget approval", "href": "http://oa.example.test/detail/a1"},
+                            {"title": "Travel request", "href": "http://oa.example.test/detail/a2"},
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Budget approval",
+                        "text": "abcdefghij",
+                        "fields": [{"name": "Applicant", "value": "Alice"}],
+                        "attachments": [{"name": "budget.pdf"}],
+                        "workflow": [{"text": "Opinion: approved"}],
+                    },
+                },
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Travel request",
+                        "text": "klmnopqrst",
+                        "fields": [{"name": "Applicant", "value": "Bob"}],
+                        "attachments": [],
+                        "workflow": [],
+                    },
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "details",
+                "--limit",
+                "2",
+                "--include",
+                "text,attachments",
+                "--text-limit",
+                "4",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([call["command"] for call in seen_payloads], ["pending_list_api", "detail_read", "detail_read"])
+        self.assertEqual(payload["result"]["count"], 2)
+        self.assertEqual(payload["result"]["items"][0]["source_item"]["title"], "Budget approval")
+        self.assertEqual(payload["result"]["items"][0]["detail"], {"text": "abcd", "attachments": [{"name": "budget.pdf"}]})
+        self.assertEqual(payload["result"]["items"][1]["detail"], {"text": "klmn", "attachments": []})
+
+    def test_oa_pending_attachments_indexes_detail_attachments(self):
+        server, _seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Budget approval", "href": "http://oa.example.test/detail/a1"},
+                            {"title": "Travel request", "href": "http://oa.example.test/detail/a2"},
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"attachments": [{"name": "budget.pdf", "href": "http://oa.example.test/f1"}]}},
+                {"ok": True, "result": {"attachments": [{"name": "ticket.png", "href": "http://oa.example.test/f2"}]}},
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "attachments",
+                "--limit",
+                "2",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["count"], 2)
+        self.assertEqual(
+            payload["result"]["items"][0],
+            {
+                "source_title": "Budget approval",
+                "source_href": "http://oa.example.test/detail/a1",
+                "name": "budget.pdf",
+                "href": "http://oa.example.test/f1",
+            },
+        )
+
+    def test_oa_sent_workflow_indexes_detail_workflow_as_csv(self):
+        server, _seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Sent doc", "href": "http://oa.example.test/detail/s1"},
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"workflow": [{"text": "Manager approved"}]}},
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "sent",
+                "workflow",
+                "--format",
+                "csv",
+                "--fields",
+                "source_title,text",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(list(csv.DictReader(io.StringIO(result.stdout))), [{"source_title": "Sent doc", "text": "Manager approved"}])
+
+    def test_oa_detail_attachments_projects_single_detail_attachments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "title": "Seal request",
+                    "attachments": [{"name": "seal-plan.pdf", "href": "http://oa.example.test/f1"}],
+                    "workflow": [{"text": "Opinion: approved"}],
+                },
+            }
+        )
+        detail_url = "http://oa.example.test/detail?a=1"
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "detail",
+                "attachments",
+                "--url",
+                detail_url,
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "detail_read")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["name"], "seal-plan.pdf")
+
     def test_oa_sent_export_csv_prints_items_as_csv(self):
         server, _seen_payloads = self._start_daemon(
             {
@@ -192,12 +352,14 @@ class CliOaTests(unittest.TestCase):
 
     def _start_daemon(self, response):
         seen_payloads = []
+        responses = response if isinstance(response, list) else [response]
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["content-length"])).decode("utf-8"))
                 seen_payloads.append(body)
-                payload = json.dumps(response).encode("utf-8")
+                index = min(len(seen_payloads) - 1, len(responses) - 1)
+                payload = json.dumps(responses[index]).encode("utf-8")
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(payload)))

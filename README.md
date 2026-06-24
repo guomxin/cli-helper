@@ -145,6 +145,8 @@ Read an OA detail page from a URL found in list output:
 
 ```bash
 python -m bscli.cli.main --home .bscli oa detail read --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+python -m bscli.cli.main --home .bscli oa detail attachments --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+python -m bscli.cli.main --home .bscli oa detail workflow --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
 ```
 
 The detail reader fetches the page inside the logged-in browser context and
@@ -157,15 +159,24 @@ Pending, sent, and template objects:
 python -m bscli.cli.main --home .bscli oa pending list
 python -m bscli.cli.main --home .bscli oa pending search --keyword budget --limit 10
 python -m bscli.cli.main --home .bscli oa pending show -7317807227272018131
+python -m bscli.cli.main --home .bscli oa pending details --limit 10 --include title,text,attachments --text-limit 2000
+python -m bscli.cli.main --home .bscli oa pending attachments --limit 20 --format csv --fields source_title,name,href
+python -m bscli.cli.main --home .bscli oa pending workflow --limit 20 --format table --fields source_title,text
 python -m bscli.cli.main --home .bscli oa pending export --format csv --fields title,affair_id
 
 python -m bscli.cli.main --home .bscli oa sent list
 python -m bscli.cli.main --home .bscli oa sent search --keyword contract
+python -m bscli.cli.main --home .bscli oa sent details --limit 10
+python -m bscli.cli.main --home .bscli oa sent attachments --limit 20 --format csv --fields source_title,name,href
+python -m bscli.cli.main --home .bscli oa sent workflow --limit 20
 python -m bscli.cli.main --home .bscli oa sent export --format csv --fields title,sender,affair_id
 
 python -m bscli.cli.main --home .bscli oa template list
 python -m bscli.cli.main --home .bscli oa template search --keyword seal
 python -m bscli.cli.main --home .bscli oa template show -6511139737225050501
+python -m bscli.cli.main --home .bscli oa template details --limit 10 --include title,fields,attachments
+python -m bscli.cli.main --home .bscli oa template attachments --limit 20
+python -m bscli.cli.main --home .bscli oa template workflow --limit 20
 python -m bscli.cli.main --home .bscli oa template export --format table --fields title,template_id
 ```
 
@@ -188,6 +199,10 @@ python -m bscli.cli.main --home .bscli oa discovered run template-section
 Collection commands support `--keyword`, `--limit`, `--fields`, and
 `--format json|table|csv`, so agents can request either structured JSON or
 compact tabular output without needing post-processing glue.
+Batch detail commands first read the corresponding list, then call
+`detail_read` for each row with an `href`. Use `--include` to choose detail
+sections (`title,text,fields,attachments,workflow`) and `--text-limit` to cap
+large page text.
 
 Read the structured pending list from the OA home page:
 
@@ -369,7 +384,9 @@ Implemented:
 - CLI `tool manifest oa`
 - CLI `mcp serve`
 - Business CLI `oa detail read`
+- Business CLI `oa detail attachments/workflow`
 - Business CLI `oa pending/sent/template list/search/show/export`
+- Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`
 
 Not implemented yet:
