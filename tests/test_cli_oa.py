@@ -520,6 +520,186 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["args"]["source_url"], "http://oa.example.test/detail?affairId=affair-1")
         self.assertTrue(seen_payloads[0]["args"]["confirm"])
 
+    def test_oa_pending_submit_executes_each_item_and_verifies_disappearance(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly 24",
+                                "affair_id": "a24",
+                                "href": "http://oa.example.test/detail?affairId=a24",
+                            },
+                            {
+                                "title": "Weekly 23",
+                                "affair_id": "a23",
+                                "href": "http://oa.example.test/detail?affairId=a23",
+                            },
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
+                {"ok": True, "task_id": "submit-24", "result": {"submitted": True, "affair_id": "a24"}},
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly 23",
+                                "affair_id": "a23",
+                                "href": "http://oa.example.test/detail?affairId=a23",
+                            }
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
+                {"ok": True, "task_id": "submit-23", "result": {"submitted": True, "affair_id": "a23"}},
+                {"ok": True, "result": {"items": []}},
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "submit",
+                "--keyword",
+                "Weekly",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--limit",
+                "2",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--timeout",
+                "1",
+                "--verify-wait",
+                "0",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["submitted_count"], 2)
+        self.assertEqual(payload["result"]["items"][0]["verification"]["status"], "disappeared")
+        self.assertEqual(payload["result"]["items"][1]["verification"]["status"], "disappeared")
+        self.assertEqual(
+            [entry["command"] for entry in seen_payloads],
+            [
+                "pending_list_api",
+                "detail_read",
+                "write_execute",
+                "pending_list_api",
+                "detail_read",
+                "write_execute",
+                "pending_list_api",
+            ],
+        )
+        self.assertEqual(seen_payloads[2]["args"]["affair_id"], "a24")
+        self.assertEqual(seen_payloads[2]["args"]["opinion"], "approved")
+        self.assertTrue(seen_payloads[2]["args"]["confirm"])
+
+    def test_oa_pending_submit_stops_when_item_is_still_pending_after_submit(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly 24",
+                                "affair_id": "a24",
+                                "href": "http://oa.example.test/detail?affairId=a24",
+                            },
+                            {
+                                "title": "Weekly 23",
+                                "affair_id": "a23",
+                                "href": "http://oa.example.test/detail?affairId=a23",
+                            },
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
+                {"ok": True, "task_id": "submit-24", "result": {"submitted": True, "affair_id": "a24"}},
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly 24",
+                                "affair_id": "a24",
+                                "href": "http://oa.example.test/detail?affairId=a24",
+                            },
+                            {
+                                "title": "Weekly 23",
+                                "affair_id": "a23",
+                                "href": "http://oa.example.test/detail?affairId=a23",
+                            },
+                        ]
+                    },
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "submit",
+                "--keyword",
+                "Weekly",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--limit",
+                "2",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--timeout",
+                "1",
+                "--verify-wait",
+                "0",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["result"]["submitted_count"], 0)
+        self.assertEqual(payload["result"]["items"][0]["verification"]["status"], "still_pending")
+        self.assertEqual(len(payload["result"]["items"]), 1)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read", "write_execute", "pending_list_api"])
+
+    def test_oa_pending_submit_requires_confirm_before_daemon_calls(self):
+        server, seen_payloads = self._start_daemon({"ok": True, "result": {"items": []}})
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "pending",
+                "submit",
+                "--keyword",
+                "Weekly",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["requires_confirmation"])
+        self.assertEqual(seen_payloads, [])
+
     def test_oa_discovered_list_uses_local_store(self):
         with TemporaryDirectory() as tmp:
             api_dir = Path(tmp) / "discovered" / "oa" / "apis"

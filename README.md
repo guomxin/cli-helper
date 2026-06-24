@@ -231,6 +231,17 @@ The same safe planning capabilities are also registered as agent-callable tools:
 tool requires a `confirm` argument in its schema before it can perform a
 production write.
 
+For repeated pending items, use the governed batch submit command. It submits
+one item at a time and verifies that each `affair_id` disappears from pending
+before continuing:
+
+```bash
+python -m bscli.cli.main --home .bscli oa pending submit --keyword "周报发送流程" --action ContinueSubmit --opinion "已阅" --limit 3 --confirm
+```
+
+If a submitted item is still present after verification, the command stops and
+does not attempt later items.
+
 Read the structured pending list from the OA home page:
 
 ```bash

@@ -22,6 +22,11 @@ logged-in Chrome session after explicit confirmation.
   function, and relies on a follow-up pending-list check for business success.
 - Without `--confirm`, `oa write execute ...` returns `ok=false` and records only
   a blocked local plan.
+- `oa pending submit ... --confirm` is the governed batch wrapper for repeated
+  pending items. It reads the pending list, verifies that each detail page
+  exposes the requested action, executes one item, then reads the pending list
+  again. The next item is not attempted unless the previous `affairId` has
+  disappeared from pending.
 
 Only `ContinueSubmit` is executable at this stage. Reject, archive, delete,
 revoke, return, upload, and other write actions remain blocked until each has a
