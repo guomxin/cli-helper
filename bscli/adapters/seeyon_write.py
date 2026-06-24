@@ -157,3 +157,33 @@ def append_oa_write_audit(home: Path, plan: dict) -> Path:
         file.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True))
         file.write("\n")
     return audit_path
+
+
+def append_oa_write_verification_audit(
+    home: Path,
+    *,
+    affair_id: str,
+    action: str,
+    source_url: str,
+    verification: dict,
+    submit: dict | None = None,
+) -> Path:
+    audit_dir = home / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / "oa-write-verifications.jsonl"
+    row = {
+        "schema_version": "bscli.oa_write_verification.v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "system": "oa",
+        "target": {
+            "affair_id": str(affair_id),
+            "source_url": str(source_url or ""),
+        },
+        "action": normalize_write_action(action),
+        "verification": verification,
+        "submit": submit or {},
+    }
+    with audit_path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+        file.write("\n")
+    return audit_path

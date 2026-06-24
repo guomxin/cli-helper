@@ -383,6 +383,76 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertFalse(result["result"]["structuredContent"]["safety"]["will_execute"])
 
+    def test_call_oa_pending_submit_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"target_count": 0, "submitted_count": 0, "items": []}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__pending_submit",
+                    "arguments": {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "limit": 3,
+                        "confirm": True,
+                        "verify_wait": 0,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "pending_submit",
+                    {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "limit": 3,
+                        "confirm": True,
+                        "verify_wait": 0,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["submitted_count"], 0)
+
+    def test_call_oa_pending_submit_requires_confirm_argument(self):
+        calls = []
+        server = self._server(runner=lambda *args: calls.append(args) or {})
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__pending_submit",
+                    "arguments": {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["error"]["code"], -32602)
+        self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

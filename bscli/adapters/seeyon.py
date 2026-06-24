@@ -438,7 +438,7 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
         CommandDefinition(
             system="oa",
             name="write_execute",
-            description="Reserved Seeyon OA write execution command. Currently returns a blocked plan only.",
+            description="Execute a confirmed Seeyon OA ContinueSubmit write through the logged-in Chrome bridge.",
             access="write",
             strategy="human_gate",
             risk="high",
@@ -451,7 +451,7 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 "confirm": {
                     "type": "boolean",
                     "required": True,
-                    "description": "Must be true to confirm intent; production execution is still blocked.",
+                    "description": "Must be true to confirm intent before production execution.",
                 },
             },
             output_schema={
@@ -462,5 +462,41 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.plan.safety.will_execute"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="pending_submit",
+            description="Submit matching Seeyon OA pending items one by one with action verification and post-submit disappearance checks.",
+            access="write",
+            strategy="human_gate",
+            risk="high",
+            requires_confirmation=True,
+            args_schema={
+                "keyword": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "opinion": {"type": "string"},
+                "limit": {"type": "integer"},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm intent before batch production execution.",
+                },
+                "verify_wait": {
+                    "type": "number",
+                    "description": "Seconds to wait after each submit before reading pending items again.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "target_count": {"type": "integer"},
+                    "submitted_count": {"type": "integer"},
+                    "stopped": {"type": "boolean"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.submitted_count"},
         )
     )

@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 from bscli.core.config import ConfigStore
 from bscli.core.config import SystemProfile
-from bscli.daemon.app import DaemonState
+from bscli.daemon.app import DaemonResponse, DaemonState
 
 
 class DaemonTests(unittest.TestCase):
@@ -2052,6 +2052,211 @@ class DaemonTests(unittest.TestCase):
             self.assertFalse(response.body["ok"])
             self.assertEqual(response.body["error"], "extension write task returned no submission confirmation")
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
+    def test_run_oa_pending_submit_executes_each_item_and_records_verification_audit(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly 24",
+                                    "affair_id": "a24",
+                                    "href": "http://oa.example.test/detail?affairId=a24",
+                                },
+                                {
+                                    "title": "Weekly 23",
+                                    "affair_id": "a23",
+                                    "href": "http://oa.example.test/detail?affairId=a23",
+                                },
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(200, {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}}),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "task_id": "submit-24",
+                        "run_id": "run-submit-24",
+                        "result": {"submitted": True, "affair_id": "a24"},
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "run_id": "run-verify-24",
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly 23",
+                                    "affair_id": "a23",
+                                    "href": "http://oa.example.test/detail?affairId=a23",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(200, {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}}),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "task_id": "submit-23",
+                        "run_id": "run-submit-23",
+                        "result": {"submitted": True, "affair_id": "a23"},
+                    },
+                ),
+                DaemonResponse(200, {"ok": True, "run_id": "run-verify-23", "result": {"items": []}}),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "pending_submit",
+                    "args": {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "limit": 2,
+                        "confirm": True,
+                        "verify_wait": 0,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-write-verifications.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(response.body["result"]["target_count"], 2)
+            self.assertEqual(response.body["result"]["submitted_count"], 2)
+            self.assertFalse(response.body["result"]["stopped"])
+            self.assertEqual(response.body["result"]["items"][0]["verification"]["status"], "disappeared")
+            self.assertEqual(
+                [call[0] for call in calls],
+                [
+                    "pending_list_api",
+                    "detail_read",
+                    "write_execute",
+                    "pending_list_api",
+                    "detail_read",
+                    "write_execute",
+                    "pending_list_api",
+                ],
+            )
+            self.assertEqual(calls[2][1]["affair_id"], "a24")
+            self.assertEqual(calls[2][1]["opinion"], "approved")
+            self.assertTrue(calls[2][1]["confirm"])
+            self.assertEqual(len(audit_rows), 2)
+            self.assertEqual(audit_rows[0]["target"]["affair_id"], "a24")
+            self.assertEqual(audit_rows[0]["verification"]["status"], "disappeared")
+            self.assertNotIn("approved", json.dumps(audit_rows, ensure_ascii=False))
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
+
+    def test_run_oa_pending_submit_requires_confirm_before_nested_calls(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            state._run_nested_oa_command = lambda *args: calls.append(args)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "pending_submit",
+                    "args": {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertFalse(response.body["ok"])
+            self.assertTrue(response.body["requires_confirmation"])
+            self.assertEqual(calls, [])
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
+    def test_run_oa_pending_submit_stops_when_post_submit_verification_fails(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly 24",
+                                    "affair_id": "a24",
+                                    "href": "http://oa.example.test/detail?affairId=a24",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(200, {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}}),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "task_id": "submit-24",
+                        "result": {"submitted": True, "affair_id": "a24"},
+                    },
+                ),
+                DaemonResponse(500, {"ok": False, "error": "pending list failed"}),
+            ]
+
+            state._run_nested_oa_command = lambda *_args: responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "pending_submit",
+                    "args": {
+                        "keyword": "Weekly",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "confirm": True,
+                        "verify_wait": 0,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-write-verifications.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertFalse(response.body["ok"])
+            self.assertEqual(response.body["result"]["submitted_count"], 0)
+            self.assertTrue(response.body["result"]["stopped"])
+            self.assertEqual(response.body["result"]["items"][0]["verification"]["status"], "verify_failed")
+            self.assertFalse(response.body["result"]["items"][0]["verification"]["verified"])
+            self.assertIn("pending list failed", response.body["result"]["items"][0]["verification"]["error"])
+            self.assertEqual(audit_rows[0]["verification"]["status"], "verify_failed")
 
 
 if __name__ == "__main__":

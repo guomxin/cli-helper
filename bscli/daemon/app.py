@@ -6,6 +6,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -20,7 +21,11 @@ from bscli.adapters.seeyon_home import (
     parse_template_projection,
     parse_template_list,
 )
-from bscli.adapters.seeyon_write import append_oa_write_audit, build_oa_write_plan
+from bscli.adapters.seeyon_write import (
+    append_oa_write_audit,
+    append_oa_write_verification_audit,
+    build_oa_write_plan,
+)
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApiStore
@@ -190,6 +195,11 @@ class DaemonState:
         if system == "oa" and command in {"write_draft", "write_dry_run", "write_execute"}:
             return self._run_oa_write_plan_command(
                 command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "pending_submit":
+            return self._run_oa_pending_submit_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -745,6 +755,199 @@ class DaemonState:
             )
         return DaemonResponse(200, {"ok": True, "task_id": None, "result": plan})
 
+    def _run_oa_pending_submit_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if args.get("confirm") is not True:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa pending submit requires confirm=true",
+                    "result": {"items": [], "submitted_count": 0, "target_count": 0},
+                },
+            )
+
+        action = str(args.get("action") or "")
+        keyword = str(args.get("keyword") or "")
+        opinion = str(args.get("opinion") or "")
+        verify_wait = max(float(args.get("verify_wait") or 0.0), 0.0)
+
+        list_response = self._run_nested_oa_command("pending_list_api", {}, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return DaemonResponse(
+                list_response.status,
+                {
+                    "ok": False,
+                    "error": list_response.body.get("error") or "pending list failed",
+                    "source": list_response.body,
+                    "result": {"items": [], "submitted_count": 0, "target_count": 0},
+                },
+            )
+
+        source_items = _apply_pending_submit_filters(
+            _pending_items_from_response_body(list_response.body),
+            keyword=keyword,
+            limit=args.get("limit"),
+        )
+        results = []
+        submitted_count = 0
+
+        for item in source_items:
+            affair_id = str(item.get("affair_id") or "")
+            href = str(item.get("href") or "")
+            row = {
+                "title": item.get("title", ""),
+                "affair_id": affair_id,
+                "href": href,
+                "action": action,
+                "submit": None,
+                "verification": _pending_submit_verification(
+                    "not_checked",
+                    affair_id=affair_id,
+                    before_present=True,
+                    after_present=True,
+                ),
+            }
+            if not affair_id or not href:
+                row["verification"] = _pending_submit_verification(
+                    "invalid_item",
+                    affair_id=affair_id,
+                    before_present=bool(affair_id),
+                    after_present=True,
+                )
+                results.append(row)
+                self._append_pending_submit_verification_audit(row)
+                break
+
+            detail_response = self._run_nested_oa_command(
+                "detail_read",
+                {"url": href},
+                timeout_seconds,
+            )
+            actions = (
+                detail_response.body.get("result", {}).get("actions")
+                if detail_response.body.get("ok")
+                else []
+            )
+            if not _action_available(actions, action):
+                row["verification"] = _pending_submit_verification(
+                    "action_missing",
+                    affair_id=affair_id,
+                    before_present=True,
+                    after_present=True,
+                )
+                row["detail_error"] = detail_response.body.get("error")
+                results.append(row)
+                self._append_pending_submit_verification_audit(row)
+                break
+
+            submit_response = self._run_nested_oa_command(
+                "write_execute",
+                {
+                    "affair_id": affair_id,
+                    "action": action,
+                    "opinion": opinion,
+                    "source_url": href,
+                    "confirm": True,
+                },
+                timeout_seconds,
+            )
+            row["submit"] = {
+                "ok": submit_response.body.get("ok") is True,
+                "task_id": submit_response.body.get("task_id"),
+                "run_id": submit_response.body.get("run_id"),
+                "error": submit_response.body.get("error"),
+            }
+            if submit_response.body.get("ok") is not True:
+                row["verification"] = _pending_submit_verification(
+                    "submit_failed",
+                    affair_id=affair_id,
+                    before_present=True,
+                    after_present=True,
+                )
+                results.append(row)
+                self._append_pending_submit_verification_audit(row)
+                break
+
+            if verify_wait:
+                time.sleep(verify_wait)
+            verify_response = self._run_nested_oa_command("pending_list_api", {}, timeout_seconds)
+            if verify_response.status != 200 or verify_response.body.get("ok") is False:
+                row["verification"] = _pending_submit_verification(
+                    "verify_failed",
+                    affair_id=affair_id,
+                    before_present=True,
+                    after_present=True,
+                    run_id=verify_response.body.get("run_id"),
+                    task_id=verify_response.body.get("task_id"),
+                )
+                row["verification"]["error"] = verify_response.body.get("error") or "pending list verification failed"
+                results.append(row)
+                self._append_pending_submit_verification_audit(row)
+                break
+            verify_items = _pending_items_from_response_body(verify_response.body)
+            still_pending = _item_present_by_affair_id(verify_items, affair_id)
+            row["verification"] = _pending_submit_verification(
+                "still_pending" if still_pending else "disappeared",
+                affair_id=affair_id,
+                before_present=True,
+                after_present=still_pending,
+                run_id=verify_response.body.get("run_id"),
+                task_id=verify_response.body.get("task_id"),
+            )
+            results.append(row)
+            self._append_pending_submit_verification_audit(row)
+            if still_pending:
+                break
+            submitted_count += 1
+
+        ok = submitted_count == len(source_items)
+        return DaemonResponse(
+            200,
+            {
+                "ok": ok,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": {
+                    "target_count": len(source_items),
+                    "submitted_count": submitted_count,
+                    "stopped": not ok,
+                    "items": results,
+                },
+            },
+        )
+
+    def _run_nested_oa_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        return self._run_command_with_trace(
+            {
+                "system": "oa",
+                "command": command,
+                "args": args,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+
+    def _append_pending_submit_verification_audit(self, row: dict[str, Any]) -> None:
+        append_oa_write_verification_audit(
+            self.config_store.root,
+            affair_id=str(row.get("affair_id") or ""),
+            action=str(row.get("action") or ""),
+            source_url=str(row.get("href") or ""),
+            verification=row.get("verification") if isinstance(row.get("verification"), dict) else {},
+            submit=row.get("submit") if isinstance(row.get("submit"), dict) else {},
+        )
+
     def _run_page_fetch(
         self,
         system: str,
@@ -840,7 +1043,7 @@ class DaemonState:
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command == "write_execute":
+        if system == "oa" and command in {"write_execute", "pending_submit"}:
             return {"access": "write", "strategy": "human_gate"}
         if command == "discovered_run":
             try:
@@ -1033,11 +1236,84 @@ def _trace_result_summary(response_body: dict[str, Any]) -> dict[str, Any]:
             summary["api"] = {
                 key: api.get(key)
                 for key in ("system", "name", "access", "risk", "tool_name")
-                if key in api
+            if key in api
             }
     elif result is not None:
         summary["result_type"] = type(result).__name__
     return summary
+
+
+def _pending_items_from_response_body(response_body: dict[str, Any]) -> list[dict[str, Any]]:
+    result = response_body.get("result")
+    if not isinstance(result, dict):
+        return []
+    items = result.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _apply_pending_submit_filters(
+    items: list[dict[str, Any]],
+    *,
+    keyword: str,
+    limit: Any,
+) -> list[dict[str, Any]]:
+    filtered = list(items)
+    if keyword:
+        needle = keyword.lower()
+        filtered = [
+            item
+            for item in filtered
+            if needle in json.dumps(item, ensure_ascii=False).lower()
+        ]
+    if limit is not None:
+        try:
+            filtered = filtered[: max(int(limit), 0)]
+        except (TypeError, ValueError):
+            filtered = []
+    return filtered
+
+
+def _action_available(actions: Any, action_code: str) -> bool:
+    if not isinstance(actions, list):
+        return False
+    return any(
+        isinstance(action, dict) and str(action.get("code") or "") == action_code
+        for action in actions
+    )
+
+
+def _item_present_by_affair_id(items: list[dict[str, Any]], affair_id: str) -> bool:
+    return any(
+        isinstance(item, dict) and str(item.get("affair_id") or "") == str(affair_id)
+        for item in items
+    )
+
+
+def _pending_submit_verification(
+    status: str,
+    *,
+    affair_id: str,
+    before_present: bool,
+    after_present: bool,
+    run_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    verification = {
+        "type": "pending_disappearance",
+        "status": status,
+        "verified": status in {"disappeared", "still_pending"},
+        "affair_id": str(affair_id),
+        "before_present": before_present,
+        "after_present": after_present,
+        "present_after_submit": after_present,
+    }
+    if run_id:
+        verification["run_id"] = run_id
+    if task_id:
+        verification["task_id"] = task_id
+    return verification
 
 
 def _mark_oa_write_plan_for_execution(plan: dict[str, Any]) -> None:

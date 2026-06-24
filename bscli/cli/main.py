@@ -7,7 +7,6 @@ import io
 import json
 from pathlib import Path
 import sys
-import time
 from urllib.error import HTTPError
 import urllib.request
 from urllib.parse import urlparse
@@ -599,100 +598,19 @@ def handle_oa_pending_submit(args: argparse.Namespace) -> int:
         )
         return 0
 
-    list_response = run_oa_daemon_command(args, "pending_list_api", {})
-    if not list_response.get("ok", False):
-        emit_cli_value(
-            {
-                "ok": False,
-                "error": list_response.get("error") or "pending list failed",
-                "source": list_response,
-                "result": {"items": [], "submitted_count": 0, "target_count": 0},
-            },
-            args,
-        )
-        return 0
-
-    source_items = _pending_items_from_response(list_response)
-    source_items = _apply_collection_options(source_items, args, apply_fields=False)
-    results = []
-    submitted_count = 0
-
-    for item in source_items:
-        affair_id = str(item.get("affair_id") or "")
-        href = str(item.get("href") or "")
-        row = {
-            "title": item.get("title", ""),
-            "affair_id": affair_id,
-            "href": href,
-            "action": args.action,
-            "submit": None,
-            "verification": {"status": "not_checked"},
-        }
-        if not affair_id or not href:
-            row["verification"] = {"status": "invalid_item", "present_after_submit": True}
-            results.append(row)
-            break
-
-        detail_response = run_oa_daemon_command(args, "detail_read", {"url": href})
-        actions = detail_response.get("result", {}).get("actions") if detail_response.get("ok") else []
-        if not _action_available(actions, args.action):
-            row["verification"] = {"status": "action_missing", "present_after_submit": True}
-            row["detail_error"] = detail_response.get("error")
-            results.append(row)
-            break
-
-        submit_response = run_oa_daemon_command(
-            args,
-            "write_execute",
-            {
-                "affair_id": affair_id,
-                "action": args.action,
-                "opinion": args.opinion,
-                "source_url": href,
-                "confirm": True,
-            },
-        )
-        row["submit"] = {
-            "ok": submit_response.get("ok") is True,
-            "task_id": submit_response.get("task_id"),
-            "run_id": submit_response.get("run_id"),
-            "error": submit_response.get("error"),
-        }
-        if submit_response.get("ok") is not True:
-            row["verification"] = {"status": "submit_failed", "present_after_submit": True}
-            results.append(row)
-            break
-
-        wait_seconds = max(float(getattr(args, "verify_wait", 0.0) or 0.0), 0.0)
-        if wait_seconds:
-            time.sleep(wait_seconds)
-        verify_response = run_oa_daemon_command(args, "pending_list_api", {})
-        verify_items = _pending_items_from_response(verify_response) if verify_response.get("ok") else []
-        still_pending = _item_present_by_affair_id(verify_items, affair_id)
-        row["verification"] = {
-            "status": "still_pending" if still_pending else "disappeared",
-            "present_after_submit": still_pending,
-            "run_id": verify_response.get("run_id"),
-            "task_id": verify_response.get("task_id"),
-        }
-        results.append(row)
-        if still_pending:
-            break
-        submitted_count += 1
-
-    ok = submitted_count == len(source_items)
-    emit_cli_value(
-        {
-            "ok": ok,
-            "result": {
-                "target_count": len(source_items),
-                "submitted_count": submitted_count,
-                "stopped": not ok,
-                "items": results,
-            },
-        },
+    response = run_oa_daemon_command(
         args,
+        "pending_submit",
+        {
+            "keyword": args.keyword,
+            "action": args.action,
+            "opinion": args.opinion,
+            "limit": args.limit,
+            "confirm": True,
+            "verify_wait": args.verify_wait,
+        },
     )
+    emit_cli_value(response, args)
     return 0
 
 
@@ -735,24 +653,6 @@ def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
         return 0
     emit_cli_value(plan, args)
     return 0
-
-
-def _pending_items_from_response(response: dict) -> list[dict]:
-    result = response.get("result")
-    if not isinstance(result, dict):
-        return []
-    items = result.get("items")
-    return items if isinstance(items, list) else []
-
-
-def _action_available(actions, action_code: str) -> bool:
-    if not isinstance(actions, list):
-        return False
-    return any(isinstance(action, dict) and str(action.get("code") or "") == action_code for action in actions)
-
-
-def _item_present_by_affair_id(items: list[dict], affair_id: str) -> bool:
-    return any(isinstance(item, dict) and str(item.get("affair_id") or "") == str(affair_id) for item in items)
 
 
 def run_oa_daemon_command(

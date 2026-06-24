@@ -22,11 +22,12 @@ logged-in Chrome session after explicit confirmation.
   function, and relies on a follow-up pending-list check for business success.
 - Without `--confirm`, `oa write execute ...` returns `ok=false` and records only
   a blocked local plan.
-- `oa pending submit ... --confirm` is the governed batch wrapper for repeated
-  pending items. It reads the pending list, verifies that each detail page
-  exposes the requested action, executes one item, then reads the pending list
-  again. The next item is not attempted unless the previous `affairId` has
-  disappeared from pending.
+- `oa pending submit ... --confirm` is the governed daemon command for repeated
+  pending items. The CLI and MCP tool both call the same daemon execution path.
+  It reads the pending list, verifies that each detail page exposes the
+  requested action, executes one item, then reads the pending list again. The
+  next item is not attempted unless the previous `affairId` has disappeared
+  from pending.
 
 Only `ContinueSubmit` is executable at this stage. Reject, archive, delete,
 revoke, return, upload, and other write actions remain blocked until each has a
@@ -54,6 +55,21 @@ Audit rows remove `opinion.text` and keep only metadata such as opinion length.
 They also keep request bodies null and redact
 `request.payload_preview.opinionText`, so sensitive payload text is not written
 to disk.
+
+Batch submit verification rows are written separately to
+`.bscli/audit/oa-write-verifications.jsonl`. Each row uses
+`schema_version=bscli.oa_write_verification.v1` and records the `affair_id`,
+action metadata, submit task metadata, and a normalized verification object:
+
+- `type`: currently `pending_disappearance`.
+- `status`: `disappeared`, `still_pending`, `verify_failed`,
+  `submit_failed`, `action_missing`, `invalid_item`, or `not_checked`.
+- `verified`: true only when a post-submit pending-list read actually proved
+  `disappeared` or `still_pending`.
+- `before_present`, `after_present`, and `present_after_submit`: booleans for
+  agent-friendly checks.
+
+The verification audit does not store opinion text.
 
 ## Risk Classification
 
@@ -94,9 +110,12 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__write_draft`
 - `oa__write_dry_run`
 - `oa__write_execute`
+- `oa__pending_submit`
 
 `write_draft` and `write_dry_run` are exposed as read/low-risk daemon tools
 because they do not mutate OA state. `write_execute` is exposed as a
 write/high-risk human-gate tool and requires a `confirm` argument in the tool
 schema. Confirmed `ContinueSubmit` executions are delivered through the Chrome
-extension bridge.
+extension bridge. `pending_submit` is also exposed as a write/high-risk
+human-gate tool and requires `keyword`, `action`, and `confirm`; it reuses the
+same daemon-side verification and audit path as the CLI.

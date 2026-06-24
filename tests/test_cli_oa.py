@@ -522,42 +522,26 @@ class CliOaTests(unittest.TestCase):
 
     def test_oa_pending_submit_executes_each_item_and_verifies_disappearance(self):
         server, seen_payloads = self._start_daemon(
-            [
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Weekly 24",
-                                "affair_id": "a24",
-                                "href": "http://oa.example.test/detail?affairId=a24",
-                            },
-                            {
-                                "title": "Weekly 23",
-                                "affair_id": "a23",
-                                "href": "http://oa.example.test/detail?affairId=a23",
-                            },
-                        ]
-                    },
+            {
+                "ok": True,
+                "result": {
+                    "target_count": 2,
+                    "submitted_count": 2,
+                    "stopped": False,
+                    "items": [
+                        {
+                            "title": "Weekly 24",
+                            "affair_id": "a24",
+                            "verification": {"status": "disappeared"},
+                        },
+                        {
+                            "title": "Weekly 23",
+                            "affair_id": "a23",
+                            "verification": {"status": "disappeared"},
+                        },
+                    ],
                 },
-                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
-                {"ok": True, "task_id": "submit-24", "result": {"submitted": True, "affair_id": "a24"}},
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Weekly 23",
-                                "affair_id": "a23",
-                                "href": "http://oa.example.test/detail?affairId=a23",
-                            }
-                        ]
-                    },
-                },
-                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
-                {"ok": True, "task_id": "submit-23", "result": {"submitted": True, "affair_id": "a23"}},
-                {"ok": True, "result": {"items": []}},
-            ]
+            }
         )
 
         with TemporaryDirectory() as tmp:
@@ -588,62 +572,31 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["submitted_count"], 2)
         self.assertEqual(payload["result"]["items"][0]["verification"]["status"], "disappeared")
         self.assertEqual(payload["result"]["items"][1]["verification"]["status"], "disappeared")
-        self.assertEqual(
-            [entry["command"] for entry in seen_payloads],
-            [
-                "pending_list_api",
-                "detail_read",
-                "write_execute",
-                "pending_list_api",
-                "detail_read",
-                "write_execute",
-                "pending_list_api",
-            ],
-        )
-        self.assertEqual(seen_payloads[2]["args"]["affair_id"], "a24")
-        self.assertEqual(seen_payloads[2]["args"]["opinion"], "approved")
-        self.assertTrue(seen_payloads[2]["args"]["confirm"])
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_submit"])
+        self.assertEqual(seen_payloads[0]["args"]["keyword"], "Weekly")
+        self.assertEqual(seen_payloads[0]["args"]["action"], "ContinueSubmit")
+        self.assertEqual(seen_payloads[0]["args"]["opinion"], "approved")
+        self.assertEqual(seen_payloads[0]["args"]["limit"], 2)
+        self.assertEqual(seen_payloads[0]["args"]["verify_wait"], 0.0)
+        self.assertTrue(seen_payloads[0]["args"]["confirm"])
 
     def test_oa_pending_submit_stops_when_item_is_still_pending_after_submit(self):
         server, seen_payloads = self._start_daemon(
-            [
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Weekly 24",
-                                "affair_id": "a24",
-                                "href": "http://oa.example.test/detail?affairId=a24",
-                            },
-                            {
-                                "title": "Weekly 23",
-                                "affair_id": "a23",
-                                "href": "http://oa.example.test/detail?affairId=a23",
-                            },
-                        ]
-                    },
+            {
+                "ok": False,
+                "result": {
+                    "target_count": 2,
+                    "submitted_count": 0,
+                    "stopped": True,
+                    "items": [
+                        {
+                            "title": "Weekly 24",
+                            "affair_id": "a24",
+                            "verification": {"status": "still_pending"},
+                        }
+                    ],
                 },
-                {"ok": True, "result": {"actions": [{"code": "ContinueSubmit"}]}},
-                {"ok": True, "task_id": "submit-24", "result": {"submitted": True, "affair_id": "a24"}},
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Weekly 24",
-                                "affair_id": "a24",
-                                "href": "http://oa.example.test/detail?affairId=a24",
-                            },
-                            {
-                                "title": "Weekly 23",
-                                "affair_id": "a23",
-                                "href": "http://oa.example.test/detail?affairId=a23",
-                            },
-                        ]
-                    },
-                },
-            ]
+            }
         )
 
         with TemporaryDirectory() as tmp:
@@ -674,7 +627,7 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["submitted_count"], 0)
         self.assertEqual(payload["result"]["items"][0]["verification"]["status"], "still_pending")
         self.assertEqual(len(payload["result"]["items"]), 1)
-        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read", "write_execute", "pending_list_api"])
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_submit"])
 
     def test_oa_pending_submit_requires_confirm_before_daemon_calls(self):
         server, seen_payloads = self._start_daemon({"ok": True, "result": {"items": []}})

@@ -227,20 +227,23 @@ requires `--confirm`, dispatches a browser task, verifies the detail-page
 `affairId`, fills the opinion, and invokes the page's own Seeyon submit
 function. Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
-`oa__write_draft`, `oa__write_dry_run`, and `oa__write_execute`; the execute
-tool requires a `confirm` argument in its schema before it can perform a
-production write.
+`oa__write_draft`, `oa__write_dry_run`, `oa__write_execute`, and
+`oa__pending_submit`; executable tools require a `confirm` argument in their
+schema before they can perform a production write.
 
-For repeated pending items, use the governed batch submit command. It submits
-one item at a time and verifies that each `affair_id` disappears from pending
-before continuing:
+For repeated pending items, use the governed batch submit command. It runs in
+the daemon execution layer, so CLI and agent tools share the same confirmation
+gate, action check, post-submit verification, and audit trail. It submits one
+item at a time and verifies that each `affair_id` disappears from pending before
+continuing:
 
 ```bash
-python -m bscli.cli.main --home .bscli oa pending submit --keyword "周报发送流程" --action ContinueSubmit --opinion "已阅" --limit 3 --confirm
+python -m bscli.cli.main --home .bscli oa pending submit --keyword "weekly report" --action ContinueSubmit --opinion "read" --limit 3 --confirm
 ```
 
 If a submitted item is still present after verification, the command stops and
-does not attempt later items.
+does not attempt later items. Verification audit rows are written to
+`.bscli/audit/oa-write-verifications.jsonl` without storing the opinion text.
 
 Read the structured pending list from the OA home page:
 
@@ -427,11 +430,14 @@ Implemented:
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`
+- Governed write CLI `oa write execute`
+- Governed batch write CLI `oa pending submit`
+- MCP write tools `oa__write_execute` and `oa__pending_submit`
 
 Not implemented yet:
 
 - UI workflow recording
-- Real Seeyon OA business command adapters beyond read-only home-page exploration
+- Seeyon OA write actions beyond confirmed `ContinueSubmit`
 
 ## Tests
 
