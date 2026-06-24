@@ -206,6 +206,19 @@ function waitForTabComplete(tabId, timeoutMs) {
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (tab && tab.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    });
   });
 }
 

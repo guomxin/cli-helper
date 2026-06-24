@@ -567,6 +567,7 @@ def run_oa_daemon_command(
             "args": command_args,
             "timeout_seconds": args.timeout,
         },
+        timeout=max(float(args.timeout) + 5, 10),
     )
 
 
@@ -838,7 +839,7 @@ def handle_adapter(args: argparse.Namespace) -> int:
     raise ValueError(f"unknown adapter action: {args.action}")
 
 
-def post_json(url: str, payload: dict) -> dict:
+def post_json(url: str, payload: dict, *, timeout: float = 10) -> dict:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -847,7 +848,7 @@ def post_json(url: str, payload: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         try:

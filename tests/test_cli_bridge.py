@@ -1,9 +1,11 @@
 import json
 import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 from tempfile import TemporaryDirectory
@@ -12,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
 from bscli.cli.main import print_json
+from bscli.cli.main import post_json
 from bscli.core.registry import CommandRegistry
 
 
@@ -126,6 +129,34 @@ class CliAndBridgeTests(unittest.TestCase):
             stdout.flush()
 
         self.assertEqual(json.loads(buffer.getvalue().decode("gbk"))["text"], "A\u00a0B")
+
+    def test_post_json_accepts_custom_timeout(self):
+        seen_payloads = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["content-length"])).decode("utf-8"))
+                seen_payloads.append(body)
+                payload = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        response = post_json(f"http://127.0.0.1:{server.server_port}", {"hello": "world"}, timeout=1)
+
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(seen_payloads, [{"hello": "world"}])
 
     def test_cli_adapter_parse_seeyon_home_templates(self):
         with TemporaryDirectory() as tmp:
