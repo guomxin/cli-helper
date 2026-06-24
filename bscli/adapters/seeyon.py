@@ -380,3 +380,87 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
             verify={"type": "json_path", "path": "$.candidates"},
         )
     )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="write_draft",
+            description="Build a non-executing Seeyon OA write-operation draft plan.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "affair_id": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "opinion": {"type": "string"},
+                "source_url": {"type": "string"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "safety": {"type": "object"},
+                    "request": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.safety.will_execute"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="write_dry_run",
+            description="Build and audit a non-executing Seeyon OA write-operation dry-run plan.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "affair_id": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "opinion": {"type": "string"},
+                "source_url": {"type": "string"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "safety": {"type": "object"},
+                    "request": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.request.status"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="write_execute",
+            description="Reserved Seeyon OA write execution command. Currently returns a blocked plan only.",
+            access="write",
+            strategy="human_gate",
+            risk="high",
+            requires_confirmation=True,
+            args_schema={
+                "affair_id": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "opinion": {"type": "string"},
+                "source_url": {"type": "string"},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm intent; production execution is still blocked.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "plan": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.plan.safety.will_execute"},
+        )
+    )

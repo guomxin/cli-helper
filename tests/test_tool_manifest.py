@@ -78,6 +78,23 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(tool["metadata"]["access"], "write")
         self.assertEqual(tool["metadata"]["risk"], "medium")
 
+    def test_oa_write_execute_tool_requires_confirm_argument(self):
+        registry = CommandRegistry()
+        register_seeyon_commands(registry)
+
+        manifest = export_tool_manifest(registry, system="oa")
+        tools = {tool["name"]: tool for tool in manifest["tools"]}
+        tool = tools["oa__write_execute"]
+
+        self.assertEqual(
+            tool["input_schema"]["required"],
+            ["affair_id", "action", "confirm"],
+        )
+        self.assertEqual(tool["input_schema"]["properties"]["confirm"]["type"], "boolean")
+        self.assertEqual(tool["metadata"]["access"], "write")
+        self.assertEqual(tool["metadata"]["risk"], "high")
+        self.assertTrue(tool["metadata"]["requires_confirmation"])
+
 
 if __name__ == "__main__":
     unittest.main()

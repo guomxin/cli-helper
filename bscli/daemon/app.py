@@ -20,6 +20,7 @@ from bscli.adapters.seeyon_home import (
     parse_template_projection,
     parse_template_list,
 )
+from bscli.adapters.seeyon_write import append_oa_write_audit, build_oa_write_plan
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApiStore
@@ -186,6 +187,8 @@ class DaemonState:
                     "result": self._session_status(),
                 },
             )
+        if system == "oa" and command in {"write_draft", "write_dry_run", "write_execute"}:
+            return self._run_oa_write_plan_command(command, body.get("args") or {})
         if command == "discovered_run":
             return self._run_discovered_command(body)
         task_kind = COMMAND_TASKS.get((system, command))
@@ -603,6 +606,35 @@ class DaemonState:
             },
         )
 
+    def _run_oa_write_plan_command(self, command: str, args: dict[str, Any]) -> DaemonResponse:
+        mode = {
+            "write_draft": "draft",
+            "write_dry_run": "dry-run",
+            "write_execute": "execute",
+        }[command]
+        plan = build_oa_write_plan(
+            affair_id=str(args.get("affair_id") or ""),
+            action=str(args.get("action") or ""),
+            opinion=str(args.get("opinion") or ""),
+            mode=mode,
+            source_url=str(args.get("source_url") or ""),
+        )
+        if mode == "dry-run":
+            append_oa_write_audit(self.config_store.root, plan)
+        if mode == "execute":
+            append_oa_write_audit(self.config_store.root, plan)
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": args.get("confirm") is True,
+                    "error": "oa write execute is not implemented for production writes",
+                    "result": plan,
+                },
+            )
+        return DaemonResponse(200, {"ok": True, "task_id": None, "result": plan})
+
     def _run_page_fetch(
         self,
         system: str,
@@ -696,6 +728,10 @@ class DaemonState:
         return None
 
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
+        if system == "oa" and command in {"write_draft", "write_dry_run"}:
+            return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "write_execute":
+            return {"access": "write", "strategy": "human_gate"}
         if command == "discovered_run":
             try:
                 api = DiscoveredApiStore(self.config_store.root).load_api(system, str(args.get("name") or ""))

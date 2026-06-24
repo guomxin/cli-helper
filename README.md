@@ -223,6 +223,10 @@ python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --actio
 `draft` and `dry-run` never contact the daemon or browser. `dry-run` writes a
 sanitized audit row under `.bscli/audit/oa-write-plans.jsonl`. `execute` is a
 reserved command and returns a blocked plan even when `--confirm` is provided.
+The same safe planning capabilities are also registered as agent-callable tools:
+`oa__write_draft`, `oa__write_dry_run`, and `oa__write_execute`; the execute
+tool requires a `confirm` argument in its schema but still cannot perform a
+production write.
 
 Read the structured pending list from the OA home page:
 

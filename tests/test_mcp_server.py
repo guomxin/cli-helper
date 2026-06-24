@@ -319,6 +319,70 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(calls, [("oa", "discovered_run", {"name": "submit", "confirm": True})])
         self.assertEqual(result["result"]["structuredContent"]["confirmed"], True)
 
+    def test_call_oa_write_execute_requires_confirm_argument(self):
+        calls = []
+        server = self._server(runner=lambda *args: calls.append(args) or {})
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 14,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_execute",
+                    "arguments": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["error"]["code"], -32602)
+        self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
+
+    def test_call_oa_write_dry_run_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"mode": "dry-run", "safety": {"will_execute": False}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 15,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_dry_run",
+                    "arguments": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "write_dry_run",
+                    {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                )
+            ],
+        )
+        self.assertFalse(result["result"]["structuredContent"]["safety"]["will_execute"])
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

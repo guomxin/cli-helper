@@ -76,6 +76,9 @@ class CliAndBridgeTests(unittest.TestCase):
                     "template_detail",
                     "template_list",
                     "template_list_api",
+                    "write_draft",
+                    "write_dry_run",
+                    "write_execute",
                 ],
             )
 
@@ -330,6 +333,9 @@ class CliAndBridgeTests(unittest.TestCase):
                     "template_detail",
                     "template_list",
                     "template_list_api",
+                    "write_draft",
+                    "write_dry_run",
+                    "write_execute",
                 ],
         )
 

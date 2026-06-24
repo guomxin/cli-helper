@@ -1863,6 +1863,65 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["replay"]["json"], {"saved": True})
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
+    def test_run_oa_write_dry_run_records_sanitized_audit_without_browser_task(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_dry_run",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["mode"], "dry-run")
+            self.assertFalse(response.body["result"]["safety"]["will_execute"])
+            self.assertEqual(response.body["result"]["request"]["status"], "not_sent")
+            self.assertEqual(len(audit_rows), 1)
+            self.assertEqual(audit_rows[0]["target"]["affair_id"], "affair-1")
+            self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
+            self.assertEqual(state.bridge.pending_tasks, [])
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
+
+    def test_run_oa_write_execute_stays_blocked_even_when_confirmed(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertEqual(response.body["ok"], False)
+            self.assertEqual(response.body["result"]["mode"], "execute")
+            self.assertEqual(response.body["result"]["request"]["status"], "blocked")
+            self.assertFalse(response.body["result"]["safety"]["will_execute"])
+            self.assertEqual(state.bridge.pending_tasks, [])
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()

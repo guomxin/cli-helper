@@ -69,3 +69,17 @@ Before any OA write can become executable, it must have:
 
 Until those conditions are met and reviewed, BSCLI must stay at discovery,
 draft, and dry-run only.
+
+## Agent Tool Exposure
+
+The safe planning commands are registered in the normal BSCLI command registry:
+
+- `oa__write_draft`
+- `oa__write_dry_run`
+- `oa__write_execute`
+
+`write_draft` and `write_dry_run` are exposed as read/low-risk daemon tools
+because they do not mutate OA state. `write_execute` is exposed as a
+write/high-risk human-gate tool and requires a `confirm` argument in the tool
+schema, but the daemon implementation still returns a blocked plan and does not
+deliver any browser task.
