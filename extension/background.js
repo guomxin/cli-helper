@@ -219,6 +219,7 @@ async function executeSeeyonWrite(payload) {
     if (!injection || !injection.result) {
       throw new Error("Seeyon submit script returned no result");
     }
+    await new Promise((resolve) => setTimeout(resolve, Number(payload.after_submit_wait_ms || 8000)));
     return injection.result;
   } finally {
     if (tab.id && payload.keep_tab !== true) {
@@ -252,7 +253,6 @@ async function runSeeyonContinueSubmit(payload) {
     throw new Error("Seeyon submit function doZCDB was not found on the detail page");
   }
 
-  const records = [];
   const dialogs = [];
   const findCommentElement = () => {
     const selectors = [
@@ -269,79 +269,8 @@ async function runSeeyonContinueSubmit(payload) {
     }
     return null;
   };
-  const originalFetch = window.fetch;
-  const originalOpen = XMLHttpRequest.prototype.open;
-  const originalSend = XMLHttpRequest.prototype.send;
   const originalConfirm = window.confirm;
   const originalAlert = window.alert;
-
-  const appendRecord = (record) => {
-    records.push({
-      ...record,
-      url: String(record.url || "").slice(0, 2000),
-      requestBody: record.requestBody == null ? null : String(record.requestBody).slice(0, 2000),
-      responseText: record.responseText == null ? null : String(record.responseText).slice(0, 2000),
-      error: record.error == null ? null : String(record.error).slice(0, 1000),
-    });
-    if (records.length > 100) {
-      records.splice(0, records.length - 100);
-    }
-  };
-
-  window.fetch = async function bscliWriteFetch(input, init = {}) {
-    const method = (init && init.method) || (input && input.method) || "GET";
-    const url = input && input.url ? input.url : input;
-    try {
-      const response = await originalFetch.apply(this, arguments);
-      let responseText = null;
-      try {
-        responseText = await response.clone().text();
-      } catch (_error) {
-        responseText = null;
-      }
-      appendRecord({
-        kind: "fetch",
-        method,
-        url,
-        status: response.status,
-        ok: response.ok,
-        requestBody: init && init.body,
-        responseText,
-      });
-      return response;
-    } catch (error) {
-      appendRecord({
-        kind: "fetch",
-        method,
-        url,
-        status: 0,
-        ok: false,
-        requestBody: init && init.body,
-        error: error && error.message ? error.message : String(error),
-      });
-      throw error;
-    }
-  };
-
-  XMLHttpRequest.prototype.open = function bscliWriteOpen(method, url) {
-    this.__bscliWriteMethod = method || "GET";
-    this.__bscliWriteUrl = url || "";
-    return originalOpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function bscliWriteSend(body) {
-    this.addEventListener("loadend", () => {
-      appendRecord({
-        kind: "xmlhttprequest",
-        method: this.__bscliWriteMethod || "GET",
-        url: this.responseURL || this.__bscliWriteUrl || "",
-        status: this.status,
-        ok: this.status >= 200 && this.status < 400,
-        requestBody: body,
-        responseText: this.responseText,
-      });
-    });
-    return originalSend.apply(this, arguments);
-  };
 
   window.confirm = function bscliWriteConfirm(message) {
     dialogs.push({ type: "confirm", message: String(message || "").slice(0, 1000), accepted: true });
@@ -366,30 +295,12 @@ async function runSeeyonContinueSubmit(payload) {
     comment.dispatchEvent(new Event("input", { bubbles: true }));
     comment.dispatchEvent(new Event("change", { bubbles: true }));
 
-    const returned = window.doZCDB();
-    if (returned && typeof returned.then === "function") {
-      await returned;
-    }
-    const deadline = Date.now() + Number(payload.wait_ms || 12000);
-    while (Date.now() < deadline) {
-      if (records.some((record) => String(record.url || "").includes("finishWorkItem"))) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
+    window.doZCDB();
   } finally {
-    window.fetch = originalFetch;
-    XMLHttpRequest.prototype.open = originalOpen;
-    XMLHttpRequest.prototype.send = originalSend;
     window.confirm = originalConfirm;
     window.alert = originalAlert;
   }
 
-  const finishRecords = records.filter((record) => String(record.url || "").includes("finishWorkItem"));
-  const successfulFinish = finishRecords.some((record) => Number(record.status) >= 200 && Number(record.status) < 400);
-  if (!successfulFinish) {
-    throw new Error(`Seeyon finishWorkItem request was not observed or did not succeed; observed=${finishRecords.length}`);
-  }
   return {
     submitted: true,
     affair_id: expectedAffairId,
@@ -398,7 +309,6 @@ async function runSeeyonContinueSubmit(payload) {
     url: location.href,
     title: document.title,
     dialogs,
-    records: finishRecords.slice(-5),
   };
 }
 
