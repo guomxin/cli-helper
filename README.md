@@ -32,6 +32,9 @@ Load the Chrome extension:
 3. Choose "Load unpacked".
 4. Select `D:\Codes\CLIExp\extension`.
 
+After changing files under `extension/`, click "Reload" for the unpacked
+extension so the background service worker picks up the new task handlers.
+
 Open and log in to the OA system in Chrome:
 
 ```text
@@ -149,9 +152,10 @@ python -m bscli.cli.main --home .bscli oa detail attachments --url "http://10.10
 python -m bscli.cli.main --home .bscli oa detail workflow --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
 ```
 
-The detail reader fetches the page inside the logged-in browser context and
-extracts page text, table-like form fields, attachment download links, and
-workflow/opinion hints.
+The detail reader opens the target URL in a temporary inactive Chrome tab,
+waits for the page to render, captures HTML inside the logged-in browser
+context, and extracts page text, table-like form fields, attachment download
+links, and workflow/opinion hints.
 
 Pending, sent, and template objects:
 
@@ -351,6 +355,7 @@ Implemented:
 - Local daemon endpoints
 - Chrome extension DOM snapshot task
 - Chrome extension HTML snapshot task
+- Chrome extension rendered detail snapshot task
 - Profile-based browser tab routing for multi-tab / multi-system use
 - Daemon-side Seeyon OA home-page parsing
 - API response shape inspection

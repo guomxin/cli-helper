@@ -93,6 +93,9 @@ async function executeTask(clientId, tabId, task) {
         target: { tabId },
         func: collectHtmlSnapshot,
       });
+    } else if (task.kind === "rendered_html_snapshot") {
+      const result = await collectRenderedHtmlSnapshot(task.payload || {});
+      injection = { result };
     } else if (task.kind === "network_probe_install") {
       [injection] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -163,6 +166,47 @@ function collectHtmlSnapshot() {
     title: document.title,
     html: document.documentElement.outerHTML,
   };
+}
+
+async function collectRenderedHtmlSnapshot(payload) {
+  const url = payload.url;
+  if (!url) {
+    throw new Error("url is required");
+  }
+  const settleMs = Number(payload.settle_ms || 1500);
+  const tab = await chrome.tabs.create({ url, active: false });
+  try {
+    await waitForTabComplete(tab.id, 20000);
+    if (settleMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+    }
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: collectHtmlSnapshot,
+    });
+    return injection.result;
+  } finally {
+    if (tab.id) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+    }
+  }
+}
+
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error("timed out waiting for rendered tab load"));
+    }, timeoutMs);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
 }
 
 function collectPageInventory() {

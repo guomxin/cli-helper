@@ -1418,8 +1418,7 @@ class DaemonTests(unittest.TestCase):
                     if tasks:
                         break
                     time.sleep(0.01)
-                self.assertEqual(tasks[0]["kind"], "page_fetch")
-                self.assertEqual(tasks[0]["payload"]["method"], "GET")
+                self.assertEqual(tasks[0]["kind"], "rendered_html_snapshot")
                 self.assertEqual(tasks[0]["payload"]["url"], detail_url)
                 state.handle(
                     "POST",
@@ -1429,11 +1428,9 @@ class DaemonTests(unittest.TestCase):
                         "task_id": tasks[0]["id"],
                         "ok": True,
                         "result": {
-                            "status": 200,
-                            "ok": True,
                             "url": detail_url,
-                            "contentType": "text/html",
-                            "text": """
+                            "title": "Seal request",
+                            "html": """
                             <h1>Seal request</h1>
                             <table><tr><th>Applicant</th><td>Alice</td></tr></table>
                             <a href="/seeyon/fileUpload.do?method=download&fileId=f1">seal-plan.pdf</a>

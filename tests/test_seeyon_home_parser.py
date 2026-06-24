@@ -95,7 +95,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["affair_id"], "abc-123")
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
         )
         self.assertFalse(result["items"][0]["read"])
         self.assertTrue(result["items"][1]["read"])
@@ -140,7 +140,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertFalse(result["items"][0]["read"])
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=abc-123&showTab=true",
         )
 
     def test_parse_sent_projection_extracts_rows_from_section_api(self):
@@ -181,7 +181,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["affair_id"], "sent-123")
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=summary&openFrom=listSent&affairId=sent-123&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&openFrom=listSent&affairId=sent-123&showTab=true",
         )
 
     def test_parse_template_list_extracts_template_ids(self):
@@ -210,7 +210,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][1]["template_id"], "3492618929488609812")
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
         )
 
     def test_parse_template_projection_extracts_rows_from_section_api(self):
@@ -246,7 +246,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
         )
 
     def test_parse_template_projection_extracts_chessboard_items_from_section_api(self):
@@ -279,7 +279,7 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["open_type"], "4")
         self.assertEqual(
             result["items"][0]["href"],
-            "http://10.10.50.110/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
         )
 
     def test_parse_template_list_accepts_playwright_saved_string_result(self):

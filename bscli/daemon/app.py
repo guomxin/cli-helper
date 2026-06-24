@@ -30,7 +30,7 @@ COMMAND_TASKS = {
     ("oa", "api_replay"): "page_fetch",
     ("oa", "api_save"): "page_fetch",
     ("oa", "current_page_snapshot"): "dom_snapshot",
-    ("oa", "detail_read"): "page_fetch",
+    ("oa", "detail_read"): "rendered_html_snapshot",
     ("oa", "navigation_inventory"): "html_snapshot",
     ("oa", "network_api_candidates"): "network_log_snapshot",
     ("oa", "network_log_snapshot"): "network_log_snapshot",
@@ -516,31 +516,39 @@ class DaemonState:
         args: dict[str, Any],
         timeout_seconds: float,
     ) -> DaemonResponse:
-        replay_response = self._run_page_fetch(
-            system,
-            target_client_id,
-            {"method": "GET", "url": args["url"], "headers": {}, "body": None},
-            timeout_seconds,
+        task_id = self.bridge.enqueue_task(
+            system=system,
+            kind="rendered_html_snapshot",
+            payload={"url": args["url"], "settle_ms": int(args.get("settle_ms", 1500))},
+            target_client_id=target_client_id,
         )
-        if replay_response.status != 200:
-            return replay_response
-        replay = replay_response.body["result"] or {}
-        if not replay.get("ok"):
+        result = self.bridge.wait_for_result(task_id, timeout_seconds=timeout_seconds)
+        if result is None:
             return DaemonResponse(
-                502,
+                504,
                 {
                     "ok": False,
-                    "task_id": replay_response.body["task_id"],
-                    "error": f"detail page returned HTTP {replay.get('status')}",
+                    "task_id": task_id,
+                    "error": "command timed out waiting for rendered detail page",
                 },
             )
-        html = str(replay.get("text") or "")
+        if not result["ok"]:
+            return DaemonResponse(
+                500,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "error": result.get("error") or "rendered detail page failed",
+                },
+            )
+        snapshot = result.get("result") or {}
+        html = str(snapshot.get("html") or snapshot.get("text") or "")
         return DaemonResponse(
             200,
             {
                 "ok": True,
-                "task_id": replay_response.body["task_id"],
-                "result": parse_oa_detail(html, base_url=replay.get("url") or args["url"]),
+                "task_id": task_id,
+                "result": parse_oa_detail(html, base_url=snapshot.get("url") or args["url"]),
             },
         )
 

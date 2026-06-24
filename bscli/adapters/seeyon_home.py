@@ -91,7 +91,7 @@ def parse_pending_list(html: str, *, base_url: str) -> dict:
                 "date": compact_cells[2] if len(compact_cells) > 2 else "",
                 "category": compact_cells[3] if len(compact_cells) > 3 else "",
                 "affair_id": _query_value(raw_href, "affairId", base_url=base_url),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "read": _has_self_or_descendant_class(row, "AlreadyRead"),
                 "raw_text": _clean(row.text(), 800),
             }
@@ -124,7 +124,7 @@ def parse_pending_projection(projection: dict, *, base_url: str) -> dict:
                 "category": _cell_text(cells, 3),
                 "affair_id": _query_value(raw_href, "affairId", base_url=base_url)
                 or str(title_cell.get("id") or ""),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "read": title_cell.get("className") != "ReadDifferFromNotRead",
                 "raw_text": _clean(" ".join(_cell_text(cells, offset) for offset in range(len(cells))), 800),
             }
@@ -164,7 +164,7 @@ def parse_sent_projection(projection: dict, *, base_url: str) -> dict:
                 "category": _cell_text(cells, 3),
                 "affair_id": _query_value(raw_href, "affairId", base_url=base_url)
                 or str(title_cell.get("id") or ""),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "raw_text": _clean(" ".join(_cell_text(cells, offset) for offset in range(len(cells))), 800),
             }
         )
@@ -199,7 +199,7 @@ def parse_template_projection(projection: dict, *, base_url: str) -> dict:
                 "title": title,
                 "template_id": _query_value(raw_href, "templateId", base_url=base_url)
                 or str(item.get("id") or item.get("optionId") or ""),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "raw_href": raw_href,
                 "open_type": str(item.get("openType") or ""),
                 "raw_text": title,
@@ -229,7 +229,7 @@ def parse_template_projection(projection: dict, *, base_url: str) -> dict:
                 "title": title,
                 "template_id": _query_value(raw_href, "templateId", base_url=base_url)
                 or str(title_cell.get("id") or ""),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "raw_href": raw_href,
                 "raw_text": _clean(_strip_html(cell_html), 800),
             }
@@ -277,7 +277,7 @@ def parse_template_list(html: str, *, base_url: str) -> dict:
                 "index": index,
                 "title": title,
                 "template_id": _query_value(raw_href, "templateId", base_url=base_url),
-                "href": urljoin(base_url, raw_href) if raw_href else "",
+                "href": _join_app_url(base_url, raw_href) if raw_href else "",
                 "raw_href": raw_href,
                 "raw_text": _clean(table.text(), 800),
             }
@@ -637,9 +637,24 @@ def _parse_counted_label(label: str) -> tuple[str, int | None]:
 def _query_value(url: str, key: str, *, base_url: str) -> str:
     if not url:
         return ""
-    parsed = urlparse(urljoin(base_url, url))
+    parsed = urlparse(_join_app_url(base_url, url))
     values = parse_qs(parsed.query, keep_blank_values=True).get(key)
     if values:
         return values[0]
     match = re.search(rf"[?&]{re.escape(key)}=([^&]+)", url)
     return unquote(match.group(1)) if match else ""
+
+
+def _join_app_url(base_url: str, url: str) -> str:
+    url = str(url or "").replace("&amp;", "&")
+    if not url:
+        return ""
+    base = urlparse(base_url)
+    if (
+        base.path.startswith("/seeyon/")
+        and url.startswith("/")
+        and not url.startswith("/seeyon/")
+        and not url.startswith("//")
+    ):
+        return urljoin(base_url, f"/seeyon{url}")
+    return urljoin(base_url, url)
