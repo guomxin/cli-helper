@@ -106,6 +106,29 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="detail_read",
+            description="Read a Seeyon OA detail page by URL and extract text, fields, attachments, and workflow hints.",
+            access="read",
+            strategy="page_fetch",
+            args_schema={
+                "url": {"type": "string", "required": True},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "text": {"type": "string"},
+                    "fields": {"type": "array"},
+                    "attachments": {"type": "array"},
+                    "workflow": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.text"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="navigation_inventory",
             description="Read Seeyon OA portal tabs, left navigation shortcuts, and home-page sections.",
             access="read",

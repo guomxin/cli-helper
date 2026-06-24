@@ -141,6 +141,16 @@ python -m bscli.cli.main --home .bscli oa page inventory
 python -m bscli.cli.main --home .bscli oa nav list
 ```
 
+Read an OA detail page from a URL found in list output:
+
+```bash
+python -m bscli.cli.main --home .bscli oa detail read --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+```
+
+The detail reader fetches the page inside the logged-in browser context and
+extracts page text, table-like form fields, attachment download links, and
+workflow/opinion hints.
+
 Pending, sent, and template objects:
 
 ```bash
@@ -334,6 +344,7 @@ Implemented:
 - Command execution trace records with `run_id`
 - Discovered API origin policy checks and confirmation gate
 - CLI `command run oa current_page_snapshot`
+- CLI `command run oa detail_read`
 - CLI `command run oa api_inspect`
 - CLI `command run oa api_replay`
 - CLI `command run oa api_save`
@@ -357,6 +368,9 @@ Implemented:
 - CLI `command list oa`
 - CLI `tool manifest oa`
 - CLI `mcp serve`
+- Business CLI `oa detail read`
+- Business CLI `oa pending/sent/template list/search/show/export`
+- Business CLI `oa probe/api/discovered ...`
 
 Not implemented yet:
 

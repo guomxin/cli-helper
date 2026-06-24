@@ -73,6 +73,42 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_detail_read_maps_url_to_detail_read(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "title": "Seal request",
+                    "attachments": [{"name": "seal-plan.pdf"}],
+                    "workflow": [{"text": "Opinion: approved"}],
+                },
+            }
+        )
+        detail_url = "http://oa.example.test/detail?a=1"
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "detail",
+                "read",
+                "--url",
+                detail_url,
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(json.loads(result.stdout)["result"]["title"], "Seal request")
+        self.assertEqual(
+            seen_payloads[0],
+            {
+                "system": "oa",
+                "command": "detail_read",
+                "args": {"url": detail_url},
+                "timeout_seconds": 30.0,
+            },
+        )
+
     def test_oa_sent_export_csv_prints_items_as_csv(self):
         server, _seen_payloads = self._start_daemon(
             {

@@ -301,6 +301,134 @@ def parse_navigation_inventory(html: str, *, base_url: str) -> dict:
     }
 
 
+def parse_oa_detail(html: str, *, base_url: str) -> dict:
+    root = _parse_html(html)
+    title = _detail_title(root)
+    text = _clean(root.text(), 20000)
+    fields = _parse_detail_fields(root)
+    attachments = _parse_detail_attachments(root, base_url=base_url)
+    workflow = _parse_detail_workflow(root)
+    return {
+        "title": title,
+        "url": base_url,
+        "text": text,
+        "fields": fields,
+        "attachments": attachments,
+        "attachment_count": len(attachments),
+        "workflow": workflow,
+        "workflow_count": len(workflow),
+    }
+
+
+def _detail_title(root: _Node) -> str:
+    for node in root.descendants():
+        if node.tag in {"h1", "h2"}:
+            title = _clean(node.text(), 300)
+            if title:
+                return title
+    for element_id in ("summarySubject", "subject", "title"):
+        node = _find_by_id(root, element_id)
+        if node:
+            title = _clean(node.text() or node.attr("title"), 300)
+            if title:
+                return title
+    title_node = _first(root, tag="title")
+    return _clean(title_node.text(), 300) if title_node else ""
+
+
+def _parse_detail_fields(root: _Node) -> list[dict]:
+    fields = []
+    seen = set()
+    for row in _find_all(root, tag="tr"):
+        row_marker = " ".join(row.attr(name).lower() for name in ("id", "class", "name") if row.attr(name))
+        if any(marker in row_marker for marker in ("workflow", "process", "opinion", "processlog")):
+            continue
+        cells = [
+            _clean(cell.text(), 500)
+            for cell in row.children
+            if cell.tag in {"th", "td"}
+        ]
+        cells = [cell for cell in cells if cell]
+        if len(cells) < 2:
+            continue
+        name = _field_name(cells[0])
+        value = _clean(" ".join(cells[1:]), 1000)
+        if name.lower() in {"node", "opinion", "workflow", "process"}:
+            continue
+        if not name or not value:
+            continue
+        key = (name, value)
+        if key in seen:
+            continue
+        seen.add(key)
+        fields.append({"name": name, "value": value})
+        if len(fields) >= 200:
+            break
+    return fields
+
+
+def _field_name(value: str) -> str:
+    return _clean(str(value or "").rstrip(":："), 200)
+
+
+def _parse_detail_attachments(root: _Node, *, base_url: str) -> list[dict]:
+    attachments = []
+    seen = set()
+    for link in _find_all(root, tag="a"):
+        href = link.attr("href").replace("&amp;", "&")
+        name = _clean(link.attr("title") or link.text() or href.rsplit("/", 1)[-1], 300)
+        if not href or not _looks_like_attachment(href, name):
+            continue
+        absolute = urljoin(base_url, href)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        attachments.append(
+            {
+                "name": name,
+                "href": absolute,
+                "raw_href": href,
+            }
+        )
+    return attachments
+
+
+def _looks_like_attachment(href: str, name: str) -> bool:
+    value = f"{href} {name}".lower()
+    if any(marker in value for marker in ("download", "fileupload", "attachment", "fileid=", "createfile.do")):
+        return True
+    return bool(re.search(r"\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|txt|csv|png|jpe?g)(\?|$)", value))
+
+
+def _parse_detail_workflow(root: _Node) -> list[dict]:
+    workflow = []
+    seen = set()
+    keywords = ("意见", "流程", "节点", "处理", "审批", "opinion", "workflow", "process", "approved", "approval")
+    for node in root.descendants():
+        if node.tag in {"html", "body", "document"}:
+            continue
+        if node.tag not in {"tr", "li", "div", "section", "p"}:
+            continue
+        marker = " ".join(
+            node.attr(name).lower()
+            for name in ("id", "class", "name")
+            if node.attr(name)
+        )
+        text = _clean(node.text(), 1000)
+        if not text:
+            continue
+        haystack = f"{marker} {text}".lower()
+        if not any(keyword.lower() in haystack for keyword in keywords):
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        workflow.append({"text": text})
+        if len(workflow) >= 100:
+            break
+    return workflow
+
+
 def _parse_portals(root: _Node) -> list[dict]:
     portals = []
     for index, node in enumerate(

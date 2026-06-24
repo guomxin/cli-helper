@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from bscli.adapters.seeyon import build_seeyon_profile
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
+    parse_oa_detail,
     parse_navigation_inventory,
     parse_pending_list,
     parse_pending_projection,
@@ -29,6 +30,7 @@ COMMAND_TASKS = {
     ("oa", "api_replay"): "page_fetch",
     ("oa", "api_save"): "page_fetch",
     ("oa", "current_page_snapshot"): "dom_snapshot",
+    ("oa", "detail_read"): "page_fetch",
     ("oa", "navigation_inventory"): "html_snapshot",
     ("oa", "network_api_candidates"): "network_log_snapshot",
     ("oa", "network_log_snapshot"): "network_log_snapshot",
@@ -240,6 +242,8 @@ class DaemonState:
             return self._run_api_inspect_command(system, target_client_id, args, timeout_seconds)
         if command == "api_save":
             return self._run_api_save_command(system, target_client_id, args, timeout_seconds)
+        if command == "detail_read":
+            return self._run_detail_read_command(system, target_client_id, args, timeout_seconds)
         if command == "api_replay":
             payload = {
                 "method": args.get("method", "GET").upper(),
@@ -502,6 +506,41 @@ class DaemonState:
                     "inspection": inspect_api_response(replay),
                     "replay": replay,
                 },
+            },
+        )
+
+    def _run_detail_read_command(
+        self,
+        system: str,
+        target_client_id: str,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        replay_response = self._run_page_fetch(
+            system,
+            target_client_id,
+            {"method": "GET", "url": args["url"], "headers": {}, "body": None},
+            timeout_seconds,
+        )
+        if replay_response.status != 200:
+            return replay_response
+        replay = replay_response.body["result"] or {}
+        if not replay.get("ok"):
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "task_id": replay_response.body["task_id"],
+                    "error": f"detail page returned HTTP {replay.get('status')}",
+                },
+            )
+        html = str(replay.get("text") or "")
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": replay_response.body["task_id"],
+                "result": parse_oa_detail(html, base_url=replay.get("url") or args["url"]),
             },
         )
 

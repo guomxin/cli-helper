@@ -3,6 +3,7 @@ import unittest
 
 from bscli.adapters.seeyon_home import (
     parse_navigation_inventory,
+    parse_oa_detail,
     parse_pending_list,
     parse_pending_projection,
     parse_sent_projection,
@@ -12,6 +13,48 @@ from bscli.adapters.seeyon_home import (
 
 
 class SeeyonHomeParserTests(unittest.TestCase):
+    def test_parse_oa_detail_extracts_fields_attachments_and_workflow(self):
+        html = """
+        <html>
+          <head><title>Seal request - OA</title></head>
+          <body>
+            <h1 id="summarySubject">Seal request</h1>
+            <table id="formData">
+              <tr><th>Applicant</th><td>Alice</td></tr>
+              <tr><td>Department</td><td>Finance</td></tr>
+            </table>
+            <div class="content">Please approve the company seal usage.</div>
+            <div id="attachments">
+              <a href="/seeyon/fileUpload.do?method=download&fileId=f1">seal-plan.pdf</a>
+            </div>
+            <table class="processLog">
+              <tr><td>Node</td><td>Manager approval</td><td>Opinion: approved</td></tr>
+            </table>
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary",
+        )
+
+        self.assertEqual(result["title"], "Seal request")
+        self.assertIn("Please approve", result["text"])
+        self.assertEqual(
+            result["fields"],
+            [
+                {"name": "Applicant", "value": "Alice"},
+                {"name": "Department", "value": "Finance"},
+            ],
+        )
+        self.assertEqual(result["attachments"][0]["name"], "seal-plan.pdf")
+        self.assertEqual(
+            result["attachments"][0]["href"],
+            "http://10.10.50.110/seeyon/fileUpload.do?method=download&fileId=f1",
+        )
+        self.assertEqual(result["workflow"][0]["text"], "Node Manager approval Opinion: approved")
+
     def test_parse_pending_list_extracts_structured_rows(self):
         html = """
         <div id="section_556815601453123423">

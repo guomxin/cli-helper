@@ -173,6 +173,14 @@ def _build_oa_parser(oa_sub) -> None:
     _add_daemon_options(nav_list)
     _add_output_options(nav_list)
 
+    detail = oa_sub.add_parser("detail")
+    detail_sub = detail.add_subparsers(dest="oa_action", required=True)
+    detail_read = detail_sub.add_parser("read")
+    detail_read.set_defaults(oa_command="detail_read")
+    detail_read.add_argument("--url", required=True)
+    _add_daemon_options(detail_read)
+    _add_output_options(detail_read)
+
     pending = oa_sub.add_parser("pending")
     pending_sub = pending.add_subparsers(dest="oa_action", required=True)
     _add_collection_parser(
@@ -485,6 +493,8 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
         return {"affair_id": args.affair_id}
     if command == "template_detail":
         return {"template_id": args.template_id}
+    if command == "detail_read":
+        return {"url": args.url}
     if command in {"api_inspect", "api_replay"}:
         return _api_args_from_oa_cli(args)
     if command == "api_save":

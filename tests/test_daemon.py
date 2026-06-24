@@ -1392,6 +1392,77 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["inspection"]["data_shape"], "Data.items[]")
             self.assertEqual(response.body["result"]["inspection"]["item_count"], 1)
 
+    def test_run_detail_read_fetches_and_parses_detail_page(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            detail_url = "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=a1"
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "page_fetch")
+                self.assertEqual(tasks[0]["payload"]["method"], "GET")
+                self.assertEqual(tasks[0]["payload"]["url"], detail_url)
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "status": 200,
+                            "ok": True,
+                            "url": detail_url,
+                            "contentType": "text/html",
+                            "text": """
+                            <h1>Seal request</h1>
+                            <table><tr><th>Applicant</th><td>Alice</td></tr></table>
+                            <a href="/seeyon/fileUpload.do?method=download&fileId=f1">seal-plan.pdf</a>
+                            <div class="processLog">Opinion: approved</div>
+                            """,
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "detail_read",
+                    "args": {"url": detail_url},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["title"], "Seal request")
+            self.assertEqual(response.body["result"]["fields"][0], {"name": "Applicant", "value": "Alice"})
+            self.assertEqual(response.body["result"]["attachments"][0]["name"], "seal-plan.pdf")
+            self.assertEqual(response.body["result"]["workflow"][0]["text"], "Opinion: approved")
+
     def test_run_api_save_replays_and_writes_discovered_api_file(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
