@@ -74,7 +74,7 @@ class ExtensionFilesTests(unittest.TestCase):
         self.assertIn("seeyon_write_execute", background)
         self.assertIn("executeSeeyonWrite", background)
         self.assertIn("runSeeyonContinueSubmit", background)
-        self.assertIn("doZCDB", background)
+        self.assertIn("dealSubmitFunc", background)
         self.assertIn("content_deal_comment", background)
         self.assertNotIn("findSeeyonCommentElement();", background)
 

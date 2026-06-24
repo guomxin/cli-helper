@@ -249,8 +249,14 @@ async function runSeeyonContinueSubmit(payload) {
   if (String(pageAffairId) !== expectedAffairId) {
     throw new Error(`affair_id mismatch: page=${pageAffairId || "(empty)"} expected=${expectedAffairId}`);
   }
-  if (typeof window.doZCDB !== "function") {
-    throw new Error("Seeyon submit function doZCDB was not found on the detail page");
+  const submitFn =
+    typeof window.dealSubmitFunc === "function"
+      ? window.dealSubmitFunc
+      : window.$ && window.$.content && window.$.content.callback && typeof window.$.content.callback.dealSubmit === "function"
+        ? window.$.content.callback.dealSubmit
+        : null;
+  if (!submitFn) {
+    throw new Error("Seeyon submit function dealSubmitFunc was not found on the detail page");
   }
 
   const dialogs = [];
@@ -295,7 +301,7 @@ async function runSeeyonContinueSubmit(payload) {
     comment.dispatchEvent(new Event("input", { bubbles: true }));
     comment.dispatchEvent(new Event("change", { bubbles: true }));
 
-    window.doZCDB();
+    submitFn.call(window);
   } finally {
     window.confirm = originalConfirm;
     window.alert = originalAlert;

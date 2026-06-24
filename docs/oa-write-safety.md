@@ -18,8 +18,8 @@ logged-in Chrome session after explicit confirmation.
 - `oa write execute ... --confirm` contacts the daemon, sends a
   `seeyon_write_execute` browser task, opens the source detail page in an
   inactive tab, verifies the target `affairId`, writes the opinion into
-  `content_deal_comment`, invokes the page's own `doZCDB()` submit function, and
-  observes the `finishWorkItem` request before reporting success.
+  `content_deal_comment`, invokes the page's own `dealSubmitFunc()` submit
+  function, and relies on a follow-up pending-list check for business success.
 - Without `--confirm`, `oa write execute ...` returns `ok=false` and records only
   a blocked local plan.
 
