@@ -95,6 +95,55 @@ class SeeyonHomeParserTests(unittest.TestCase):
             },
         )
 
+    def test_parse_oa_detail_extracts_write_endpoint_candidates(self):
+        html = """
+        <html>
+          <body>
+            <script>
+              function submitOpinion() {
+                $.ajax({url:'/seeyon/ajax.do?method=submitOpinion'});
+                return '/collaboration/collaboration.do?method=finishWorkItem&from=listPending';
+              }
+              var readOnlyContent = '/content/content.do?method=index&canDeleteISigntureHtml=true';
+            </script>
+            <input type="hidden" name="contentAffairId" value="affair-1">
+            <input type="hidden" name="summaryId" value="summary-1">
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do",
+        )
+
+        self.assertEqual(
+            result["write_hints"]["hidden_fields"],
+            [
+                {"name": "contentAffairId", "value_present": True},
+                {"name": "summaryId", "value_present": True},
+            ],
+        )
+        self.assertEqual(
+            result["write_hints"]["endpoint_candidates"],
+            [
+                {
+                    "url": "http://10.10.50.110/seeyon/ajax.do?method=submitOpinion",
+                    "method": "UNKNOWN",
+                    "risk": "high",
+                    "source": "rendered_html",
+                    "tested": False,
+                },
+                {
+                    "url": "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=finishWorkItem&from=listPending",
+                    "method": "UNKNOWN",
+                    "risk": "high",
+                    "source": "rendered_html",
+                    "tested": False,
+                },
+            ],
+        )
+
     def test_parse_pending_list_extracts_structured_rows(self):
         html = """
         <div id="section_556815601453123423">

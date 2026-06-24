@@ -33,10 +33,14 @@ Write plans use `schema_version=bscli.oa_write_plan.v1` and contain:
   `dry_run_only=true`.
 - `request`: currently `not_built`, `not_sent`, or `blocked`; method, URL, and
   body are always null.
+- `request.payload_preview`: a local, non-sent preview containing `affairId`,
+  `actionCode`, `opinionText`, optional `sourceUrl`, and `dryRunOnly=true`.
+- `request.payload_fields`: a field-level summary for audit and validation.
 
 Audit rows remove `opinion.text` and keep only metadata such as opinion length.
-They also keep request bodies null, so sensitive payloads are not written to
-disk.
+They also keep request bodies null and redact
+`request.payload_preview.opinionText`, so sensitive payload text is not written
+to disk.
 
 ## Risk Classification
 

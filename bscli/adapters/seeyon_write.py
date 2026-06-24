@@ -84,6 +84,23 @@ def build_oa_write_plan(
     target = {"affair_id": str(affair_id)}
     if source_url:
         target["source_url"] = source_url
+    payload_preview = {
+        "affairId": str(affair_id),
+        "actionCode": normalized_action["code"],
+        "opinionText": str(opinion or ""),
+        "sourceUrl": source_url or "",
+        "dryRunOnly": True,
+    }
+    payload_fields = [
+        {"name": "affairId", "value_present": bool(payload_preview["affairId"])},
+        {"name": "actionCode", "value_present": bool(payload_preview["actionCode"])},
+        {
+            "name": "opinionText",
+            "value_present": bool(payload_preview["opinionText"]),
+            "length": len(payload_preview["opinionText"]),
+        },
+        {"name": "sourceUrl", "value_present": bool(payload_preview["sourceUrl"])},
+    ]
     return {
         "schema_version": "bscli.oa_write_plan.v1",
         "created_at": datetime.now(UTC).isoformat(),
@@ -110,6 +127,8 @@ def build_oa_write_plan(
             "method": None,
             "url": None,
             "body": None,
+            "payload_preview": payload_preview,
+            "payload_fields": payload_fields,
             "reason": request_reason,
         },
     }
@@ -123,6 +142,9 @@ def sanitize_oa_write_plan_for_audit(plan: dict) -> dict:
     request = sanitized.get("request")
     if isinstance(request, dict):
         request["body"] = None
+        payload_preview = request.get("payload_preview")
+        if isinstance(payload_preview, dict):
+            payload_preview["opinionText"] = None
     return sanitized
 
 

@@ -322,7 +322,7 @@ def parse_oa_detail(html: str, *, base_url: str) -> dict:
         "workflow_count": len(workflow),
         "actions": actions,
         "action_count": len(actions),
-        "write_hints": _parse_detail_write_hints(root, html),
+        "write_hints": _parse_detail_write_hints(root, html, base_url=base_url),
     }
 
 
@@ -478,7 +478,7 @@ def _extract_json_arr_base_items(html: str) -> list:
     return items
 
 
-def _parse_detail_write_hints(root: _Node, html: str) -> dict:
+def _parse_detail_write_hints(root: _Node, html: str, *, base_url: str) -> dict:
     csrf_tokens = []
     if re.search(r"\bCSRFTOKEN\b\s*=", str(html or "")):
         csrf_tokens.append({"name": "CSRFTOKEN", "value_present": True})
@@ -494,7 +494,57 @@ def _parse_detail_write_hints(root: _Node, html: str) -> dict:
         hidden_fields.append({"name": name, "value_present": bool(node.attr("value"))})
         if len(hidden_fields) >= 100:
             break
-    return {"csrf_tokens": csrf_tokens, "hidden_fields": hidden_fields}
+    hints = {"csrf_tokens": csrf_tokens, "hidden_fields": hidden_fields}
+    endpoint_candidates = _parse_write_endpoint_candidates(str(html or ""), base_url=base_url)
+    if endpoint_candidates:
+        hints["endpoint_candidates"] = endpoint_candidates
+    return hints
+
+
+def _parse_write_endpoint_candidates(html: str, *, base_url: str) -> list[dict]:
+    candidates = []
+    seen = set()
+    for match in re.finditer(r"['\"]([^'\"]+\.do\?method=[^'\"]+)['\"]", html):
+        raw_url = match.group(1).replace("&amp;", "&")
+        if not _looks_like_write_endpoint(raw_url):
+            continue
+        absolute = _join_app_url(base_url, raw_url)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+        candidates.append(
+            {
+                "url": absolute,
+                "method": "UNKNOWN",
+                "risk": "high",
+                "source": "rendered_html",
+                "tested": False,
+            }
+        )
+        if len(candidates) >= 50:
+            break
+    return candidates
+
+
+def _looks_like_write_endpoint(url: str) -> bool:
+    parsed = urlparse(_join_app_url("http://localhost/seeyon/main.do?method=main", str(url or "")))
+    method_values = parse_qs(parsed.query, keep_blank_values=True).get("method", [])
+    value = f"{parsed.path} {' '.join(method_values)}".lower()
+    return any(
+        marker in value
+        for marker in (
+            "submit",
+            "finish",
+            "save",
+            "archive",
+            "delete",
+            "revoke",
+            "cancel",
+            "upload",
+            "opinion",
+            "workitem",
+        )
+    )
 
 
 def _parse_portals(root: _Node) -> list[dict]:
