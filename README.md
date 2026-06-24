@@ -126,6 +126,59 @@ Read OA portal tabs, left-side shortcuts, and home-page sections:
 python -m bscli.cli.main --home .bscli command run oa navigation_inventory --timeout 30
 ```
 
+## OA Business CLI
+
+The `oa` command group exposes business-oriented aliases for common Seeyon OA
+operations. These commands still run through the same daemon, Chrome extension
+bridge, trace store, origin policy, and confirmation gate.
+
+Session and page inspection:
+
+```bash
+python -m bscli.cli.main --home .bscli oa status
+python -m bscli.cli.main --home .bscli oa page snapshot
+python -m bscli.cli.main --home .bscli oa page inventory
+python -m bscli.cli.main --home .bscli oa nav list
+```
+
+Pending, sent, and template objects:
+
+```bash
+python -m bscli.cli.main --home .bscli oa pending list
+python -m bscli.cli.main --home .bscli oa pending search --keyword budget --limit 10
+python -m bscli.cli.main --home .bscli oa pending show -7317807227272018131
+python -m bscli.cli.main --home .bscli oa pending export --format csv --fields title,affair_id
+
+python -m bscli.cli.main --home .bscli oa sent list
+python -m bscli.cli.main --home .bscli oa sent search --keyword contract
+python -m bscli.cli.main --home .bscli oa sent export --format csv --fields title,sender,affair_id
+
+python -m bscli.cli.main --home .bscli oa template list
+python -m bscli.cli.main --home .bscli oa template search --keyword seal
+python -m bscli.cli.main --home .bscli oa template show -6511139737225050501
+python -m bscli.cli.main --home .bscli oa template export --format table --fields title,template_id
+```
+
+Page/API discovery:
+
+```bash
+python -m bscli.cli.main --home .bscli oa probe install
+python -m bscli.cli.main --home .bscli oa probe logs
+python -m bscli.cli.main --home .bscli oa probe candidates
+
+python -m bscli.cli.main --home .bscli oa api inspect --method GET --url "http://10.10.50.110/seeyon/ajax.do?..."
+python -m bscli.cli.main --home .bscli oa api replay --method GET --url "http://10.10.50.110/seeyon/ajax.do?..."
+python -m bscli.cli.main --home .bscli oa api save template-section --method GET --url "http://10.10.50.110/seeyon/ajax.do?..."
+
+python -m bscli.cli.main --home .bscli oa discovered list
+python -m bscli.cli.main --home .bscli oa discovered show template-section
+python -m bscli.cli.main --home .bscli oa discovered run template-section
+```
+
+Collection commands support `--keyword`, `--limit`, `--fields`, and
+`--format json|table|csv`, so agents can request either structured JSON or
+compact tabular output without needing post-processing glue.
+
 Read the structured pending list from the OA home page:
 
 ```bash
