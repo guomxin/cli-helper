@@ -76,6 +76,7 @@ class ExtensionFilesTests(unittest.TestCase):
         self.assertIn("runSeeyonContinueSubmit", background)
         self.assertIn("doZCDB", background)
         self.assertIn("content_deal_comment", background)
+        self.assertNotIn("findSeeyonCommentElement();", background)
 
 
 if __name__ == "__main__":

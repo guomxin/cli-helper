@@ -216,6 +216,9 @@ async function executeSeeyonWrite(payload) {
       func: runSeeyonContinueSubmit,
       args: [payload],
     });
+    if (!injection || !injection.result) {
+      throw new Error("Seeyon submit script returned no result");
+    }
     return injection.result;
   } finally {
     if (tab.id && payload.keep_tab !== true) {
@@ -251,6 +254,21 @@ async function runSeeyonContinueSubmit(payload) {
 
   const records = [];
   const dialogs = [];
+  const findCommentElement = () => {
+    const selectors = [
+      "#content_deal_comment",
+      "textarea[name='content_deal_comment']",
+      "textarea#content",
+      "textarea[name='content']",
+    ];
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        return element;
+      }
+    }
+    return null;
+  };
   const originalFetch = window.fetch;
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -335,7 +353,7 @@ async function runSeeyonContinueSubmit(payload) {
   };
 
   try {
-    const comment = findSeeyonCommentElement();
+    const comment = findCommentElement();
     if (!comment) {
       throw new Error("content_deal_comment was not found on the detail page");
     }
@@ -382,22 +400,6 @@ async function runSeeyonContinueSubmit(payload) {
     dialogs,
     records: finishRecords.slice(-5),
   };
-}
-
-function findSeeyonCommentElement() {
-  const selectors = [
-    "#content_deal_comment",
-    "textarea[name='content_deal_comment']",
-    "textarea#content",
-    "textarea[name='content']",
-  ];
-  for (const selector of selectors) {
-    const element = document.querySelector(selector);
-    if (element) {
-      return element;
-    }
-  }
-  return null;
 }
 
 function waitForTabComplete(tabId, timeoutMs) {

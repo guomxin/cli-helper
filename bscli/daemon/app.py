@@ -719,6 +719,18 @@ class DaemonState:
                     },
                 )
             submitted = result.get("result") or {}
+            if not isinstance(submitted, dict) or submitted.get("submitted") is not True:
+                return DaemonResponse(
+                    502,
+                    {
+                        "ok": False,
+                        "task_id": task_id,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "extension write task returned no submission confirmation",
+                        "result": plan,
+                    },
+                )
             if isinstance(submitted, dict):
                 submitted.setdefault("plan", plan)
             return DaemonResponse(

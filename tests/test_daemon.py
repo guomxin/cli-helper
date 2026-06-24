@@ -1994,6 +1994,65 @@ class DaemonTests(unittest.TestCase):
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
+    def test_run_oa_write_execute_rejects_empty_extension_result(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "ok": True,
+                        "result": None,
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 502)
+            self.assertFalse(response.body["ok"])
+            self.assertEqual(response.body["error"], "extension write task returned no submission confirmation")
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
