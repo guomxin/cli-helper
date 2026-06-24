@@ -68,6 +68,15 @@ class ExtensionFilesTests(unittest.TestCase):
         self.assertIn("collectOaTemplateList", background)
         self.assertIn("templateId", background)
 
+    def test_background_contains_seeyon_write_executor(self):
+        background = Path("extension/background.js").read_text(encoding="utf-8")
+
+        self.assertIn("seeyon_write_execute", background)
+        self.assertIn("executeSeeyonWrite", background)
+        self.assertIn("runSeeyonContinueSubmit", background)
+        self.assertIn("doZCDB", background)
+        self.assertIn("content_deal_comment", background)
+
 
 if __name__ == "__main__":
     unittest.main()

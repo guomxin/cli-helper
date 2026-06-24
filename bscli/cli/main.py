@@ -277,6 +277,7 @@ def _build_oa_parser(oa_sub) -> None:
         write_cmd.add_argument("--source-url", default="")
         if mode == "execute":
             write_cmd.add_argument("--confirm", action="store_true")
+            _add_daemon_options(write_cmd)
         _add_output_options(write_cmd)
 
 
@@ -585,11 +586,25 @@ def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
         emit_cli_value(plan, args)
         return 0
     if args.oa_write_mode == "execute":
+        if getattr(args, "confirm", False):
+            response = run_oa_daemon_command(
+                args,
+                "write_execute",
+                {
+                    "affair_id": args.affair_id,
+                    "action": args.action,
+                    "opinion": args.opinion,
+                    "source_url": args.source_url,
+                    "confirm": True,
+                },
+            )
+            emit_cli_value(response, args)
+            return 0
         blocked = {
             "ok": False,
-            "error": "oa write execute is not implemented for production writes",
+            "error": "oa write execute requires --confirm",
             "requires_confirmation": True,
-            "confirmed": bool(getattr(args, "confirm", False)),
+            "confirmed": False,
             "plan": plan,
         }
         append_oa_write_audit(home, plan)

@@ -96,6 +96,9 @@ async function executeTask(clientId, tabId, task) {
     } else if (task.kind === "rendered_html_snapshot") {
       const result = await collectRenderedHtmlSnapshot(task.payload || {});
       injection = { result };
+    } else if (task.kind === "seeyon_write_execute") {
+      const result = await executeSeeyonWrite(task.payload || {});
+      injection = { result };
     } else if (task.kind === "network_probe_install") {
       [injection] = await chrome.scripting.executeScript({
         target: { tabId },
@@ -190,6 +193,211 @@ async function collectRenderedHtmlSnapshot(payload) {
       await chrome.tabs.remove(tab.id).catch(() => {});
     }
   }
+}
+
+async function executeSeeyonWrite(payload) {
+  if (payload.confirm !== true) {
+    throw new Error("confirm=true is required for seeyon_write_execute");
+  }
+  if (payload.action !== "ContinueSubmit") {
+    throw new Error(`unsupported Seeyon write action: ${payload.action || ""}`);
+  }
+  const url = payload.source_url || payload.url;
+  if (!url) {
+    throw new Error("source_url is required for seeyon_write_execute");
+  }
+  const tab = await chrome.tabs.create({ url, active: false });
+  try {
+    await waitForTabComplete(tab.id, 30000);
+    await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 2000)));
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: runSeeyonContinueSubmit,
+      args: [payload],
+    });
+    return injection.result;
+  } finally {
+    if (tab.id && payload.keep_tab !== true) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+    }
+  }
+}
+
+async function runSeeyonContinueSubmit(payload) {
+  const expectedAffairId = String(payload.affair_id || "");
+  const opinion = String(payload.opinion || "");
+  if (!expectedAffairId) {
+    throw new Error("affair_id is required");
+  }
+  if (payload.confirm !== true) {
+    throw new Error("confirm=true is required");
+  }
+  if (payload.action !== "ContinueSubmit") {
+    throw new Error(`unsupported Seeyon write action: ${payload.action || ""}`);
+  }
+
+  const pageAffairId =
+    String(window.affairId || "") ||
+    document.querySelector("#affairId")?.value ||
+    new URLSearchParams(location.search).get("affairId") ||
+    "";
+  if (String(pageAffairId) !== expectedAffairId) {
+    throw new Error(`affair_id mismatch: page=${pageAffairId || "(empty)"} expected=${expectedAffairId}`);
+  }
+  if (typeof window.doZCDB !== "function") {
+    throw new Error("Seeyon submit function doZCDB was not found on the detail page");
+  }
+
+  const records = [];
+  const dialogs = [];
+  const originalFetch = window.fetch;
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSend = XMLHttpRequest.prototype.send;
+  const originalConfirm = window.confirm;
+  const originalAlert = window.alert;
+
+  const appendRecord = (record) => {
+    records.push({
+      ...record,
+      url: String(record.url || "").slice(0, 2000),
+      requestBody: record.requestBody == null ? null : String(record.requestBody).slice(0, 2000),
+      responseText: record.responseText == null ? null : String(record.responseText).slice(0, 2000),
+      error: record.error == null ? null : String(record.error).slice(0, 1000),
+    });
+    if (records.length > 100) {
+      records.splice(0, records.length - 100);
+    }
+  };
+
+  window.fetch = async function bscliWriteFetch(input, init = {}) {
+    const method = (init && init.method) || (input && input.method) || "GET";
+    const url = input && input.url ? input.url : input;
+    try {
+      const response = await originalFetch.apply(this, arguments);
+      let responseText = null;
+      try {
+        responseText = await response.clone().text();
+      } catch (_error) {
+        responseText = null;
+      }
+      appendRecord({
+        kind: "fetch",
+        method,
+        url,
+        status: response.status,
+        ok: response.ok,
+        requestBody: init && init.body,
+        responseText,
+      });
+      return response;
+    } catch (error) {
+      appendRecord({
+        kind: "fetch",
+        method,
+        url,
+        status: 0,
+        ok: false,
+        requestBody: init && init.body,
+        error: error && error.message ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
+
+  XMLHttpRequest.prototype.open = function bscliWriteOpen(method, url) {
+    this.__bscliWriteMethod = method || "GET";
+    this.__bscliWriteUrl = url || "";
+    return originalOpen.apply(this, arguments);
+  };
+  XMLHttpRequest.prototype.send = function bscliWriteSend(body) {
+    this.addEventListener("loadend", () => {
+      appendRecord({
+        kind: "xmlhttprequest",
+        method: this.__bscliWriteMethod || "GET",
+        url: this.responseURL || this.__bscliWriteUrl || "",
+        status: this.status,
+        ok: this.status >= 200 && this.status < 400,
+        requestBody: body,
+        responseText: this.responseText,
+      });
+    });
+    return originalSend.apply(this, arguments);
+  };
+
+  window.confirm = function bscliWriteConfirm(message) {
+    dialogs.push({ type: "confirm", message: String(message || "").slice(0, 1000), accepted: true });
+    return true;
+  };
+  window.alert = function bscliWriteAlert(message) {
+    dialogs.push({ type: "alert", message: String(message || "").slice(0, 1000) });
+    return undefined;
+  };
+
+  try {
+    const comment = findSeeyonCommentElement();
+    if (!comment) {
+      throw new Error("content_deal_comment was not found on the detail page");
+    }
+    const valueSetter = Object.getOwnPropertyDescriptor(comment.constructor.prototype, "value")?.set;
+    if (valueSetter) {
+      valueSetter.call(comment, opinion);
+    } else {
+      comment.value = opinion;
+    }
+    comment.dispatchEvent(new Event("input", { bubbles: true }));
+    comment.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const returned = window.doZCDB();
+    if (returned && typeof returned.then === "function") {
+      await returned;
+    }
+    const deadline = Date.now() + Number(payload.wait_ms || 12000);
+    while (Date.now() < deadline) {
+      if (records.some((record) => String(record.url || "").includes("finishWorkItem"))) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  } finally {
+    window.fetch = originalFetch;
+    XMLHttpRequest.prototype.open = originalOpen;
+    XMLHttpRequest.prototype.send = originalSend;
+    window.confirm = originalConfirm;
+    window.alert = originalAlert;
+  }
+
+  const finishRecords = records.filter((record) => String(record.url || "").includes("finishWorkItem"));
+  const successfulFinish = finishRecords.some((record) => Number(record.status) >= 200 && Number(record.status) < 400);
+  if (!successfulFinish) {
+    throw new Error(`Seeyon finishWorkItem request was not observed or did not succeed; observed=${finishRecords.length}`);
+  }
+  return {
+    submitted: true,
+    affair_id: expectedAffairId,
+    action: "ContinueSubmit",
+    opinion_length: opinion.length,
+    url: location.href,
+    title: document.title,
+    dialogs,
+    records: finishRecords.slice(-5),
+  };
+}
+
+function findSeeyonCommentElement() {
+  const selectors = [
+    "#content_deal_comment",
+    "textarea[name='content_deal_comment']",
+    "textarea#content",
+    "textarea[name='content']",
+  ];
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (element) {
+      return element;
+    }
+  }
+  return null;
 }
 
 function waitForTabComplete(tabId, timeoutMs) {

@@ -462,7 +462,7 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(audit_rows[0]["opinion"]["length"], 2)
         self.assertNotIn("同意", json.dumps(audit_rows[0], ensure_ascii=False))
 
-    def test_oa_write_execute_is_blocked_even_with_confirm_for_now(self):
+    def test_oa_write_execute_without_confirm_stays_local_blocked(self):
         with TemporaryDirectory() as tmp:
             result = self._run_cli(
                 tmp,
@@ -475,13 +475,50 @@ class CliOaTests(unittest.TestCase):
                 "ContinueSubmit",
                 "--opinion",
                 "同意",
-                "--confirm",
             )
 
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
-        self.assertEqual(payload["error"], "oa write execute is not implemented for production writes")
+        self.assertEqual(payload["error"], "oa write execute requires --confirm")
         self.assertFalse(payload["plan"]["safety"]["will_execute"])
+
+    def test_oa_write_execute_with_confirm_calls_daemon(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "result": {"submitted": True, "affair_id": "affair-1"},
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "execute",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--source-url",
+                "http://oa.example.test/detail?affairId=affair-1",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(seen_payloads[0]["command"], "write_execute")
+        self.assertEqual(seen_payloads[0]["args"]["affair_id"], "affair-1")
+        self.assertEqual(seen_payloads[0]["args"]["action"], "ContinueSubmit")
+        self.assertEqual(seen_payloads[0]["args"]["opinion"], "approved")
+        self.assertEqual(seen_payloads[0]["args"]["source_url"], "http://oa.example.test/detail?affairId=affair-1")
+        self.assertTrue(seen_payloads[0]["args"]["confirm"])
 
     def test_oa_discovered_list_uses_local_store(self):
         with TemporaryDirectory() as tmp:

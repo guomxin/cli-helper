@@ -188,7 +188,11 @@ class DaemonState:
                 },
             )
         if system == "oa" and command in {"write_draft", "write_dry_run", "write_execute"}:
-            return self._run_oa_write_plan_command(command, body.get("args") or {})
+            return self._run_oa_write_plan_command(
+                command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
         if command == "discovered_run":
             return self._run_discovered_command(body)
         task_kind = COMMAND_TASKS.get((system, command))
@@ -606,7 +610,13 @@ class DaemonState:
             },
         )
 
-    def _run_oa_write_plan_command(self, command: str, args: dict[str, Any]) -> DaemonResponse:
+    def _run_oa_write_plan_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
         mode = {
             "write_draft": "draft",
             "write_dry_run": "dry-run",
@@ -622,15 +632,103 @@ class DaemonState:
         if mode == "dry-run":
             append_oa_write_audit(self.config_store.root, plan)
         if mode == "execute":
+            if args.get("confirm") is not True:
+                append_oa_write_audit(self.config_store.root, plan)
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": False,
+                        "error": "oa write execute requires confirm=true",
+                        "result": plan,
+                    },
+                )
+            if plan["action"]["code"] != "ContinueSubmit":
+                append_oa_write_audit(self.config_store.root, plan)
+                return DaemonResponse(
+                    400,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": f"oa write execute only supports ContinueSubmit for now, got: {plan['action']['code']}",
+                        "result": plan,
+                    },
+                )
+            _mark_oa_write_plan_for_execution(plan)
             append_oa_write_audit(self.config_store.root, plan)
+            if not self.bridge.list_clients():
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "no Chrome extension client connected; start Chrome, load the BSCLI extension, and open the OA tab",
+                        "result": plan,
+                    },
+                )
+            target_client_id = self._select_client_id_for_system("oa")
+            if target_client_id is None:
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "no browser client is currently registered for system: oa; open the matching system tab and wait for the extension to register it",
+                        "result": plan,
+                    },
+                )
+            task_id = self.bridge.enqueue_task(
+                system="oa",
+                kind="seeyon_write_execute",
+                payload={
+                    "affair_id": plan["target"]["affair_id"],
+                    "action": plan["action"]["code"],
+                    "opinion": plan["opinion"]["text"],
+                    "source_url": plan["target"].get("source_url", ""),
+                    "confirm": True,
+                },
+                target_client_id=target_client_id,
+            )
+            result = self.bridge.wait_for_result(task_id, timeout_seconds=timeout_seconds)
+            if result is None:
+                return DaemonResponse(
+                    504,
+                    {
+                        "ok": False,
+                        "task_id": task_id,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "command timed out waiting for Chrome extension write result: oa.write_execute",
+                        "result": plan,
+                    },
+                )
+            if not result["ok"]:
+                return DaemonResponse(
+                    500,
+                    {
+                        "ok": False,
+                        "task_id": task_id,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": result.get("error") or "extension write task failed",
+                        "result": plan,
+                    },
+                )
+            submitted = result.get("result") or {}
+            if isinstance(submitted, dict):
+                submitted.setdefault("plan", plan)
             return DaemonResponse(
-                409,
+                200,
                 {
-                    "ok": False,
+                    "ok": True,
+                    "task_id": task_id,
                     "requires_confirmation": True,
-                    "confirmed": args.get("confirm") is True,
-                    "error": "oa write execute is not implemented for production writes",
-                    "result": plan,
+                    "confirmed": True,
+                    "result": submitted,
                 },
             )
         return DaemonResponse(200, {"ok": True, "task_id": None, "result": plan})
@@ -928,3 +1026,12 @@ def _trace_result_summary(response_body: dict[str, Any]) -> dict[str, Any]:
     elif result is not None:
         summary["result_type"] = type(result).__name__
     return summary
+
+
+def _mark_oa_write_plan_for_execution(plan: dict[str, Any]) -> None:
+    safety = plan.setdefault("safety", {})
+    safety["will_execute"] = True
+    safety["dry_run_only"] = False
+    request = plan.setdefault("request", {})
+    request["status"] = "sent_by_extension"
+    request["reason"] = "confirmed OA write dispatched through the Chrome extension bridge"

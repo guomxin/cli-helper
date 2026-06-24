@@ -211,8 +211,8 @@ Batch detail commands first read the corresponding list, then call
 sections (`title,text,fields,attachments,workflow`) and `--text-limit` to cap
 large page text.
 
-Safe write planning is available, but production execution is intentionally
-blocked at this stage:
+Safe write planning is available, and confirmed `ContinueSubmit` writes can run
+through the Chrome extension bridge:
 
 ```bash
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
@@ -223,11 +223,12 @@ python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --actio
 `draft` and `dry-run` never contact the daemon or browser. They include a local
 `request.payload_preview` for review. `dry-run` writes a sanitized audit row
 under `.bscli/audit/oa-write-plans.jsonl` with opinion text redacted. `execute`
-is a reserved command and returns a blocked plan even when `--confirm` is
-provided.
+requires `--confirm`, dispatches a browser task, verifies the detail-page
+`affairId`, fills the opinion, and invokes the page's own Seeyon submit
+function. Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
 `oa__write_draft`, `oa__write_dry_run`, and `oa__write_execute`; the execute
-tool requires a `confirm` argument in its schema but still cannot perform a
+tool requires a `confirm` argument in its schema before it can perform a
 production write.
 
 Read the structured pending list from the OA home page:

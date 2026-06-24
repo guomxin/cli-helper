@@ -1894,7 +1894,7 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(state.bridge.pending_tasks, [])
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
-    def test_run_oa_write_execute_stays_blocked_even_when_confirmed(self):
+    def test_run_oa_write_execute_without_confirm_stays_blocked(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
 
@@ -1908,7 +1908,6 @@ class DaemonTests(unittest.TestCase):
                         "affair_id": "affair-1",
                         "action": "ContinueSubmit",
                         "opinion": "approved",
-                        "confirm": True,
                     },
                     "timeout_seconds": 1,
                 },
@@ -1921,6 +1920,79 @@ class DaemonTests(unittest.TestCase):
             self.assertFalse(response.body["result"]["safety"]["will_execute"])
             self.assertEqual(state.bridge.pending_tasks, [])
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
+
+    def test_run_oa_write_execute_with_confirm_dispatches_extension_task(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            seen_tasks = []
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                seen_tasks.extend(tasks.body["tasks"])
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "ok": True,
+                        "result": {"submitted": True, "affair_id": "affair-1"},
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+            worker.join()
+
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(response.body["result"]["submitted"], True)
+            self.assertEqual(seen_tasks[0]["kind"], "seeyon_write_execute")
+            self.assertEqual(seen_tasks[0]["payload"]["affair_id"], "affair-1")
+            self.assertEqual(seen_tasks[0]["payload"]["action"], "ContinueSubmit")
+            self.assertEqual(seen_tasks[0]["payload"]["opinion"], "approved")
+            self.assertTrue(seen_tasks[0]["payload"]["confirm"])
+            self.assertEqual(len(audit_rows), 1)
+            self.assertTrue(audit_rows[0]["safety"]["will_execute"])
+            self.assertFalse(audit_rows[0]["safety"]["dry_run_only"])
+            self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
 
 if __name__ == "__main__":
