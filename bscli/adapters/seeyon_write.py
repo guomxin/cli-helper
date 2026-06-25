@@ -31,6 +31,31 @@ HIGH_RISK_CODES = {
     "UploadAttachment",
 }
 
+PROMOTED_EXECUTABLE_CODES = {"ContinueSubmit"}
+
+DRY_RUN_ONLY_WRITE_CODES = {
+    "Archive",
+    "Comment",
+    "Delete",
+    "Disagree",
+    "Return",
+    "Revoke",
+    "Submit",
+    "UploadAttachment",
+}
+
+ACTION_TYPES = {
+    "Archive": "workflow.archive",
+    "Comment": "workflow.comment",
+    "ContinueSubmit": "workflow.submit",
+    "Delete": "workflow.delete",
+    "Disagree": "workflow.disagree",
+    "Return": "workflow.return",
+    "Revoke": "workflow.revoke",
+    "Submit": "workflow.submit",
+    "UploadAttachment": "workflow.upload_attachment",
+}
+
 
 WRITE_GOVERNANCE_LIFECYCLE = [
     "resolve_target",
@@ -53,6 +78,41 @@ def build_write_governance(
         "confirmation_required_for_execute": True,
         "verification_method": str(verification_method or ""),
         "audit_policy": "redact_user_text",
+    }
+
+
+def write_action_type(code: str) -> str:
+    return ACTION_TYPES.get(str(code or "").strip(), "workflow.unpromoted")
+
+
+def is_dry_run_only_write_action(code: str) -> bool:
+    code = str(code or "").strip()
+    return code in DRY_RUN_ONLY_WRITE_CODES and code not in PROMOTED_EXECUTABLE_CODES
+
+
+def write_action_promotion(code: str) -> dict:
+    code = str(code or "").strip()
+    if code in PROMOTED_EXECUTABLE_CODES:
+        return {
+            "status": "promoted",
+            "execute_allowed": True,
+            "dry_run_allowed": True,
+            "verification_method": "pending_disappearance",
+            "requirements": [],
+            "blocked_reasons": [],
+        }
+    requirements = [
+        f"execution mapping for {code or 'this action'}",
+        "post-write verification method",
+        "real OA dry-run evidence and user-confirmed production test",
+    ]
+    return {
+        "status": "dry_run_only",
+        "execute_allowed": False,
+        "dry_run_allowed": True,
+        "verification_method": "not_promoted",
+        "requirements": requirements,
+        "blocked_reasons": [f"execute not promoted for {code or 'this action'}"],
     }
 
 
@@ -95,16 +155,25 @@ def build_oa_write_plan(
     source_url: str = "",
 ) -> dict:
     normalized_action = normalize_write_action(action)
+    promotion = write_action_promotion(normalized_action["code"])
     request_status = {
         "draft": "not_built",
         "dry-run": "not_sent",
         "execute": "blocked",
     }.get(mode, "not_built")
     request_reason = (
-        "production OA write endpoint has not been promoted to an executable command"
+        f"OA action {normalized_action['code']} has not been promoted to an executable command"
+        if not promotion["execute_allowed"]
+        else "confirmed OA write will use the promoted Chrome extension workflow"
         if mode == "execute"
         else "write endpoint discovery is required before production execution"
     )
+    if mode != "execute":
+        request_reason = (
+            f"OA action {normalized_action['code']} is available for dry-run only until promotion requirements are met"
+            if not promotion["execute_allowed"]
+            else "write endpoint discovery is required before production execution"
+        )
     target = {"affair_id": str(affair_id)}
     if source_url:
         target["source_url"] = source_url
@@ -147,9 +216,10 @@ def build_oa_write_plan(
             "dry_run_only": True,
         },
         "governance": build_write_governance(
-            "workflow.submit",
-            verification_method="pending_disappearance",
+            write_action_type(normalized_action["code"]),
+            verification_method=promotion["verification_method"],
         ),
+        "promotion": promotion,
         "request": {
             "status": request_status,
             "method": None,

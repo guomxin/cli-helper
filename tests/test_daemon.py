@@ -2328,6 +2328,65 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(items[1]["supported_write_actions"][0]["daemon_commands"]["execute"], "meeting_reply_execute")
             self.assertEqual(items[1]["verification_method"], "meeting_reply_readback")
 
+    def test_run_oa_write_capabilities_reports_archive_as_dry_run_only(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            nested_responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "type": "pending",
+                            "items": [
+                                {
+                                    "title": "Contract archive",
+                                    "affair_id": "archive-1",
+                                    "href": "http://oa.example.test/detail?affairId=archive-1",
+                                }
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Contract archive",
+                            "actions": [
+                                {"code": "Archive", "label": "处理后归档", "risk": "high"},
+                                {"code": "Opinion", "label": "意见", "risk": "medium"},
+                            ],
+                        },
+                    },
+                ),
+            ]
+            state._run_nested_oa_command = lambda *_args: nested_responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_capabilities",
+                    "args": {"type": "pending"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            item = response.body["result"]["items"][0]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(item["supported_write_actions"], [])
+            self.assertEqual(item["capability_status"], "dry_run_only")
+            self.assertEqual(item["unpromoted_write_actions"][0]["name"], "workflow.archive")
+            self.assertEqual(item["unpromoted_write_actions"][0]["action"], "Archive")
+            self.assertTrue(item["unpromoted_write_actions"][0]["dry_run_allowed"])
+            self.assertFalse(item["unpromoted_write_actions"][0]["execute_allowed"])
+            self.assertIn("oa write dry-run --affair-id archive-1 --action Archive", item["unpromoted_write_actions"][0]["dry_run_command"])
+            self.assertIn("execution mapping", item["unpromoted_write_actions"][0]["promotion_requirements"][0])
+            self.assertIn("execute not promoted", item["blocked_reasons"][0])
+
     def test_run_oa_meeting_reply_execute_posts_and_verifies_reply(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

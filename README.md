@@ -260,6 +260,18 @@ items and reports each item's `category`, `affair_id`, current state,
 use `pending_disappearance` verification. Meeting reply actions use
 `meeting_reply_readback` verification because a replied meeting can remain
 visible in pending even after `myReply.feedbackFlag` has changed.
+For workflow items, the action inventory is intentionally split:
+
+- `supported_write_actions`: promoted actions with both dry-run and confirmed
+  execute support.
+- `unpromoted_write_actions`: real write-like actions found on the page that
+  may be dry-run checked but cannot execute yet.
+- `discovered_write_actions`: raw page actions, including helper actions such
+  as opinion phrases, tracking, or print.
+
+For example, `Archive` / `处理后归档` is reported as `workflow.archive` with
+`dry_run_allowed=true` and `execute_allowed=false` until its execution mapping
+and post-write verification method are promoted.
 
 `draft` is an offline local plan and does not contact the daemon or browser.
 `dry-run` is the write precheck: it runs through the daemon, resolves the

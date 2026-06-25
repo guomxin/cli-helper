@@ -26,7 +26,10 @@ from bscli.adapters.seeyon_write import (
     append_oa_write_verification_audit,
     build_oa_write_plan,
     build_write_governance,
+    is_dry_run_only_write_action,
     normalize_write_action,
+    write_action_promotion,
+    write_action_type,
 )
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
@@ -1052,6 +1055,7 @@ class DaemonState:
             "href": item.get("href", ""),
             "current_state": _current_state_from_pending_item(item),
             "supported_write_actions": [],
+            "unpromoted_write_actions": [],
             "discovered_write_actions": [],
             "verification_method": "",
         }
@@ -1086,6 +1090,7 @@ class DaemonState:
         actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
         discovered = [_summarize_oa_write_action(action) for action in actions]
         supported = []
+        unpromoted = _unpromoted_oa_write_action_capabilities(discovered, str(item.get("affair_id") or ""))
         if _find_oa_write_action(actions, "ContinueSubmit") is not None:
             affair_id = str(item.get("affair_id") or "")
             supported.append(
@@ -1111,9 +1116,12 @@ class DaemonState:
                 "detail_title": detail.get("title", ""),
             },
             "supported_write_actions": supported,
+            "unpromoted_write_actions": unpromoted,
             "discovered_write_actions": discovered,
             "verification_method": "pending_disappearance",
-            "capability_status": "supported" if supported else "read_only_or_unpromoted",
+            "capability_status": "supported" if supported else "dry_run_only" if unpromoted else "read_only_or_unpromoted",
+            "blocked_reasons": _blocked_reasons_from_unpromoted_actions(unpromoted),
+            "promotion_requirements": _promotion_requirements_from_unpromoted_actions(unpromoted),
         }
 
     def _oa_meeting_reply_capability(
@@ -2599,6 +2607,59 @@ def _current_state_from_pending_item(item: dict[str, Any]) -> dict[str, Any]:
         if key in item:
             state[key] = item.get(key)
     return state
+
+
+def _unpromoted_oa_write_action_capabilities(
+    actions: list[dict[str, Any]],
+    affair_id: str,
+) -> list[dict[str, Any]]:
+    capabilities = []
+    for action in actions:
+        code = str(action.get("code") or "")
+        if not is_dry_run_only_write_action(code):
+            continue
+        promotion = write_action_promotion(code)
+        capabilities.append(
+            {
+                "name": write_action_type(code),
+                "action": code,
+                "label": action.get("label", ""),
+                "risk": action.get("risk", "medium"),
+                "dry_run_allowed": promotion["dry_run_allowed"],
+                "execute_allowed": promotion["execute_allowed"],
+                "dry_run_command": f"oa write dry-run --affair-id {affair_id} --action {code}",
+                "execute_command": None,
+                "tool_names": ["oa__write_dry_run"],
+                "daemon_commands": {"dry_run": "write_dry_run"},
+                "verification_method": promotion["verification_method"],
+                "promotion_status": promotion["status"],
+                "promotion_requirements": promotion["requirements"],
+                "blocked_reasons": promotion["blocked_reasons"],
+                "governance": build_write_governance(
+                    write_action_type(code),
+                    verification_method=promotion["verification_method"],
+                ),
+            }
+        )
+    return capabilities
+
+
+def _blocked_reasons_from_unpromoted_actions(actions: list[dict[str, Any]]) -> list[str]:
+    reasons = []
+    for action in actions:
+        for reason in action.get("blocked_reasons", []):
+            if reason not in reasons:
+                reasons.append(reason)
+    return reasons
+
+
+def _promotion_requirements_from_unpromoted_actions(actions: list[dict[str, Any]]) -> list[str]:
+    requirements = []
+    for action in actions:
+        for requirement in action.get("promotion_requirements", []):
+            if requirement not in requirements:
+                requirements.append(requirement)
+    return requirements
 
 
 def _query_param(url: str, name: str) -> str:

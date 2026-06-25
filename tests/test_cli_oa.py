@@ -791,6 +791,46 @@ class CliOaTests(unittest.TestCase):
         )
         self.assertEqual(payload["result"]["items"][0]["supported_write_actions"][0]["name"], "workflow.submit")
 
+    def test_oa_write_capabilities_preserves_unpromoted_actions(self):
+        server, _seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "count": 1,
+                    "items": [
+                        {
+                            "title": "Contract archive",
+                            "affair_id": "archive-1",
+                            "category": "workflow",
+                            "supported_write_actions": [],
+                            "unpromoted_write_actions": [
+                                {
+                                    "name": "workflow.archive",
+                                    "action": "Archive",
+                                    "dry_run_allowed": True,
+                                    "execute_allowed": False,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "capabilities",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["items"][0]["unpromoted_write_actions"][0]["name"], "workflow.archive")
+        self.assertFalse(payload["result"]["items"][0]["unpromoted_write_actions"][0]["execute_allowed"])
+
     def test_oa_meeting_reply_execute_requires_confirm_before_daemon_call(self):
         server, seen_payloads = self._start_daemon({"ok": True})
 

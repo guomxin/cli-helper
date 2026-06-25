@@ -42,6 +42,22 @@ class SeeyonWriteTests(unittest.TestCase):
             ],
         )
 
+    def test_archive_write_plan_is_dry_run_only_until_promoted(self):
+        plan = build_oa_write_plan(
+            affair_id="archive-1",
+            action="Archive",
+            opinion="",
+            mode="dry-run",
+        )
+
+        self.assertEqual(plan["action"], {"code": "Archive", "label": "处理后归档", "risk": "high"})
+        self.assertEqual(plan["governance"]["action_type"], "workflow.archive")
+        self.assertEqual(plan["governance"]["verification_method"], "not_promoted")
+        self.assertEqual(plan["promotion"]["status"], "dry_run_only")
+        self.assertFalse(plan["promotion"]["execute_allowed"])
+        self.assertIn("execution mapping", plan["promotion"]["requirements"][0])
+        self.assertFalse(plan["safety"]["will_execute"])
+
     def test_write_audit_redacts_payload_preview_opinion_text(self):
         plan = build_oa_write_plan(
             affair_id="affair-1",

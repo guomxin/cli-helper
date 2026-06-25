@@ -14,6 +14,9 @@ logged-in Chrome session after explicit confirmation.
 - `oa write capabilities --type pending` is the read-only agent inventory. It
   reports each pending item's category, supported write actions, current state,
   and verification method before an agent chooses a dry-run or execute command.
+  Workflow page actions are split into three layers: promoted
+  `supported_write_actions`, dry-run-only `unpromoted_write_actions`, and raw
+  `discovered_write_actions`.
 - `oa write draft ...` builds a local write plan only. It does not contact the
   daemon and does not create an audit row.
 - `oa write dry-run ...` builds the same local write plan and appends a
@@ -41,6 +44,12 @@ Only collaboration `ContinueSubmit` and meeting reply are executable at this
 stage. Reject, archive, delete, revoke, return, upload, and other write actions
 remain blocked until each has a dedicated mapping and tests.
 
+`Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
+may call `oa write dry-run --affair-id <id> --action Archive` to prove the
+target exists and the detail page exposes the action, but `execute` remains
+blocked until the action has an execution mapping, a post-write verification
+method, and a user-confirmed production test.
+
 ## Governance Lifecycle
 
 Promoted write actions share the same lifecycle:
@@ -55,6 +64,9 @@ Promoted write actions share the same lifecycle:
 The plan objects expose this as `governance.lifecycle`, together with
 `governance.verification_method`, so agents can distinguish the safety protocol
 from the concrete business command.
+For unpromoted actions such as `Archive`, `governance.verification_method` is
+`not_promoted`; that value means dry-run can validate current page capability,
+but production success verification has not been accepted yet.
 
 ## Write Plan Shape
 
@@ -64,6 +76,8 @@ Write plans use `schema_version=bscli.oa_write_plan.v1` and contain:
 - `target`: currently `affair_id`, with optional `source_url`.
 - `action`: normalized action code, display label, and risk.
 - `opinion`: full text in CLI output, plus length.
+- `promotion`: whether the action is executable or dry-run-only, plus the
+  requirements that must be met before execution can be promoted.
 - `safety`: local draft/dry-run plans use `will_execute=false` and
   `dry_run_only=true`; confirmed execution plans use `will_execute=true` and
   `dry_run_only=false`.
