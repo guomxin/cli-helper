@@ -67,6 +67,10 @@ from the concrete business command.
 For unpromoted actions such as `Archive`, `governance.verification_method` is
 `not_promoted`; that value means dry-run can validate current page capability,
 but production success verification has not been accepted yet.
+Dry-run may also attach `promotion.evidence` after reading the detail page. This
+evidence can include the matched page action, safe hidden-field names,
+CSRF-token presence, and untested endpoint candidates from rendered HTML. It is
+for promotion analysis only and does not authorize execution.
 
 ## Write Plan Shape
 
@@ -78,6 +82,9 @@ Write plans use `schema_version=bscli.oa_write_plan.v1` and contain:
 - `opinion`: full text in CLI output, plus length.
 - `promotion`: whether the action is executable or dry-run-only, plus the
   requirements that must be met before execution can be promoted.
+  `promotion.evidence`, when present, records read-only clues collected during
+  precheck; endpoint candidates remain `tested=false` until separately
+  validated without mutating OA state.
 - `safety`: local draft/dry-run plans use `will_execute=false` and
   `dry_run_only=true`; confirmed execution plans use `will_execute=true` and
   `dry_run_only=false`.

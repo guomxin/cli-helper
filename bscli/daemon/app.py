@@ -1552,6 +1552,8 @@ class DaemonState:
         if actions is not None:
             precheck["available_actions"] = [_summarize_oa_write_action(action) for action in actions]
         plan["precheck"] = precheck
+        if detail is not None:
+            _attach_oa_write_promotion_evidence(plan, detail=detail, actions=actions or [])
         if not passed:
             request = plan.setdefault("request", {})
             request["status"] = "blocked"
@@ -2422,6 +2424,52 @@ def _summarize_oa_write_action(action: Any) -> dict[str, str]:
         "label": str(action.get("label") or fallback["label"]),
         "risk": str(action.get("risk") or fallback["risk"]),
     }
+
+
+def _attach_oa_write_promotion_evidence(
+    plan: dict[str, Any],
+    *,
+    detail: dict[str, Any],
+    actions: list,
+) -> None:
+    promotion = plan.get("promotion")
+    if not isinstance(promotion, dict):
+        return
+    action_code = str(plan.get("action", {}).get("code") or "")
+    available_action = _find_oa_write_action(actions, action_code)
+    execute_allowed = promotion.get("execute_allowed") is True
+    promotion["evidence"] = {
+        "action_present": available_action is not None,
+        "available_action": _project_oa_write_action_evidence(available_action),
+        "write_hints": _project_oa_write_hints_evidence(detail.get("write_hints")),
+        "execute_allowed": execute_allowed,
+        "verification_method": str(promotion.get("verification_method") or ""),
+        "missing_for_execute": [] if execute_allowed else list(promotion.get("requirements") or []),
+    }
+
+
+def _project_oa_write_action_evidence(action: Any) -> dict[str, Any]:
+    if not isinstance(action, dict):
+        return {}
+    summary = _summarize_oa_write_action(action)
+    for key in ("id", "access", "requires_confirmation", "supports_dry_run", "source"):
+        if key in action:
+            summary[key] = action.get(key)
+    return summary
+
+
+def _project_oa_write_hints_evidence(write_hints: Any) -> dict[str, Any]:
+    if not isinstance(write_hints, dict):
+        return {}
+    evidence = {}
+    for key in ("csrf_tokens", "hidden_fields", "endpoint_candidates"):
+        value = write_hints.get(key)
+        if isinstance(value, list):
+            evidence[key] = [
+                item for item in value
+                if isinstance(item, dict)
+            ]
+    return evidence
 
 
 def _oa_write_check(

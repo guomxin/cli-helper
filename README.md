@@ -272,6 +272,11 @@ For workflow items, the action inventory is intentionally split:
 For example, `Archive` / `处理后归档` is reported as `workflow.archive` with
 `dry_run_allowed=true` and `execute_allowed=false` until its execution mapping
 and post-write verification method are promoted.
+When dry-run reads the detail page, unpromoted actions also include
+`promotion.evidence`: whether the action is present, which page script exposed
+it, safe hidden-field names, CSRF-token presence, and untested endpoint
+candidates found in rendered HTML. These are promotion clues only; they are not
+used to execute a write.
 
 `draft` is an offline local plan and does not contact the daemon or browser.
 `dry-run` is the write precheck: it runs through the daemon, resolves the

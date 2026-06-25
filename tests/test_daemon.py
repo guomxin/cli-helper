@@ -2546,6 +2546,87 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(audit_rows[0]["precheck"]["status"], "passed")
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
 
+    def test_run_oa_write_dry_run_adds_promotion_evidence_for_archive(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Contract archive",
+                                    "affair_id": "archive-1",
+                                    "href": "http://oa.example.test/detail?affairId=archive-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Contract archive",
+                            "url": "http://oa.example.test/detail?affairId=archive-1",
+                            "actions": [
+                                {
+                                    "code": "Archive",
+                                    "label": "处理后归档",
+                                    "risk": "high",
+                                    "source": "jsonArrBase",
+                                }
+                            ],
+                            "write_hints": {
+                                "csrf_tokens": [{"name": "CSRFTOKEN", "value_present": True}],
+                                "hidden_fields": [
+                                    {"name": "contentAffairId", "value_present": True},
+                                    {"name": "summaryId", "value_present": True},
+                                ],
+                                "endpoint_candidates": [
+                                    {
+                                        "url": "http://oa.example.test/collaboration/collaboration.do?method=finishWorkItem",
+                                        "method": "UNKNOWN",
+                                        "risk": "high",
+                                        "source": "rendered_html",
+                                        "tested": False,
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                ),
+            ]
+            state._run_nested_oa_command = lambda *_args: responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_dry_run",
+                    "args": {
+                        "affair_id": "archive-1",
+                        "action": "Archive",
+                        "opinion": "",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            evidence = response.body["result"]["promotion"]["evidence"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(evidence["action_present"], True)
+            self.assertEqual(evidence["available_action"]["source"], "jsonArrBase")
+            self.assertEqual(evidence["write_hints"]["hidden_fields"][0]["name"], "contentAffairId")
+            self.assertEqual(evidence["write_hints"]["endpoint_candidates"][0]["tested"], False)
+            self.assertFalse(evidence["execute_allowed"])
+            self.assertEqual(evidence["verification_method"], "not_promoted")
+            self.assertIn("post-write verification method", evidence["missing_for_execute"])
+
     def test_run_oa_write_dry_run_blocks_when_target_action_is_missing(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
