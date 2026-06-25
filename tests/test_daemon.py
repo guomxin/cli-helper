@@ -2196,6 +2196,139 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(state.bridge.pending_tasks, [])
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
+    def test_run_oa_meeting_reply_dry_run_prechecks_current_reply(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state._resolve_oa_meeting_reply_target = lambda args, timeout_seconds: (
+                {
+                    "affair_id": "affair-1",
+                    "meeting_id": "meeting-1",
+                    "proxy_id": "",
+                    "source_url": "http://oa.example.test/meeting.do?meetingId=meeting-1",
+                    "source_item": {"title": "Water meeting", "affair_id": "affair-1"},
+                },
+                None,
+            )
+            state._run_oa_meeting_view = lambda meeting_id, proxy_id, timeout_seconds: DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "meetingAuth": {"showReply": True, "showReplyAttitude": True},
+                        "meetingVo": {"title": "Water meeting", "state": 10, "roomState": 1},
+                        "myReply": {"feedbackFlag": -100, "feedbackName": "not replied", "userName": "Tester"},
+                    },
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_reply_dry_run",
+                    "args": {"id": "affair-1", "attitude": "join", "feedback": "will attend"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-meeting-replies.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            plan = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(plan["precheck"]["passed"])
+            self.assertEqual(plan["target"]["meeting_id"], "meeting-1")
+            self.assertEqual(plan["action"], {"code": "join", "label": "参加", "feedbackFlag": 1})
+            self.assertEqual(plan["current_reply"]["feedbackFlag"], -100)
+            self.assertFalse(plan["safety"]["will_execute"])
+            self.assertNotIn("will attend", json.dumps(audit_rows[0], ensure_ascii=False))
+
+    def test_run_oa_meeting_reply_execute_posts_and_verifies_reply(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            posts = []
+            views = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "meetingAuth": {"showReply": True, "showReplyAttitude": True},
+                            "meetingVo": {"title": "Water meeting", "state": 10, "roomState": 1},
+                            "myReply": {"feedbackFlag": -100, "feedbackName": "not replied", "userName": "Tester"},
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "meetingAuth": {"showReply": True, "showReplyAttitude": True},
+                            "meetingVo": {"title": "Water meeting", "state": 10, "roomState": 1},
+                            "myReply": {"feedbackFlag": 1, "feedbackName": "参加", "userName": "Tester"},
+                        },
+                    },
+                ),
+            ]
+            state._resolve_oa_meeting_reply_target = lambda args, timeout_seconds: (
+                {
+                    "affair_id": "affair-1",
+                    "meeting_id": "meeting-1",
+                    "proxy_id": "",
+                    "source_url": "http://oa.example.test/meeting.do?meetingId=meeting-1",
+                    "source_item": {"title": "Water meeting", "affair_id": "affair-1"},
+                },
+                None,
+            )
+            state._run_oa_meeting_view = lambda meeting_id, proxy_id, timeout_seconds: views.pop(0)
+
+            def fake_post(meeting_id, proxy_id, attitude, feedback, timeout_seconds):
+                posts.append((meeting_id, proxy_id, attitude, feedback, timeout_seconds))
+                return DaemonResponse(200, {"ok": True, "result": {"json": {"success": True}}})
+
+            state._post_oa_meeting_reply = fake_post
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_reply_execute",
+                    "args": {
+                        "id": "affair-1",
+                        "attitude": "join",
+                        "feedback": "will attend",
+                        "confirm": True,
+                        "verify_wait": 0,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(posts, [("meeting-1", "", 1, "will attend", 1.0)])
+            self.assertTrue(response.body["result"]["submitted"])
+            self.assertEqual(response.body["result"]["verification"]["status"], "matched")
+
+    def test_run_oa_meeting_reply_execute_requires_confirm(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_reply_execute",
+                    "args": {"id": "affair-1", "attitude": "join"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertTrue(response.body["requires_confirmation"])
+
     def test_run_oa_write_dry_run_prechecks_target_action_and_records_report(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

@@ -721,6 +721,90 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["request"]["status"], "not_built")
         self.assertFalse(audit_exists)
 
+    def test_oa_meeting_reply_dry_run_calls_daemon_with_plain_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"precheck": {"passed": True}}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "reply",
+                "dry-run",
+                "--id",
+                "affair-1",
+                "--attitude",
+                "join",
+                "--feedback",
+                "will attend",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "meeting_reply_dry_run")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"id": "affair-1", "attitude": "join", "feedback": "will attend"},
+        )
+
+    def test_oa_meeting_reply_execute_requires_confirm_before_daemon_call(self):
+        server, seen_payloads = self._start_daemon({"ok": True})
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "reply",
+                "execute",
+                "--id",
+                "affair-1",
+                "--attitude",
+                "join",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads, [])
+        self.assertEqual(payload["ok"], False)
+        self.assertTrue(payload["requires_confirmation"])
+
+    def test_oa_meeting_reply_execute_with_confirm_calls_daemon(self):
+        server, seen_payloads = self._start_daemon({"ok": True, "result": {"submitted": True}})
+
+        with TemporaryDirectory() as tmp:
+            self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "reply",
+                "execute",
+                "--id",
+                "affair-1",
+                "--attitude",
+                "join",
+                "--feedback",
+                "will attend",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "meeting_reply_execute")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "id": "affair-1",
+                "attitude": "join",
+                "feedback": "will attend",
+                "confirm": True,
+                "verify_wait": 2.0,
+            },
+        )
+
     def test_oa_write_dry_run_calls_daemon_for_prechecked_plan(self):
         server, seen_payloads = self._start_daemon(
             {

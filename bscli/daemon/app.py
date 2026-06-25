@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from bscli.adapters.seeyon import build_seeyon_profile
 from bscli.browser.bridge import ExtensionBridge
@@ -209,6 +209,12 @@ class DaemonState:
             )
         if system == "oa" and command == "pending_submit":
             return self._run_oa_pending_submit_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in {"meeting_reply_dry_run", "meeting_reply_execute"}:
+            return self._run_oa_meeting_reply_command(
+                command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1581,6 +1587,265 @@ class DaemonState:
             submit=row.get("submit") if isinstance(row.get("submit"), dict) else {},
         )
 
+    def _run_oa_meeting_reply_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        mode = "dry-run" if command == "meeting_reply_dry_run" else "execute"
+        action = _normalize_oa_meeting_attitude(str(args.get("attitude") or "join"))
+        feedback = str(args.get("feedback") or "")
+        plan = _build_oa_meeting_reply_plan(mode=mode, action=action, feedback=feedback)
+        if mode == "execute" and args.get("confirm") is not True:
+            _append_oa_meeting_reply_audit(self.config_store.root, plan)
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa meeting reply execute requires confirm=true",
+                    "result": plan,
+                },
+            )
+
+        target, target_error = self._resolve_oa_meeting_reply_target(args, timeout_seconds)
+        if target_error is not None:
+            plan["blocked"] = True
+            plan["blocked_reasons"].append(target_error.body.get("error", "target resolution failed"))
+            _append_oa_meeting_reply_audit(self.config_store.root, plan)
+            return DaemonResponse(
+                target_error.status,
+                {**target_error.body, "result": plan},
+            )
+        plan["target"] = target
+
+        view_response = self._run_oa_meeting_view(
+            target["meeting_id"],
+            target.get("proxy_id", ""),
+            timeout_seconds,
+        )
+        if view_response.status != 200 or view_response.body.get("ok") is False:
+            plan["blocked"] = True
+            plan["checks"].append(_oa_write_check("meeting_view", False, view_response.body.get("error", "meeting view failed")))
+            plan["blocked_reasons"].append(view_response.body.get("error", "meeting view failed"))
+            _append_oa_meeting_reply_audit(self.config_store.root, plan)
+            return DaemonResponse(view_response.status, {**view_response.body, "result": plan})
+        meeting_view = view_response.body.get("result") if isinstance(view_response.body, dict) else {}
+        if not isinstance(meeting_view, dict):
+            meeting_view = {}
+        precheck = _precheck_oa_meeting_reply_plan(plan, meeting_view)
+        _append_oa_meeting_reply_audit(self.config_store.root, plan)
+        if not precheck["passed"]:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": mode == "execute",
+                    "confirmed": args.get("confirm") is True,
+                    "error": precheck["error"],
+                    "result": plan,
+                },
+            )
+        if mode == "dry-run":
+            return DaemonResponse(200, {"ok": True, "requires_confirmation": False, "result": plan})
+
+        plan["safety"]["will_execute"] = True
+        submit_response = self._post_oa_meeting_reply(
+            target["meeting_id"],
+            target.get("proxy_id", ""),
+            action["feedbackFlag"],
+            feedback,
+            timeout_seconds,
+        )
+        if submit_response.status != 200 or submit_response.body.get("ok") is False:
+            return DaemonResponse(
+                submit_response.status,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": submit_response.body.get("error", "meeting reply submit failed"),
+                    "result": {"submitted": False, "plan": plan, "submit": submit_response.body},
+                },
+            )
+        verify_wait = max(float(args.get("verify_wait", 2.0)), 0.0)
+        if verify_wait:
+            time.sleep(verify_wait)
+        verification = self._verify_oa_meeting_reply(
+            plan,
+            timeout_seconds=timeout_seconds,
+        )
+        result = {
+            "submitted": verification.get("status") == "matched",
+            "plan": plan,
+            "submit": submit_response.body,
+            "verification": verification,
+        }
+        if verification.get("status") != "matched":
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": verification.get("error") or "meeting reply verification failed",
+                    "result": result,
+                },
+            )
+        _append_oa_meeting_reply_audit(self.config_store.root, {**plan, "verification": verification})
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": result,
+            },
+        )
+
+    def _resolve_oa_meeting_reply_target(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> tuple[dict[str, Any], DaemonResponse | None]:
+        target_id = str(args.get("id") or args.get("affair_id") or "").strip()
+        source_url = str(args.get("source_url") or "").strip()
+        meeting_id = str(args.get("meeting_id") or "").strip()
+        proxy_id = str(args.get("proxy_id") or "").strip()
+        source_item = None
+        if not meeting_id and source_url:
+            meeting_id = _query_param(source_url, "meetingId")
+            proxy_id = proxy_id or _query_param(source_url, "proxyId")
+        if not meeting_id and target_id:
+            source_item, error = self._resolve_workflow_item_from_args(
+                {"type": "pending", "id": target_id},
+                timeout_seconds,
+            )
+            if error is not None:
+                return {}, error
+            source_url = str(source_item.get("href") or "")
+            meeting_id = _query_param(source_url, "meetingId")
+            proxy_id = proxy_id or _query_param(source_url, "proxyId")
+        if not meeting_id:
+            return {}, DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "meeting reply requires --id, --meeting-id, or --source-url with meetingId",
+                },
+            )
+        target = {
+            "affair_id": target_id,
+            "meeting_id": meeting_id,
+            "proxy_id": proxy_id,
+            "source_url": source_url,
+        }
+        if source_item is not None:
+            target["source_item"] = source_item
+        return target, None
+
+    def _run_oa_meeting_view(
+        self,
+        meeting_id: str,
+        proxy_id: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        response = self._run_oa_meeting_ajax(
+            "meetingView",
+            [{"meetingId": meeting_id, "proxyId": proxy_id}],
+            timeout_seconds,
+        )
+        if response.status != 200:
+            return response
+        replay = response.body.get("result") if isinstance(response.body, dict) else {}
+        data = replay.get("json") if isinstance(replay, dict) else None
+        if not isinstance(data, dict):
+            return DaemonResponse(502, {"ok": False, "error": "meetingView response was not JSON"})
+        return DaemonResponse(200, {"ok": True, "task_id": response.body.get("task_id"), "result": data})
+
+    def _post_oa_meeting_reply(
+        self,
+        meeting_id: str,
+        proxy_id: str,
+        attitude: int,
+        feedback: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        return self._run_oa_meeting_ajax(
+            "reply",
+            [
+                {
+                    "meetingId": meeting_id,
+                    "proxyId": proxy_id,
+                    "feedbackFlag": attitude,
+                    "feedback": feedback,
+                }
+            ],
+            timeout_seconds,
+        )
+
+    def _verify_oa_meeting_reply(
+        self,
+        plan: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        target = plan.get("target") if isinstance(plan.get("target"), dict) else {}
+        response = self._run_oa_meeting_view(
+            str(target.get("meeting_id") or ""),
+            str(target.get("proxy_id") or ""),
+            timeout_seconds,
+        )
+        if response.status != 200 or response.body.get("ok") is False:
+            return {"status": "error", "error": response.body.get("error", "meeting view failed")}
+        view = response.body.get("result") if isinstance(response.body, dict) else {}
+        reply = _project_oa_meeting_reply((view or {}).get("myReply"))
+        expected = plan.get("action", {}).get("feedbackFlag")
+        if reply.get("feedbackFlag") == expected:
+            return {"status": "matched", "reply": reply}
+        return {
+            "status": "mismatch",
+            "expected_feedbackFlag": expected,
+            "reply": reply,
+            "error": "meeting reply did not match requested attitude after submit",
+        }
+
+    def _run_oa_meeting_ajax(
+        self,
+        manager_method: str,
+        arguments: list[Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if not self.bridge.list_clients():
+            return DaemonResponse(409, {"ok": False, "error": "no Chrome extension client connected"})
+        target_client_id = self._select_client_id_for_system("oa")
+        if target_client_id is None:
+            return DaemonResponse(409, {"ok": False, "error": "no browser client is currently registered for system: oa"})
+        profile = self._load_system_profile("oa") or build_seeyon_profile()
+        parsed = urlparse(profile.base_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        body = urlencode(
+            {
+                "managerMethod": manager_method,
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+        )
+        return self._run_page_fetch(
+            "oa",
+            target_client_id,
+            {
+                "method": "POST",
+                "url": f"{base}/seeyon/ajax.do?method=ajaxAction&managerName=meetingAjaxManager",
+                "headers": {"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                "body": body,
+                "max_text": 120000,
+            },
+            timeout_seconds,
+        )
+
     def _run_page_fetch(
         self,
         system: str,
@@ -1680,6 +1945,10 @@ class DaemonState:
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_execute", "pending_submit"}:
+            return {"access": "write", "strategy": "human_gate"}
+        if system == "oa" and command == "meeting_reply_dry_run":
+            return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "meeting_reply_execute":
             return {"access": "write", "strategy": "human_gate"}
         if system == "oa" and command in WORKFLOW_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
@@ -1999,3 +2268,115 @@ def _mark_oa_write_plan_for_execution(plan: dict[str, Any]) -> None:
     request = plan.setdefault("request", {})
     request["status"] = "sent_by_extension"
     request["reason"] = "confirmed OA write dispatched through the Chrome extension bridge"
+
+
+def _normalize_oa_meeting_attitude(value: str) -> dict[str, Any]:
+    normalized = (value or "").strip().lower().replace("-", "_")
+    mapping = {
+        "join": {"code": "join", "label": "参加", "feedbackFlag": 1},
+        "attend": {"code": "join", "label": "参加", "feedbackFlag": 1},
+        "1": {"code": "join", "label": "参加", "feedbackFlag": 1},
+        "参加": {"code": "join", "label": "参加", "feedbackFlag": 1},
+        "not_join": {"code": "not_join", "label": "不参加", "feedbackFlag": 0},
+        "0": {"code": "not_join", "label": "不参加", "feedbackFlag": 0},
+        "不参加": {"code": "not_join", "label": "不参加", "feedbackFlag": 0},
+        "pending": {"code": "pending", "label": "待定", "feedbackFlag": -1},
+        "-1": {"code": "pending", "label": "待定", "feedbackFlag": -1},
+        "待定": {"code": "pending", "label": "待定", "feedbackFlag": -1},
+    }
+    if normalized not in mapping:
+        raise ValueError(f"unsupported meeting reply attitude: {value}")
+    return dict(mapping[normalized])
+
+
+def _build_oa_meeting_reply_plan(
+    *,
+    mode: str,
+    action: dict[str, Any],
+    feedback: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "bscli.oa_meeting_reply_plan.v1",
+        "mode": mode,
+        "target": {},
+        "action": action,
+        "feedback": {"text": feedback, "length": len(feedback)},
+        "current_reply": {},
+        "checks": [],
+        "missing": [],
+        "blocked": False,
+        "blocked_reasons": [],
+        "precheck": {"status": "not_run", "passed": False},
+        "safety": {
+            "will_execute": False,
+            "requires_confirmation": mode == "execute",
+        },
+    }
+
+
+def _precheck_oa_meeting_reply_plan(plan: dict[str, Any], meeting_view: dict[str, Any]) -> dict[str, Any]:
+    auth = meeting_view.get("meetingAuth") if isinstance(meeting_view.get("meetingAuth"), dict) else {}
+    meeting = meeting_view.get("meetingVo") if isinstance(meeting_view.get("meetingVo"), dict) else {}
+    reply = _project_oa_meeting_reply(meeting_view.get("myReply"))
+    plan["meeting"] = {
+        "title": meeting.get("title", ""),
+        "state": meeting.get("state"),
+        "roomState": meeting.get("roomState"),
+    }
+    plan["current_reply"] = reply
+    checks = [
+        _oa_write_check("meeting_view", True, "meeting view loaded"),
+        _oa_write_check("reply_allowed", auth.get("showReply") is True, "meeting allows reply"),
+        _oa_write_check("attitude_allowed", auth.get("showReplyAttitude") is True, "meeting allows attitude reply"),
+        _oa_write_check("my_reply_found", bool(reply), "current user reply state found"),
+    ]
+    plan["checks"].extend(checks)
+    failed = [check for check in checks if not check["passed"]]
+    if failed:
+        plan["blocked"] = True
+        plan["blocked_reasons"] = [check["message"] for check in failed]
+        plan["missing"] = [check["name"] for check in failed]
+        plan["precheck"] = {
+            "status": "blocked",
+            "passed": False,
+            "error": "; ".join(plan["blocked_reasons"]),
+        }
+        return {"passed": False, "error": plan["precheck"]["error"]}
+    plan["precheck"] = {"status": "passed", "passed": True}
+    return {"passed": True, "error": ""}
+
+
+def _project_oa_meeting_reply(reply: Any) -> dict[str, Any]:
+    if not isinstance(reply, dict):
+        return {}
+    return {
+        "id": reply.get("id", ""),
+        "userId": reply.get("userId", ""),
+        "userName": reply.get("userName", ""),
+        "feedbackFlag": reply.get("feedbackFlag"),
+        "feedbackName": reply.get("feedbackName", ""),
+        "state": reply.get("state"),
+        "lookState": reply.get("lookState"),
+        "readDate": reply.get("readDate"),
+    }
+
+
+def _append_oa_meeting_reply_audit(home: Path, plan: dict[str, Any]) -> Path:
+    audit_dir = home / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / "oa-meeting-replies.jsonl"
+    sanitized = json.loads(json.dumps(plan, ensure_ascii=False))
+    if isinstance(sanitized.get("feedback"), dict):
+        sanitized["feedback"].pop("text", None)
+    sanitized["audited_at"] = datetime.now(UTC).isoformat()
+    with audit_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True) + "\n")
+    return audit_path
+
+
+def _query_param(url: str, name: str) -> str:
+    try:
+        parsed = urlparse(url)
+        return parse_qs(parsed.query).get(name, [""])[0]
+    except Exception:
+        return ""

@@ -282,6 +282,24 @@ def _build_oa_parser(oa_sub) -> None:
     _add_daemon_options(discovered_run)
     _add_output_options(discovered_run)
 
+    meeting = oa_sub.add_parser("meeting")
+    meeting_sub = meeting.add_subparsers(dest="oa_meeting_area", required=True)
+    reply = meeting_sub.add_parser("reply")
+    reply_sub = reply.add_subparsers(dest="oa_meeting_action", required=True)
+    for mode in ("dry-run", "execute"):
+        reply_cmd = reply_sub.add_parser(mode)
+        reply_cmd.set_defaults(oa_meeting_reply_mode=mode)
+        reply_cmd.add_argument("--id", required=True, help="Pending affair id to resolve to a meeting.")
+        reply_cmd.add_argument("--meeting-id")
+        reply_cmd.add_argument("--source-url", default="")
+        reply_cmd.add_argument("--attitude", default="join", help="join, not_join, or pending.")
+        reply_cmd.add_argument("--feedback", default="")
+        if mode == "execute":
+            reply_cmd.add_argument("--confirm", action="store_true")
+            reply_cmd.add_argument("--verify-wait", type=float, default=2.0)
+        _add_daemon_options(reply_cmd)
+        _add_output_options(reply_cmd)
+
     write = oa_sub.add_parser("write")
     write_sub = write.add_subparsers(dest="oa_action", required=True)
     for mode in ("draft", "dry-run", "execute"):
@@ -562,6 +580,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
 
 
 def handle_oa(args: argparse.Namespace, home: Path) -> int:
+    if getattr(args, "oa_meeting_reply_mode", None):
+        return handle_oa_meeting_reply(args)
     if getattr(args, "oa_write_mode", None):
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
@@ -838,6 +858,41 @@ def handle_oa_pending_submit(args: argparse.Namespace) -> int:
             "confirm": True,
             "verify_wait": args.verify_wait,
         },
+    )
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_meeting_reply(args: argparse.Namespace) -> int:
+    if args.oa_meeting_reply_mode == "execute" and not getattr(args, "confirm", False):
+        emit_cli_value(
+            {
+                "ok": False,
+                "requires_confirmation": True,
+                "confirmed": False,
+                "error": "oa meeting reply execute requires --confirm",
+                "result": {},
+            },
+            args,
+        )
+        return 0
+
+    command_args = {
+        "id": args.id,
+        "attitude": args.attitude,
+        "feedback": args.feedback,
+    }
+    if args.meeting_id:
+        command_args["meeting_id"] = args.meeting_id
+    if args.source_url:
+        command_args["source_url"] = args.source_url
+    if args.oa_meeting_reply_mode == "execute":
+        command_args["confirm"] = True
+        command_args["verify_wait"] = args.verify_wait
+    response = run_oa_daemon_command(
+        args,
+        "meeting_reply_dry_run" if args.oa_meeting_reply_mode == "dry-run" else "meeting_reply_execute",
+        command_args,
     )
     emit_cli_value(response, args)
     return 0
