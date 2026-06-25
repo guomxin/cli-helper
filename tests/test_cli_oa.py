@@ -348,7 +348,10 @@ class CliOaTests(unittest.TestCase):
                 "ok": True,
                 "result": {
                     "title": "Weekly report",
-                    "workflow": [{"text": "Manager approved"}],
+                    "workflow": [
+                        {"text": "Manager approved", "node": "manager"},
+                        {"text": "Finance approved", "node": "finance"},
+                    ],
                 },
             }
         )
@@ -362,6 +365,10 @@ class CliOaTests(unittest.TestCase):
                 "opinions",
                 "--url",
                 detail_url,
+                "--limit",
+                "1",
+                "--fields",
+                "text",
                 "--daemon-url",
                 f"http://127.0.0.1:{server.server_port}",
             )
@@ -369,7 +376,7 @@ class CliOaTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(seen_payloads[0]["command"], "detail_read")
         self.assertEqual(payload["result"]["count"], 1)
-        self.assertEqual(payload["result"]["items"][0]["text"], "Manager approved")
+        self.assertEqual(payload["result"]["items"], [{"text": "Manager approved"}])
 
     def test_oa_workflow_opinions_batches_pending_detail_workflow(self):
         server, seen_payloads = self._start_daemon(

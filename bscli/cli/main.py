@@ -578,8 +578,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
     if not response.get("ok", False):
         print_json(response)
         return 0
-    response = _apply_response_options(response, args)
     response = _project_detail_response(response, args)
+    response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
 
@@ -624,8 +624,8 @@ def _run_oa_workflow_detail(
     if not response.get("ok", False):
         print_json(response)
         return 0
-    response = _apply_response_options(response, args)
     response = _project_detail_response(response, args)
+    response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
 
