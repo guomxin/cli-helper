@@ -378,6 +378,105 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"], [{"text": "Manager approved"}])
 
+    def test_oa_workflow_opinions_resolves_affair_id_from_pending_list(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly report",
+                                "affair_id": "a1",
+                                "href": "http://oa.example.test/detail/a1",
+                            },
+                            {
+                                "title": "Travel request",
+                                "affair_id": "a2",
+                                "href": "http://oa.example.test/detail/a2",
+                            },
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Weekly report",
+                        "workflow": [{"text": "Manager approved"}],
+                    },
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "opinions",
+                "--type",
+                "pending",
+                "--id",
+                "a1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read"])
+        self.assertEqual(seen_payloads[1]["args"], {"url": "http://oa.example.test/detail/a1"})
+        self.assertEqual(payload["result"]["source_item"]["affair_id"], "a1")
+        self.assertEqual(payload["result"]["items"], [{"text": "Manager approved"}])
+
+    def test_oa_workflow_detail_resolves_affair_id_from_sent_list(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Sent doc",
+                                "affair_id": "s1",
+                                "href": "http://oa.example.test/detail/s1",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Sent doc",
+                        "text": "abcdef",
+                        "workflow": [],
+                    },
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "detail",
+                "--type",
+                "sent",
+                "--id",
+                "s1",
+                "--include",
+                "title,text",
+                "--text-limit",
+                "3",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["sent_list_api", "detail_read"])
+        self.assertEqual(payload["result"]["source_item"]["affair_id"], "s1")
+        self.assertEqual(payload["result"]["detail"], {"title": "Sent doc", "text": "abc"})
+
     def test_oa_workflow_opinions_batches_pending_detail_workflow(self):
         server, seen_payloads = self._start_daemon(
             [

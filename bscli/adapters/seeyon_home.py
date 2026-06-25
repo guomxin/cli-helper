@@ -409,6 +409,7 @@ def _looks_like_attachment(href: str, name: str) -> bool:
 def _parse_detail_workflow(root: _Node) -> list[dict]:
     workflow = []
     seen = set()
+    extra_keywords = ("意见", "流程", "节点", "处理", "审批", "已阅")
     keywords = ("意见", "流程", "节点", "处理", "审批", "opinion", "workflow", "process", "approved", "approval")
     for node in root.descendants():
         if node.tag in {"html", "body", "document"}:
@@ -424,15 +425,84 @@ def _parse_detail_workflow(root: _Node) -> list[dict]:
         if not text:
             continue
         haystack = f"{marker} {text}".lower()
-        if not any(keyword.lower() in haystack for keyword in keywords):
+        if not any(keyword.lower() in haystack for keyword in (*keywords, *extra_keywords)):
             continue
+        entry = _clean_workflow_entry(text)
+        if entry is None:
+            continue
+        text = entry["text"]
         if text in seen:
             continue
         seen.add(text)
-        workflow.append({"text": text})
+        workflow.append(entry)
         if len(workflow) >= 100:
             break
     return workflow
+
+
+def _clean_workflow_entry(text: str) -> dict | None:
+    text = _clean(text, 1000)
+    if not text or _looks_like_workflow_noise(text):
+        return None
+    text = _strip_workflow_ui_tail(text)
+    if not text or _looks_like_workflow_noise(text):
+        return None
+    return {"text": text}
+
+
+def _looks_like_workflow_noise(text: str) -> bool:
+    compact = _clean(text, 1000)
+    lower = compact.lower()
+    code_markers = (
+        "<!--",
+        "{{",
+        "function ",
+        "var ",
+        "jsonarrbase",
+        "document.",
+        "return false",
+        "$.",
+        "$(",
+        ".css(",
+    )
+    if any(marker in lower for marker in code_markers):
+        return True
+    header_markers = (
+        "处理人意见区",
+        "与我相关",
+        "意见隐藏",
+        "显示更多意见",
+        "不包括:",
+        "不包括：",
+        "关联文档",
+        "明细日志",
+        "流程最大化",
+    )
+    has_timestamp = bool(re.search(r"\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}", compact))
+    has_english_opinion = bool(re.search(r"\b(opinion|approved|approval|rejected|reject)\b", lower))
+    if any(marker in compact for marker in header_markers):
+        return True
+    chinese_opinion_markers = (
+        "已阅",
+        "同意",
+        "不同意",
+        "退回",
+        "驳回",
+        "通过",
+        "批准",
+        "已处理",
+        "阅",
+    )
+    has_chinese_opinion = has_timestamp and any(marker in compact for marker in chinese_opinion_markers)
+    if not has_english_opinion and not has_chinese_opinion:
+        return True
+    return False
+
+
+def _strip_workflow_ui_tail(text: str) -> str:
+    text = re.sub(r"\s+暂无数据\s*$", "", text)
+    text = re.sub(r"\s+回复\s*\(\s*\)\s*\d+\s*$", "", text)
+    return _clean(text, 1000)
 
 
 def _parse_detail_write_actions(html: str) -> list[dict]:

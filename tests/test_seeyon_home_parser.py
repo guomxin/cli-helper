@@ -55,6 +55,39 @@ class SeeyonHomeParserTests(unittest.TestCase):
         )
         self.assertEqual(result["workflow"][0]["text"], "Node Manager approval Opinion: approved")
 
+    def test_parse_oa_detail_filters_script_like_workflow_noise(self):
+        html = """
+        <html>
+          <body>
+            <h1 id="summarySubject">Archive confirmation</h1>
+            <div class="workflowAdvanced">
+              <!-- var workflowAdvanced = true; //-->
+              {{# var prediction = d; }}
+              <script>var jsonArrBase = '[{"codes":["Opinion"],"label":"意见"}]';</script>
+              function attDivToggle() { return false; }
+            </div>
+            <div class="processLog">处理人意见区 （共1条，0个赞） 与我相关 （共0条）</div>
+            <div class="processLog">处理后归档</div>
+            <div class="processLog">流程</div>
+            <div class="processLog">Archive confirmation 王玉霄 2026-06-15 15:53 表单 流程 取消 修改流程</div>
+            <div class="processLog">王玉霄 已阅 2026-06-15 16:06 回复 ( ) 0</div>
+            <div class="processLog">王玉霄 已阅 2026-06-15 16:06 回复 ( ) 0</div>
+            <div class="processLog">意见隐藏 不包括: 跟踪 全部 指定人 处理后归档</div>
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary",
+        )
+
+        self.assertEqual(
+            result["workflow"],
+            [{"text": "王玉霄 已阅 2026-06-15 16:06"}],
+        )
+        self.assertEqual(result["workflow_count"], 1)
+
     def test_parse_oa_detail_extracts_write_actions_from_page_script(self):
         html = """
         <html>

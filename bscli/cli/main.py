@@ -318,7 +318,9 @@ def _add_workflow_parser(subparsers) -> None:
 
     detail = subparsers.add_parser("detail")
     detail.set_defaults(oa_workflow_action="detail")
-    detail.add_argument("--url", required=True)
+    detail.add_argument("--url")
+    detail.add_argument("--id", dest="workflow_id")
+    _add_workflow_type_option(detail)
     _add_detail_options(detail)
     _add_daemon_options(detail)
     _add_output_options(detail)
@@ -327,6 +329,7 @@ def _add_workflow_parser(subparsers) -> None:
         parser = subparsers.add_parser(action)
         parser.set_defaults(oa_workflow_action=action)
         parser.add_argument("--url")
+        parser.add_argument("--id", dest="workflow_id")
         _add_workflow_type_option(parser)
         parser.add_argument("--keyword")
         _add_daemon_options(parser)
@@ -601,7 +604,7 @@ def handle_oa_workflow(args: argparse.Namespace) -> int:
         return _run_oa_workflow_detail(args, projection=None)
     if action in {"attachments", "opinions", "actions"}:
         projection = "workflow" if action == "opinions" else action
-        if getattr(args, "url", None):
+        if getattr(args, "url", None) or getattr(args, "workflow_id", None):
             return _run_oa_workflow_detail(args, projection=projection)
         return _run_oa_workflow_batch(args, projection)
     raise ValueError(f"unknown workflow action: {action}")
@@ -618,16 +621,92 @@ def _run_oa_workflow_detail(
     *,
     projection: str | None,
 ) -> int:
+    source_item = None
+    detail_url = getattr(args, "url", None) or ""
+    workflow_id = getattr(args, "workflow_id", None)
+    if not detail_url and workflow_id:
+        resolved = _resolve_workflow_item_by_id(args, workflow_id)
+        if not resolved.get("ok", False):
+            emit_cli_value(resolved, args)
+            return 0
+        source_item = resolved["item"]
+        detail_url = source_item.get("href") or ""
+    if not detail_url:
+        emit_cli_value(
+            {
+                "ok": False,
+                "error": "oa workflow detail requires --url or --id",
+                "result": {},
+            },
+            args,
+        )
+        return 0
     args.oa_command = "detail_read"
     args.oa_detail_projection = projection
-    response = run_oa_daemon_command(args, "detail_read", {"url": args.url})
+    response = run_oa_daemon_command(args, "detail_read", {"url": detail_url})
     if not response.get("ok", False):
         print_json(response)
         return 0
     response = _project_detail_response(response, args)
     response = _apply_response_options(response, args)
+    if source_item:
+        response = _attach_workflow_source_item(response, source_item, projection=projection)
     emit_cli_value(response, args)
     return 0
+
+
+def _resolve_workflow_item_by_id(args: argparse.Namespace, workflow_id: str) -> dict:
+    list_response = run_oa_daemon_command(args, _workflow_list_command(args.workflow_type), {})
+    if not list_response.get("ok", False):
+        return {
+            "ok": False,
+            "error": list_response.get("error") or "workflow list failed",
+            "source": list_response,
+            "result": {},
+        }
+    result = list_response.get("result") or {}
+    items = result.get("items") if isinstance(result, dict) else []
+    if not isinstance(items, list):
+        items = []
+    for item in items:
+        if isinstance(item, dict) and str(item.get("affair_id") or "") == str(workflow_id):
+            if not item.get("href"):
+                return {
+                    "ok": False,
+                    "error": f"workflow item has no detail href: {workflow_id}",
+                    "item": item,
+                    "result": {},
+                }
+            return {"ok": True, "item": item}
+    return {
+        "ok": False,
+        "error": f"workflow id not found in {args.workflow_type} list: {workflow_id}",
+        "result": {
+            "type": args.workflow_type,
+            "id": workflow_id,
+            "searched_count": len(items),
+        },
+    }
+
+
+def _attach_workflow_source_item(
+    response: dict,
+    source_item: dict,
+    *,
+    projection: str | None,
+) -> dict:
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return response
+    if projection is None:
+        return {
+            **response,
+            "result": {
+                "source_item": source_item,
+                "detail": result,
+            },
+        }
+    return {**response, "result": {**result, "source_item": source_item}}
 
 
 def _workflow_list_command(workflow_type: str) -> str:
