@@ -701,6 +701,70 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["status"], 200)
             self.assertEqual(response.body["result"]["json"]["data"][0]["title"], "待办")
 
+    def test_run_api_replay_passes_text_limit_to_page_fetch_task(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "page_fetch")
+                self.assertEqual(tasks[0]["payload"]["max_text"], 120000)
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "status": 200,
+                            "ok": True,
+                            "contentType": "text/html",
+                            "text": "x" * 120000,
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "api_replay",
+                    "args": {
+                        "method": "GET",
+                        "url": "/seeyon/meeting.do?method=view",
+                        "max_text": 120000,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(len(response.body["result"]["text"]), 120000)
+
     def test_run_pending_list_parses_html_snapshot_in_daemon(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

@@ -283,6 +283,8 @@ class DaemonState:
                 "headers": args.get("headers", {}),
                 "body": args.get("body"),
             }
+            if args.get("max_text") is not None:
+                payload["max_text"] = int(args["max_text"])
         else:
             payload = {"selector": args.get("selector", "body")}
         task_id = self.bridge.enqueue_task(
@@ -1622,12 +1624,15 @@ class DaemonState:
         )
 
     def _api_request_from_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {
+        request = {
             "method": args.get("method", "GET").upper(),
             "url": args["url"],
             "headers": args.get("headers", {}),
             "body": args.get("body"),
         }
+        if args.get("max_text") is not None:
+            request["max_text"] = int(args["max_text"])
+        return request
 
     def _validate_discovered_api_policy(
         self,

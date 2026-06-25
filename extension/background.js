@@ -523,6 +523,7 @@ function collectNetworkLogSnapshot() {
 async function runPageFetch(payload) {
   const method = (payload.method || "GET").toUpperCase();
   const headers = payload.headers || {};
+  const maxText = Math.max(0, Math.min(Number(payload.max_text || 20000), 1000000));
   const response = await fetch(payload.url, {
     method,
     headers,
@@ -545,7 +546,7 @@ async function runPageFetch(payload) {
     ok: response.ok,
     contentType,
     json,
-    text: text.slice(0, 20000),
+    text: text.slice(0, maxText),
   };
 }
 

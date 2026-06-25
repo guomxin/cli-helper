@@ -632,6 +632,35 @@ class CliOaTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO(result.stdout)))
         self.assertEqual(rows, [{"title": "Sent doc", "affair_id": "s1"}])
 
+    def test_oa_api_replay_accepts_text_limit_argument(self):
+        server, seen_payloads = self._start_daemon({"ok": True, "result": {"status": 200}})
+
+        with TemporaryDirectory() as tmp:
+            self._run_cli(
+                tmp,
+                "oa",
+                "api",
+                "replay",
+                "--method",
+                "GET",
+                "--url",
+                "http://oa.example.test/detail",
+                "--text-limit",
+                "120000",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "api_replay")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "method": "GET",
+                "url": "http://oa.example.test/detail",
+                "max_text": 120000,
+            },
+        )
+
     def test_oa_api_save_builds_request_arguments(self):
         server, seen_payloads = self._start_daemon({"ok": True, "result": {"saved_path": "x"}})
 

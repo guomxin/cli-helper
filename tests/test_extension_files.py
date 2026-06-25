@@ -46,6 +46,7 @@ class ExtensionFilesTests(unittest.TestCase):
         self.assertIn("page_fetch", background)
         self.assertIn("runPageFetch", background)
         self.assertIn("credentials: \"include\"", background)
+        self.assertIn("max_text", background)
 
     def test_background_contains_oa_pending_list_collector(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")

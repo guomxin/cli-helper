@@ -251,6 +251,7 @@ def _build_oa_parser(oa_sub) -> None:
         api_cmd.add_argument("--url", required=True)
         api_cmd.add_argument("--headers", default="{}")
         api_cmd.add_argument("--body")
+        api_cmd.add_argument("--text-limit", type=int, dest="text_limit")
         _add_daemon_options(api_cmd)
         _add_output_options(api_cmd)
     api_save = api_sub.add_parser("save")
@@ -952,6 +953,9 @@ def _api_args_from_oa_cli(args: argparse.Namespace) -> dict:
         api_args["headers"] = headers
     if args.body is not None:
         api_args["body"] = args.body
+    text_limit = getattr(args, "text_limit", None)
+    if text_limit is not None:
+        api_args["max_text"] = text_limit
     return api_args
 
 
