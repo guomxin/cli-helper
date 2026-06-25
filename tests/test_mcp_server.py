@@ -382,6 +382,31 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
         self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
 
+    def test_call_oa_write_execute_rejects_unexpected_argument(self):
+        calls = []
+        server = self._server(runner=lambda *args: calls.append(args) or {})
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 141,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_execute",
+                    "arguments": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "confirm": True,
+                        "unexpected": "value",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["error"]["code"], -32602)
+        self.assertIn("Unexpected argument 'unexpected'", result["error"]["message"])
+
     def test_call_oa_write_dry_run_maps_to_daemon_command(self):
         calls = []
 
