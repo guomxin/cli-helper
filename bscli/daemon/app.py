@@ -10,7 +10,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from bscli.adapters.seeyon import build_seeyon_profile
+from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
     parse_oa_detail,
@@ -35,6 +35,7 @@ from bscli.adapters.seeyon_write import (
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApiStore, render_discovered_request
+from bscli.core.registry import CommandRegistry
 from bscli.core.trace import TraceStore
 
 COMMAND_TASKS = {
@@ -58,11 +59,15 @@ COMMAND_TASKS = {
 }
 
 WORKFLOW_READ_COMMANDS = {
+    "workflow_brief",
     "workflow_list",
     "workflow_detail",
+    "workflow_evidence",
+    "workflow_inspect",
     "workflow_opinions",
     "workflow_attachments",
     "workflow_actions",
+    "workflow_timeline",
 }
 
 
@@ -206,6 +211,10 @@ class DaemonState:
                     "result": self._session_status(),
                 },
             )
+        if system == "oa" and command == "doctor":
+            return self._run_oa_doctor_command()
+        if system == "oa" and command == "capability_map":
+            return self._run_oa_capability_map_command()
         if system == "oa" and command == "write_capabilities":
             return self._run_oa_write_capabilities_command(
                 body.get("args") or {},
@@ -615,8 +624,16 @@ class DaemonState:
         *,
         timeout_seconds: float,
     ) -> DaemonResponse:
+        if command == "workflow_brief":
+            return self._run_oa_workflow_brief_command(args, timeout_seconds)
         if command == "workflow_list":
             return self._run_oa_workflow_list_command(args, timeout_seconds)
+        if command == "workflow_inspect":
+            return self._run_oa_workflow_inspect_command(args, timeout_seconds)
+        if command == "workflow_evidence":
+            return self._run_oa_workflow_evidence_command(args, timeout_seconds)
+        if command == "workflow_timeline":
+            return self._run_oa_workflow_timeline_command(args, timeout_seconds)
         if command == "workflow_detail":
             return self._run_oa_workflow_detail_command(args, timeout_seconds)
         projection_key = {
@@ -639,7 +656,37 @@ class DaemonState:
         list_command = self._workflow_list_command(workflow_type)
         list_response = self._run_nested_oa_command(list_command, {}, timeout_seconds)
         if list_response.status != 200 or list_response.body.get("ok") is False:
-            return list_response
+            if workflow_type != "pending":
+                return list_response
+            fallback_response = self._run_nested_oa_command("pending_list", {}, timeout_seconds)
+            if fallback_response.status != 200 or fallback_response.body.get("ok") is False:
+                return list_response
+            fallback_result = fallback_response.body.get("result") if isinstance(fallback_response.body, dict) else {}
+            if not isinstance(fallback_result, dict):
+                fallback_result = {}
+            source_items = self._workflow_items_from_result(fallback_result)
+            filtered = self._filter_workflow_items(source_items, args)
+            return DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "task_id": fallback_response.body.get("task_id"),
+                    "result": {
+                        "type": workflow_type,
+                        "source": "home_dom_fallback",
+                        "name": fallback_result.get("name", ""),
+                        "total": fallback_result.get("total"),
+                        "page": fallback_result.get("page"),
+                        "source_count": len(source_items),
+                        "count": len(filtered),
+                        "items": filtered,
+                        "fallback": {
+                            "from": list_command,
+                            "reason": list_response.body.get("error", ""),
+                        },
+                    },
+                },
+            )
         result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
         if not isinstance(result, dict):
             result = {}
@@ -705,6 +752,150 @@ class DaemonState:
                 "ok": True,
                 "task_id": detail_response.body.get("task_id"),
                 "result": result,
+            },
+        )
+
+    def _run_oa_workflow_brief_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        list_args = {"type": self._workflow_type(args)}
+        for key in ("keyword", "limit"):
+            if args.get(key) is not None:
+                list_args[key] = args[key]
+        list_response = self._run_nested_oa_command("workflow_list", list_args, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        list_result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(list_result, dict):
+            list_result = {}
+        workflow_type = self._workflow_type(args)
+        source_items = self._filter_workflow_items(self._workflow_items_from_result(list_result), args)
+        brief_items = [_workflow_brief_item(item) for item in source_items if isinstance(item, dict)]
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": list_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source": list_result.get("source") or "workflow_list",
+                    "source_count": list_result.get("source_count", len(source_items)),
+                    "count": len(brief_items),
+                    "items": brief_items,
+                    "read_effect": _workflow_read_effect(workflow_type, detail_page_opened=False),
+                },
+            },
+        )
+
+    def _run_oa_workflow_inspect_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_type = self._workflow_type(args)
+        detail_url = str(args.get("url") or "").strip()
+        source_item = None
+        if not detail_url:
+            resolved, error_response = self._resolve_workflow_item_from_args(args, timeout_seconds)
+            if error_response is not None:
+                return error_response
+            source_item = resolved
+            detail_url = str(source_item.get("href") or "").strip()
+        if not detail_url:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "oa workflow inspect requires url or id",
+                    "result": {},
+                },
+            )
+        detail_response = self._run_nested_oa_command("detail_read", {"url": detail_url}, timeout_seconds)
+        if detail_response.status != 200 or detail_response.body.get("ok") is False:
+            return detail_response
+        detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        project_args = dict(args)
+        project_args.setdefault("include", "title,text,fields,attachments,workflow,actions")
+        projected = self._project_workflow_detail(detail, project_args)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": detail_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source_item": source_item or {},
+                    "detail": projected,
+                    "summary": _workflow_detail_summary(source_item or {}, detail, args),
+                    "read_effect": _workflow_read_effect(workflow_type, detail_page_opened=True),
+                },
+            },
+        )
+
+    def _run_oa_workflow_evidence_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        inspect_args = dict(args)
+        inspect_args.setdefault("include", "title,text,fields,attachments,workflow,actions")
+        inspect_response = self._run_nested_oa_command("workflow_inspect", inspect_args, timeout_seconds)
+        if inspect_response.status != 200 or inspect_response.body.get("ok") is False:
+            return inspect_response
+        inspected = inspect_response.body.get("result") if isinstance(inspect_response.body, dict) else {}
+        if not isinstance(inspected, dict):
+            inspected = {}
+        source_item = inspected.get("source_item") if isinstance(inspected.get("source_item"), dict) else {}
+        detail = inspected.get("detail") if isinstance(inspected.get("detail"), dict) else {}
+        summary = inspected.get("summary") if isinstance(inspected.get("summary"), dict) else {}
+        workflow_type = self._workflow_type(args)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": inspect_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source_item": source_item,
+                    "evidence": _workflow_evidence_packet(source_item, detail, summary, args),
+                    "read_effect": inspected.get(
+                        "read_effect",
+                        _workflow_read_effect(workflow_type, detail_page_opened=True),
+                    ),
+                },
+            },
+        )
+
+    def _run_oa_workflow_timeline_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        opinion_response = self._run_nested_oa_command("workflow_opinions", dict(args), timeout_seconds)
+        if opinion_response.status != 200 or opinion_response.body.get("ok") is False:
+            return opinion_response
+        result = opinion_response.body.get("result") if isinstance(opinion_response.body, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        normalized = [_workflow_timeline_entry(index, item) for index, item in enumerate(items, start=1)]
+        workflow_type = self._workflow_type(args)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": opinion_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source_item": result.get("source_item", {}),
+                    "count": len(normalized),
+                    "items": normalized,
+                    "read_effect": _workflow_read_effect(workflow_type, detail_page_opened=True),
+                },
             },
         )
 
@@ -828,8 +1019,7 @@ class DaemonState:
                 },
             )
         workflow_type = self._workflow_type(args)
-        list_command = self._workflow_list_command(workflow_type)
-        list_response = self._run_nested_oa_command(list_command, {}, timeout_seconds)
+        list_response = self._run_oa_workflow_list_command({"type": workflow_type}, timeout_seconds)
         if list_response.status != 200 or list_response.body.get("ok") is False:
             return {}, list_response
         result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
@@ -1001,6 +1191,82 @@ class DaemonState:
                 },
             },
         )
+
+    def _run_oa_doctor_command(self) -> DaemonResponse:
+        capability_map = self._build_oa_capability_map()
+        discovered = capability_map.get("discovered", [])
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": None,
+                "result": {
+                    "daemon": {
+                        "ok": True,
+                        "home": str(self.config_store.root),
+                        "trace_store": str(self.config_store.root / "trace.db"),
+                    },
+                    "session": self._session_status(),
+                    "capabilities": {
+                        "read_count": len(capability_map["read"]),
+                        "read_names": [item["name"] for item in capability_map["read"]],
+                        "write": capability_map["write"],
+                    },
+                    "discovered": {
+                        "count": len(discovered),
+                        "items": discovered,
+                    },
+                },
+            },
+        )
+
+    def _run_oa_capability_map_command(self) -> DaemonResponse:
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": None,
+                "result": self._build_oa_capability_map(),
+            },
+        )
+
+    def _build_oa_capability_map(self) -> dict[str, Any]:
+        registry = CommandRegistry()
+        register_seeyon_commands(registry)
+        read = [
+            {
+                "name": _capability_name_from_command(command.name),
+                "command": command.name,
+                "risk": command.risk,
+            }
+            for command in registry.list("oa")
+            if command.access == "read"
+        ]
+        discovered = []
+        try:
+            discovered = [
+                {
+                    "name": api.name,
+                    "tool_name": api.tool_name,
+                    "access": api.access,
+                    "risk": api.risk,
+                    "description": api.description,
+                }
+                for api in DiscoveredApiStore(self.config_store.root).list_apis("oa")
+            ]
+        except ValueError:
+            discovered = []
+        return {
+            "read": read,
+            "write": {
+                "executable": ["workflow.submit", "meeting.reply"],
+                "dry_run_only": ["workflow.archive"],
+                "blocked": ["workflow.delete", "workflow.revoke", "workflow.return", "workflow.upload"],
+                "human_gate_commands": ["write_execute", "pending_submit", "meeting_reply_execute"],
+                "policy": "write actions require dry-run/precheck, explicit confirmation, read-back verification, and sanitized audit",
+            },
+            "discovered": discovered,
+        }
 
     def _run_oa_write_capabilities_command(
         self,
@@ -2711,6 +2977,139 @@ def _append_oa_meeting_reply_audit(home: Path, plan: dict[str, Any]) -> Path:
     with audit_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True) + "\n")
     return audit_path
+
+
+def _capability_name_from_command(command_name: str) -> str:
+    return command_name.replace("_", ".")
+
+
+def _workflow_read_effect(workflow_type: str, *, detail_page_opened: bool) -> dict[str, Any]:
+    return {
+        "detail_page_opened": detail_page_opened,
+        "may_mark_read": detail_page_opened and workflow_type == "pending",
+        "note": (
+            "Opening a pending detail page may change its read/unread state."
+            if detail_page_opened and workflow_type == "pending"
+            else ""
+        ),
+    }
+
+
+def _workflow_brief_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": item.get("title", ""),
+        "affair_id": str(item.get("affair_id") or ""),
+        "sender": item.get("sender", ""),
+        "date": item.get("date", ""),
+        "category": item.get("category", ""),
+        "read": item.get("read"),
+        "href": item.get("href", ""),
+        "detail_read": False,
+        "signals": {
+            "has_href": bool(item.get("href")),
+            "has_affair_id": bool(item.get("affair_id")),
+        },
+    }
+
+
+def _workflow_detail_summary(
+    source_item: dict[str, Any],
+    detail: dict[str, Any],
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    text = str(detail.get("text") or "")
+    text_limit = _workflow_text_limit_from_args(args)
+    return {
+        "title": detail.get("title") or source_item.get("title", ""),
+        "affair_id": str(source_item.get("affair_id") or _query_param(str(detail.get("url") or ""), "affairId")),
+        "sender": source_item.get("sender", ""),
+        "date": source_item.get("date", ""),
+        "category": source_item.get("category", ""),
+        "url": detail.get("url") or source_item.get("href", ""),
+        "text_excerpt": text[:text_limit],
+        "text_length": len(text),
+        "field_count": _list_len(detail.get("fields")),
+        "attachment_count": _list_len(detail.get("attachments")),
+        "opinion_count": _list_len(detail.get("workflow")),
+        "action_count": _list_len(detail.get("actions")),
+        "has_attachments": _list_len(detail.get("attachments")) > 0,
+        "has_write_actions": _list_len(detail.get("actions")) > 0,
+    }
+
+
+def _workflow_evidence_packet(
+    source_item: dict[str, Any],
+    detail: dict[str, Any],
+    summary: dict[str, Any],
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    text = str(detail.get("text") or "")
+    text_limit = _workflow_text_limit_from_args(args)
+    full_text_length = int(summary.get("text_length") or len(text))
+    fields = detail.get("fields") if isinstance(detail.get("fields"), list) else []
+    attachments = detail.get("attachments") if isinstance(detail.get("attachments"), list) else []
+    opinions = detail.get("workflow") if isinstance(detail.get("workflow"), list) else []
+    actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
+    return {
+        "identity": {
+            "title": summary.get("title") or detail.get("title") or source_item.get("title", ""),
+            "affair_id": summary.get("affair_id") or source_item.get("affair_id", ""),
+            "sender": summary.get("sender") or source_item.get("sender", ""),
+            "date": summary.get("date") or source_item.get("date", ""),
+            "category": summary.get("category") or source_item.get("category", ""),
+            "url": summary.get("url") or detail.get("url") or source_item.get("href", ""),
+        },
+        "body": {
+            "text_excerpt": text[:text_limit],
+            "text_length": full_text_length,
+            "truncated": full_text_length > text_limit,
+        },
+        "fields": fields,
+        "attachments": {"count": len(attachments), "items": attachments},
+        "opinions": {"count": len(opinions), "items": opinions},
+        "actions": {
+            "count": len(actions),
+            "high_risk_count": len([action for action in actions if isinstance(action, dict) and action.get("risk") == "high"]),
+            "items": actions,
+        },
+    }
+
+
+def _workflow_timeline_entry(index: int, entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {
+            "index": index,
+            "node": "",
+            "handler": "",
+            "time": "",
+            "opinion": "",
+            "text": str(entry),
+            "raw": entry,
+        }
+    text = str(entry.get("text") or entry.get("content") or entry.get("opinion") or "")
+    return {
+        "index": index,
+        "node": entry.get("node") or entry.get("activity") or entry.get("step") or "",
+        "handler": entry.get("handler") or entry.get("actor") or entry.get("name") or "",
+        "time": entry.get("time") or entry.get("date") or entry.get("created_at") or "",
+        "opinion": entry.get("opinion") or entry.get("attitude") or entry.get("decision") or "",
+        "text": text,
+        "raw": entry,
+    }
+
+
+def _workflow_text_limit_from_args(args: dict[str, Any]) -> int:
+    value = args.get("text_limit")
+    if value is None:
+        return 3000
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 3000
+
+
+def _list_len(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
 
 
 def _oa_write_category_for_item(item: dict[str, Any]) -> str:

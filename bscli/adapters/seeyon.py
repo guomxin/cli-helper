@@ -307,6 +307,114 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="workflow_inspect",
+            description="Read one Seeyon OA workflow as an agent-ready intelligence packet with detail summary and read-effect metadata.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "include": {"type": "string"},
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source_item": {"type": "object"},
+                    "detail": {"type": "object"},
+                    "summary": {"type": "object"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.summary"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_brief",
+            description="Read a list-only Seeyon OA workflow brief without opening detail pages.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_evidence",
+            description="Read one Seeyon OA workflow and return a compact evidence packet for agent decisions.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {"type": "string", "description": "Workflow collection: pending or sent. Defaults to pending."},
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source_item": {"type": "object"},
+                    "evidence": {"type": "object"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.evidence"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_timeline",
+            description="Read and normalize the workflow opinion timeline for one Seeyon OA workflow.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {"type": "string", "description": "Workflow collection: pending or sent. Defaults to pending."},
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source_item": {"type": "object"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="workflow_opinions",
             description="Read workflow opinions for one or more Seeyon OA workflows.",
             access="read",
@@ -517,6 +625,47 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.connected"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="doctor",
+            description="Check BSCLI/OA daemon, browser bridge, discovered API, and static capability readiness.",
+            access="read",
+            strategy="daemon_api",
+            args_schema={},
+            api={"path": "/commands/run", "method": "POST"},
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "daemon": {"type": "object"},
+                    "session": {"type": "object"},
+                    "capabilities": {"type": "object"},
+                    "discovered": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.daemon.ok"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="capability_map",
+            description="Return the agent-facing OA read/write/discovered capability map without executing writes.",
+            access="read",
+            strategy="daemon_api",
+            args_schema={},
+            api={"path": "/commands/run", "method": "POST"},
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "read": {"type": "array"},
+                    "write": {"type": "object"},
+                    "discovered": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.read"},
         )
     )
     registry.register(

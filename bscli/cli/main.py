@@ -157,6 +157,16 @@ def _build_oa_parser(oa_sub) -> None:
     status.set_defaults(oa_command="session_status")
     _add_daemon_options(status)
 
+    doctor = oa_sub.add_parser("doctor")
+    doctor.set_defaults(oa_command="doctor")
+    _add_daemon_options(doctor)
+    _add_output_options(doctor)
+
+    capabilities = oa_sub.add_parser("capabilities")
+    capabilities.set_defaults(oa_command="capability_map")
+    _add_daemon_options(capabilities)
+    _add_output_options(capabilities)
+
     page = oa_sub.add_parser("page")
     page_sub = page.add_subparsers(dest="oa_action", required=True)
     snapshot = page_sub.add_parser("snapshot")
@@ -337,7 +347,7 @@ def _build_oa_parser(oa_sub) -> None:
 
 
 def _add_workflow_parser(subparsers) -> None:
-    for action in ("list", "search", "export"):
+    for action in ("list", "search", "export", "brief"):
         parser = subparsers.add_parser(action)
         parser.set_defaults(oa_workflow_action=action)
         _add_workflow_type_option(parser)
@@ -347,6 +357,32 @@ def _add_workflow_parser(subparsers) -> None:
             parser.add_argument("--keyword")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="csv" if action == "export" else "json")
+
+    inspect = subparsers.add_parser("inspect")
+    inspect.set_defaults(oa_workflow_action="inspect")
+    inspect.add_argument("--url")
+    inspect.add_argument("--id", dest="workflow_id")
+    _add_workflow_type_option(inspect)
+    _add_detail_options(inspect)
+    _add_daemon_options(inspect)
+    _add_output_options(inspect)
+
+    evidence = subparsers.add_parser("evidence")
+    evidence.set_defaults(oa_workflow_action="evidence")
+    evidence.add_argument("--url")
+    evidence.add_argument("--id", dest="workflow_id")
+    _add_workflow_type_option(evidence)
+    evidence.add_argument("--text-limit", type=int, dest="text_limit")
+    _add_daemon_options(evidence)
+    _add_output_options(evidence)
+
+    timeline = subparsers.add_parser("timeline")
+    timeline.set_defaults(oa_workflow_action="timeline")
+    timeline.add_argument("--url")
+    timeline.add_argument("--id", dest="workflow_id")
+    _add_workflow_type_option(timeline)
+    _add_daemon_options(timeline)
+    _add_output_options(timeline)
 
     details = subparsers.add_parser("details")
     details.set_defaults(oa_workflow_action="details")
@@ -639,6 +675,27 @@ def handle_oa_workflow(args: argparse.Namespace) -> int:
         response = run_oa_daemon_command(args, "workflow_list", _workflow_daemon_args_from_cli(args))
         if not response.get("ok", False):
             print_json(response)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
+    if action == "brief":
+        response = run_oa_daemon_command(args, "workflow_brief", _workflow_daemon_args_from_cli(args))
+        if not response.get("ok", False):
+            emit_cli_value(response, args)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
+    if action in {"inspect", "evidence", "timeline"}:
+        command = {
+            "inspect": "workflow_inspect",
+            "evidence": "workflow_evidence",
+            "timeline": "workflow_timeline",
+        }[action]
+        response = run_oa_daemon_command(args, command, _workflow_daemon_args_from_cli(args))
+        if not response.get("ok", False):
+            emit_cli_value(response, args)
             return 0
         response = _apply_response_options(response, args)
         emit_cli_value(response, args)

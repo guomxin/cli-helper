@@ -16,7 +16,13 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(manifest["schema_version"], "bscli.tool_manifest.v1")
         tools = {tool["name"]: tool for tool in manifest["tools"]}
         self.assertIn("oa__pending_list", tools)
+        self.assertIn("oa__doctor", tools)
+        self.assertIn("oa__capability_map", tools)
         self.assertIn("oa__workflow_list", tools)
+        self.assertIn("oa__workflow_inspect", tools)
+        self.assertIn("oa__workflow_brief", tools)
+        self.assertIn("oa__workflow_evidence", tools)
+        self.assertIn("oa__workflow_timeline", tools)
         self.assertIn("oa__workflow_opinions", tools)
         self.assertIn("oa__template_detail", tools)
 
@@ -62,6 +68,28 @@ class ToolManifestTests(unittest.TestCase):
         )
         self.assertEqual(workflow_opinions["metadata"]["command"], "workflow_opinions")
         self.assertEqual(workflow_opinions["metadata"]["access"], "read")
+
+        workflow_inspect = tools["oa__workflow_inspect"]
+        self.assertEqual(
+            workflow_inspect["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "Workflow collection: pending or sent. Defaults to pending."},
+                    "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                    "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                    "include": {"type": "string"},
+                    "text_limit": {"type": "integer"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(workflow_inspect["metadata"]["access"], "read")
+
+        doctor = tools["oa__doctor"]
+        self.assertEqual(doctor["input_schema"]["required"], [])
+        self.assertEqual(doctor["metadata"]["strategy"], "daemon_api")
 
     def test_discovered_write_api_manifest_requires_confirm_argument(self):
         api = DiscoveredApi(

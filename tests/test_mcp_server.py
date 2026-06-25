@@ -654,6 +654,57 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertEqual(result["result"]["structuredContent"]["count"], 1)
 
+    def test_call_oa_doctor_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"daemon": {"ok": True}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__doctor",
+                    "arguments": {},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "doctor", {})])
+        self.assertTrue(result["result"]["structuredContent"]["daemon"]["ok"])
+
+    def test_call_oa_workflow_inspect_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"summary": {"title": "Weekly report"}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__workflow_inspect",
+                    "arguments": {"type": "pending", "id": "affair-1", "text_limit": 200},
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [("oa", "workflow_inspect", {"type": "pending", "id": "affair-1", "text_limit": 200})],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["summary"]["title"], "Weekly report")
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

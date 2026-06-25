@@ -139,10 +139,16 @@ Session and page inspection:
 
 ```bash
 python -m bscli.cli.main --home .bscli oa status
+python -m bscli.cli.main --home .bscli oa doctor
+python -m bscli.cli.main --home .bscli oa capabilities
 python -m bscli.cli.main --home .bscli oa page snapshot
 python -m bscli.cli.main --home .bscli oa page inventory
 python -m bscli.cli.main --home .bscli oa nav list
 ```
+
+`oa doctor` checks the daemon, trace store, browser bridge session, discovered
+API count, and static capability map. `oa capabilities` returns the
+agent-facing read/write/discovered capability map without executing writes.
 
 Read an OA detail page from a URL found in list output:
 
@@ -165,6 +171,10 @@ Workflow read commands:
 python -m bscli.cli.main --home .bscli oa workflow list --type pending
 python -m bscli.cli.main --home .bscli oa workflow search --type pending --keyword weekly
 python -m bscli.cli.main --home .bscli oa workflow list --type sent --limit 10
+python -m bscli.cli.main --home .bscli oa workflow brief --type pending --limit 20
+python -m bscli.cli.main --home .bscli oa workflow inspect --type pending --id 6924695233995293606
+python -m bscli.cli.main --home .bscli oa workflow evidence --type pending --id 6924695233995293606
+python -m bscli.cli.main --home .bscli oa workflow timeline --type pending --id 6924695233995293606
 python -m bscli.cli.main --home .bscli oa workflow detail --type pending --id 6924695233995293606
 python -m bscli.cli.main --home .bscli oa workflow opinions --type pending --id 6924695233995293606
 python -m bscli.cli.main --home .bscli oa workflow opinions --type pending --keyword weekly --limit 3
@@ -182,10 +192,17 @@ API has been discovered and verified. Prefer `--id` for business commands; the
 optional `--url` value is a rendered OA detail-page URL fallback, not a backend
 opinion API URL.
 
+`oa workflow brief` is list-only and does not open workflow detail pages, so it
+will not change a pending item's read/unread state. `inspect`, `evidence`, and
+`timeline` intentionally open a single rendered detail page and include
+`read_effect` metadata noting that pending detail reads may mark an item as
+read.
+
 The same workflow surface is also exported to agents through the tool manifest
 and MCP server. Current tool names include `oa__workflow_list`,
-`oa__workflow_detail`, `oa__workflow_opinions`, `oa__workflow_attachments`, and
-`oa__workflow_actions`. For example, an agent can call
+`oa__workflow_brief`, `oa__workflow_inspect`, `oa__workflow_evidence`,
+`oa__workflow_timeline`, `oa__workflow_detail`, `oa__workflow_opinions`,
+`oa__workflow_attachments`, and `oa__workflow_actions`. For example, an agent can call
 `oa__workflow_opinions` with `{"type":"pending","id":"..."}` and let the daemon
 resolve the list item, open the rendered detail page, and return only the
 opinion entries. Opinion entries always include `text`; when the rendered page
@@ -541,9 +558,11 @@ Implemented:
 - CLI `command list oa`
 - CLI `tool manifest oa`
 - CLI `mcp serve`
+- Business CLI `oa doctor`
+- Business CLI `oa capabilities`
 - Business CLI `oa detail read`
 - Business CLI `oa detail attachments/workflow`
-- Business CLI `oa workflow list/search/detail/opinions/attachments/actions`
+- Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`

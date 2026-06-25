@@ -876,6 +876,142 @@ class CliOaTests(unittest.TestCase):
         )
         self.assertFalse(payload["result"]["endpoint_candidates"][0]["safe_to_call"])
 
+    def test_oa_doctor_calls_daemon_doctor_command(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"daemon": {"ok": True}, "session": {"connected": True}}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "doctor",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "doctor")
+        self.assertEqual(seen_payloads[0]["args"], {})
+        self.assertTrue(payload["result"]["session"]["connected"])
+
+    def test_oa_capabilities_calls_daemon_capability_map_command(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"read": [{"name": "workflow.list"}], "write": {"executable": []}}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "capabilities",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "capability_map")
+        self.assertEqual(seen_payloads[0]["args"], {})
+        self.assertEqual(payload["result"]["read"][0]["name"], "workflow.list")
+
+    def test_oa_workflow_inspect_calls_daemon_with_detail_options(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"summary": {"title": "Weekly report"}}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "inspect",
+                "--type",
+                "pending",
+                "--id",
+                "a1",
+                "--include",
+                "title,text,workflow",
+                "--text-limit",
+                "80",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "workflow_inspect")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"type": "pending", "id": "a1", "include": "title,text,workflow", "text_limit": 80},
+        )
+        self.assertEqual(payload["result"]["summary"]["title"], "Weekly report")
+
+    def test_oa_workflow_brief_calls_daemon_without_opening_detail_options(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"count": 1, "items": [{"title": "Weekly report"}]}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "brief",
+                "--type",
+                "pending",
+                "--keyword",
+                "weekly",
+                "--limit",
+                "1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "workflow_brief")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "keyword": "weekly", "limit": 1})
+        self.assertEqual(payload["result"]["items"][0]["title"], "Weekly report")
+
+    def test_oa_workflow_evidence_and_timeline_call_daemon_with_id(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {"ok": True, "result": {"evidence": {"identity": {"affair_id": "a1"}}}},
+                {"ok": True, "result": {"count": 1, "items": [{"text": "Approved"}]}},
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            evidence = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "evidence",
+                "--id",
+                "a1",
+                "--text-limit",
+                "120",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            timeline = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "timeline",
+                "--id",
+                "a1",
+                "--limit",
+                "5",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "workflow_evidence")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "id": "a1", "text_limit": 120})
+        self.assertEqual(seen_payloads[1]["command"], "workflow_timeline")
+        self.assertEqual(seen_payloads[1]["args"], {"type": "pending", "id": "a1", "limit": 5})
+        self.assertEqual(json.loads(evidence.stdout)["result"]["evidence"]["identity"]["affair_id"], "a1")
+        self.assertEqual(json.loads(timeline.stdout)["result"]["items"][0]["text"], "Approved")
+
     def test_oa_meeting_reply_execute_requires_confirm_before_daemon_call(self):
         server, seen_payloads = self._start_daemon({"ok": True})
 
