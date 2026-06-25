@@ -1460,6 +1460,143 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["attachments"][0]["name"], "seal-plan.pdf")
             self.assertEqual(response.body["result"]["workflow"][0]["text"], "Opinion: approved")
 
+    def test_run_workflow_list_filters_items(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            state._run_nested_oa_command = lambda command, args, timeout: calls.append((command, args, timeout)) or DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Weekly report", "affair_id": "a1"},
+                            {"title": "Travel request", "affair_id": "a2"},
+                        ]
+                    },
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "workflow_list",
+                    "args": {"type": "pending", "keyword": "weekly", "limit": 1},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["pending_list_api"])
+            self.assertEqual(response.body["result"]["count"], 1)
+            self.assertEqual(response.body["result"]["items"][0]["affair_id"], "a1")
+
+    def test_run_workflow_opinions_resolves_id_and_returns_structured_opinions(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "a1",
+                                    "href": "http://oa.example.test/detail/a1",
+                                },
+                                {
+                                    "title": "Travel request",
+                                    "affair_id": "a2",
+                                    "href": "http://oa.example.test/detail/a2",
+                                },
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "workflow": [
+                                {
+                                    "text": "Alice approved",
+                                    "handler": "Alice",
+                                    "opinion": "approved",
+                                    "time": "",
+                                }
+                            ],
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout):
+                calls.append((command, args, timeout))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "workflow_opinions",
+                    "args": {"type": "pending", "id": "a1", "limit": 5},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["pending_list_api", "detail_read"])
+            self.assertEqual(calls[1][1], {"url": "http://oa.example.test/detail/a1"})
+            self.assertEqual(response.body["result"]["source_item"]["affair_id"], "a1")
+            self.assertEqual(response.body["result"]["count"], 1)
+            self.assertEqual(response.body["result"]["items"][0]["handler"], "Alice")
+
+    def test_run_workflow_detail_reports_clear_missing_id_error(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state._run_nested_oa_command = lambda *_args: DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Weekly report",
+                                "affair_id": "a1",
+                                "href": "http://oa.example.test/detail/a1",
+                            }
+                        ]
+                    },
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "workflow_detail",
+                    "args": {"type": "pending", "id": "missing"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 404)
+            self.assertFalse(response.body["ok"])
+            self.assertIn("workflow id not found", response.body["error"])
+            self.assertEqual(response.body["result"]["searched_count"], 1)
+            self.assertIn("oa workflow list", response.body["suggestions"][0])
+
     def test_run_api_save_replays_and_writes_discovered_api_file(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

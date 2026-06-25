@@ -590,8 +590,7 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
 def handle_oa_workflow(args: argparse.Namespace) -> int:
     action = args.oa_workflow_action
     if action in {"list", "search", "export"}:
-        command = _workflow_list_command(args.workflow_type)
-        response = run_oa_daemon_command(args, command, {})
+        response = run_oa_daemon_command(args, "workflow_list", _workflow_daemon_args_from_cli(args))
         if not response.get("ok", False):
             print_json(response)
             return 0
@@ -601,13 +600,49 @@ def handle_oa_workflow(args: argparse.Namespace) -> int:
     if action == "details":
         return _run_oa_workflow_batch(args, "details")
     if action == "detail":
-        return _run_oa_workflow_detail(args, projection=None)
+        response = run_oa_daemon_command(args, "workflow_detail", _workflow_daemon_args_from_cli(args))
+        if not response.get("ok", False):
+            emit_cli_value(response, args)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
     if action in {"attachments", "opinions", "actions"}:
-        projection = "workflow" if action == "opinions" else action
-        if getattr(args, "url", None) or getattr(args, "workflow_id", None):
-            return _run_oa_workflow_detail(args, projection=projection)
-        return _run_oa_workflow_batch(args, projection)
+        command = {
+            "attachments": "workflow_attachments",
+            "opinions": "workflow_opinions",
+            "actions": "workflow_actions",
+        }[action]
+        response = run_oa_daemon_command(args, command, _workflow_daemon_args_from_cli(args))
+        if not response.get("ok", False):
+            emit_cli_value(response, args)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
     raise ValueError(f"unknown workflow action: {action}")
+
+
+def _workflow_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {"type": args.workflow_type}
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    if getattr(args, "limit", None) is not None:
+        payload["limit"] = args.limit
+    workflow_id = getattr(args, "workflow_id", None)
+    if workflow_id:
+        payload["id"] = workflow_id
+    url = getattr(args, "url", None)
+    if url:
+        payload["url"] = url
+    include = getattr(args, "include", None)
+    if include:
+        payload["include"] = include
+    text_limit = getattr(args, "text_limit", None)
+    if text_limit is not None:
+        payload["text_limit"] = text_limit
+    return payload
 
 
 def _run_oa_workflow_batch(args: argparse.Namespace, batch_kind: str) -> int:

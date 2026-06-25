@@ -51,6 +51,14 @@ COMMAND_TASKS = {
     ("oa", "template_list_api"): "section_api_replay",
 }
 
+WORKFLOW_READ_COMMANDS = {
+    "workflow_list",
+    "workflow_detail",
+    "workflow_opinions",
+    "workflow_attachments",
+    "workflow_actions",
+}
+
 
 @dataclass(frozen=True)
 class DaemonResponse:
@@ -200,6 +208,12 @@ class DaemonState:
             )
         if system == "oa" and command == "pending_submit":
             return self._run_oa_pending_submit_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in WORKFLOW_READ_COMMANDS:
+            return self._run_oa_workflow_read_command(
+                command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -569,6 +583,349 @@ class DaemonState:
                 "result": parse_oa_detail(html, base_url=snapshot.get("url") or args["url"]),
             },
         )
+
+    def _run_oa_workflow_read_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if command == "workflow_list":
+            return self._run_oa_workflow_list_command(args, timeout_seconds)
+        if command == "workflow_detail":
+            return self._run_oa_workflow_detail_command(args, timeout_seconds)
+        projection_key = {
+            "workflow_opinions": "workflow",
+            "workflow_attachments": "attachments",
+            "workflow_actions": "actions",
+        }[command]
+        return self._run_oa_workflow_projection_command(
+            args,
+            projection_key=projection_key,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _run_oa_workflow_list_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_type = self._workflow_type(args)
+        list_command = self._workflow_list_command(workflow_type)
+        list_response = self._run_nested_oa_command(list_command, {}, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        source_items = self._workflow_items_from_result(result)
+        filtered = self._filter_workflow_items(source_items, args)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": list_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source": result.get("source") or list_command,
+                    "name": result.get("name", ""),
+                    "total": result.get("total"),
+                    "page": result.get("page"),
+                    "source_count": len(source_items),
+                    "count": len(filtered),
+                    "items": filtered,
+                },
+            },
+        )
+
+    def _run_oa_workflow_detail_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        detail_url = str(args.get("url") or "").strip()
+        source_item = None
+        if not detail_url:
+            resolved, error_response = self._resolve_workflow_item_from_args(args, timeout_seconds)
+            if error_response is not None:
+                return error_response
+            source_item = resolved
+            detail_url = str(source_item.get("href") or "").strip()
+        if not detail_url:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "oa workflow detail requires url or id",
+                    "result": {},
+                    "suggestions": [
+                        "Run: python -m bscli.cli.main --home .bscli oa workflow list --type pending --fields title,affair_id,href",
+                    ],
+                },
+            )
+        detail_response = self._run_nested_oa_command("detail_read", {"url": detail_url}, timeout_seconds)
+        if detail_response.status != 200 or detail_response.body.get("ok") is False:
+            return detail_response
+        detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        projected = self._project_workflow_detail(detail, args)
+        if source_item is not None:
+            result = {"source_item": source_item, "detail": projected}
+        else:
+            result = projected
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": detail_response.body.get("task_id"),
+                "result": result,
+            },
+        )
+
+    def _run_oa_workflow_projection_command(
+        self,
+        args: dict[str, Any],
+        *,
+        projection_key: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if str(args.get("url") or "").strip() or str(args.get("id") or "").strip():
+            return self._run_oa_workflow_single_projection_command(
+                args,
+                projection_key=projection_key,
+                timeout_seconds=timeout_seconds,
+            )
+
+        list_response = self._run_oa_workflow_list_command(args, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        list_result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        source_items = list_result.get("items") if isinstance(list_result, dict) else []
+        if not isinstance(source_items, list):
+            source_items = []
+
+        indexed_items = []
+        for source_item in source_items:
+            if not isinstance(source_item, dict) or not source_item.get("href"):
+                continue
+            detail_response = self._run_nested_oa_command(
+                "detail_read",
+                {"url": source_item["href"]},
+                timeout_seconds,
+            )
+            if detail_response.status != 200 or detail_response.body.get("ok") is False:
+                continue
+            detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+            if not isinstance(detail, dict):
+                continue
+            indexed_items.extend(self._index_workflow_detail_entries(source_item, detail, projection_key))
+
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "result": {
+                    "type": list_result.get("type") if isinstance(list_result, dict) else self._workflow_type(args),
+                    "source_count": len(source_items),
+                    "count": len(indexed_items),
+                    "items": indexed_items,
+                },
+            },
+        )
+
+    def _run_oa_workflow_single_projection_command(
+        self,
+        args: dict[str, Any],
+        *,
+        projection_key: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        detail_url = str(args.get("url") or "").strip()
+        source_item = None
+        if not detail_url:
+            resolved, error_response = self._resolve_workflow_item_from_args(args, timeout_seconds)
+            if error_response is not None:
+                return error_response
+            source_item = resolved
+            detail_url = str(source_item.get("href") or "").strip()
+        if not detail_url:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "oa workflow projection requires url or id",
+                    "result": {"items": [], "count": 0},
+                },
+            )
+        detail_response = self._run_nested_oa_command("detail_read", {"url": detail_url}, timeout_seconds)
+        if detail_response.status != 200 or detail_response.body.get("ok") is False:
+            return detail_response
+        detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        entries = detail.get(projection_key)
+        if not isinstance(entries, list):
+            entries = []
+        limit = self._workflow_limit(args)
+        if limit is not None:
+            entries = entries[:limit]
+        result = {
+            "title": detail.get("title", ""),
+            "url": detail.get("url", detail_url),
+            "count": len(entries),
+            "items": entries,
+        }
+        if source_item is not None:
+            result["source_item"] = source_item
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": detail_response.body.get("task_id"),
+                "result": result,
+            },
+        )
+
+    def _resolve_workflow_item_from_args(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> tuple[dict[str, Any], DaemonResponse | None]:
+        workflow_id = str(args.get("id") or "").strip()
+        if not workflow_id:
+            return {}, DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "workflow id is required when url is not provided",
+                    "result": {},
+                },
+            )
+        workflow_type = self._workflow_type(args)
+        list_command = self._workflow_list_command(workflow_type)
+        list_response = self._run_nested_oa_command(list_command, {}, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return {}, list_response
+        result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        source_items = self._workflow_items_from_result(result)
+        for item in source_items:
+            if isinstance(item, dict) and str(item.get("affair_id") or "") == workflow_id:
+                if not item.get("href"):
+                    return {}, DaemonResponse(
+                        409,
+                        {
+                            "ok": False,
+                            "error": f"workflow item has no detail href: {workflow_id}",
+                            "result": {"type": workflow_type, "id": workflow_id, "item": item},
+                        },
+                    )
+                return item, None
+        return {}, DaemonResponse(
+            404,
+            {
+                "ok": False,
+                "error": f"workflow id not found in {workflow_type} list: {workflow_id}",
+                "result": {
+                    "type": workflow_type,
+                    "id": workflow_id,
+                    "searched_count": len(source_items),
+                },
+                "suggestions": [
+                    f"Run: python -m bscli.cli.main --home .bscli oa workflow list --type {workflow_type} --fields title,affair_id,href",
+                    "Refresh the OA home page if the browser list is stale.",
+                ],
+            },
+        )
+
+    def _workflow_type(self, args: dict[str, Any]) -> str:
+        workflow_type = str(args.get("type") or "pending").strip() or "pending"
+        if workflow_type not in {"pending", "sent"}:
+            raise ValueError(f"unsupported workflow type: {workflow_type}")
+        return workflow_type
+
+    def _workflow_list_command(self, workflow_type: str) -> str:
+        return {"pending": "pending_list_api", "sent": "sent_list_api"}[workflow_type]
+
+    def _workflow_items_from_result(self, result: dict[str, Any]) -> list:
+        items = result.get("items")
+        return items if isinstance(items, list) else []
+
+    def _filter_workflow_items(self, items: list, args: dict[str, Any]) -> list:
+        filtered = list(items)
+        keyword = str(args.get("keyword") or "").strip()
+        if keyword:
+            needle = keyword.lower()
+            filtered = [
+                item
+                for item in filtered
+                if needle in json.dumps(item, ensure_ascii=False).lower()
+            ]
+        limit = self._workflow_limit(args)
+        if limit is not None:
+            filtered = filtered[:limit]
+        return filtered
+
+    def _workflow_limit(self, args: dict[str, Any]) -> int | None:
+        value = args.get("limit")
+        if value is None:
+            return None
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
+
+    def _project_workflow_detail(self, detail: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        include = self._workflow_include(args)
+        text_limit = self._workflow_text_limit(args)
+        projected = {}
+        for key in include:
+            if key not in detail:
+                continue
+            value = detail[key]
+            if key == "text" and isinstance(value, str):
+                value = value[:text_limit]
+            projected[key] = value
+        return projected
+
+    def _workflow_include(self, args: dict[str, Any]) -> list[str]:
+        value = str(args.get("include") or "title,text,fields,attachments,workflow")
+        return [part.strip() for part in value.split(",") if part.strip()]
+
+    def _workflow_text_limit(self, args: dict[str, Any]) -> int:
+        value = args.get("text_limit")
+        if value is None:
+            return 3000
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("text_limit must be an integer") from exc
+
+    def _index_workflow_detail_entries(
+        self,
+        source_item: dict[str, Any],
+        detail: dict[str, Any],
+        key: str,
+    ) -> list[dict[str, Any]]:
+        entries = detail.get(key)
+        if not isinstance(entries, list):
+            return []
+        indexed = []
+        for entry in entries:
+            row = {
+                "source_title": source_item.get("title", ""),
+                "source_href": source_item.get("href", ""),
+                "affair_id": source_item.get("affair_id", ""),
+            }
+            if isinstance(entry, dict):
+                row.update(entry)
+            else:
+                row["text"] = str(entry)
+            indexed.append(row)
+        return indexed
 
     def _run_api_save_command(
         self,
@@ -1046,6 +1403,8 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_execute", "pending_submit"}:
             return {"access": "write", "strategy": "human_gate"}
+        if system == "oa" and command in WORKFLOW_READ_COMMANDS:
+            return {"access": "read", "strategy": "daemon_api"}
         if command == "discovered_run":
             try:
                 api = DiscoveredApiStore(self.config_store.root).load_api(system, str(args.get("name") or ""))

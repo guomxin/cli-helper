@@ -182,6 +182,16 @@ API has been discovered and verified. Prefer `--id` for business commands; the
 optional `--url` value is a rendered OA detail-page URL fallback, not a backend
 opinion API URL.
 
+The same workflow surface is also exported to agents through the tool manifest
+and MCP server. Current tool names include `oa__workflow_list`,
+`oa__workflow_detail`, `oa__workflow_opinions`, `oa__workflow_attachments`, and
+`oa__workflow_actions`. For example, an agent can call
+`oa__workflow_opinions` with `{"type":"pending","id":"..."}` and let the daemon
+resolve the list item, open the rendered detail page, and return only the
+opinion entries. Opinion entries always include `text`; when the rendered page
+has a recognizable pattern they also include structured `handler`, `opinion`,
+and `time` fields.
+
 Pending, sent, and template objects:
 
 ```bash

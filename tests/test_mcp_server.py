@@ -493,6 +493,33 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
         self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
 
+    def test_call_oa_workflow_opinions_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"count": 1, "items": [{"text": "Alice approved"}]}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 19,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__workflow_opinions",
+                    "arguments": {"type": "pending", "id": "affair-1", "limit": 5},
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [("oa", "workflow_opinions", {"type": "pending", "id": "affair-1", "limit": 5})],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["count"], 1)
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

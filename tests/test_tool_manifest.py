@@ -16,6 +16,8 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(manifest["schema_version"], "bscli.tool_manifest.v1")
         tools = {tool["name"]: tool for tool in manifest["tools"]}
         self.assertIn("oa__pending_list", tools)
+        self.assertIn("oa__workflow_list", tools)
+        self.assertIn("oa__workflow_opinions", tools)
         self.assertIn("oa__template_detail", tools)
 
         detail = tools["oa__template_detail"]
@@ -42,6 +44,24 @@ class ToolManifestTests(unittest.TestCase):
                 "requires_confirmation": False,
             },
         )
+        workflow_opinions = tools["oa__workflow_opinions"]
+        self.assertEqual(
+            workflow_opinions["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "Workflow collection: pending or sent. Defaults to pending."},
+                    "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                    "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                    "keyword": {"type": "string", "description": "Keyword used when reading a batch of workflow opinions."},
+                    "limit": {"type": "integer"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(workflow_opinions["metadata"]["command"], "workflow_opinions")
+        self.assertEqual(workflow_opinions["metadata"]["access"], "read")
 
     def test_discovered_write_api_manifest_requires_confirm_argument(self):
         api = DiscoveredApi(

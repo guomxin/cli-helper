@@ -252,6 +252,143 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="workflow_list",
+            description="Read Seeyon OA workflow items from the pending or sent collection.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_detail",
+            description="Read a Seeyon OA workflow detail page by affair_id or rendered detail URL.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "include": {"type": "string"},
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source_item": {"type": "object"},
+                    "detail": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.detail"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_opinions",
+            description="Read workflow opinions for one or more Seeyon OA workflows.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {"type": "string", "description": "Workflow collection: pending or sent. Defaults to pending."},
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "keyword": {"type": "string", "description": "Keyword used when reading a batch of workflow opinions."},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "source_item": {"type": "object"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_attachments",
+            description="Read workflow detail attachments for one or more Seeyon OA workflows.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="workflow_actions",
+            description="Read candidate workflow actions for one or more Seeyon OA workflows without executing writes.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection: pending or sent. Defaults to pending.",
+                },
+                "id": {"type": "string", "description": "Workflow affair_id to resolve from the selected collection."},
+                "url": {"type": "string", "description": "Rendered OA detail-page URL fallback."},
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="pending_detail",
             description="Read one pending item metadata from the current Seeyon OA home page by affair_id.",
             access="read",

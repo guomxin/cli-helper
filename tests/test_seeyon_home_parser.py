@@ -84,9 +84,59 @@ class SeeyonHomeParserTests(unittest.TestCase):
 
         self.assertEqual(
             result["workflow"],
-            [{"text": "王玉霄 已阅 2026-06-15 16:06"}],
+            [
+                {
+                    "text": "王玉霄 已阅 2026-06-15 16:06",
+                    "handler": "王玉霄",
+                    "opinion": "已阅",
+                    "time": "2026-06-15 16:06",
+                }
+            ],
         )
         self.assertEqual(result["workflow_count"], 1)
+
+    def test_parse_oa_detail_splits_aggregated_workflow_opinions(self):
+        html = """
+        <html>
+          <body>
+            <div class="processLog">
+              黄佳豪 已阅 2026-06-18 09:51 回复 ( ) 0
+              杨宏博 同意 2026-06-18 09:54 回复 ( ) 0
+              王玉霄 同意 2026-06-18 10:01 回复 ( ) 0
+            </div>
+            <div class="processLog">黄佳豪 已阅 2026-06-18 09:51 回复 ( ) 0</div>
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary",
+        )
+
+        self.assertEqual(
+            result["workflow"],
+            [
+                {
+                    "text": "黄佳豪 已阅 2026-06-18 09:51",
+                    "handler": "黄佳豪",
+                    "opinion": "已阅",
+                    "time": "2026-06-18 09:51",
+                },
+                {
+                    "text": "杨宏博 同意 2026-06-18 09:54",
+                    "handler": "杨宏博",
+                    "opinion": "同意",
+                    "time": "2026-06-18 09:54",
+                },
+                {
+                    "text": "王玉霄 同意 2026-06-18 10:01",
+                    "handler": "王玉霄",
+                    "opinion": "同意",
+                    "time": "2026-06-18 10:01",
+                },
+            ],
+        )
 
     def test_parse_oa_detail_extracts_write_actions_from_page_script(self):
         html = """

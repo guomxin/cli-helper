@@ -10,6 +10,13 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from bscli.adapters.seeyon_write import write_action_risk
 
 
+_WORKFLOW_OPINION_RE = re.compile(
+    r"(?P<handler>\S+)\s+"
+    r"(?P<opinion>已阅|同意|不同意|退回|驳回|通过|批准|已处理|阅)\s+"
+    r"(?P<time>\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2})\b"
+)
+
+
 @dataclass
 class _Node:
     tag: str
@@ -427,27 +434,64 @@ def _parse_detail_workflow(root: _Node) -> list[dict]:
         haystack = f"{marker} {text}".lower()
         if not any(keyword.lower() in haystack for keyword in (*keywords, *extra_keywords)):
             continue
-        entry = _clean_workflow_entry(text)
-        if entry is None:
-            continue
-        text = entry["text"]
-        if text in seen:
-            continue
-        seen.add(text)
-        workflow.append(entry)
+        for entry in _clean_workflow_entries(text):
+            key = _workflow_entry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            workflow.append(entry)
+            if len(workflow) >= 100:
+                break
         if len(workflow) >= 100:
             break
     return workflow
 
 
-def _clean_workflow_entry(text: str) -> dict | None:
+def _clean_workflow_entries(text: str) -> list[dict]:
     text = _clean(text, 1000)
     if not text or _looks_like_workflow_noise(text):
-        return None
+        return []
     text = _strip_workflow_ui_tail(text)
     if not text or _looks_like_workflow_noise(text):
-        return None
-    return {"text": text}
+        return []
+    structured = [_workflow_entry_from_match(match) for match in _WORKFLOW_OPINION_RE.finditer(text)]
+    if structured:
+        return structured
+    return [{"text": text}]
+
+
+def _clean_workflow_entry(text: str) -> dict | None:
+    entries = _clean_workflow_entries(text)
+    return entries[0] if entries else None
+
+
+def _parse_workflow_entry_fields(text: str) -> dict[str, str]:
+    match = _WORKFLOW_OPINION_RE.match(text)
+    if not match:
+        return {}
+    return _workflow_fields_from_match(match)
+
+
+def _workflow_entry_from_match(match: re.Match) -> dict[str, str]:
+    fields = _workflow_fields_from_match(match)
+    return {
+        "text": f"{fields['handler']} {fields['opinion']} {fields['time']}",
+        **fields,
+    }
+
+
+def _workflow_fields_from_match(match: re.Match) -> dict[str, str]:
+    return {
+        "handler": match.group("handler"),
+        "opinion": match.group("opinion"),
+        "time": match.group("time"),
+    }
+
+
+def _workflow_entry_key(entry: dict) -> tuple:
+    if all(entry.get(key) for key in ("handler", "opinion", "time")):
+        return (entry.get("handler"), entry.get("opinion"), entry.get("time"))
+    return (entry.get("text", ""),)
 
 
 def _looks_like_workflow_noise(text: str) -> bool:

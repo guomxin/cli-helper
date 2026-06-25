@@ -239,7 +239,7 @@ class CliOaTests(unittest.TestCase):
 
         self.assertEqual(list(csv.DictReader(io.StringIO(result.stdout))), [{"source_title": "Sent doc", "text": "Manager approved"}])
 
-    def test_oa_workflow_list_maps_pending_type_to_pending_list_api(self):
+    def test_oa_workflow_list_maps_pending_type_to_workflow_list(self):
         server, seen_payloads = self._start_daemon(
             {
                 "ok": True,
@@ -271,11 +271,12 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(seen_payloads[0]["command"], "pending_list_api")
+        self.assertEqual(seen_payloads[0]["command"], "workflow_list")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "keyword": "weekly", "limit": 1})
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"][0]["title"], "Weekly report")
 
-    def test_oa_workflow_search_maps_sent_type_to_sent_list_api(self):
+    def test_oa_workflow_search_maps_sent_type_to_workflow_list(self):
         server, seen_payloads = self._start_daemon(
             {
                 "ok": True,
@@ -303,7 +304,8 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(seen_payloads[0]["command"], "sent_list_api")
+        self.assertEqual(seen_payloads[0]["command"], "workflow_list")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "sent", "keyword": "contract"})
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"][0]["affair_id"], "s1")
 
@@ -313,9 +315,7 @@ class CliOaTests(unittest.TestCase):
                 "ok": True,
                 "result": {
                     "title": "Weekly report",
-                    "text": "abcdefghij",
-                    "attachments": [],
-                    "workflow": [{"text": "Manager approved"}],
+                    "text": "abcd",
                 },
             }
         )
@@ -338,8 +338,11 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(seen_payloads[0]["command"], "detail_read")
-        self.assertEqual(seen_payloads[0]["args"], {"url": detail_url})
+        self.assertEqual(seen_payloads[0]["command"], "workflow_detail")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"type": "pending", "url": detail_url, "include": "title,text", "text_limit": 4},
+        )
         self.assertEqual(payload["result"], {"title": "Weekly report", "text": "abcd"})
 
     def test_oa_workflow_opinions_projects_single_detail_workflow(self):
@@ -348,7 +351,8 @@ class CliOaTests(unittest.TestCase):
                 "ok": True,
                 "result": {
                     "title": "Weekly report",
-                    "workflow": [
+                    "count": 2,
+                    "items": [
                         {"text": "Manager approved", "node": "manager"},
                         {"text": "Finance approved", "node": "finance"},
                     ],
@@ -374,38 +378,25 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual(seen_payloads[0]["command"], "detail_read")
+        self.assertEqual(seen_payloads[0]["command"], "workflow_opinions")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "url": detail_url, "limit": 1})
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"], [{"text": "Manager approved"}])
 
     def test_oa_workflow_opinions_resolves_affair_id_from_pending_list(self):
         server, seen_payloads = self._start_daemon(
-            [
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Weekly report",
-                                "affair_id": "a1",
-                                "href": "http://oa.example.test/detail/a1",
-                            },
-                            {
-                                "title": "Travel request",
-                                "affair_id": "a2",
-                                "href": "http://oa.example.test/detail/a2",
-                            },
-                        ]
-                    },
-                },
-                {
-                    "ok": True,
-                    "result": {
+            {
+                "ok": True,
+                "result": {
+                    "source_item": {
                         "title": "Weekly report",
-                        "workflow": [{"text": "Manager approved"}],
+                        "affair_id": "a1",
+                        "href": "http://oa.example.test/detail/a1",
                     },
+                    "count": 1,
+                    "items": [{"text": "Manager approved"}],
                 },
-            ]
+            }
         )
 
         with TemporaryDirectory() as tmp:
@@ -423,35 +414,27 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read"])
-        self.assertEqual(seen_payloads[1]["args"], {"url": "http://oa.example.test/detail/a1"})
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["workflow_opinions"])
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "id": "a1"})
         self.assertEqual(payload["result"]["source_item"]["affair_id"], "a1")
         self.assertEqual(payload["result"]["items"], [{"text": "Manager approved"}])
 
     def test_oa_workflow_detail_resolves_affair_id_from_sent_list(self):
         server, seen_payloads = self._start_daemon(
-            [
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {
-                                "title": "Sent doc",
-                                "affair_id": "s1",
-                                "href": "http://oa.example.test/detail/s1",
-                            }
-                        ]
-                    },
-                },
-                {
-                    "ok": True,
-                    "result": {
+            {
+                "ok": True,
+                "result": {
+                    "source_item": {
                         "title": "Sent doc",
-                        "text": "abcdef",
-                        "workflow": [],
+                        "affair_id": "s1",
+                        "href": "http://oa.example.test/detail/s1",
+                    },
+                    "detail": {
+                        "title": "Sent doc",
+                        "text": "abc",
                     },
                 },
-            ]
+            }
         )
 
         with TemporaryDirectory() as tmp:
@@ -473,23 +456,24 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual([entry["command"] for entry in seen_payloads], ["sent_list_api", "detail_read"])
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["workflow_detail"])
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"type": "sent", "id": "s1", "include": "title,text", "text_limit": 3},
+        )
         self.assertEqual(payload["result"]["source_item"]["affair_id"], "s1")
         self.assertEqual(payload["result"]["detail"], {"title": "Sent doc", "text": "abc"})
 
     def test_oa_workflow_opinions_batches_pending_detail_workflow(self):
         server, seen_payloads = self._start_daemon(
-            [
-                {
-                    "ok": True,
-                    "result": {
-                        "items": [
-                            {"title": "Weekly report", "href": "http://oa.example.test/detail/a1"},
-                        ]
-                    },
+            {
+                "ok": True,
+                "result": {
+                    "source_count": 1,
+                    "count": 1,
+                    "items": [{"source_title": "Weekly report", "text": "Manager approved"}],
                 },
-                {"ok": True, "result": {"workflow": [{"text": "Manager approved"}]}},
-            ]
+            }
         )
 
         with TemporaryDirectory() as tmp:
@@ -507,7 +491,8 @@ class CliOaTests(unittest.TestCase):
             )
 
         payload = json.loads(result.stdout)
-        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read"])
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["workflow_opinions"])
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "keyword": "weekly"})
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"][0]["source_title"], "Weekly report")
         self.assertEqual(payload["result"]["items"][0]["text"], "Manager approved")
