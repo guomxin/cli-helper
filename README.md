@@ -159,6 +159,26 @@ context, and extracts page text, table-like form fields, attachment download
 links, workflow/opinion hints, and candidate write actions. Candidate actions
 are discovery metadata only; they do not execute page writes.
 
+Workflow read commands:
+
+```bash
+python -m bscli.cli.main --home .bscli oa workflow list --type pending
+python -m bscli.cli.main --home .bscli oa workflow search --type pending --keyword weekly
+python -m bscli.cli.main --home .bscli oa workflow list --type sent --limit 10
+python -m bscli.cli.main --home .bscli oa workflow detail --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+python -m bscli.cli.main --home .bscli oa workflow opinions --url "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=..."
+python -m bscli.cli.main --home .bscli oa workflow opinions --type pending --keyword weekly --limit 3
+python -m bscli.cli.main --home .bscli oa workflow attachments --type sent --limit 10 --format csv --fields source_title,name,href
+python -m bscli.cli.main --home .bscli oa workflow actions --type pending --limit 10 --format table --fields source_title,code,label,risk
+```
+
+`oa workflow` is the agent-facing workflow toolbox. It reuses the existing
+pending/sent list APIs and the detail reader, but exposes them as one business
+surface for finding workflows, reading detail pages, collecting opinions,
+attachments, and candidate actions. Today `--type` supports `pending` and
+`sent`; more workflow collections should be added only after their backing OA
+API has been discovered and verified.
+
 Pending, sent, and template objects:
 
 ```bash
@@ -452,6 +472,7 @@ Implemented:
 - CLI `mcp serve`
 - Business CLI `oa detail read`
 - Business CLI `oa detail attachments/workflow`
+- Business CLI `oa workflow list/search/detail/opinions/attachments/actions`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`

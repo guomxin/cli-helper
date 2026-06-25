@@ -190,6 +190,10 @@ def _build_oa_parser(oa_sub) -> None:
         _add_daemon_options(detail_projection)
         _add_output_options(detail_projection)
 
+    workflow = oa_sub.add_parser("workflow")
+    workflow_sub = workflow.add_subparsers(dest="oa_action", required=True)
+    _add_workflow_parser(workflow_sub)
+
     pending = oa_sub.add_parser("pending")
     pending_sub = pending.add_subparsers(dest="oa_action", required=True)
     _add_collection_parser(
@@ -290,6 +294,53 @@ def _build_oa_parser(oa_sub) -> None:
             write_cmd.add_argument("--confirm", action="store_true")
             _add_daemon_options(write_cmd)
         _add_output_options(write_cmd)
+
+
+def _add_workflow_parser(subparsers) -> None:
+    for action in ("list", "search", "export"):
+        parser = subparsers.add_parser(action)
+        parser.set_defaults(oa_workflow_action=action)
+        _add_workflow_type_option(parser)
+        if action == "search":
+            parser.add_argument("--keyword", required=True)
+        else:
+            parser.add_argument("--keyword")
+        _add_daemon_options(parser)
+        _add_output_options(parser, default_format="csv" if action == "export" else "json")
+
+    details = subparsers.add_parser("details")
+    details.set_defaults(oa_workflow_action="details")
+    _add_workflow_type_option(details)
+    details.add_argument("--keyword")
+    _add_detail_options(details)
+    _add_daemon_options(details)
+    _add_output_options(details, default_format="json")
+
+    detail = subparsers.add_parser("detail")
+    detail.set_defaults(oa_workflow_action="detail")
+    detail.add_argument("--url", required=True)
+    _add_detail_options(detail)
+    _add_daemon_options(detail)
+    _add_output_options(detail)
+
+    for action in ("attachments", "opinions", "actions"):
+        parser = subparsers.add_parser(action)
+        parser.set_defaults(oa_workflow_action=action)
+        parser.add_argument("--url")
+        _add_workflow_type_option(parser)
+        parser.add_argument("--keyword")
+        _add_daemon_options(parser)
+        _add_output_options(parser, default_format="json")
+
+
+def _add_workflow_type_option(parser) -> None:
+    parser.add_argument(
+        "--type",
+        choices=["pending", "sent"],
+        default="pending",
+        dest="workflow_type",
+        help="Workflow collection to read; defaults to pending.",
+    )
 
 
 def _add_collection_parser(
@@ -509,6 +560,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
         return handle_oa_pending_submit(args)
+    if getattr(args, "oa_workflow_action", None):
+        return handle_oa_workflow(args)
     command = args.oa_command
     if command == "discovered_list":
         apis = [_discovered_api_summary(api) for api in DiscoveredApiStore(home).list_apis("oa")]
@@ -529,6 +582,63 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
     response = _project_detail_response(response, args)
     emit_cli_value(response, args)
     return 0
+
+
+def handle_oa_workflow(args: argparse.Namespace) -> int:
+    action = args.oa_workflow_action
+    if action in {"list", "search", "export"}:
+        command = _workflow_list_command(args.workflow_type)
+        response = run_oa_daemon_command(args, command, {})
+        if not response.get("ok", False):
+            print_json(response)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
+    if action == "details":
+        return _run_oa_workflow_batch(args, "details")
+    if action == "detail":
+        return _run_oa_workflow_detail(args, projection=None)
+    if action in {"attachments", "opinions", "actions"}:
+        projection = "workflow" if action == "opinions" else action
+        if getattr(args, "url", None):
+            return _run_oa_workflow_detail(args, projection=projection)
+        return _run_oa_workflow_batch(args, projection)
+    raise ValueError(f"unknown workflow action: {action}")
+
+
+def _run_oa_workflow_batch(args: argparse.Namespace, batch_kind: str) -> int:
+    args.oa_command = _workflow_list_command(args.workflow_type)
+    args.oa_batch_kind = batch_kind
+    return handle_oa_batch(args)
+
+
+def _run_oa_workflow_detail(
+    args: argparse.Namespace,
+    *,
+    projection: str | None,
+) -> int:
+    args.oa_command = "detail_read"
+    args.oa_detail_projection = projection
+    response = run_oa_daemon_command(args, "detail_read", {"url": args.url})
+    if not response.get("ok", False):
+        print_json(response)
+        return 0
+    response = _apply_response_options(response, args)
+    response = _project_detail_response(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def _workflow_list_command(workflow_type: str) -> str:
+    mapping = {
+        "pending": "pending_list_api",
+        "sent": "sent_list_api",
+    }
+    try:
+        return mapping[workflow_type]
+    except KeyError as exc:
+        raise ValueError(f"unsupported workflow type: {workflow_type}") from exc
 
 
 def handle_oa_batch(args: argparse.Namespace) -> int:

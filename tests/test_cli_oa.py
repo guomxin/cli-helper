@@ -239,6 +239,173 @@ class CliOaTests(unittest.TestCase):
 
         self.assertEqual(list(csv.DictReader(io.StringIO(result.stdout))), [{"source_title": "Sent doc", "text": "Manager approved"}])
 
+    def test_oa_workflow_list_maps_pending_type_to_pending_list_api(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "run_id": "run-1",
+                "result": {
+                    "count": 2,
+                    "items": [
+                        {"title": "Weekly report", "affair_id": "a1"},
+                        {"title": "Travel request", "affair_id": "a2"},
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "list",
+                "--type",
+                "pending",
+                "--keyword",
+                "weekly",
+                "--limit",
+                "1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "pending_list_api")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["title"], "Weekly report")
+
+    def test_oa_workflow_search_maps_sent_type_to_sent_list_api(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "items": [
+                        {"title": "Contract sent", "affair_id": "s1"},
+                        {"title": "Weekly sent", "affair_id": "s2"},
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "search",
+                "--type",
+                "sent",
+                "--keyword",
+                "contract",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "sent_list_api")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["affair_id"], "s1")
+
+    def test_oa_workflow_detail_reads_detail_page_by_url(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "title": "Weekly report",
+                    "text": "abcdefghij",
+                    "attachments": [],
+                    "workflow": [{"text": "Manager approved"}],
+                },
+            }
+        )
+        detail_url = "http://oa.example.test/detail?a=1"
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "detail",
+                "--url",
+                detail_url,
+                "--include",
+                "title,text",
+                "--text-limit",
+                "4",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "detail_read")
+        self.assertEqual(seen_payloads[0]["args"], {"url": detail_url})
+        self.assertEqual(payload["result"], {"title": "Weekly report", "text": "abcd"})
+
+    def test_oa_workflow_opinions_projects_single_detail_workflow(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "title": "Weekly report",
+                    "workflow": [{"text": "Manager approved"}],
+                },
+            }
+        )
+        detail_url = "http://oa.example.test/detail?a=1"
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "opinions",
+                "--url",
+                detail_url,
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "detail_read")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["text"], "Manager approved")
+
+    def test_oa_workflow_opinions_batches_pending_detail_workflow(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {"title": "Weekly report", "href": "http://oa.example.test/detail/a1"},
+                        ]
+                    },
+                },
+                {"ok": True, "result": {"workflow": [{"text": "Manager approved"}]}},
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "workflow",
+                "opinions",
+                "--type",
+                "pending",
+                "--keyword",
+                "weekly",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "detail_read"])
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["source_title"], "Weekly report")
+        self.assertEqual(payload["result"]["items"][0]["text"], "Manager approved")
+
     def test_oa_detail_attachments_projects_single_detail_attachments(self):
         server, seen_payloads = self._start_daemon(
             {
