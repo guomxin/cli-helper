@@ -253,12 +253,18 @@ python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --actio
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
 ```
 
-`draft` and `dry-run` never contact the daemon or browser. They include a local
-`request.payload_preview` for review. `dry-run` writes a sanitized audit row
-under `.bscli/audit/oa-write-plans.jsonl` with opinion text redacted. `execute`
-requires `--confirm`, dispatches a browser task, verifies the detail-page
-`affairId`, fills the opinion, and invokes the page's own Seeyon submit
-function. Other write actions remain blocked until they have their own mappings.
+`draft` is an offline local plan and does not contact the daemon or browser.
+`dry-run` is the write precheck: it runs through the daemon, resolves the
+pending workflow by `affair_id` when `--source-url` is omitted, reads the
+rendered detail page, checks that the requested action is currently available,
+and returns a machine-readable report with `checks`, `missing`,
+`blocked_reasons`, `suggestions`, `target.source_item`, and `precheck`
+metadata. It never dispatches a browser write task, and writes a sanitized audit
+row under `.bscli/audit/oa-write-plans.jsonl` with opinion text redacted.
+`execute` requires `--confirm`; after confirmation it reruns the same precheck,
+dispatches the browser write task only if the target action is available, then
+reads the pending list again and records whether the `affair_id` disappeared.
+Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
 `oa__write_draft`, `oa__write_dry_run`, `oa__write_execute`, and
 `oa__pending_submit`; executable tools require a `confirm` argument in their

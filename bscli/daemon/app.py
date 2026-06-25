@@ -25,6 +25,7 @@ from bscli.adapters.seeyon_write import (
     append_oa_write_audit,
     append_oa_write_verification_audit,
     build_oa_write_plan,
+    normalize_write_action,
 )
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
 from bscli.core.config import ConfigStore, SystemProfile
@@ -998,7 +999,19 @@ class DaemonState:
             source_url=str(args.get("source_url") or ""),
         )
         if mode == "dry-run":
+            precheck = self._precheck_oa_write_plan(plan, args, timeout_seconds)
             append_oa_write_audit(self.config_store.root, plan)
+            if not precheck["passed"]:
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "requires_confirmation": False,
+                        "error": precheck["error"],
+                        "result": plan,
+                        "suggestions": plan.get("suggestions", []),
+                    },
+                )
         if mode == "execute":
             if args.get("confirm") is not True:
                 append_oa_write_audit(self.config_store.root, plan)
@@ -1022,6 +1035,20 @@ class DaemonState:
                         "confirmed": True,
                         "error": f"oa write execute only supports ContinueSubmit for now, got: {plan['action']['code']}",
                         "result": plan,
+                    },
+                )
+            precheck = self._precheck_oa_write_plan(plan, args, timeout_seconds)
+            if not precheck["passed"]:
+                append_oa_write_audit(self.config_store.root, plan)
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": precheck["error"],
+                        "result": plan,
+                        "suggestions": plan.get("suggestions", []),
                     },
                 )
             _mark_oa_write_plan_for_execution(plan)
@@ -1101,6 +1128,28 @@ class DaemonState:
                 )
             if isinstance(submitted, dict):
                 submitted.setdefault("plan", plan)
+                verification = self._verify_oa_write_submission(
+                    plan,
+                    submit={
+                        "ok": True,
+                        "task_id": task_id,
+                        "error": None,
+                    },
+                    timeout_seconds=timeout_seconds,
+                )
+                submitted["verification"] = verification
+                if verification.get("status") != "disappeared":
+                    return DaemonResponse(
+                        502,
+                        {
+                            "ok": False,
+                            "task_id": task_id,
+                            "requires_confirmation": True,
+                            "confirmed": True,
+                            "error": verification.get("error") or f"post-submit verification failed: {verification.get('status')}",
+                            "result": submitted,
+                        },
+                    )
             return DaemonResponse(
                 200,
                 {
@@ -1112,6 +1161,230 @@ class DaemonState:
                 },
             )
         return DaemonResponse(200, {"ok": True, "task_id": None, "result": plan})
+
+    def _precheck_oa_write_plan(
+        self,
+        plan: dict[str, Any],
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        checks = []
+        missing = []
+        blocked_reasons = []
+        suggestions = []
+        target = plan.setdefault("target", {})
+        affair_id = str(target.get("affair_id") or args.get("affair_id") or "").strip()
+        action_code = str(plan.get("action", {}).get("code") or args.get("action") or "").strip()
+        source_url = str(target.get("source_url") or args.get("source_url") or "").strip()
+
+        if not affair_id:
+            missing.append("affair_id")
+            blocked_reasons.append("affair_id is required")
+            checks.append(_oa_write_check("target_resolved", False, "affair_id is required"))
+        if not action_code:
+            missing.append("action")
+            blocked_reasons.append("action is required")
+            checks.append(_oa_write_check("action_available", False, "action is required"))
+        if missing:
+            return self._finish_oa_write_precheck(
+                plan,
+                checks=checks,
+                missing=missing,
+                blocked_reasons=blocked_reasons,
+                suggestions=["Provide affair_id and action before running dry-run or execute."],
+            )
+
+        source_item = None
+        if source_url:
+            target["source_url"] = source_url
+            checks.append(_oa_write_check("target_resolved", True, "source_url provided"))
+        else:
+            workflow_type = str(args.get("type") or "pending")
+            source_item, error_response = self._resolve_workflow_item_from_args(
+                {"type": workflow_type, "id": affair_id},
+                timeout_seconds,
+            )
+            if error_response is not None:
+                missing.append(f"target:{affair_id}")
+                blocked_reasons.append(error_response.body.get("error") or "workflow target not found")
+                suggestions.extend(error_response.body.get("suggestions") or [])
+                checks.append(
+                    _oa_write_check(
+                        "target_resolved",
+                        False,
+                        error_response.body.get("error") or "workflow target not found",
+                    )
+                )
+                return self._finish_oa_write_precheck(
+                    plan,
+                    checks=checks,
+                    missing=missing,
+                    blocked_reasons=blocked_reasons,
+                    suggestions=suggestions,
+                )
+            source_url = str(source_item.get("href") or "").strip()
+            target["source_url"] = source_url
+            target["source_item"] = source_item
+            checks.append(_oa_write_check("target_resolved", True, "workflow target resolved from pending list"))
+
+        detail_response = self._run_nested_oa_command("detail_read", {"url": source_url}, timeout_seconds)
+        if detail_response.status != 200 or detail_response.body.get("ok") is False:
+            missing.append("detail")
+            blocked_reasons.append(detail_response.body.get("error") or "detail page could not be read")
+            checks.append(
+                _oa_write_check(
+                    "detail_read",
+                    False,
+                    detail_response.body.get("error") or "detail page could not be read",
+                    run_id=detail_response.body.get("run_id"),
+                    task_id=detail_response.body.get("task_id"),
+                )
+            )
+            return self._finish_oa_write_precheck(
+                plan,
+                checks=checks,
+                missing=missing,
+                blocked_reasons=blocked_reasons,
+                suggestions=["Open or refresh the OA pending page, then rerun the dry-run."],
+            )
+
+        detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        checks.append(
+            _oa_write_check(
+                "detail_read",
+                True,
+                "detail page read successfully",
+                run_id=detail_response.body.get("run_id"),
+                task_id=detail_response.body.get("task_id"),
+            )
+        )
+        actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
+        available_action = _find_oa_write_action(actions, action_code)
+        if available_action is None:
+            missing.append(f"action:{action_code}")
+            blocked_reasons.append(f"target action is not available: {action_code}")
+            checks.append(
+                _oa_write_check(
+                    "action_available",
+                    False,
+                    f"target action is not available: {action_code}",
+                    available_actions=[_summarize_oa_write_action(action) for action in actions],
+                )
+            )
+            return self._finish_oa_write_precheck(
+                plan,
+                checks=checks,
+                missing=missing,
+                blocked_reasons=blocked_reasons,
+                suggestions=["Run: python -m bscli.cli.main --home .bscli oa workflow actions --type pending --id <affair_id>"],
+                detail=detail,
+                actions=actions,
+            )
+
+        normalized_action = _summarize_oa_write_action(available_action)
+        if normalized_action.get("code"):
+            plan["action"] = normalized_action
+        checks.append(
+            _oa_write_check(
+                "action_available",
+                True,
+                f"target action is available: {action_code}",
+                action=normalized_action,
+            )
+        )
+        return self._finish_oa_write_precheck(
+            plan,
+            checks=checks,
+            missing=[],
+            blocked_reasons=[],
+            suggestions=[],
+            detail=detail,
+            actions=actions,
+        )
+
+    def _finish_oa_write_precheck(
+        self,
+        plan: dict[str, Any],
+        *,
+        checks: list[dict[str, Any]],
+        missing: list[str],
+        blocked_reasons: list[str],
+        suggestions: list[str],
+        detail: dict[str, Any] | None = None,
+        actions: list | None = None,
+    ) -> dict[str, Any]:
+        passed = not missing and all(check.get("passed") for check in checks)
+        plan["checks"] = checks
+        plan["missing"] = missing
+        plan["blocked"] = not passed
+        plan["blocked_reasons"] = blocked_reasons
+        plan["suggestions"] = suggestions
+        precheck = {
+            "status": "passed" if passed else "blocked",
+            "checked_at": datetime.now(UTC).isoformat(),
+            "action_count": len(actions or []),
+        }
+        if detail is not None:
+            precheck["detail"] = {
+                "title": detail.get("title", ""),
+                "url": detail.get("url") or plan.get("target", {}).get("source_url", ""),
+            }
+        if actions is not None:
+            precheck["available_actions"] = [_summarize_oa_write_action(action) for action in actions]
+        plan["precheck"] = precheck
+        if not passed:
+            request = plan.setdefault("request", {})
+            request["status"] = "blocked"
+            request["reason"] = "; ".join(blocked_reasons) or "write precheck blocked"
+            safety = plan.setdefault("safety", {})
+            safety["will_execute"] = False
+            safety["dry_run_only"] = True
+        return {
+            "passed": passed,
+            "error": "; ".join(blocked_reasons) or "write precheck blocked",
+        }
+
+    def _verify_oa_write_submission(
+        self,
+        plan: dict[str, Any],
+        *,
+        submit: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        affair_id = str(plan.get("target", {}).get("affair_id") or "")
+        verify_response = self._run_nested_oa_command("pending_list_api", {}, timeout_seconds)
+        if verify_response.status != 200 or verify_response.body.get("ok") is False:
+            verification = _pending_submit_verification(
+                "verify_failed",
+                affair_id=affair_id,
+                before_present=True,
+                after_present=True,
+                run_id=verify_response.body.get("run_id"),
+                task_id=verify_response.body.get("task_id"),
+            )
+            verification["error"] = verify_response.body.get("error") or "pending list verification failed"
+        else:
+            verify_items = _pending_items_from_response_body(verify_response.body)
+            still_pending = _item_present_by_affair_id(verify_items, affair_id)
+            verification = _pending_submit_verification(
+                "still_pending" if still_pending else "disappeared",
+                affair_id=affair_id,
+                before_present=True,
+                after_present=still_pending,
+                run_id=verify_response.body.get("run_id"),
+                task_id=verify_response.body.get("task_id"),
+            )
+        append_oa_write_verification_audit(
+            self.config_store.root,
+            affair_id=affair_id,
+            action=str(plan.get("action", {}).get("code") or ""),
+            source_url=str(plan.get("target", {}).get("source_url") or ""),
+            verification=verification,
+            submit=submit,
+        )
+        return verification
 
     def _run_oa_pending_submit_command(
         self,
@@ -1642,6 +1915,44 @@ def _action_available(actions: Any, action_code: str) -> bool:
         isinstance(action, dict) and str(action.get("code") or "") == action_code
         for action in actions
     )
+
+
+def _find_oa_write_action(actions: Any, action_code: str) -> dict[str, Any] | None:
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if isinstance(action, dict) and str(action.get("code") or "") == str(action_code):
+            return action
+    return None
+
+
+def _summarize_oa_write_action(action: Any) -> dict[str, str]:
+    if not isinstance(action, dict):
+        return normalize_write_action("")
+    code = str(action.get("code") or "")
+    fallback = normalize_write_action(code)
+    return {
+        "code": code,
+        "label": str(action.get("label") or fallback["label"]),
+        "risk": str(action.get("risk") or fallback["risk"]),
+    }
+
+
+def _oa_write_check(
+    name: str,
+    passed: bool,
+    message: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    check = {
+        "name": name,
+        "passed": passed,
+        "message": message,
+    }
+    for key, value in extra.items():
+        if value is not None:
+            check[key] = value
+    return check
 
 
 def _item_present_by_affair_id(items: list[dict[str, Any]], affair_id: str) -> bool:

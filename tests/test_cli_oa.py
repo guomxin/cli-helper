@@ -692,7 +692,27 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["request"]["status"], "not_built")
         self.assertFalse(audit_exists)
 
-    def test_oa_write_dry_run_records_sanitized_audit_plan(self):
+    def test_oa_write_dry_run_calls_daemon_for_prechecked_plan(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_write_plan.v1",
+                    "mode": "dry-run",
+                    "target": {
+                        "affair_id": "affair-1",
+                        "source_item": {"affair_id": "affair-1"},
+                    },
+                    "action": {"code": "ContinueSubmit", "label": "提交", "risk": "high"},
+                    "opinion": {"text": "同意", "length": 2},
+                    "safety": {"will_execute": False},
+                    "precheck": {"status": "passed"},
+                    "checks": [{"name": "action_available", "passed": True}],
+                    "missing": [],
+                },
+            }
+        )
+
         with TemporaryDirectory() as tmp:
             result = self._run_cli(
                 tmp,
@@ -705,20 +725,29 @@ class CliOaTests(unittest.TestCase):
                 "ContinueSubmit",
                 "--opinion",
                 "同意",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
             )
 
             payload = json.loads(result.stdout)
             audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
-            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            audit_exists = audit_path.exists()
 
-        self.assertEqual(payload["mode"], "dry-run")
-        self.assertFalse(payload["safety"]["will_execute"])
-        self.assertEqual(payload["request"]["status"], "not_sent")
-        self.assertEqual(len(audit_rows), 1)
-        self.assertEqual(audit_rows[0]["target"]["affair_id"], "affair-1")
-        self.assertEqual(audit_rows[0]["action"]["code"], "ContinueSubmit")
-        self.assertEqual(audit_rows[0]["opinion"]["length"], 2)
-        self.assertNotIn("同意", json.dumps(audit_rows[0], ensure_ascii=False))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["mode"], "dry-run")
+        self.assertFalse(payload["result"]["safety"]["will_execute"])
+        self.assertEqual(payload["result"]["precheck"]["status"], "passed")
+        self.assertFalse(audit_exists)
+        self.assertEqual(seen_payloads[0]["command"], "write_dry_run")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "affair_id": "affair-1",
+                "action": "ContinueSubmit",
+                "opinion": "同意",
+                "source_url": "",
+            },
+        )
 
     def test_oa_write_execute_without_confirm_stays_local_blocked(self):
         with TemporaryDirectory() as tmp:

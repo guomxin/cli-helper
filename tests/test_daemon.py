@@ -2091,6 +2091,87 @@ class DaemonTests(unittest.TestCase):
     def test_run_oa_write_dry_run_records_sanitized_audit_without_browser_task(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            state._run_nested_oa_command = lambda command, args, timeout_seconds: calls.append((command, args, timeout_seconds)) or DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Weekly report",
+                        "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                    },
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_dry_run",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["mode"], "dry-run")
+            self.assertFalse(response.body["result"]["safety"]["will_execute"])
+            self.assertEqual(response.body["result"]["request"]["status"], "not_sent")
+            self.assertEqual(len(audit_rows), 1)
+            self.assertEqual(audit_rows[0]["target"]["affair_id"], "affair-1")
+            self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
+            self.assertEqual([call[0] for call in calls], ["detail_read"])
+            self.assertEqual(state.bridge.pending_tasks, [])
+            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
+
+    def test_run_oa_write_dry_run_prechecks_target_action_and_records_report(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [
+                                {"code": "Track", "label": "跟踪", "risk": "medium"},
+                                {"code": "ContinueSubmit", "label": "提交", "risk": "high"},
+                            ],
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
 
             response = state.handle(
                 "POST",
@@ -2109,15 +2190,78 @@ class DaemonTests(unittest.TestCase):
 
             audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
             audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            plan = response.body["result"]
             self.assertEqual(response.status, 200)
-            self.assertEqual(response.body["result"]["mode"], "dry-run")
-            self.assertFalse(response.body["result"]["safety"]["will_execute"])
-            self.assertEqual(response.body["result"]["request"]["status"], "not_sent")
-            self.assertEqual(len(audit_rows), 1)
-            self.assertEqual(audit_rows[0]["target"]["affair_id"], "affair-1")
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["pending_list_api", "detail_read"])
+            self.assertEqual(plan["target"]["source_item"]["affair_id"], "affair-1")
+            self.assertEqual(plan["target"]["source_url"], "http://oa.example.test/detail?affairId=affair-1")
+            self.assertEqual(plan["precheck"]["status"], "passed")
+            self.assertEqual([check["name"] for check in plan["checks"]], ["target_resolved", "detail_read", "action_available"])
+            self.assertTrue(all(check["passed"] for check in plan["checks"]))
+            self.assertEqual(plan["action"], {"code": "ContinueSubmit", "label": "提交", "risk": "high"})
+            self.assertFalse(plan["safety"]["will_execute"])
+            self.assertEqual(plan["missing"], [])
+            self.assertEqual(audit_rows[0]["precheck"]["status"], "passed")
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
+
+    def test_run_oa_write_dry_run_blocks_when_target_action_is_missing(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [{"code": "Track", "label": "跟踪", "risk": "medium"}],
+                        },
+                    },
+                ),
+            ]
+
+            state._run_nested_oa_command = lambda *_args: responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_dry_run",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            plan = response.body["result"]
+            self.assertEqual(response.status, 409)
+            self.assertFalse(response.body["ok"])
+            self.assertIn("target action is not available", response.body["error"])
+            self.assertEqual(plan["precheck"]["status"], "blocked")
+            self.assertIn("action:ContinueSubmit", plan["missing"])
+            self.assertEqual(plan["checks"][-1]["name"], "action_available")
+            self.assertFalse(plan["checks"][-1]["passed"])
             self.assertEqual(state.bridge.pending_tasks, [])
-            self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
     def test_run_oa_write_execute_without_confirm_stays_blocked(self):
         with TemporaryDirectory() as tmp:
@@ -2160,6 +2304,20 @@ class DaemonTests(unittest.TestCase):
                 },
             )
 
+            nested_responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                        },
+                    },
+                ),
+                DaemonResponse(200, {"ok": True, "result": {"items": []}}),
+            ]
+            state._run_nested_oa_command = lambda *_args: nested_responses.pop(0)
             seen_tasks = []
 
             def extension_worker():
@@ -2219,6 +2377,188 @@ class DaemonTests(unittest.TestCase):
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 
+    def test_run_oa_write_execute_with_confirm_prechecks_and_verifies_disappearance(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            nested_calls = []
+            nested_responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "run_id": "run-verify",
+                        "task_id": "task-verify",
+                        "result": {"items": []},
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                nested_calls.append((command, args, timeout_seconds))
+                return nested_responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+            seen_tasks = []
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                seen_tasks.extend(tasks.body["tasks"])
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "ok": True,
+                        "result": {"submitted": True, "affair_id": "affair-1"},
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+            worker.join()
+
+            audit_path = Path(tmp) / "audit" / "oa-write-verifications.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in nested_calls], ["detail_read", "pending_list_api"])
+            self.assertEqual(nested_calls[0][1], {"url": "http://oa.example.test/detail?affairId=affair-1"})
+            self.assertEqual(seen_tasks[0]["kind"], "seeyon_write_execute")
+            self.assertEqual(response.body["result"]["verification"]["status"], "disappeared")
+            self.assertTrue(response.body["result"]["verification"]["verified"])
+            self.assertEqual(audit_rows[0]["verification"]["status"], "disappeared")
+
+    def test_run_oa_write_execute_reports_error_when_item_is_still_pending_after_submit(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            nested_responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+            ]
+            state._run_nested_oa_command = lambda *_args: nested_responses.pop(0)
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "ok": True,
+                        "result": {"submitted": True, "affair_id": "affair-1"},
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 502)
+            self.assertFalse(response.body["ok"])
+            self.assertEqual(response.body["result"]["verification"]["status"], "still_pending")
+            self.assertIn("post-submit verification failed", response.body["error"])
+
     def test_run_oa_write_execute_rejects_empty_extension_result(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
@@ -2230,6 +2570,17 @@ class DaemonTests(unittest.TestCase):
                     "tab_id": 7,
                     "url": "http://10.10.50.110/seeyon/main.do?method=main",
                     "title": "OA",
+                },
+            )
+
+            state._run_nested_oa_command = lambda *_args: DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Weekly report",
+                        "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                    },
                 },
             )
 

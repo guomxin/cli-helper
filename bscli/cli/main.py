@@ -290,6 +290,8 @@ def _build_oa_parser(oa_sub) -> None:
         write_cmd.add_argument("--action", required=True)
         write_cmd.add_argument("--opinion", default="")
         write_cmd.add_argument("--source-url", default="")
+        if mode == "dry-run":
+            _add_daemon_options(write_cmd)
         if mode == "execute":
             write_cmd.add_argument("--confirm", action="store_true")
             _add_daemon_options(write_cmd)
@@ -849,8 +851,17 @@ def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
         source_url=args.source_url,
     )
     if args.oa_write_mode == "dry-run":
-        append_oa_write_audit(home, plan)
-        emit_cli_value(plan, args)
+        response = run_oa_daemon_command(
+            args,
+            "write_dry_run",
+            {
+                "affair_id": args.affair_id,
+                "action": args.action,
+                "opinion": args.opinion,
+                "source_url": args.source_url,
+            },
+        )
+        emit_cli_value(response, args)
         return 0
     if args.oa_write_mode == "execute":
         if getattr(args, "confirm", False):
