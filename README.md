@@ -278,6 +278,17 @@ it, safe hidden-field names, CSRF-token presence, and untested endpoint
 candidates found in rendered HTML. These are promotion clues only; they are not
 used to execute a write.
 
+Endpoint candidates can be classified without calling them:
+
+```bash
+python -m bscli.cli.main --home .bscli oa write endpoints --affair-id <id> --action Archive
+```
+
+This command reuses the dry-run precheck, classifies rendered-HTML endpoint
+candidates as likely action-related, auxiliary, or unknown, and returns
+`safe_to_call=false` for every candidate. It does not issue network probes to
+write-like URLs.
+
 `draft` is an offline local plan and does not contact the daemon or browser.
 `dry-run` is the write precheck: it runs through the daemon, resolves the
 pending workflow by `affair_id` when `--source-url` is omitted, reads the

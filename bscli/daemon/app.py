@@ -26,6 +26,7 @@ from bscli.adapters.seeyon_write import (
     append_oa_write_verification_audit,
     build_oa_write_plan,
     build_write_governance,
+    classify_write_endpoint_candidates,
     is_dry_run_only_write_action,
     normalize_write_action,
     write_action_promotion,
@@ -207,6 +208,11 @@ class DaemonState:
             )
         if system == "oa" and command == "write_capabilities":
             return self._run_oa_write_capabilities_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "write_endpoint_candidates":
+            return self._run_oa_write_endpoint_candidates_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1380,6 +1386,59 @@ class DaemonState:
             )
         return DaemonResponse(200, {"ok": True, "task_id": None, "result": plan})
 
+    def _run_oa_write_endpoint_candidates_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        plan = build_oa_write_plan(
+            affair_id=str(args.get("affair_id") or ""),
+            action=str(args.get("action") or ""),
+            opinion="",
+            mode="dry-run",
+            source_url=str(args.get("source_url") or ""),
+        )
+        precheck = self._precheck_oa_write_plan(plan, args, timeout_seconds)
+        evidence = plan.get("promotion", {}).get("evidence")
+        if not isinstance(evidence, dict):
+            evidence = {}
+        endpoint_candidates = evidence.get("endpoint_analysis")
+        if not isinstance(endpoint_candidates, list):
+            write_hints = evidence.get("write_hints") if isinstance(evidence.get("write_hints"), dict) else {}
+            endpoint_candidates = classify_write_endpoint_candidates(
+                write_hints.get("endpoint_candidates"),
+                action=str(plan.get("action", {}).get("code") or ""),
+            )
+        result = {
+            "target": plan.get("target", {}),
+            "action": plan.get("action", {}),
+            "precheck": plan.get("precheck", {}),
+            "promotion": plan.get("promotion", {}),
+            "write_hints": evidence.get("write_hints", {}),
+            "endpoint_candidates": endpoint_candidates,
+            "probe_policy": _oa_endpoint_probe_policy(),
+        }
+        if not precheck["passed"]:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": False,
+                    "error": precheck["error"],
+                    "result": result,
+                    "suggestions": plan.get("suggestions", []),
+                },
+            )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": False,
+                "result": result,
+            },
+        )
+
     def _precheck_oa_write_plan(
         self,
         plan: dict[str, Any],
@@ -2156,6 +2215,8 @@ class DaemonState:
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
         if system == "oa" and command == "write_capabilities":
             return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "write_endpoint_candidates":
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_execute", "pending_submit"}:
@@ -2446,6 +2507,12 @@ def _attach_oa_write_promotion_evidence(
         "verification_method": str(promotion.get("verification_method") or ""),
         "missing_for_execute": [] if execute_allowed else list(promotion.get("requirements") or []),
     }
+    hints = promotion["evidence"].get("write_hints")
+    endpoint_candidates = hints.get("endpoint_candidates") if isinstance(hints, dict) else []
+    promotion["evidence"]["endpoint_analysis"] = classify_write_endpoint_candidates(
+        endpoint_candidates,
+        action=action_code,
+    )
 
 
 def _project_oa_write_action_evidence(action: Any) -> dict[str, Any]:
@@ -2519,6 +2586,14 @@ def _pending_submit_verification(
     if task_id:
         verification["task_id"] = task_id
     return verification
+
+
+def _oa_endpoint_probe_policy() -> dict[str, Any]:
+    return {
+        "automatic_network_probe": "disabled",
+        "safe_to_call_default": False,
+        "reason": "no endpoint candidate was called; write-like URLs require a user-confirmed test plan before any network probe",
+    }
 
 
 def _mark_oa_write_plan_for_execution(plan: dict[str, Any]) -> None:

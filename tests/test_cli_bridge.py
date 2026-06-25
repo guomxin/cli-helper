@@ -87,6 +87,7 @@ class CliAndBridgeTests(unittest.TestCase):
                     "write_capabilities",
                     "write_draft",
                     "write_dry_run",
+                    "write_endpoint_candidates",
                     "write_execute",
                 ],
             )
@@ -353,6 +354,7 @@ class CliAndBridgeTests(unittest.TestCase):
                     "write_capabilities",
                     "write_draft",
                     "write_dry_run",
+                    "write_endpoint_candidates",
                     "write_execute",
                 ],
         )

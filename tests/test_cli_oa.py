@@ -831,6 +831,51 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["items"][0]["unpromoted_write_actions"][0]["name"], "workflow.archive")
         self.assertFalse(payload["result"]["items"][0]["unpromoted_write_actions"][0]["execute_allowed"])
 
+    def test_oa_write_endpoints_calls_daemon_with_plain_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "action": {"code": "Archive"},
+                    "endpoint_candidates": [
+                        {
+                            "url": "http://oa.example.test/seeyon/collaboration/collaboration.do?method=finishWorkItem",
+                            "classification": "possible_archive_completion",
+                            "safe_to_call": False,
+                        }
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "endpoints",
+                "--affair-id",
+                "archive-1",
+                "--action",
+                "Archive",
+                "--source-url",
+                "http://oa.example.test/detail?affairId=archive-1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_endpoint_candidates")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "affair_id": "archive-1",
+                "action": "Archive",
+                "source_url": "http://oa.example.test/detail?affairId=archive-1",
+            },
+        )
+        self.assertFalse(payload["result"]["endpoint_candidates"][0]["safe_to_call"])
+
     def test_oa_meeting_reply_execute_requires_confirm_before_daemon_call(self):
         server, seen_payloads = self._start_daemon({"ok": True})
 

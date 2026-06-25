@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 
 ACTION_LABELS = {
@@ -113,6 +115,73 @@ def write_action_promotion(code: str) -> dict:
         "verification_method": "not_promoted",
         "requirements": requirements,
         "blocked_reasons": [f"execute not promoted for {code or 'this action'}"],
+    }
+
+
+def classify_write_endpoint_candidates(candidates: Any, *, action: str) -> list[dict[str, Any]]:
+    if not isinstance(candidates, list):
+        return []
+    return [
+        classify_write_endpoint_candidate(candidate, action=action)
+        for candidate in candidates
+        if isinstance(candidate, dict)
+    ]
+
+
+def classify_write_endpoint_candidate(candidate: dict[str, Any], *, action: str) -> dict[str, Any]:
+    url = str(candidate.get("url") or "")
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    method_text = " ".join(query.get("method", []))
+    action_code = str(action or "").strip()
+    haystack = f"{parsed.path} {parsed.query} {method_text}".lower()
+    classification = "unknown_write_candidate"
+    relation = "unknown"
+    confidence = "low"
+    reasons: list[str] = []
+
+    if action_code == "Archive" and "finishworkitem" in haystack and "archive" in haystack:
+        classification = "possible_archive_completion"
+        relation = "possible"
+        confidence = "medium"
+        reasons.append("URL contains both finishWorkItem and archive markers.")
+    elif action_code == "Archive" and any(marker in haystack for marker in ("archive", "pigeonhole")):
+        classification = "possible_archive_endpoint"
+        relation = "possible"
+        confidence = "medium"
+        reasons.append("URL contains archive-like markers.")
+    elif "supervise" in haystack:
+        classification = "auxiliary_supervise"
+        relation = "unlikely_direct_archive" if action_code == "Archive" else "auxiliary"
+        confidence = "low"
+        reasons.append("URL targets supervise APIs, which are usually auxiliary reminder/supervision settings.")
+    elif "upload" in haystack:
+        classification = "auxiliary_upload"
+        relation = "auxiliary"
+        confidence = "low"
+        reasons.append("URL targets upload behavior, not the requested workflow action itself.")
+    elif "opinion" in haystack:
+        classification = "opinion_support"
+        relation = "auxiliary"
+        confidence = "low"
+        reasons.append("URL targets opinion/comment behavior.")
+    elif any(marker in haystack for marker in ("finish", "submit", "workitem", "save")):
+        classification = "generic_write_endpoint"
+        relation = "possible"
+        confidence = "low"
+        reasons.append("URL contains generic write-like markers but no action-specific marker.")
+    else:
+        reasons.append("No action-specific marker was found in the candidate URL.")
+
+    return {
+        **candidate,
+        "classification": classification,
+        "relation_to_action": relation,
+        "confidence": confidence,
+        "reasons": reasons,
+        "safe_to_call": False,
+        "probe_status": "not_called",
+        "probe_policy": "do_not_call_without_user_confirmed_test_plan",
     }
 
 

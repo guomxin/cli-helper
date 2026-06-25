@@ -417,6 +417,32 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="write_endpoint_candidates",
+            description="Classify untested Seeyon OA write endpoint candidates for one workflow action without calling them.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "affair_id": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "source_url": {"type": "string"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "object"},
+                    "action": {"type": "object"},
+                    "endpoint_candidates": {"type": "array"},
+                    "probe_policy": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.endpoint_candidates"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="pending_detail",
             description="Read one pending item metadata from the current Seeyon OA home page by affair_id.",
             access="read",

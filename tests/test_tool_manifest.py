@@ -202,6 +202,12 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(execute["input_schema"]["required"], ["id", "confirm"])
         self.assertEqual(execute["input_schema"]["properties"]["confirm"]["type"], "boolean")
 
+        endpoints = tools["oa__write_endpoint_candidates"]
+        self.assertEqual(endpoints["metadata"]["access"], "read")
+        self.assertEqual(endpoints["metadata"]["risk"], "low")
+        self.assertEqual(endpoints["input_schema"]["required"], ["affair_id", "action"])
+        self.assertFalse(endpoints["metadata"]["requires_confirmation"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -586,6 +586,47 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(calls, [("oa", "meeting_reply_dry_run", {"id": "affair-1", "attitude": "join", "feedback": ""})])
         self.assertTrue(result["result"]["structuredContent"]["precheck"]["passed"])
 
+    def test_call_oa_write_endpoint_candidates_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"endpoint_candidates": [{"classification": "possible_archive_completion"}]}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 184,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_endpoint_candidates",
+                    "arguments": {
+                        "affair_id": "archive-1",
+                        "action": "Archive",
+                        "source_url": "http://oa.example.test/detail?affairId=archive-1",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "write_endpoint_candidates",
+                    {
+                        "affair_id": "archive-1",
+                        "action": "Archive",
+                        "source_url": "http://oa.example.test/detail?affairId=archive-1",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["endpoint_candidates"][0]["classification"], "possible_archive_completion")
+
     def test_call_oa_workflow_opinions_maps_to_daemon_command(self):
         calls = []
 

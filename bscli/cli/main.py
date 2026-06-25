@@ -314,6 +314,13 @@ def _build_oa_parser(oa_sub) -> None:
     capabilities.add_argument("--keyword")
     _add_daemon_options(capabilities)
     _add_output_options(capabilities)
+    endpoints = write_sub.add_parser("endpoints")
+    endpoints.set_defaults(oa_write_endpoints=True)
+    endpoints.add_argument("--affair-id", required=True)
+    endpoints.add_argument("--action", required=True)
+    endpoints.add_argument("--source-url", default="")
+    _add_daemon_options(endpoints)
+    _add_output_options(endpoints)
     for mode in ("draft", "dry-run", "execute"):
         write_cmd = write_sub.add_parser(mode)
         write_cmd.set_defaults(oa_write_mode=mode)
@@ -596,6 +603,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_meeting_reply(args)
     if getattr(args, "oa_write_capabilities", False):
         return handle_oa_write_capabilities(args)
+    if getattr(args, "oa_write_endpoints", False):
+        return handle_oa_write_endpoints(args)
     if getattr(args, "oa_write_mode", None):
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
@@ -920,6 +929,18 @@ def handle_oa_write_capabilities(args: argparse.Namespace) -> int:
         command_args["limit"] = args.limit
     response = run_oa_daemon_command(args, "write_capabilities", command_args)
     response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write_endpoints(args: argparse.Namespace) -> int:
+    command_args = {
+        "affair_id": args.affair_id,
+        "action": args.action,
+    }
+    if args.source_url:
+        command_args["source_url"] = args.source_url
+    response = run_oa_daemon_command(args, "write_endpoint_candidates", command_args)
     emit_cli_value(response, args)
     return 0
 

@@ -2627,6 +2627,89 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(evidence["verification_method"], "not_promoted")
             self.assertIn("post-write verification method", evidence["missing_for_execute"])
 
+    def test_run_oa_write_endpoint_candidates_classifies_archive_hints_without_calling_them(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Contract archive",
+                                    "affair_id": "archive-1",
+                                    "href": "http://oa.example.test/detail?affairId=archive-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Contract archive",
+                            "url": "http://oa.example.test/detail?affairId=archive-1",
+                            "actions": [{"code": "Archive", "label": "处理后归档", "risk": "high"}],
+                            "write_hints": {
+                                "endpoint_candidates": [
+                                    {
+                                        "url": "http://oa.example.test/seeyon/supervise/supervise.do?method=saveOrUpdateSupervise",
+                                        "method": "UNKNOWN",
+                                        "risk": "high",
+                                        "source": "rendered_html",
+                                        "tested": False,
+                                    },
+                                    {
+                                        "url": "http://oa.example.test/seeyon/collaboration/collaboration.do?method=finishWorkItem&operation=archive",
+                                        "method": "UNKNOWN",
+                                        "risk": "high",
+                                        "source": "rendered_html",
+                                        "tested": False,
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_endpoint_candidates",
+                    "args": {"affair_id": "archive-1", "action": "Archive"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            candidates = result["endpoint_candidates"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["pending_list_api", "detail_read"])
+            self.assertEqual(result["action"], {"code": "Archive", "label": "处理后归档", "risk": "high"})
+            self.assertEqual(candidates[0]["classification"], "auxiliary_supervise")
+            self.assertEqual(candidates[0]["relation_to_action"], "unlikely_direct_archive")
+            self.assertFalse(candidates[0]["safe_to_call"])
+            self.assertEqual(candidates[1]["classification"], "possible_archive_completion")
+            self.assertEqual(candidates[1]["relation_to_action"], "possible")
+            self.assertFalse(candidates[1]["safe_to_call"])
+            self.assertEqual(result["probe_policy"]["automatic_network_probe"], "disabled")
+            self.assertIn("no endpoint candidate was called", result["probe_policy"]["reason"])
+
     def test_run_oa_write_dry_run_blocks_when_target_action_is_missing(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

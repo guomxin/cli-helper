@@ -39,6 +39,9 @@ logged-in Chrome session after explicit confirmation.
 - `oa meeting reply execute ... --confirm` posts the reply through
   `meetingAjaxManager.reply`, then reads `meetingView` again and succeeds only
   when `myReply.feedbackFlag` matches the requested attitude.
+- `oa write endpoints ...` classifies endpoint candidates found during dry-run
+  evidence collection. It does not call the candidates and marks each result
+  with `safe_to_call=false`.
 
 Only collaboration `ContinueSubmit` and meeting reply are executable at this
 stage. Reject, archive, delete, revoke, return, upload, and other write actions
@@ -71,6 +74,9 @@ Dry-run may also attach `promotion.evidence` after reading the detail page. This
 evidence can include the matched page action, safe hidden-field names,
 CSRF-token presence, and untested endpoint candidates from rendered HTML. It is
 for promotion analysis only and does not authorize execution.
+`promotion.evidence.endpoint_analysis` and `oa write endpoints` use static URL
+classification only. Automatic network probes are disabled because candidates
+often contain write-like methods such as `save`, `finish`, or `archive`.
 
 ## Write Plan Shape
 
@@ -160,6 +166,7 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__write_capabilities`
 - `oa__write_draft`
 - `oa__write_dry_run`
+- `oa__write_endpoint_candidates`
 - `oa__write_execute`
 - `oa__pending_submit`
 - `oa__meeting_reply_dry_run`
