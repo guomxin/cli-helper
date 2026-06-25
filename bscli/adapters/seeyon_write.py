@@ -32,6 +32,30 @@ HIGH_RISK_CODES = {
 }
 
 
+WRITE_GOVERNANCE_LIFECYCLE = [
+    "resolve_target",
+    "dry_run_precheck",
+    "confirmation_gate",
+    "execute",
+    "readback_verification",
+    "sanitized_audit",
+]
+
+
+def build_write_governance(
+    action_type: str,
+    *,
+    verification_method: str,
+) -> dict:
+    return {
+        "action_type": str(action_type or ""),
+        "lifecycle": list(WRITE_GOVERNANCE_LIFECYCLE),
+        "confirmation_required_for_execute": True,
+        "verification_method": str(verification_method or ""),
+        "audit_policy": "redact_user_text",
+    }
+
+
 def normalize_write_action(action: str) -> dict:
     code = str(action or "").strip()
     label = ACTION_LABELS.get(code, code)
@@ -122,6 +146,10 @@ def build_oa_write_plan(
             "risk": normalized_action["risk"],
             "dry_run_only": True,
         },
+        "governance": build_write_governance(
+            "workflow.submit",
+            verification_method="pending_disappearance",
+        ),
         "request": {
             "status": request_status,
             "method": None,

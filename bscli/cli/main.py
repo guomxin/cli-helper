@@ -302,6 +302,18 @@ def _build_oa_parser(oa_sub) -> None:
 
     write = oa_sub.add_parser("write")
     write_sub = write.add_subparsers(dest="oa_action", required=True)
+    capabilities = write_sub.add_parser("capabilities")
+    capabilities.set_defaults(oa_write_capabilities=True)
+    capabilities.add_argument(
+        "--type",
+        choices=["pending"],
+        default="pending",
+        dest="workflow_type",
+        help="Workflow collection to inspect; currently pending is supported.",
+    )
+    capabilities.add_argument("--keyword")
+    _add_daemon_options(capabilities)
+    _add_output_options(capabilities)
     for mode in ("draft", "dry-run", "execute"):
         write_cmd = write_sub.add_parser(mode)
         write_cmd.set_defaults(oa_write_mode=mode)
@@ -582,6 +594,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
 def handle_oa(args: argparse.Namespace, home: Path) -> int:
     if getattr(args, "oa_meeting_reply_mode", None):
         return handle_oa_meeting_reply(args)
+    if getattr(args, "oa_write_capabilities", False):
+        return handle_oa_write_capabilities(args)
     if getattr(args, "oa_write_mode", None):
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
@@ -894,6 +908,18 @@ def handle_oa_meeting_reply(args: argparse.Namespace) -> int:
         "meeting_reply_dry_run" if args.oa_meeting_reply_mode == "dry-run" else "meeting_reply_execute",
         command_args,
     )
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write_capabilities(args: argparse.Namespace) -> int:
+    command_args = {"type": args.workflow_type}
+    if args.keyword:
+        command_args["keyword"] = args.keyword
+    if args.limit is not None:
+        command_args["limit"] = args.limit
+    response = run_oa_daemon_command(args, "write_capabilities", command_args)
+    response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
 

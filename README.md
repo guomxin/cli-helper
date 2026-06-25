@@ -248,10 +248,18 @@ Safe write planning is available, and confirmed `ContinueSubmit` writes can run
 through the Chrome extension bridge:
 
 ```bash
+python -m bscli.cli.main --home .bscli oa write capabilities --type pending --limit 10 --format table --fields title,category,affair_id,verification_method
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
 ```
+
+`capabilities` is the read-only inventory command for agents. It reads pending
+items and reports each item's `category`, `affair_id`, current state,
+`supported_write_actions`, and `verification_method`. Workflow submit actions
+use `pending_disappearance` verification. Meeting reply actions use
+`meeting_reply_readback` verification because a replied meeting can remain
+visible in pending even after `myReply.feedbackFlag` has changed.
 
 `draft` is an offline local plan and does not contact the daemon or browser.
 `dry-run` is the write precheck: it runs through the daemon, resolves the
@@ -268,7 +276,8 @@ Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
 `oa__write_draft`, `oa__write_dry_run`, `oa__write_execute`, and
 `oa__pending_submit`; executable tools require a `confirm` argument in their
-schema before they can perform a production write.
+schema before they can perform a production write. Agents can also call
+`oa__write_capabilities` first to decide which write command is applicable.
 
 For repeated pending items, use the governed batch submit command. It runs in
 the daemon execution layer, so CLI and agent tools share the same confirmation
@@ -283,6 +292,21 @@ python -m bscli.cli.main --home .bscli oa pending submit --keyword "weekly repor
 If a submitted item is still present after verification, the command stops and
 does not attempt later items. Verification audit rows are written to
 `.bscli/audit/oa-write-verifications.jsonl` without storing the opinion text.
+
+Meeting replies have their own governed command because Seeyon exposes them
+through the `meetingAjaxManager` API rather than the collaboration page submit
+workflow:
+
+```bash
+python -m bscli.cli.main --home .bscli oa meeting reply dry-run --id <pending_affair_id> --attitude join
+python -m bscli.cli.main --home .bscli oa meeting reply execute --id <pending_affair_id> --attitude join --confirm
+```
+
+The execute form requires `--confirm`, posts the reply through the logged-in
+Chrome bridge, then reads `meetingView` again and succeeds only when
+`myReply.feedbackFlag` matches the requested attitude. The agent-facing tool
+names are `oa__meeting_reply_dry_run` and `oa__meeting_reply_execute`; the
+execute tool requires `confirm` in its input schema.
 
 Read the structured pending list from the OA home page:
 

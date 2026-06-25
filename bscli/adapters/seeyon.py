@@ -389,6 +389,34 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="write_capabilities",
+            description="Read agent-facing write capabilities for pending Seeyon OA items without executing writes.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection to inspect; currently pending is the supported write target.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="pending_detail",
             description="Read one pending item metadata from the current Seeyon OA home page by affair_id.",
             access="read",
@@ -635,5 +663,68 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.submitted_count"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="meeting_reply_dry_run",
+            description="Precheck a Seeyon OA meeting reply without mutating OA state.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "required": True, "description": "Pending affair_id to resolve to a meeting."},
+                "meeting_id": {"type": "string"},
+                "source_url": {"type": "string"},
+                "attitude": {"type": "string", "description": "join, not_join, or pending. Defaults to join."},
+                "feedback": {"type": "string"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "precheck": {"type": "object"},
+                    "target": {"type": "object"},
+                    "current_reply": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.precheck"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="meeting_reply_execute",
+            description="Execute a confirmed Seeyon OA meeting reply and verify the reply state by reading meetingView.",
+            access="write",
+            strategy="human_gate",
+            risk="high",
+            requires_confirmation=True,
+            args_schema={
+                "id": {"type": "string", "required": True, "description": "Pending affair_id to resolve to a meeting."},
+                "meeting_id": {"type": "string"},
+                "source_url": {"type": "string"},
+                "attitude": {"type": "string", "description": "join, not_join, or pending. Defaults to join."},
+                "feedback": {"type": "string"},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm intent before production execution.",
+                },
+                "verify_wait": {
+                    "type": "number",
+                    "description": "Seconds to wait after submit before reading meetingView again.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "submitted": {"type": "boolean"},
+                    "verification": {"type": "object"},
+                    "plan": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.verification.status"},
         )
     )

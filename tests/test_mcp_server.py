@@ -518,6 +518,74 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
         self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
 
+    def test_call_oa_write_capabilities_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"count": 1, "items": [{"title": "Weekly report"}]}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 181,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_capabilities",
+                    "arguments": {"type": "pending", "keyword": "weekly", "limit": 1},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "write_capabilities", {"type": "pending", "keyword": "weekly", "limit": 1})])
+        self.assertEqual(result["result"]["structuredContent"]["count"], 1)
+
+    def test_call_oa_meeting_reply_execute_requires_confirm_argument(self):
+        calls = []
+        server = self._server(runner=lambda *args: calls.append(args) or {})
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 182,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__meeting_reply_execute",
+                    "arguments": {"id": "affair-1", "attitude": "join"},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["error"]["code"], -32602)
+        self.assertIn("Missing required argument 'confirm'", result["error"]["message"])
+
+    def test_call_oa_meeting_reply_dry_run_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"precheck": {"passed": True}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 183,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__meeting_reply_dry_run",
+                    "arguments": {"id": "affair-1", "attitude": "join", "feedback": ""},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "meeting_reply_dry_run", {"id": "affair-1", "attitude": "join", "feedback": ""})])
+        self.assertTrue(result["result"]["structuredContent"]["precheck"]["passed"])
+
     def test_call_oa_workflow_opinions_maps_to_daemon_command(self):
         calls = []
 

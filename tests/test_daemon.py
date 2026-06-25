@@ -2243,6 +2243,91 @@ class DaemonTests(unittest.TestCase):
             self.assertFalse(plan["safety"]["will_execute"])
             self.assertNotIn("will attend", json.dumps(audit_rows[0], ensure_ascii=False))
 
+    def test_run_oa_write_capabilities_reports_workflow_and_meeting_actions(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            nested_calls = []
+            nested_responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "type": "pending",
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                    "state": "pending",
+                                },
+                                {
+                                    "title": "Water meeting",
+                                    "affair_id": "affair-2",
+                                    "href": "http://oa.example.test/meeting.do?method=view&meetingId=meeting-2",
+                                },
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [
+                                {"code": "Track", "label": "track", "risk": "medium"},
+                                {"code": "ContinueSubmit", "label": "submit", "risk": "high"},
+                            ],
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                nested_calls.append((command, args, timeout_seconds))
+                return nested_responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+            state._run_oa_meeting_view = lambda meeting_id, proxy_id, timeout_seconds: DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "meetingAuth": {"showReply": True, "showReplyAttitude": True},
+                        "meetingVo": {"title": "Water meeting", "state": 10, "roomState": 1},
+                        "myReply": {"feedbackFlag": -100, "feedbackName": "not replied"},
+                    },
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_capabilities",
+                    "args": {"type": "pending", "limit": 2},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in nested_calls], ["workflow_list", "detail_read"])
+            items = response.body["result"]["items"]
+            self.assertEqual(response.body["result"]["count"], 2)
+            self.assertEqual(items[0]["category"], "workflow")
+            self.assertEqual(items[0]["supported_write_actions"][0]["name"], "workflow.submit")
+            self.assertEqual(items[0]["supported_write_actions"][0]["daemon_commands"]["execute"], "write_execute")
+            self.assertEqual(items[0]["verification_method"], "pending_disappearance")
+            self.assertEqual(items[1]["category"], "meeting")
+            self.assertEqual(items[1]["current_state"]["feedbackFlag"], -100)
+            self.assertEqual(items[1]["supported_write_actions"][0]["name"], "meeting.reply")
+            self.assertEqual(items[1]["supported_write_actions"][0]["daemon_commands"]["execute"], "meeting_reply_execute")
+            self.assertEqual(items[1]["verification_method"], "meeting_reply_readback")
+
     def test_run_oa_meeting_reply_execute_posts_and_verifies_reply(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

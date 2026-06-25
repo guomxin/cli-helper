@@ -25,6 +25,7 @@ from bscli.adapters.seeyon_write import (
     append_oa_write_audit,
     append_oa_write_verification_audit,
     build_oa_write_plan,
+    build_write_governance,
     normalize_write_action,
 )
 from bscli.core.api_discovery import extract_api_candidates, inspect_api_response
@@ -200,6 +201,11 @@ class DaemonState:
                     "task_id": None,
                     "result": self._session_status(),
                 },
+            )
+        if system == "oa" and command == "write_capabilities":
+            return self._run_oa_write_capabilities_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
         if system == "oa" and command in {"write_draft", "write_dry_run", "write_execute"}:
             return self._run_oa_write_plan_command(
@@ -986,6 +992,202 @@ class DaemonState:
                 },
             },
         )
+
+    def _run_oa_write_capabilities_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_type = self._workflow_type(args)
+        if workflow_type != "pending":
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "write capabilities currently support only pending workflow items",
+                    "result": {"type": workflow_type, "items": [], "count": 0},
+                },
+            )
+        list_args = {"type": workflow_type}
+        for key in ("keyword", "limit"):
+            if args.get(key) is not None:
+                list_args[key] = args[key]
+        list_response = self._run_nested_oa_command("workflow_list", list_args, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        source_items = self._workflow_items_from_result(result)
+        capability_items = [
+            self._oa_write_capability_for_item(item, timeout_seconds)
+            for item in source_items
+            if isinstance(item, dict)
+        ]
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": list_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "source_count": len(source_items),
+                    "count": len(capability_items),
+                    "items": capability_items,
+                },
+            },
+        )
+
+    def _oa_write_capability_for_item(
+        self,
+        item: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        category = _oa_write_category_for_item(item)
+        row = {
+            "category": category,
+            "title": item.get("title", ""),
+            "affair_id": str(item.get("affair_id") or ""),
+            "href": item.get("href", ""),
+            "current_state": _current_state_from_pending_item(item),
+            "supported_write_actions": [],
+            "discovered_write_actions": [],
+            "verification_method": "",
+        }
+        if category == "meeting":
+            row.update(self._oa_meeting_reply_capability(item, timeout_seconds))
+            return row
+        row.update(self._oa_workflow_submit_capability(item, timeout_seconds))
+        return row
+
+    def _oa_workflow_submit_capability(
+        self,
+        item: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        href = str(item.get("href") or "")
+        if not href:
+            return {
+                "verification_method": "pending_disappearance",
+                "capability_status": "blocked",
+                "blocked_reasons": ["workflow item has no detail href"],
+            }
+        detail_response = self._run_nested_oa_command("detail_read", {"url": href}, timeout_seconds)
+        if detail_response.status != 200 or detail_response.body.get("ok") is False:
+            return {
+                "verification_method": "pending_disappearance",
+                "capability_status": "blocked",
+                "blocked_reasons": [detail_response.body.get("error") or "detail page could not be read"],
+            }
+        detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
+        discovered = [_summarize_oa_write_action(action) for action in actions]
+        supported = []
+        if _find_oa_write_action(actions, "ContinueSubmit") is not None:
+            affair_id = str(item.get("affair_id") or "")
+            supported.append(
+                {
+                    "name": "workflow.submit",
+                    "action": "ContinueSubmit",
+                    "risk": "high",
+                    "requires_confirmation": True,
+                    "dry_run_command": f"oa write dry-run --affair-id {affair_id} --action ContinueSubmit",
+                    "execute_command": f"oa write execute --affair-id {affair_id} --action ContinueSubmit --confirm",
+                    "tool_names": ["oa__write_dry_run", "oa__write_execute"],
+                    "daemon_commands": {"dry_run": "write_dry_run", "execute": "write_execute"},
+                    "verification_method": "pending_disappearance",
+                    "governance": build_write_governance(
+                        "workflow.submit",
+                        verification_method="pending_disappearance",
+                    ),
+                }
+            )
+        return {
+            "current_state": {
+                **_current_state_from_pending_item(item),
+                "detail_title": detail.get("title", ""),
+            },
+            "supported_write_actions": supported,
+            "discovered_write_actions": discovered,
+            "verification_method": "pending_disappearance",
+            "capability_status": "supported" if supported else "read_only_or_unpromoted",
+        }
+
+    def _oa_meeting_reply_capability(
+        self,
+        item: dict[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        href = str(item.get("href") or "")
+        meeting_id = _query_param(href, "meetingId")
+        proxy_id = _query_param(href, "proxyId")
+        current_state = _current_state_from_pending_item(item)
+        supported = []
+        blocked_reasons = []
+        if not meeting_id:
+            blocked_reasons.append("meetingId was not found in the pending item href")
+            return {
+                "current_state": current_state,
+                "verification_method": "meeting_reply_readback",
+                "capability_status": "blocked",
+                "blocked_reasons": blocked_reasons,
+            }
+        view_response = self._run_oa_meeting_view(meeting_id, proxy_id, timeout_seconds)
+        if view_response.status != 200 or view_response.body.get("ok") is False:
+            blocked_reasons.append(view_response.body.get("error") or "meeting view failed")
+            return {
+                "current_state": current_state,
+                "verification_method": "meeting_reply_readback",
+                "capability_status": "blocked",
+                "blocked_reasons": blocked_reasons,
+            }
+        view = view_response.body.get("result") if isinstance(view_response.body, dict) else {}
+        if not isinstance(view, dict):
+            view = {}
+        auth = view.get("meetingAuth") if isinstance(view.get("meetingAuth"), dict) else {}
+        meeting = view.get("meetingVo") if isinstance(view.get("meetingVo"), dict) else {}
+        reply = _project_oa_meeting_reply(view.get("myReply"))
+        current_state = {
+            **current_state,
+            "meeting_id": meeting_id,
+            "meeting_state": meeting.get("state"),
+            "room_state": meeting.get("roomState"),
+            **reply,
+        }
+        if auth.get("showReply") is True and auth.get("showReplyAttitude") is True:
+            affair_id = str(item.get("affair_id") or "")
+            supported.append(
+                {
+                    "name": "meeting.reply",
+                    "attitudes": ["join", "not_join", "pending"],
+                    "risk": "high",
+                    "requires_confirmation": True,
+                    "dry_run_command": f"oa meeting reply dry-run --id {affair_id} --attitude join",
+                    "execute_command": f"oa meeting reply execute --id {affair_id} --attitude join --confirm",
+                    "tool_names": ["oa__meeting_reply_dry_run", "oa__meeting_reply_execute"],
+                    "daemon_commands": {"dry_run": "meeting_reply_dry_run", "execute": "meeting_reply_execute"},
+                    "verification_method": "meeting_reply_readback",
+                    "governance": build_write_governance(
+                        "meeting.reply",
+                        verification_method="meeting_reply_readback",
+                    ),
+                }
+            )
+        else:
+            if auth.get("showReply") is not True:
+                blocked_reasons.append("meeting reply is not available")
+            if auth.get("showReplyAttitude") is not True:
+                blocked_reasons.append("meeting attitude reply is not available")
+        return {
+            "current_state": current_state,
+            "supported_write_actions": supported,
+            "verification_method": "meeting_reply_readback",
+            "capability_status": "supported" if supported else "read_only_or_blocked",
+            "blocked_reasons": blocked_reasons,
+        }
 
     def _run_oa_write_plan_command(
         self,
@@ -1942,6 +2144,8 @@ class DaemonState:
         return None
 
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
+        if system == "oa" and command == "write_capabilities":
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_execute", "pending_submit"}:
@@ -2311,6 +2515,10 @@ def _build_oa_meeting_reply_plan(
             "will_execute": False,
             "requires_confirmation": mode == "execute",
         },
+        "governance": build_write_governance(
+            "meeting.reply",
+            verification_method="meeting_reply_readback",
+        ),
     }
 
 
@@ -2372,6 +2580,25 @@ def _append_oa_meeting_reply_audit(home: Path, plan: dict[str, Any]) -> Path:
     with audit_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True) + "\n")
     return audit_path
+
+
+def _oa_write_category_for_item(item: dict[str, Any]) -> str:
+    href = str(item.get("href") or "").lower()
+    kind = " ".join(
+        str(item.get(key) or "").lower()
+        for key in ("category", "type", "source", "module", "app")
+    )
+    if "meetingid=" in href or "meeting.do" in href or "meeting" in kind:
+        return "meeting"
+    return "workflow"
+
+
+def _current_state_from_pending_item(item: dict[str, Any]) -> dict[str, Any]:
+    state = {}
+    for key in ("state", "status", "sender", "send_time", "receive_time", "deadline"):
+        if key in item:
+            state[key] = item.get(key)
+    return state
 
 
 def _query_param(url: str, name: str) -> str:

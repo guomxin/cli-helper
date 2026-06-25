@@ -749,6 +749,48 @@ class CliOaTests(unittest.TestCase):
             {"id": "affair-1", "attitude": "join", "feedback": "will attend"},
         )
 
+    def test_oa_write_capabilities_calls_daemon_with_plain_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "count": 1,
+                    "items": [
+                        {
+                            "title": "Weekly report",
+                            "affair_id": "affair-1",
+                            "category": "workflow",
+                            "supported_write_actions": [{"name": "workflow.submit"}],
+                        }
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "capabilities",
+                "--type",
+                "pending",
+                "--keyword",
+                "weekly",
+                "--limit",
+                "1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_capabilities")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"type": "pending", "keyword": "weekly", "limit": 1},
+        )
+        self.assertEqual(payload["result"]["items"][0]["supported_write_actions"][0]["name"], "workflow.submit")
+
     def test_oa_meeting_reply_execute_requires_confirm_before_daemon_call(self):
         server, seen_payloads = self._start_daemon({"ok": True})
 

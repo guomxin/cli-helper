@@ -11,6 +11,9 @@ logged-in Chrome session after explicit confirmation.
   candidate write actions from page scripts.
 - `oa pending actions --limit N` reads pending items, opens their detail pages,
   and indexes candidate write actions.
+- `oa write capabilities --type pending` is the read-only agent inventory. It
+  reports each pending item's category, supported write actions, current state,
+  and verification method before an agent chooses a dry-run or execute command.
 - `oa write draft ...` builds a local write plan only. It does not contact the
   daemon and does not create an audit row.
 - `oa write dry-run ...` builds the same local write plan and appends a
@@ -28,10 +31,30 @@ logged-in Chrome session after explicit confirmation.
   requested action, executes one item, then reads the pending list again. The
   next item is not attempted unless the previous `affairId` has disappeared
   from pending.
+- `oa meeting reply dry-run ...` resolves a pending meeting item, reads
+  `meetingView`, and checks whether the current user can reply.
+- `oa meeting reply execute ... --confirm` posts the reply through
+  `meetingAjaxManager.reply`, then reads `meetingView` again and succeeds only
+  when `myReply.feedbackFlag` matches the requested attitude.
 
-Only `ContinueSubmit` is executable at this stage. Reject, archive, delete,
-revoke, return, upload, and other write actions remain blocked until each has a
-dedicated mapping and tests.
+Only collaboration `ContinueSubmit` and meeting reply are executable at this
+stage. Reject, archive, delete, revoke, return, upload, and other write actions
+remain blocked until each has a dedicated mapping and tests.
+
+## Governance Lifecycle
+
+Promoted write actions share the same lifecycle:
+
+1. Resolve the target from a stable business id or source URL.
+2. Run a dry-run precheck that reads OA state but does not mutate it.
+3. Require an explicit confirmation gate before production execution.
+4. Execute through the logged-in Chrome bridge or a promoted backend API.
+5. Read OA state back with the action-specific verification method.
+6. Write a sanitized audit row that does not store opinion or feedback text.
+
+The plan objects expose this as `governance.lifecycle`, together with
+`governance.verification_method`, so agents can distinguish the safety protocol
+from the concrete business command.
 
 ## Write Plan Shape
 
@@ -71,6 +94,12 @@ action metadata, submit task metadata, and a normalized verification object:
 
 The verification audit does not store opinion text.
 
+Meeting reply verification uses a different rule. A meeting can remain visible
+in pending after the reply is recorded, so pending-list disappearance is not a
+reliable success signal. Meeting reply execution therefore reads `meetingView`
+after submit and treats the write as successful only when the current user's
+`myReply.feedbackFlag` matches the requested action.
+
 ## Risk Classification
 
 Action codes considered high risk include:
@@ -107,15 +136,20 @@ at discovery, draft, and dry-run only.
 
 The safe planning commands are registered in the normal BSCLI command registry:
 
+- `oa__write_capabilities`
 - `oa__write_draft`
 - `oa__write_dry_run`
 - `oa__write_execute`
 - `oa__pending_submit`
+- `oa__meeting_reply_dry_run`
+- `oa__meeting_reply_execute`
 
-`write_draft` and `write_dry_run` are exposed as read/low-risk daemon tools
-because they do not mutate OA state. `write_execute` is exposed as a
-write/high-risk human-gate tool and requires a `confirm` argument in the tool
-schema. Confirmed `ContinueSubmit` executions are delivered through the Chrome
-extension bridge. `pending_submit` is also exposed as a write/high-risk
-human-gate tool and requires `keyword`, `action`, and `confirm`; it reuses the
-same daemon-side verification and audit path as the CLI.
+`write_capabilities`, `write_draft`, `write_dry_run`, and
+`meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
+do not mutate OA state. `write_execute`, `pending_submit`, and
+`meeting_reply_execute` are exposed as write/high-risk human-gate tools and
+require `confirm` in their input schema before they can perform a production
+write. Confirmed `ContinueSubmit` executions are delivered through the Chrome
+extension bridge and verified by pending disappearance. Confirmed meeting
+replies are delivered through `meetingAjaxManager.reply` and verified by
+`meetingView.myReply.feedbackFlag`.

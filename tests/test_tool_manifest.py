@@ -174,6 +174,34 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(tool["metadata"]["strategy"], "human_gate")
         self.assertTrue(tool["metadata"]["requires_confirmation"])
 
+    def test_oa_write_capabilities_and_meeting_reply_tools_are_exported(self):
+        registry = CommandRegistry()
+        register_seeyon_commands(registry)
+
+        manifest = export_tool_manifest(registry, system="oa")
+        tools = {tool["name"]: tool for tool in manifest["tools"]}
+
+        capabilities = tools["oa__write_capabilities"]
+        self.assertEqual(capabilities["metadata"]["access"], "read")
+        self.assertEqual(capabilities["metadata"]["risk"], "low")
+        self.assertFalse(capabilities["metadata"]["requires_confirmation"])
+        self.assertEqual(
+            capabilities["input_schema"]["properties"]["type"]["description"],
+            "Workflow collection to inspect; currently pending is the supported write target.",
+        )
+
+        dry_run = tools["oa__meeting_reply_dry_run"]
+        self.assertEqual(dry_run["metadata"]["access"], "read")
+        self.assertEqual(dry_run["metadata"]["strategy"], "daemon_api")
+        self.assertEqual(dry_run["input_schema"]["required"], ["id"])
+
+        execute = tools["oa__meeting_reply_execute"]
+        self.assertEqual(execute["metadata"]["access"], "write")
+        self.assertEqual(execute["metadata"]["strategy"], "human_gate")
+        self.assertTrue(execute["metadata"]["requires_confirmation"])
+        self.assertEqual(execute["input_schema"]["required"], ["id", "confirm"])
+        self.assertEqual(execute["input_schema"]["properties"]["confirm"]["type"], "boolean")
+
 
 if __name__ == "__main__":
     unittest.main()
