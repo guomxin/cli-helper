@@ -3179,6 +3179,152 @@ class DaemonTests(unittest.TestCase):
             self.assertGreaterEqual(result["clusters"][0]["candidates"][0]["score"], 0.8)
             self.assertIn("exact", result["clusters"][0]["candidates"][0]["evidence"])
 
+    def test_run_matter_profile_builds_catalog_from_history_template_matches(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                self.assertEqual(command, "template_match")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_template_match.v1",
+                            "history_profile": {"kind": "all", "source_count": 4, "cluster_count": 2},
+                            "template_count": 8,
+                            "clusters": [
+                                {
+                                    "cluster_id": "seal-request",
+                                    "title_pattern": "[Seal] Seal Request",
+                                    "subject": "Seal Request",
+                                    "category_tag": "Seal",
+                                    "count": 3,
+                                    "kinds": ["done", "sent"],
+                                    "match_status": "matched",
+                                    "best_template": {
+                                        "template_id": "tpl-seal",
+                                        "title": "[Seal] Seal Request",
+                                        "href": "http://oa.example.test/new?templateId=tpl-seal",
+                                        "score": 0.95,
+                                    },
+                                    "candidates": [{"template_id": "tpl-seal", "title": "[Seal] Seal Request", "score": 0.95}],
+                                    "sample_items": [{"title": "[Seal] Seal Request - Alice", "affair_id": "done-1"}],
+                                },
+                                {
+                                    "cluster_id": "hr",
+                                    "title_pattern": "【HR】月度考勤确认单",
+                                    "subject": "月度考勤确认单",
+                                    "category_tag": "HR",
+                                    "count": 1,
+                                    "kinds": ["tracked"],
+                                    "match_status": "unmatched",
+                                    "best_template": {},
+                                    "candidates": [],
+                                    "sample_items": [{"title": "【HR】月度考勤确认单- Bob", "affair_id": "tracked-1"}],
+                                },
+                            ],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_profile",
+                    "args": {"kind": "all", "keyword": "seal", "limit": 20},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(calls[0][1], {"kind": "all", "keyword": "seal", "limit": 20})
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_profile.v1")
+            self.assertEqual(result["matter_count"], 2)
+            self.assertEqual(result["matched_template_count"], 1)
+            self.assertEqual(result["matters"][0]["matter_id"], "seal-request")
+            self.assertEqual(result["matters"][0]["template"]["template_id"], "tpl-seal")
+            self.assertEqual(result["matters"][0]["available_actions"][0]["command"], "launch_save_draft")
+            self.assertTrue(result["matters"][0]["available_actions"][0]["requires_confirmation"])
+            self.assertEqual(result["matters"][1]["template"], {})
+            self.assertRegex(result["matters"][1]["matter_id"], r"^matter-[a-f0-9]{10}$")
+            self.assertEqual(result["matters"][1]["available_actions"][0]["status"], "blocked")
+
+    def test_run_matter_inspect_resolves_matter_and_optionally_reads_launch_fields(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "seal-request",
+                                    "name": "[Seal] Seal Request",
+                                    "template": {
+                                        "template_id": "tpl-seal",
+                                        "title": "[Seal] Seal Request",
+                                        "href": "http://oa.example.test/new?templateId=tpl-seal",
+                                    },
+                                    "available_actions": [{"command": "launch_save_draft", "status": "available"}],
+                                }
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_inspection.v1",
+                            "template_id": "tpl-seal",
+                            "fields": [{"name": "content_coll", "type": "textarea", "readonly": False}],
+                            "buttons": [{"id": "saveDraft_a", "text": "Save draft"}],
+                            "safety": {"submitted_count": 0},
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_inspect",
+                    "args": {"id": "seal-request", "kind": "all", "with_launch": True},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["matter_profile", "launch_inspect"])
+            self.assertEqual(calls[0][1], {"kind": "all"})
+            self.assertEqual(calls[1][1], {"template_id": "tpl-seal"})
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_inspection.v1")
+            self.assertEqual(result["matter"]["matter_id"], "seal-request")
+            self.assertEqual(result["launch_inspection"]["fields"][0]["name"], "content_coll")
+            self.assertIn("oa launch dry-run --template-id tpl-seal", result["next_steps"][0])
+
     def test_run_launch_inspect_resolves_template_and_reads_rendered_page_without_submit(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

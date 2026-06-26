@@ -229,6 +229,9 @@ python -m bscli.cli.main --home .bscli oa history search --kind tracked --keywor
 python -m bscli.cli.main --home .bscli oa history profile --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa history clusters --kind all --limit 20
 python -m bscli.cli.main --home .bscli oa history export --kind sent --format csv --fields title,status,date,affair_id
+python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
+python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
+python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
 ```
 
 `oa history` reads historical tabs such as sent, done, and tracked from the OA
@@ -240,6 +243,13 @@ session. Historical detail reads are treated as read-only samples and report
 `oa history profile` clusters historical titles, categories, statuses, dates,
 `affair_id`, and `href` into high-frequency workflow types. `clusters` is the
 same profile view under a more business-oriented name.
+`oa matter profile` turns those historical clusters into a matter catalog by
+matching each matter type to the user's launchable OA templates. It reports
+matched and unmatched templates, sample historical items, and available atomic
+actions such as `launch_save_draft`.
+`oa matter inspect` reads one matter entry by id or name. By default it does not
+open the template launch page; add `--with-launch` when you explicitly want the
+matched template's fields and save-draft controls inspected.
 
 Pending, sent, and template objects:
 
@@ -415,12 +425,13 @@ dispatches the browser write task only if the target action is available, then
 reads the pending list again and records whether the `affair_id` disappeared.
 Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
-`oa__launch_dry_run`, `oa__launch_save_draft`, `oa__write_discover`,
-`oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
-`oa__write_prepare`, `oa__write_execute`, and `oa__pending_submit`; executable
-tools require a `confirm` argument in their schema before they can perform a
-write. Agents can also call `oa__write_capabilities` first to decide which
-write command is applicable.
+`oa__matter_profile`, `oa__matter_inspect`, `oa__launch_dry_run`,
+`oa__launch_save_draft`, `oa__write_discover`, `oa__write_draft`,
+`oa__write_dry_run`, `oa__write_preflight`, `oa__write_prepare`,
+`oa__write_execute`, and `oa__pending_submit`; executable tools require a
+`confirm` argument in their schema before they can perform a write. Agents can
+also call `oa__matter_profile` first to choose a business matter type, then use
+the recommended atomic command.
 `oa audit writes list` and `oa audit verifications list` summarize local audit
 rows while keeping opinion text redacted; newest rows are shown first. Use
 `show --index N` to inspect one sanitized audit record and `search` to filter by
@@ -671,6 +682,7 @@ Implemented:
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa history sections/list/search/profile/clusters/export`
+- Business CLI `oa matter profile/inspect`
 - Business CLI `oa template match`
 - Business CLI `oa launch inspect`
 - Business CLI `oa write actions`

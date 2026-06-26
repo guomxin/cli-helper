@@ -47,14 +47,22 @@ Layer 2, template matching:
 
 ```powershell
 python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
+python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
+python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
+python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
 ```
 
 `oa template match` compares historical clusters with the launchable template
 list and returns candidates with score and evidence. It reports `matched`,
 `ambiguous`, or `unmatched`; ambiguous clusters are not guessed into a concrete
 template.
+`oa matter profile` packages this into a business matter catalog: each matter
+has a stable `matter_id`, historical samples, template match state, and the
+atomic write/read commands that are safe to consider next. `oa matter inspect`
+reads one matter entry; it opens the launch page only when `--with-launch` is
+passed.
 
-Layer 3, launch-page inspection:
+Layer 3, launch-page inspection and write discovery:
 
 ```powershell
 python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>

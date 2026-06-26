@@ -30,6 +30,11 @@ without sending the workflow.
   CSRF presence, and untested endpoint candidates. Launch-source candidates are
   forced to `execute_allowed=false` even when the same action code is executable
   in another governed context.
+- `oa matter profile` and `oa matter inspect` are the business matter catalog
+  layer. They organize historical clusters around matched templates and
+  recommend atomic commands such as `launch_dry_run` or `launch_save_draft`.
+  They are read-only; `matter inspect` opens a template launch page only when
+  `--with-launch` is explicitly supplied.
 - `oa launch dry-run ...` is the launch-page save-draft precheck. It opens the
   launch page, validates requested field names/ids/labels against writable
   fields, verifies that a `saveDraft` / "保存待发" control exists, records a
@@ -243,6 +248,8 @@ The safe planning commands are registered in the normal BSCLI command registry:
 
 - `oa__launch_dry_run`
 - `oa__launch_save_draft`
+- `oa__matter_profile`
+- `oa__matter_inspect`
 - `oa__write_capabilities`
 - `oa__write_discover`
 - `oa__write_draft`
@@ -255,8 +262,9 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
 
-`launch_dry_run`, `write_capabilities`, `write_discover`, `write_draft`,
-`write_dry_run`, `write_preflight`, `write_prepare`, and
+`matter_profile`, `matter_inspect`, `launch_dry_run`, `write_capabilities`,
+`write_discover`, `write_draft`, `write_dry_run`, `write_preflight`,
+`write_prepare`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
 do not mutate OA state. `launch_save_draft`, `write_execute`, `pending_submit`,
 and `meeting_reply_execute` are exposed as write/human-gate tools and require

@@ -361,6 +361,71 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="matter_profile",
+            description="Build a Seeyon OA matter catalog from historical workflow clusters and matching form templates.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collections to profile: sent, done, tracked, or all. Defaults to all.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "matter_count": {"type": "integer"},
+                    "matched_template_count": {"type": "integer"},
+                    "matters": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.matters"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="matter_inspect",
+            description="Inspect one Seeyon OA matter type, its matched template, and optional launch-page fields.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "description": "Matter id / cluster id to inspect."},
+                "name": {"type": "string", "description": "Matter name or title pattern to inspect."},
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collections to profile: sent, done, tracked, or all. Defaults to all.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+                "with_launch": {
+                    "type": "boolean",
+                    "description": "When true, open the matched template launch page read-only to inspect fields.",
+                },
+                "settle_ms": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "matter": {"type": "object"},
+                    "launch_inspection": {"type": "object"},
+                    "next_steps": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.matter"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="launch_inspect",
             description="Open a Seeyon OA template launch page and inspect fields, buttons, and write hints without submitting.",
             access="read",

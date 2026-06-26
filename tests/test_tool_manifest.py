@@ -26,6 +26,8 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__history_list", tools)
         self.assertIn("oa__history_profile", tools)
         self.assertIn("oa__history_sections", tools)
+        self.assertIn("oa__matter_profile", tools)
+        self.assertIn("oa__matter_inspect", tools)
         self.assertIn("oa__inbox_analyze", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__workflow_opinions", tools)
@@ -155,6 +157,16 @@ class ToolManifestTests(unittest.TestCase):
         template_match = tools["oa__template_match"]
         self.assertEqual(template_match["metadata"]["access"], "read")
         self.assertEqual(template_match["input_schema"]["properties"]["kind"]["type"], "string")
+
+        matter_profile = tools["oa__matter_profile"]
+        self.assertEqual(matter_profile["metadata"]["access"], "read")
+        self.assertEqual(matter_profile["metadata"]["strategy"], "daemon_api")
+        self.assertEqual(matter_profile["input_schema"]["properties"]["kind"]["type"], "string")
+
+        matter_inspect = tools["oa__matter_inspect"]
+        self.assertEqual(matter_inspect["metadata"]["access"], "read")
+        self.assertFalse(matter_inspect["metadata"]["requires_confirmation"])
+        self.assertEqual(matter_inspect["input_schema"]["properties"]["with_launch"]["type"], "boolean")
 
         doctor = tools["oa__doctor"]
         self.assertEqual(doctor["input_schema"]["required"], [])

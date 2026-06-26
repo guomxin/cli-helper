@@ -25,12 +25,16 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("oa__pending_list", tools)
         self.assertIn("oa__session_status", tools)
         self.assertIn("oa__history_profile", tools)
+        self.assertIn("oa__matter_profile", tools)
+        self.assertIn("oa__matter_inspect", tools)
         self.assertIn("oa__template_match", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__launch_dry_run", tools)
         self.assertIn("oa__launch_save_draft", tools)
         self.assertEqual(tools["oa__session_status"]["inputSchema"]["required"], [])
         self.assertEqual(tools["oa__launch_inspect"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__matter_profile"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__matter_inspect"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__launch_dry_run"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__launch_save_draft"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(
@@ -864,6 +868,33 @@ class McpServerTests(unittest.TestCase):
             [("oa", "inbox_analyze", {"type": "pending", "keyword": "weekly", "limit": 3})],
         )
         self.assertEqual(result["result"]["structuredContent"]["mode"], "list_only")
+
+    def test_call_oa_matter_inspect_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"schema_version": "bscli.oa_matter_inspection.v1", "matter": {"matter_id": "seal-request"}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 23,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__matter_inspect",
+                    "arguments": {"id": "seal-request", "kind": "all", "with_launch": True},
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [("oa", "matter_inspect", {"id": "seal-request", "kind": "all", "with_launch": True})],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["matter"]["matter_id"], "seal-request")
 
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()

@@ -904,6 +904,67 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["args"], {"kind": "done", "keyword": "seal", "limit": 5})
         self.assertEqual(payload["result"]["schema_version"], "bscli.oa_template_match.v1")
 
+    def test_oa_matter_profile_and_inspect_call_daemon_with_catalog_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_profile.v1",
+                    "matters": [{"matter_id": "seal-request", "name": "[Seal] Seal Request"}],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            profile = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "profile",
+                "--kind",
+                "all",
+                "--keyword",
+                "seal",
+                "--limit",
+                "5",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            inspect = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "inspect",
+                "--id",
+                "seal-request",
+                "--kind",
+                "all",
+                "--with-launch",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            table = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "profile",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--format",
+                "table",
+                "--fields",
+                "matter_id,name",
+            )
+
+        self.assertEqual(json.loads(profile.stdout)["result"]["schema_version"], "bscli.oa_matter_profile.v1")
+        self.assertEqual(json.loads(inspect.stdout)["result"]["schema_version"], "bscli.oa_matter_profile.v1")
+        self.assertIn("seal-request", table.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "matter_profile")
+        self.assertEqual(seen_payloads[0]["args"], {"kind": "all", "keyword": "seal", "limit": 5})
+        self.assertEqual(seen_payloads[1]["command"], "matter_inspect")
+        self.assertEqual(seen_payloads[1]["args"], {"id": "seal-request", "kind": "all", "with_launch": True})
+        self.assertEqual(seen_payloads[2]["command"], "matter_profile")
+
     def test_oa_launch_inspect_calls_daemon_with_template_or_url(self):
         server, seen_payloads = self._start_daemon(
             {

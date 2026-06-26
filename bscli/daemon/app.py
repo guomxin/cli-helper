@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from difflib import SequenceMatcher
+import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -241,6 +242,12 @@ class DaemonState:
             )
         if system == "oa" and command == "template_match":
             return self._run_oa_template_match_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in {"matter_profile", "matter_inspect"}:
+            return self._run_oa_matter_command(
+                command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1007,6 +1014,84 @@ class DaemonState:
                 "ok": True,
                 "task_id": template_response.body.get("task_id") or profile_response.body.get("task_id"),
                 "result": result,
+            },
+        )
+
+    def _run_oa_matter_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        profile_args = _matter_profile_args(args)
+        if command == "matter_profile":
+            match_response = self._run_nested_oa_command("template_match", profile_args, timeout_seconds)
+            if match_response.status != 200 or match_response.body.get("ok") is False:
+                return match_response
+            match_result = match_response.body.get("result") if isinstance(match_response.body, dict) else {}
+            if not isinstance(match_result, dict):
+                match_result = {}
+            return DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "task_id": match_response.body.get("task_id"),
+                    "result": _build_oa_matter_profile(match_result, profile_args),
+                },
+            )
+
+        profile_response = self._run_nested_oa_command("matter_profile", profile_args, timeout_seconds)
+        if profile_response.status != 200 or profile_response.body.get("ok") is False:
+            return profile_response
+        profile = profile_response.body.get("result") if isinstance(profile_response.body, dict) else {}
+        if not isinstance(profile, dict):
+            profile = {}
+        matter = _find_oa_matter(profile.get("matters") or [], args)
+        if matter is None:
+            return DaemonResponse(
+                404,
+                {
+                    "ok": False,
+                    "error": "matter not found; use oa matter profile to list available matter ids and names",
+                    "result": {
+                        "schema_version": "bscli.oa_matter_inspection.v1",
+                        "query": _matter_query(args),
+                        "profile": {
+                            "kind": profile.get("kind", ""),
+                            "matter_count": profile.get("matter_count", 0),
+                        },
+                    },
+                },
+            )
+        launch_inspection: dict[str, Any] = {}
+        if args.get("with_launch") is True:
+            template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
+            template_id = str(template.get("template_id") or "")
+            if not template_id:
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "error": "matter has no matched template to inspect",
+                        "result": _build_oa_matter_inspection(profile, matter, launch_inspection={}),
+                    },
+                )
+            inspect_args: dict[str, Any] = {"template_id": template_id}
+            if args.get("settle_ms") is not None:
+                inspect_args["settle_ms"] = args.get("settle_ms")
+            inspect_response = self._run_nested_oa_command("launch_inspect", inspect_args, timeout_seconds)
+            if inspect_response.status != 200 or inspect_response.body.get("ok") is False:
+                return inspect_response
+            launch_result = inspect_response.body.get("result") if isinstance(inspect_response.body, dict) else {}
+            if isinstance(launch_result, dict):
+                launch_inspection = launch_result
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": profile_response.body.get("task_id"),
+                "result": _build_oa_matter_inspection(profile, matter, launch_inspection=launch_inspection),
             },
         )
 
@@ -3412,7 +3497,7 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"template_match", "launch_inspect", "launch_dry_run"}:
+        if system == "oa" and command in {"template_match", "matter_profile", "matter_inspect", "launch_inspect", "launch_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "launch_save_draft":
             return {"access": "write", "strategy": "human_gate"}
@@ -3854,6 +3939,187 @@ def _build_oa_template_match(profile: dict[str, Any], templates: dict[str, Any])
         "cluster_count": len(matched_clusters),
         "clusters": matched_clusters,
     }
+
+
+def _matter_profile_args(args: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {"kind": str(args.get("kind") or "all").strip().lower() or "all"}
+    if args.get("keyword"):
+        payload["keyword"] = args["keyword"]
+    if args.get("limit") is not None:
+        payload["limit"] = args["limit"]
+    return payload
+
+
+def _matter_query(args: dict[str, Any]) -> dict[str, str]:
+    return {
+        "id": str(args.get("id") or "").strip(),
+        "name": str(args.get("name") or "").strip(),
+    }
+
+
+def _build_oa_matter_profile(template_match: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    matters = []
+    for cluster in template_match.get("clusters") or []:
+        if not isinstance(cluster, dict):
+            continue
+        matters.append(_matter_from_template_cluster(cluster))
+    matched_count = sum(1 for matter in matters if matter.get("template"))
+    return {
+        "schema_version": "bscli.oa_matter_profile.v1",
+        "source": "template_match",
+        "kind": args.get("kind", "all"),
+        "keyword": args.get("keyword", ""),
+        "source_count": (template_match.get("history_profile") or {}).get("source_count", 0),
+        "template_count": template_match.get("template_count", 0),
+        "matter_count": len(matters),
+        "matched_template_count": matched_count,
+        "unmatched_template_count": len(matters) - matched_count,
+        "matters": matters,
+        "read_effect": {
+            "history_read": True,
+            "template_list_read": True,
+            "launch_page_opened": False,
+            "submitted_count": 0,
+        },
+    }
+
+
+def _matter_from_template_cluster(cluster: dict[str, Any]) -> dict[str, Any]:
+    template = cluster.get("best_template") if isinstance(cluster.get("best_template"), dict) else {}
+    template = {key: template.get(key, "") for key in ("template_id", "title", "href", "score") if template.get(key) not in (None, "")}
+    matter_id = _matter_id_from_cluster(cluster)
+    match_status = str(cluster.get("match_status") or "unmatched")
+    return {
+        "matter_id": matter_id,
+        "name": str(cluster.get("title_pattern") or cluster.get("subject") or matter_id),
+        "subject": str(cluster.get("subject") or ""),
+        "category_tag": str(cluster.get("category_tag") or ""),
+        "frequency": {
+            "count": int(cluster.get("count") or 0),
+            "share": float(cluster.get("share") or 0),
+            "kinds": cluster.get("kinds") if isinstance(cluster.get("kinds"), list) else [],
+            "date_range": cluster.get("date_range") if isinstance(cluster.get("date_range"), dict) else {"start": "", "end": ""},
+        },
+        "template_match_status": match_status,
+        "template": template,
+        "template_candidates": cluster.get("candidates") if isinstance(cluster.get("candidates"), list) else [],
+        "sample_items": cluster.get("sample_items") if isinstance(cluster.get("sample_items"), list) else [],
+        "available_actions": _matter_available_actions(template, match_status),
+    }
+
+
+def _matter_id_from_cluster(cluster: dict[str, Any]) -> str:
+    cluster_id = str(cluster.get("cluster_id") or "").strip()
+    if len(cluster_id) >= 4 and not re.fullmatch(r"cluster-\d+", cluster_id):
+        return cluster_id
+    title = str(cluster.get("title_pattern") or cluster.get("subject") or "").strip()
+    slug = _slug(title)
+    if len(slug) >= 4:
+        return slug
+    basis = "|".join(
+        [
+            title,
+            str(cluster.get("category_tag") or ""),
+            str(cluster.get("subject") or ""),
+        ]
+    )
+    digest = hashlib.sha1(basis.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"matter-{digest}"
+
+
+def _matter_available_actions(template: dict[str, Any], match_status: str) -> list[dict[str, Any]]:
+    if template.get("template_id") and match_status == "matched":
+        return [
+            {
+                "name": "launch.save_draft",
+                "command": "launch_save_draft",
+                "status": "available",
+                "access": "write",
+                "risk": "medium",
+                "requires_confirmation": True,
+                "description": "Create or update an OA launch-page draft for this matched template.",
+            },
+            {
+                "name": "launch.dry_run",
+                "command": "launch_dry_run",
+                "status": "available",
+                "access": "read",
+                "risk": "low",
+                "requires_confirmation": False,
+                "description": "Validate launch-page fields before saving a draft.",
+            },
+        ]
+    return [
+        {
+            "name": "launch.save_draft",
+            "command": "launch_save_draft",
+            "status": "blocked",
+            "access": "write",
+            "risk": "medium",
+            "requires_confirmation": True,
+            "reason": "matter has no unambiguous matched template",
+        }
+    ]
+
+
+def _find_oa_matter(matters: list[Any], args: dict[str, Any]) -> dict[str, Any] | None:
+    query = _matter_query(args)
+    wanted_id = _normal_match_text(query["id"])
+    wanted_name = _normal_match_text(query["name"] or query["id"])
+    for matter in matters:
+        if not isinstance(matter, dict):
+            continue
+        matter_id = _normal_match_text(str(matter.get("matter_id") or ""))
+        name = _normal_match_text(str(matter.get("name") or ""))
+        if wanted_id and matter_id == wanted_id:
+            return matter
+        if wanted_name and (name == wanted_name or wanted_name in name or name in wanted_name):
+            return matter
+    return None
+
+
+def _build_oa_matter_inspection(
+    profile: dict[str, Any],
+    matter: dict[str, Any],
+    *,
+    launch_inspection: dict[str, Any],
+) -> dict[str, Any]:
+    template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
+    result = {
+        "schema_version": "bscli.oa_matter_inspection.v1",
+        "source": "matter_profile",
+        "profile": {
+            "kind": profile.get("kind", ""),
+            "matter_count": profile.get("matter_count", 0),
+            "matched_template_count": profile.get("matched_template_count", 0),
+        },
+        "matter": matter,
+        "launch_inspection": launch_inspection,
+        "next_steps": _matter_next_steps(matter, launch_inspection),
+        "read_effect": {
+            "history_read": True,
+            "template_list_read": True,
+            "launch_page_opened": bool(launch_inspection),
+            "submitted_count": 0,
+        },
+    }
+    if template.get("template_id"):
+        result["template_id"] = template.get("template_id")
+    return result
+
+
+def _matter_next_steps(matter: dict[str, Any], launch_inspection: dict[str, Any]) -> list[str]:
+    template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
+    template_id = str(template.get("template_id") or "")
+    if not template_id:
+        return ["Run oa template match with a broader history kind or keyword to resolve this matter to a template."]
+    steps = [
+        f"oa launch dry-run --template-id {template_id} --field <field>=<value>",
+        f"oa launch save-draft --template-id {template_id} --field <field>=<value> --confirm",
+    ]
+    if not launch_inspection:
+        steps.insert(0, f"oa matter inspect --id {matter.get('matter_id')} --with-launch")
+    return steps
 
 
 def _rank_template_candidates(cluster: dict[str, Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:

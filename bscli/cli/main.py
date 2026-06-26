@@ -197,6 +197,36 @@ def _build_oa_parser(oa_sub) -> None:
     history_sub = history.add_subparsers(dest="oa_action", required=True)
     _add_history_parser(history_sub)
 
+    matter = oa_sub.add_parser("matter")
+    matter_sub = matter.add_subparsers(dest="oa_matter_action", required=True)
+    matter_profile = matter_sub.add_parser("profile")
+    matter_profile.set_defaults(oa_command="matter_profile")
+    matter_profile.add_argument(
+        "--kind",
+        choices=["sent", "done", "tracked", "all"],
+        default="all",
+        help="Historical collections to profile before matter grouping; defaults to all.",
+    )
+    matter_profile.add_argument("--keyword")
+    _add_daemon_options(matter_profile)
+    _add_output_options(matter_profile)
+    matter_inspect = matter_sub.add_parser("inspect")
+    matter_inspect.set_defaults(oa_command="matter_inspect")
+    matter_target = matter_inspect.add_mutually_exclusive_group(required=True)
+    matter_target.add_argument("--id", dest="matter_id")
+    matter_target.add_argument("--name", dest="matter_name")
+    matter_inspect.add_argument(
+        "--kind",
+        choices=["sent", "done", "tracked", "all"],
+        default="all",
+        help="Historical collections to profile before matter lookup; defaults to all.",
+    )
+    matter_inspect.add_argument("--keyword")
+    matter_inspect.add_argument("--with-launch", action="store_true", dest="with_launch")
+    matter_inspect.add_argument("--settle-ms", type=int, dest="settle_ms")
+    _add_daemon_options(matter_inspect)
+    _add_output_options(matter_inspect)
+
     detail = oa_sub.add_parser("detail")
     detail_sub = detail.add_subparsers(dest="oa_action", required=True)
     detail_read = detail_sub.add_parser("read")
@@ -843,6 +873,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_inbox(args)
     if getattr(args, "oa_history_action", None):
         return handle_oa_history(args)
+    if getattr(args, "oa_matter_action", None):
+        return handle_oa_matter(args)
     if getattr(args, "oa_workflow_action", None):
         return handle_oa_workflow(args)
     command = args.oa_command
@@ -900,6 +932,23 @@ def handle_oa_history(args: argparse.Namespace) -> int:
     if not response.get("ok", False):
         emit_cli_value(response, args)
         return 0
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_matter(args: argparse.Namespace) -> int:
+    action = args.oa_matter_action
+    if action == "profile":
+        response = run_oa_daemon_command(args, "matter_profile", _matter_daemon_args_from_cli(args))
+    elif action == "inspect":
+        response = run_oa_daemon_command(args, "matter_inspect", _matter_daemon_args_from_cli(args))
+    else:
+        raise ValueError(f"unknown matter action: {action}")
+    if not response.get("ok", False):
+        emit_cli_value(response, args)
+        return 0
+    response = _project_matter_response(response, args)
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
@@ -1003,6 +1052,21 @@ def _history_daemon_args_from_cli(args: argparse.Namespace) -> dict:
         payload["keyword"] = keyword
     if getattr(args, "limit", None) is not None:
         payload["limit"] = args.limit
+    return payload
+
+
+def _matter_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = _history_daemon_args_from_cli(args)
+    matter_id = getattr(args, "matter_id", None)
+    if matter_id:
+        payload["id"] = matter_id
+    matter_name = getattr(args, "matter_name", None)
+    if matter_name:
+        payload["name"] = matter_name
+    if getattr(args, "with_launch", False):
+        payload["with_launch"] = True
+    if getattr(args, "settle_ms", None) is not None:
+        payload["settle_ms"] = args.settle_ms
     return payload
 
 
@@ -1807,6 +1871,22 @@ def _apply_response_options(response: dict, args: argparse.Namespace) -> dict:
     filtered = _apply_collection_options(items, args)
     updated_result = {**result, "items": filtered, "count": len(filtered)}
     return {**response, "result": updated_result}
+
+
+def _project_matter_response(response: dict, args: argparse.Namespace) -> dict:
+    if response.get("ok") is not True or getattr(args, "oa_matter_action", None) != "profile":
+        return response
+    result = response.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("matters"), list):
+        return response
+    return {
+        **response,
+        "result": {
+            **result,
+            "items": result["matters"],
+            "count": len(result["matters"]),
+        },
+    }
 
 
 def _apply_collection_options(
