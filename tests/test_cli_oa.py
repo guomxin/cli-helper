@@ -1220,6 +1220,113 @@ class CliOaTests(unittest.TestCase):
         )
         self.assertEqual(payload["result"]["decision"]["status"], "ready_for_execute")
 
+    def test_oa_write_prepare_calls_daemon_for_task_packet(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_write_prepare.v1",
+                    "target": {"affair_id": "affair-1"},
+                    "preflight": {"decision": {"status": "ready_for_execute"}},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "prepare",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--text-limit",
+                "200",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_prepare")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "type": "pending",
+                "affair_id": "affair-1",
+                "action": "ContinueSubmit",
+                "opinion": "approved",
+                "source_url": "",
+                "text_limit": 200,
+            },
+        )
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_write_prepare.v1")
+
+    def test_write_prepare_uses_longer_client_timeout_for_composite_reads(self):
+        from bscli.cli import main as cli_main
+
+        self.assertEqual(cli_main._daemon_client_timeout_seconds(30, "write_prepare"), 95)
+        self.assertEqual(cli_main._daemon_client_timeout_seconds(30, "write_preflight"), 35)
+
+    def test_oa_audit_writes_and_verifications_list_local_sanitized_rows(self):
+        with TemporaryDirectory() as tmp:
+            audit_dir = Path(tmp) / "audit"
+            audit_dir.mkdir(parents=True)
+            (audit_dir / "oa-write-plans.jsonl").write_text(
+                json.dumps(
+                    {
+                        "created_at": "2026-06-26T01:00:00+00:00",
+                        "target": {"affair_id": "a1"},
+                        "action": {"code": "ContinueSubmit"},
+                        "opinion": {"length": 8},
+                        "precheck": {"status": "passed"},
+                        "safety": {"will_execute": False},
+                        "request": {"payload_preview": {"opinionText": None}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "created_at": "2026-06-26T01:05:00+00:00",
+                        "target": {"affair_id": "a2"},
+                        "action": {"code": "Archive"},
+                        "opinion": {"length": 0},
+                        "precheck": {"status": "passed"},
+                        "safety": {"will_execute": False},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (audit_dir / "oa-write-verifications.jsonl").write_text(
+                json.dumps(
+                    {
+                        "created_at": "2026-06-26T01:01:00+00:00",
+                        "target": {"affair_id": "a1"},
+                        "action": {"code": "ContinueSubmit"},
+                        "verification": {"status": "disappeared", "verified": True},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            writes = self._run_cli(tmp, "oa", "audit", "writes", "list", "--limit", "1")
+            verifications = self._run_cli(tmp, "oa", "audit", "verifications", "list")
+
+        writes_payload = json.loads(writes.stdout)
+        verifications_payload = json.loads(verifications.stdout)
+        self.assertEqual(writes_payload["result"]["items"][0]["affair_id"], "a2")
+        self.assertEqual(writes_payload["result"]["items"][0]["precheck_status"], "passed")
+        self.assertNotIn("approved", writes.stdout)
+        self.assertEqual(verifications_payload["result"]["items"][0]["verification_status"], "disappeared")
+
     def test_oa_write_execute_without_confirm_stays_local_blocked(self):
         with TemporaryDirectory() as tmp:
             result = self._run_cli(

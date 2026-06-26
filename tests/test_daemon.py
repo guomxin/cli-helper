@@ -3262,6 +3262,106 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["execution_contract"]["execute_command_template"], "")
             self.assertEqual(state.bridge.pending_tasks, [])
 
+    def test_run_oa_write_prepare_builds_evidence_and_preflight_packet_without_executing(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                if command == "workflow_evidence":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "source_item": {
+                                    "title": "Big data expert notice",
+                                    "affair_id": "affair-1",
+                                },
+                                "evidence": {
+                                    "identity": {
+                                        "title": "Big data expert notice",
+                                        "affair_id": "affair-1",
+                                    },
+                                    "body": {
+                                        "text_excerpt": "Please review expert pool notice",
+                                        "text_length": 32,
+                                        "truncated": False,
+                                    },
+                                    "actions": {
+                                        "count": 1,
+                                        "high_risk_count": 1,
+                                        "codes": ["ContinueSubmit"],
+                                    },
+                                    "attention_signals": ["has_candidate_actions"],
+                                },
+                                "read_effect": {"detail_page_opened": True, "may_mark_read": True},
+                            },
+                        },
+                    )
+                if command == "write_preflight":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "schema_version": "bscli.oa_write_preflight.v1",
+                                "target": {"affair_id": "affair-1"},
+                                "action": {"code": "ContinueSubmit", "risk": "high"},
+                                "decision": {
+                                    "status": "ready_for_execute",
+                                    "execute_allowed": True,
+                                    "requires_confirmation": True,
+                                    "verification_method": "pending_disappearance",
+                                    "blocked_reasons": [],
+                                },
+                                "execution_contract": {
+                                    "will_execute": False,
+                                    "execute_command_template": "oa write execute --affair-id affair-1 --action ContinueSubmit --opinion <opinion> --confirm",
+                                },
+                                "plan": {
+                                    "target": {"affair_id": "affair-1"},
+                                    "opinion": {"length": 8},
+                                    "safety": {"will_execute": False},
+                                },
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_prepare",
+                    "args": {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "text_limit": 200,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["workflow_evidence", "write_preflight"])
+            self.assertEqual(calls[0][1], {"type": "pending", "id": "affair-1", "text_limit": 200})
+            self.assertEqual(calls[1][1]["action"], "ContinueSubmit")
+            self.assertEqual(result["schema_version"], "bscli.oa_write_prepare.v1")
+            self.assertEqual(result["preflight"]["decision"]["status"], "ready_for_execute")
+            self.assertEqual(result["next_steps"]["status"], "needs_human_confirmation")
+            self.assertIn("--confirm", result["next_steps"]["execute_command_template"])
+            self.assertNotIn("approved", json.dumps(result, ensure_ascii=False))
+            self.assertEqual(state.bridge.pending_tasks, [])
+
     def test_run_oa_write_dry_run_adds_promotion_evidence_for_archive(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

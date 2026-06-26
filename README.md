@@ -279,7 +279,10 @@ python -m bscli.cli.main --home .bscli oa write capabilities --type pending --li
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
+python -m bscli.cli.main --home .bscli oa write prepare --affair-id <id> --action ContinueSubmit --opinion "agree" --text-limit 800
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
+python -m bscli.cli.main --home .bscli oa audit writes list --limit 10
+python -m bscli.cli.main --home .bscli oa audit verifications list --limit 10
 ```
 
 `capabilities` is the read-only inventory command for agents. It reads pending
@@ -331,16 +334,22 @@ precheck as `dry-run`, returns a sanitized `plan`, a `decision.status`
 `execution_contract` with the command template that still requires human
 confirmation. It never dispatches a browser write task and never probes
 write-like endpoint candidates.
+`prepare` is the agent task packet command. It combines `workflow_evidence` and
+`write_preflight`, then returns the workflow evidence summary, preflight
+decision, sanitized plan, and `next_steps` in one response. It is the preferred
+read-only step before asking the user to confirm a production write.
 `execute` requires `--confirm`; after confirmation it reruns the same precheck,
 dispatches the browser write task only if the target action is available, then
 reads the pending list again and records whether the `affair_id` disappeared.
 Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
 `oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
-`oa__write_execute`, and
+`oa__write_prepare`, `oa__write_execute`, and
 `oa__pending_submit`; executable tools require a `confirm` argument in their
 schema before they can perform a production write. Agents can also call
 `oa__write_capabilities` first to decide which write command is applicable.
+`oa audit writes list` and `oa audit verifications list` summarize local audit
+rows while keeping opinion text redacted; newest rows are shown first.
 
 For repeated pending items, use the governed batch submit command. It runs in
 the daemon execution layer, so CLI and agent tools share the same confirmation
@@ -583,6 +592,8 @@ Implemented:
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa write preflight`
+- Business CLI `oa write prepare`
+- Business CLI `oa audit writes/verifications list`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`

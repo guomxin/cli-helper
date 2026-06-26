@@ -235,6 +235,11 @@ class DaemonState:
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
+        if system == "oa" and command == "write_prepare":
+            return self._run_oa_write_prepare_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
         if system == "oa" and command in {"write_draft", "write_dry_run", "write_execute"}:
             return self._run_oa_write_plan_command(
                 command,
@@ -1847,6 +1852,58 @@ class DaemonState:
             },
         )
 
+    def _run_oa_write_prepare_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_type = self._workflow_type({"type": args.get("type") or "pending"})
+        affair_id = str(args.get("affair_id") or "").strip()
+        source_url = str(args.get("source_url") or "").strip()
+        evidence_args: dict[str, Any] = {"type": workflow_type}
+        if affair_id:
+            evidence_args["id"] = affair_id
+        elif source_url:
+            evidence_args["url"] = source_url
+        if args.get("text_limit") is not None:
+            evidence_args["text_limit"] = _workflow_text_limit_from_args(args)
+        evidence_response = self._run_nested_oa_command("workflow_evidence", evidence_args, timeout_seconds)
+        if evidence_response.status != 200 or evidence_response.body.get("ok") is False:
+            return evidence_response
+        preflight_args = {
+            "type": workflow_type,
+            "affair_id": affair_id,
+            "action": str(args.get("action") or ""),
+            "opinion": str(args.get("opinion") or ""),
+            "source_url": source_url,
+        }
+        preflight_response = self._run_nested_oa_command("write_preflight", preflight_args, timeout_seconds)
+        if preflight_response.status != 200 or preflight_response.body.get("ok") is False:
+            return preflight_response
+        evidence_result = evidence_response.body.get("result") if isinstance(evidence_response.body, dict) else {}
+        if not isinstance(evidence_result, dict):
+            evidence_result = {}
+        preflight = preflight_response.body.get("result") if isinstance(preflight_response.body, dict) else {}
+        if not isinstance(preflight, dict):
+            preflight = {}
+        result = _oa_write_prepare_packet(
+            workflow_type=workflow_type,
+            evidence_result=evidence_result,
+            preflight=preflight,
+            action=str(args.get("action") or ""),
+            opinion=str(args.get("opinion") or ""),
+        )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": False,
+                "confirmed": False,
+                "result": result,
+            },
+        )
+
     def _precheck_oa_write_plan(
         self,
         plan: dict[str, Any],
@@ -2627,6 +2684,8 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_preflight":
             return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "write_prepare":
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_execute", "pending_submit"}:
@@ -3302,6 +3361,79 @@ def _workflow_evidence_summary(evidence: dict[str, Any]) -> dict[str, Any]:
             "high_risk_count": int(actions.get("high_risk_count") or 0),
             "codes": actions.get("codes") if isinstance(actions.get("codes"), list) else [],
         },
+    }
+
+
+def _oa_write_prepare_packet(
+    *,
+    workflow_type: str,
+    evidence_result: dict[str, Any],
+    preflight: dict[str, Any],
+    action: str,
+    opinion: str,
+) -> dict[str, Any]:
+    evidence = evidence_result.get("evidence") if isinstance(evidence_result.get("evidence"), dict) else {}
+    source_item = evidence_result.get("source_item") if isinstance(evidence_result.get("source_item"), dict) else {}
+    decision = preflight.get("decision") if isinstance(preflight.get("decision"), dict) else {}
+    execution_contract = (
+        preflight.get("execution_contract")
+        if isinstance(preflight.get("execution_contract"), dict)
+        else {}
+    )
+    target = preflight.get("target") if isinstance(preflight.get("target"), dict) else {}
+    if not target:
+        identity = evidence.get("identity") if isinstance(evidence.get("identity"), dict) else {}
+        target = {"affair_id": str(identity.get("affair_id") or source_item.get("affair_id") or "")}
+    return {
+        "schema_version": "bscli.oa_write_prepare.v1",
+        "type": workflow_type,
+        "target": target,
+        "action": preflight.get("action") if isinstance(preflight.get("action"), dict) else {"code": action},
+        "opinion": {"length": len(str(opinion or ""))},
+        "workflow": {
+            "source_item": source_item,
+            "evidence_summary": _workflow_evidence_summary(evidence),
+            "attention_signals": evidence.get("attention_signals", []),
+            "read_effect": evidence_result.get("read_effect", {}),
+        },
+        "preflight": {
+            "decision": decision,
+            "execution_contract": execution_contract,
+            "read_effect": preflight.get("read_effect", {}),
+            "probe_policy": preflight.get("probe_policy", {}),
+            "plan": preflight.get("plan", {}),
+        },
+        "next_steps": _oa_write_prepare_next_steps(decision, execution_contract),
+    }
+
+
+def _oa_write_prepare_next_steps(
+    decision: dict[str, Any],
+    execution_contract: dict[str, Any],
+) -> dict[str, Any]:
+    status = str(decision.get("status") or "")
+    if status == "ready_for_execute":
+        return {
+            "status": "needs_human_confirmation",
+            "message": "Preflight passed; execute only after the user explicitly confirms the production write.",
+            "dry_run_command_template": execution_contract.get("dry_run_command_template", ""),
+            "execute_command_template": execution_contract.get("execute_command_template", ""),
+            "requires_confirmation": True,
+        }
+    if status == "dry_run_only":
+        return {
+            "status": "dry_run_only",
+            "message": "The action is visible and dry-run checked, but production execution is not promoted.",
+            "dry_run_command_template": execution_contract.get("dry_run_command_template", ""),
+            "execute_command_template": "",
+            "requires_confirmation": False,
+        }
+    return {
+        "status": "blocked",
+        "message": "The target is not ready for execution; review blocked_reasons and suggestions.",
+        "dry_run_command_template": execution_contract.get("dry_run_command_template", ""),
+        "execute_command_template": "",
+        "requires_confirmation": False,
     }
 
 

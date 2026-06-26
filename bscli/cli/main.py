@@ -244,6 +244,15 @@ def _build_oa_parser(oa_sub) -> None:
         show_arg_name="template_id",
     )
 
+    audit = oa_sub.add_parser("audit")
+    audit_sub = audit.add_subparsers(dest="oa_audit_area", required=True)
+    for area, kind in (("writes", "write_plans"), ("verifications", "write_verifications")):
+        area_parser = audit_sub.add_parser(area)
+        area_sub = area_parser.add_subparsers(dest="oa_audit_action", required=True)
+        list_parser = area_sub.add_parser("list")
+        list_parser.set_defaults(oa_audit_kind=kind)
+        _add_output_options(list_parser)
+
     probe = oa_sub.add_parser("probe")
     probe_sub = probe.add_subparsers(dest="oa_action", required=True)
     for action, command in (
@@ -350,6 +359,22 @@ def _build_oa_parser(oa_sub) -> None:
     preflight.add_argument("--source-url", default="")
     _add_daemon_options(preflight)
     _add_output_options(preflight)
+    prepare = write_sub.add_parser("prepare")
+    prepare.set_defaults(oa_write_prepare=True)
+    prepare.add_argument(
+        "--type",
+        choices=["pending"],
+        default="pending",
+        dest="workflow_type",
+        help="Workflow collection to resolve; currently pending is supported.",
+    )
+    prepare.add_argument("--affair-id", required=True)
+    prepare.add_argument("--action", required=True)
+    prepare.add_argument("--opinion", default="")
+    prepare.add_argument("--source-url", default="")
+    prepare.add_argument("--text-limit", type=int, dest="text_limit")
+    _add_daemon_options(prepare)
+    _add_output_options(prepare)
     for mode in ("draft", "dry-run", "execute"):
         write_cmd = write_sub.add_parser(mode)
         write_cmd.set_defaults(oa_write_mode=mode)
@@ -666,6 +691,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
 
 
 def handle_oa(args: argparse.Namespace, home: Path) -> int:
+    if getattr(args, "oa_audit_kind", None):
+        return handle_oa_audit(args, home)
     if getattr(args, "oa_meeting_reply_mode", None):
         return handle_oa_meeting_reply(args)
     if getattr(args, "oa_write_capabilities", False):
@@ -674,6 +701,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_write_endpoints(args)
     if getattr(args, "oa_write_preflight", False):
         return handle_oa_write_preflight(args)
+    if getattr(args, "oa_write_prepare", False):
+        return handle_oa_write_prepare(args)
     if getattr(args, "oa_write_mode", None):
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
@@ -699,6 +728,18 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         print_json(response)
         return 0
     response = _project_detail_response(response, args)
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_audit(args: argparse.Namespace, home: Path) -> int:
+    if args.oa_audit_kind == "write_plans":
+        response = _oa_audit_result(home, filename="oa-write-plans.jsonl", kind="write_plans")
+    elif args.oa_audit_kind == "write_verifications":
+        response = _oa_audit_result(home, filename="oa-write-verifications.jsonl", kind="write_verifications")
+    else:
+        raise ValueError(f"unknown OA audit kind: {args.oa_audit_kind}")
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
@@ -1081,6 +1122,21 @@ def handle_oa_write_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_oa_write_prepare(args: argparse.Namespace) -> int:
+    command_args = {
+        "type": args.workflow_type,
+        "affair_id": args.affair_id,
+        "action": args.action,
+        "opinion": args.opinion,
+        "source_url": args.source_url,
+    }
+    if getattr(args, "text_limit", None) is not None:
+        command_args["text_limit"] = args.text_limit
+    response = run_oa_daemon_command(args, "write_prepare", command_args)
+    emit_cli_value(response, args)
+    return 0
+
+
 def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
     plan = build_oa_write_plan(
         affair_id=args.affair_id,
@@ -1136,6 +1192,7 @@ def run_oa_daemon_command(
     command: str,
     command_args: dict,
 ) -> dict:
+    client_timeout = _daemon_client_timeout_seconds(float(args.timeout), command)
     return post_json(
         f"{args.daemon_url}/commands/run",
         {
@@ -1144,8 +1201,14 @@ def run_oa_daemon_command(
             "args": command_args,
             "timeout_seconds": args.timeout,
         },
-        timeout=max(float(args.timeout) + 5, 10),
+        timeout=client_timeout,
     )
+
+
+def _daemon_client_timeout_seconds(timeout_seconds: float, command: str) -> float:
+    if command in {"write_prepare"}:
+        return max(float(timeout_seconds) * 3 + 5, 10)
+    return max(float(timeout_seconds) + 5, 10)
 
 
 def _oa_command_args(args: argparse.Namespace) -> dict:
@@ -1195,6 +1258,80 @@ def _api_args_from_oa_cli(args: argparse.Namespace) -> dict:
     if text_limit is not None:
         api_args["max_text"] = text_limit
     return api_args
+
+
+def _oa_audit_result(home: Path, *, filename: str, kind: str) -> dict:
+    path = home / "audit" / filename
+    rows = list(reversed(_read_jsonl(path)))
+    if kind == "write_plans":
+        items = [_oa_write_audit_summary(row, index) for index, row in enumerate(rows, start=1)]
+    else:
+        items = [_oa_write_verification_summary(row, index) for index, row in enumerate(rows, start=1)]
+    return {
+        "ok": True,
+        "result": {
+            "kind": kind,
+            "path": str(path),
+            "count": len(items),
+            "items": items,
+        },
+    }
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            rows.append({"parse_error": True})
+            continue
+        rows.append(value if isinstance(value, dict) else {"value": value})
+    return rows
+
+
+def _oa_write_audit_summary(row: dict, index: int) -> dict:
+    target = row.get("target") if isinstance(row.get("target"), dict) else {}
+    action = row.get("action") if isinstance(row.get("action"), dict) else {}
+    precheck = row.get("precheck") if isinstance(row.get("precheck"), dict) else {}
+    safety = row.get("safety") if isinstance(row.get("safety"), dict) else {}
+    opinion = row.get("opinion") if isinstance(row.get("opinion"), dict) else {}
+    request = row.get("request") if isinstance(row.get("request"), dict) else {}
+    return {
+        "index": index,
+        "created_at": row.get("created_at", ""),
+        "mode": row.get("mode", ""),
+        "affair_id": str(target.get("affair_id") or ""),
+        "action": action.get("code", ""),
+        "risk": action.get("risk", ""),
+        "precheck_status": precheck.get("status", ""),
+        "request_status": request.get("status", ""),
+        "will_execute": safety.get("will_execute"),
+        "dry_run_only": safety.get("dry_run_only"),
+        "opinion_length": opinion.get("length", 0),
+    }
+
+
+def _oa_write_verification_summary(row: dict, index: int) -> dict:
+    target = row.get("target") if isinstance(row.get("target"), dict) else {}
+    action = row.get("action") if isinstance(row.get("action"), dict) else {}
+    verification = row.get("verification") if isinstance(row.get("verification"), dict) else {}
+    submit = row.get("submit") if isinstance(row.get("submit"), dict) else {}
+    return {
+        "index": index,
+        "created_at": row.get("created_at", ""),
+        "affair_id": str(target.get("affair_id") or ""),
+        "action": action.get("code", ""),
+        "verification_status": verification.get("status", ""),
+        "verified": verification.get("verified"),
+        "before_present": verification.get("before_present"),
+        "after_present": verification.get("after_present"),
+        "task_id": submit.get("task_id", ""),
+    }
 
 
 def _apply_response_options(response: dict, args: argparse.Namespace) -> dict:

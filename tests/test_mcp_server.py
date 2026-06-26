@@ -491,6 +491,51 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertEqual(result["result"]["structuredContent"]["decision"]["status"], "ready_for_execute")
 
+    def test_call_oa_write_prepare_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"schema_version": "bscli.oa_write_prepare.v1", "next_steps": {"status": "needs_human_confirmation"}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 152,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_prepare",
+                    "arguments": {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "text_limit": 200,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "write_prepare",
+                    {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "text_limit": 200,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["schema_version"], "bscli.oa_write_prepare.v1")
+
     def test_call_oa_pending_submit_maps_to_daemon_command(self):
         calls = []
 

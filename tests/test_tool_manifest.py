@@ -245,6 +245,13 @@ class ToolManifestTests(unittest.TestCase):
         self.assertFalse(preflight["metadata"]["requires_confirmation"])
         self.assertEqual(preflight["input_schema"]["required"], ["affair_id", "action"])
 
+        prepare = tools["oa__write_prepare"]
+        self.assertEqual(prepare["metadata"]["access"], "read")
+        self.assertEqual(prepare["metadata"]["risk"], "low")
+        self.assertFalse(prepare["metadata"]["requires_confirmation"])
+        self.assertEqual(prepare["input_schema"]["required"], ["affair_id", "action"])
+        self.assertEqual(prepare["input_schema"]["properties"]["text_limit"]["type"], "integer")
+
         dry_run = tools["oa__meeting_reply_dry_run"]
         self.assertEqual(dry_run["metadata"]["access"], "read")
         self.assertEqual(dry_run["metadata"]["strategy"], "daemon_api")

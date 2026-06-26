@@ -97,6 +97,7 @@ class CliAndBridgeTests(unittest.TestCase):
                     "write_endpoint_candidates",
                     "write_execute",
                     "write_preflight",
+                    "write_prepare",
                 ],
             )
 
@@ -372,6 +373,7 @@ class CliAndBridgeTests(unittest.TestCase):
                     "write_endpoint_candidates",
                     "write_execute",
                     "write_preflight",
+                    "write_prepare",
                 ],
         )
 
