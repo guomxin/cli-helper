@@ -705,6 +705,33 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertEqual(result["result"]["structuredContent"]["summary"]["title"], "Weekly report")
 
+    def test_call_oa_inbox_analyze_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"mode": "list_only", "items": [{"title": "Weekly report"}]}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 22,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__inbox_analyze",
+                    "arguments": {"type": "pending", "keyword": "weekly", "limit": 3},
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [("oa", "inbox_analyze", {"type": "pending", "keyword": "weekly", "limit": 3})],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["mode"], "list_only")
+
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()
         register_seeyon_commands(registry)

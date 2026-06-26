@@ -651,6 +651,44 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="inbox_analyze",
+            description="Analyze the OA inbox as an agent-ready read-only work queue; list-only by default, with explicit bounded deep reads.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Inbox workflow collection: pending or sent. Defaults to pending.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+                "deep": {
+                    "type": "boolean",
+                    "description": "Open detail pages for a limited number of items when true.",
+                },
+                "deep_limit": {
+                    "type": "integer",
+                    "description": "Maximum number of detail pages to open in deep mode.",
+                },
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "deep_count": {"type": "integer"},
+                    "items": {"type": "array"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="capability_map",
             description="Return the agent-facing OA read/write/discovered capability map without executing writes.",
             access="read",

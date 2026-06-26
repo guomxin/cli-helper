@@ -971,6 +971,57 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "keyword": "weekly", "limit": 1})
         self.assertEqual(payload["result"]["items"][0]["title"], "Weekly report")
 
+    def test_oa_inbox_analyze_calls_daemon_list_only_by_default(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"mode": "list_only", "items": [{"title": "Weekly report"}]}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "inbox",
+                "analyze",
+                "--type",
+                "pending",
+                "--keyword",
+                "weekly",
+                "--limit",
+                "2",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "inbox_analyze")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "keyword": "weekly", "limit": 2})
+        self.assertEqual(payload["result"]["mode"], "list_only")
+
+    def test_oa_inbox_analyze_deep_passes_explicit_detail_budget(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"mode": "deep", "deep_count": 1, "items": [{"title": "Weekly report"}]}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "inbox",
+                "analyze",
+                "--deep",
+                "--deep-limit",
+                "1",
+                "--text-limit",
+                "120",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "inbox_analyze")
+        self.assertEqual(seen_payloads[0]["args"], {"type": "pending", "deep": True, "deep_limit": 1, "text_limit": 120})
+        self.assertEqual(payload["result"]["mode"], "deep")
+
     def test_oa_workflow_evidence_and_timeline_call_daemon_with_id(self):
         server, seen_payloads = self._start_daemon(
             [

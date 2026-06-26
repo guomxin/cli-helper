@@ -1942,7 +1942,171 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["count"], 1)
             self.assertEqual(result["items"][0]["title"], "Weekly report")
             self.assertFalse(result["items"][0]["detail_read"])
+            self.assertGreater(result["items"][0]["attention_score"], 0)
+            self.assertIn("unread", result["items"][0]["attention_signals"])
             self.assertFalse(result["read_effect"]["detail_page_opened"])
+
+    def test_run_inbox_analyze_list_only_ranks_items_without_detail_reads(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout):
+                calls.append((command, args, timeout))
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "type": "pending",
+                            "source": "section_api",
+                            "source_count": 2,
+                            "count": 2,
+                            "items": [
+                                {
+                                    "title": "Contract archive",
+                                    "affair_id": "a1",
+                                    "sender": "Alice",
+                                    "date": "Today",
+                                    "category": "Contract",
+                                    "href": "http://oa.example.test/detail/a1",
+                                    "read": False,
+                                    "detail_read": False,
+                                },
+                                {
+                                    "title": "General notice",
+                                    "affair_id": "a2",
+                                    "sender": "Bob",
+                                    "date": "Yesterday",
+                                    "category": "Notice",
+                                    "read": True,
+                                    "detail_read": False,
+                                },
+                            ],
+                            "read_effect": {"detail_page_opened": False, "may_mark_read": False},
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "inbox_analyze",
+                    "args": {"type": "pending", "limit": 2},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["workflow_brief"])
+            result = response.body["result"]
+            self.assertEqual(result["mode"], "list_only")
+            self.assertEqual(result["deep_attempt_count"], 0)
+            self.assertEqual(result["deep_count"], 0)
+            self.assertFalse(result["read_effect"]["detail_page_opened"])
+            self.assertEqual(result["items"][0]["affair_id"], "a1")
+            self.assertGreater(result["items"][0]["attention_score"], result["items"][1]["attention_score"])
+            self.assertIn("unread", result["items"][0]["attention_signals"])
+            self.assertFalse(result["items"][0]["detail_read"])
+
+    def test_run_inbox_analyze_deep_enriches_limited_items(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout):
+                calls.append((command, args, timeout))
+                if command == "workflow_brief":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "type": "pending",
+                                "source": "section_api",
+                                "source_count": 2,
+                                "count": 2,
+                                "items": [
+                                    {
+                                        "title": "Contract archive",
+                                        "affair_id": "a1",
+                                        "sender": "Alice",
+                                        "date": "Today",
+                                        "category": "Contract",
+                                        "href": "http://oa.example.test/detail/a1",
+                                        "read": True,
+                                        "detail_read": False,
+                                    },
+                                    {
+                                        "title": "General notice",
+                                        "affair_id": "a2",
+                                        "sender": "Bob",
+                                        "date": "Yesterday",
+                                        "category": "Notice",
+                                        "href": "http://oa.example.test/detail/a2",
+                                        "read": True,
+                                        "detail_read": False,
+                                    },
+                                ],
+                                "read_effect": {"detail_page_opened": False, "may_mark_read": False},
+                            },
+                        },
+                    )
+                if command == "workflow_evidence":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "source_item": {"title": "Contract archive", "affair_id": "a1"},
+                                "evidence": {
+                                    "identity": {"title": "Contract archive", "affair_id": "a1"},
+                                    "body": {"text_excerpt": "Archive this contract", "text_length": 21, "truncated": False},
+                                    "attachments": {"count": 1, "items": [{"name": "contract.pdf"}]},
+                                    "opinions": {"count": 1, "items": [{"handler": "Bob"}]},
+                                    "actions": {
+                                        "count": 1,
+                                        "high_risk_count": 1,
+                                        "codes": ["Archive"],
+                                        "items": [{"code": "Archive", "risk": "high"}],
+                                    },
+                                    "attention_signals": ["has_high_risk_actions", "has_attachments"],
+                                },
+                                "read_effect": {"detail_page_opened": True, "may_mark_read": True},
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "inbox_analyze",
+                    "args": {"type": "pending", "limit": 2, "deep": True, "deep_limit": 1, "text_limit": 120},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["workflow_brief", "workflow_evidence"])
+            self.assertEqual(calls[1][1], {"type": "pending", "id": "a1", "text_limit": 120})
+            result = response.body["result"]
+            self.assertEqual(result["mode"], "deep")
+            self.assertEqual(result["deep_attempt_count"], 1)
+            self.assertEqual(result["deep_count"], 1)
+            self.assertTrue(result["read_effect"]["detail_page_opened"])
+            self.assertTrue(result["items"][0]["detail_read"])
+            self.assertFalse(result["items"][1]["detail_read"])
+            self.assertEqual(result["items"][0]["evidence_summary"]["actions"]["high_risk_count"], 1)
+            self.assertIn("has_high_risk_actions", result["items"][0]["attention_signals"])
 
     def test_run_workflow_evidence_builds_decision_packet(self):
         with TemporaryDirectory() as tmp:
@@ -1989,6 +2153,8 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(evidence["attachments"]["count"], 1)
             self.assertEqual(evidence["opinions"]["count"], 1)
             self.assertEqual(evidence["actions"]["high_risk_count"], 1)
+            self.assertEqual(evidence["actions"]["codes"], ["Archive"])
+            self.assertIn("has_high_risk_actions", evidence["attention_signals"])
 
     def test_run_workflow_timeline_normalizes_workflow_entries(self):
         with TemporaryDirectory() as tmp:

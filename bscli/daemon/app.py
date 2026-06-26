@@ -70,6 +70,10 @@ WORKFLOW_READ_COMMANDS = {
     "workflow_timeline",
 }
 
+INBOX_READ_COMMANDS = {
+    "inbox_analyze",
+}
+
 
 @dataclass(frozen=True)
 class DaemonResponse:
@@ -238,6 +242,12 @@ class DaemonState:
             )
         if system == "oa" and command in {"meeting_reply_dry_run", "meeting_reply_execute"}:
             return self._run_oa_meeting_reply_command(
+                command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in INBOX_READ_COMMANDS:
+            return self._run_oa_inbox_read_command(
                 command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
@@ -645,6 +655,102 @@ class DaemonState:
             args,
             projection_key=projection_key,
             timeout_seconds=timeout_seconds,
+        )
+
+    def _run_oa_inbox_read_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if command == "inbox_analyze":
+            return self._run_oa_inbox_analyze_command(args, timeout_seconds)
+        raise ValueError(f"unsupported inbox command: {command}")
+
+    def _run_oa_inbox_analyze_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_type = self._workflow_type(args)
+        brief_args: dict[str, Any] = {"type": workflow_type}
+        for key in ("keyword", "limit"):
+            if args.get(key) is not None:
+                brief_args[key] = args[key]
+        brief_response = self._run_nested_oa_command("workflow_brief", brief_args, timeout_seconds)
+        if brief_response.status != 200 or brief_response.body.get("ok") is False:
+            return brief_response
+
+        brief_result = brief_response.body.get("result") if isinstance(brief_response.body, dict) else {}
+        if not isinstance(brief_result, dict):
+            brief_result = {}
+        source_items = self._workflow_items_from_result(brief_result)
+        analyzed_items = [
+            _inbox_analysis_item(index, item, workflow_type)
+            for index, item in enumerate(source_items, start=1)
+            if isinstance(item, dict)
+        ]
+        analyzed_items = _rank_inbox_items(analyzed_items)
+
+        deep = args.get("deep") is True
+        deep_count = 0
+        deep_attempt_count = 0
+        deep_errors = []
+        if deep:
+            deep_limit = _inbox_deep_limit_from_args(args)
+            evidence_args_base = {"type": workflow_type}
+            if args.get("text_limit") is not None:
+                evidence_args_base["text_limit"] = _workflow_text_limit_from_args(args)
+            for item in analyzed_items:
+                if deep_count >= deep_limit:
+                    break
+                evidence_args = dict(evidence_args_base)
+                affair_id = str(item.get("affair_id") or "").strip()
+                href = str(item.get("href") or "").strip()
+                if affair_id:
+                    evidence_args["id"] = affair_id
+                elif href:
+                    evidence_args["url"] = href
+                else:
+                    continue
+                deep_attempt_count += 1
+                evidence_response = self._run_nested_oa_command("workflow_evidence", evidence_args, timeout_seconds)
+                if evidence_response.status != 200 or evidence_response.body.get("ok") is False:
+                    deep_errors.append(
+                        {
+                            "affair_id": affair_id,
+                            "title": item.get("title", ""),
+                            "error": evidence_response.body.get("error", f"HTTP {evidence_response.status}"),
+                        }
+                    )
+                    continue
+                evidence_result = evidence_response.body.get("result") if isinstance(evidence_response.body, dict) else {}
+                if not isinstance(evidence_result, dict):
+                    evidence_result = {}
+                evidence = evidence_result.get("evidence") if isinstance(evidence_result.get("evidence"), dict) else {}
+                _enrich_inbox_item_with_evidence(item, evidence)
+                deep_count += 1
+            analyzed_items = _rank_inbox_items(analyzed_items)
+
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": brief_response.body.get("task_id"),
+                "result": {
+                    "type": workflow_type,
+                    "mode": "deep" if deep else "list_only",
+                    "source": brief_result.get("source") or "workflow_brief",
+                    "source_count": brief_result.get("source_count", len(source_items)),
+                    "count": len(analyzed_items),
+                    "deep_attempt_count": deep_attempt_count,
+                    "deep_count": deep_count,
+                    "items": analyzed_items,
+                    "deep_errors": deep_errors,
+                    "read_effect": _workflow_read_effect(workflow_type, detail_page_opened=deep_attempt_count > 0),
+                },
+            },
         )
 
     def _run_oa_workflow_list_command(
@@ -2491,6 +2597,8 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "meeting_reply_execute":
             return {"access": "write", "strategy": "human_gate"}
+        if system == "oa" and command in INBOX_READ_COMMANDS:
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in WORKFLOW_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
         if command == "discovered_run":
@@ -2995,7 +3103,17 @@ def _workflow_read_effect(workflow_type: str, *, detail_page_opened: bool) -> di
     }
 
 
+_WORKFLOW_FOCUS_KEYWORDS = (
+    ("contract", 4, ("contract", "agreement", "合同", "协议")),
+    ("archive", 4, ("archive", "filing", "归档", "存档")),
+    ("meeting", 3, ("meeting", "conference", "会议", "交流会")),
+    ("finance", 3, ("budget", "invoice", "reimburse", "预算", "发票", "报销")),
+    ("weekly_report", 2, ("weekly", "report", "周报")),
+)
+
+
 def _workflow_brief_item(item: dict[str, Any]) -> dict[str, Any]:
+    attention = _workflow_item_attention(item)
     return {
         "title": item.get("title", ""),
         "affair_id": str(item.get("affair_id") or ""),
@@ -3009,6 +3127,8 @@ def _workflow_brief_item(item: dict[str, Any]) -> dict[str, Any]:
             "has_href": bool(item.get("href")),
             "has_affair_id": bool(item.get("affair_id")),
         },
+        "attention_score": attention["score"],
+        "attention_signals": attention["signals"],
     }
 
 
@@ -3019,6 +3139,10 @@ def _workflow_detail_summary(
 ) -> dict[str, Any]:
     text = str(detail.get("text") or "")
     text_limit = _workflow_text_limit_from_args(args)
+    actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
+    action_codes = _workflow_action_codes(actions)
+    high_risk_action_count = _workflow_high_risk_action_count(actions)
+    attention = _workflow_detail_attention(source_item, detail)
     return {
         "title": detail.get("title") or source_item.get("title", ""),
         "affair_id": str(source_item.get("affair_id") or _query_param(str(detail.get("url") or ""), "affairId")),
@@ -3034,6 +3158,10 @@ def _workflow_detail_summary(
         "action_count": _list_len(detail.get("actions")),
         "has_attachments": _list_len(detail.get("attachments")) > 0,
         "has_write_actions": _list_len(detail.get("actions")) > 0,
+        "action_codes": action_codes,
+        "high_risk_action_count": high_risk_action_count,
+        "attention_score": attention["score"],
+        "attention_signals": attention["signals"],
     }
 
 
@@ -3050,7 +3178,8 @@ def _workflow_evidence_packet(
     attachments = detail.get("attachments") if isinstance(detail.get("attachments"), list) else []
     opinions = detail.get("workflow") if isinstance(detail.get("workflow"), list) else []
     actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
-    return {
+    action_codes = _workflow_action_codes(actions)
+    packet = {
         "identity": {
             "title": summary.get("title") or detail.get("title") or source_item.get("title", ""),
             "affair_id": summary.get("affair_id") or source_item.get("affair_id", ""),
@@ -3069,10 +3198,267 @@ def _workflow_evidence_packet(
         "opinions": {"count": len(opinions), "items": opinions},
         "actions": {
             "count": len(actions),
-            "high_risk_count": len([action for action in actions if isinstance(action, dict) and action.get("risk") == "high"]),
+            "high_risk_count": _workflow_high_risk_action_count(actions),
+            "codes": action_codes,
             "items": actions,
         },
     }
+    attention = _workflow_evidence_attention(packet)
+    packet["attention_score"] = attention["score"]
+    packet["attention_signals"] = attention["signals"]
+    packet["recommended_next_step"] = _inbox_recommended_next_step(attention["signals"], detail_read=True)
+    return packet
+
+
+def _inbox_analysis_item(index: int, item: dict[str, Any], workflow_type: str) -> dict[str, Any]:
+    attention = _workflow_item_attention(item)
+    href = str(item.get("href") or "")
+    affair_id = str(item.get("affair_id") or "")
+    return {
+        "rank": index,
+        "source_index": index,
+        "title": item.get("title", ""),
+        "affair_id": affair_id,
+        "sender": item.get("sender", ""),
+        "date": item.get("date", ""),
+        "category": item.get("category", ""),
+        "read": item.get("read"),
+        "href": href,
+        "detail_read": False,
+        "summary": _inbox_item_summary(item),
+        "attention_score": attention["score"],
+        "attention_signals": attention["signals"],
+        "recommended_next_step": _inbox_recommended_next_step(attention["signals"], detail_read=False),
+        "commands": _workflow_followup_commands(workflow_type, affair_id=affair_id, href=href),
+    }
+
+
+def _enrich_inbox_item_with_evidence(item: dict[str, Any], evidence: dict[str, Any]) -> None:
+    evidence_summary = _workflow_evidence_summary(evidence)
+    evidence_attention = _workflow_evidence_attention(evidence)
+    item["detail_read"] = True
+    item["evidence_summary"] = evidence_summary
+    item["attention_score"] = int(item.get("attention_score") or 0) + evidence_attention["score"]
+    item["attention_signals"] = _merge_unique_strings(
+        item.get("attention_signals", []),
+        evidence_attention["signals"],
+    )
+    item["recommended_next_step"] = _inbox_recommended_next_step(item["attention_signals"], detail_read=True)
+
+
+def _workflow_evidence_summary(evidence: dict[str, Any]) -> dict[str, Any]:
+    body = evidence.get("body") if isinstance(evidence.get("body"), dict) else {}
+    attachments = evidence.get("attachments") if isinstance(evidence.get("attachments"), dict) else {}
+    opinions = evidence.get("opinions") if isinstance(evidence.get("opinions"), dict) else {}
+    actions = evidence.get("actions") if isinstance(evidence.get("actions"), dict) else {}
+    return {
+        "body": {
+            "text_excerpt": body.get("text_excerpt", ""),
+            "text_length": body.get("text_length", 0),
+            "truncated": body.get("truncated", False),
+        },
+        "attachments": {"count": int(attachments.get("count") or 0)},
+        "opinions": {"count": int(opinions.get("count") or 0)},
+        "actions": {
+            "count": int(actions.get("count") or 0),
+            "high_risk_count": int(actions.get("high_risk_count") or 0),
+            "codes": actions.get("codes") if isinstance(actions.get("codes"), list) else [],
+        },
+    }
+
+
+def _rank_inbox_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = sorted(
+        items,
+        key=lambda item: (
+            -int(item.get("attention_score") or 0),
+            int(item.get("source_index") or 0),
+        ),
+    )
+    for rank, item in enumerate(ranked, start=1):
+        item["rank"] = rank
+    return ranked
+
+
+def _workflow_item_attention(item: dict[str, Any]) -> dict[str, Any]:
+    score = 0
+    signals: list[str] = []
+    read_value = item.get("read")
+    if read_value is False or str(read_value).lower() in {"false", "0", "unread", "no"}:
+        score += 5
+        signals.append("unread")
+    if not item.get("href"):
+        score += 2
+        signals.append("missing_detail_href")
+    if not item.get("affair_id"):
+        score += 2
+        signals.append("missing_affair_id")
+    keyword_attention = _workflow_keyword_attention(
+        " ".join(str(item.get(key) or "") for key in ("title", "category", "sender"))
+    )
+    score += keyword_attention["score"]
+    signals.extend(keyword_attention["signals"])
+    return {"score": score, "signals": _merge_unique_strings(signals)}
+
+
+def _workflow_detail_attention(source_item: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+    attention_source = dict(source_item)
+    detail_url = str(detail.get("url") or "")
+    if not attention_source.get("title"):
+        attention_source["title"] = detail.get("title", "")
+    if not attention_source.get("href") and detail_url:
+        attention_source["href"] = detail_url
+    if not attention_source.get("affair_id") and detail_url:
+        attention_source["affair_id"] = _query_param(detail_url, "affairId")
+    base = _workflow_item_attention(attention_source)
+    packet = {
+        "body": {
+            "text_excerpt": str(detail.get("text") or "")[:300],
+            "text_length": len(str(detail.get("text") or "")),
+            "truncated": False,
+        },
+        "attachments": {"count": _list_len(detail.get("attachments"))},
+        "opinions": {"count": _list_len(detail.get("workflow"))},
+        "actions": {
+            "count": _list_len(detail.get("actions")),
+            "high_risk_count": _workflow_high_risk_action_count(
+                detail.get("actions") if isinstance(detail.get("actions"), list) else []
+            ),
+            "codes": _workflow_action_codes(detail.get("actions") if isinstance(detail.get("actions"), list) else []),
+        },
+    }
+    evidence = _workflow_evidence_attention(packet)
+    return {
+        "score": base["score"] + evidence["score"],
+        "signals": _merge_unique_strings(base["signals"], evidence["signals"]),
+    }
+
+
+def _workflow_evidence_attention(evidence: dict[str, Any]) -> dict[str, Any]:
+    score = 0
+    signals: list[str] = []
+    attachments = evidence.get("attachments") if isinstance(evidence.get("attachments"), dict) else {}
+    opinions = evidence.get("opinions") if isinstance(evidence.get("opinions"), dict) else {}
+    actions = evidence.get("actions") if isinstance(evidence.get("actions"), dict) else {}
+    body = evidence.get("body") if isinstance(evidence.get("body"), dict) else {}
+    if int(attachments.get("count") or 0) > 0:
+        score += 2
+        signals.append("has_attachments")
+    if int(opinions.get("count") or 0) > 0:
+        score += 1
+        signals.append("has_opinions")
+    if int(actions.get("count") or 0) > 0:
+        score += 3
+        signals.append("has_candidate_actions")
+    if int(actions.get("high_risk_count") or 0) > 0:
+        score += 8
+        signals.append("has_high_risk_actions")
+    action_codes = actions.get("codes") if isinstance(actions.get("codes"), list) else []
+    if any("archive" in str(code).lower() or "归档" in str(code) for code in action_codes):
+        score += 4
+        signals.append("archive_action_available")
+    if body.get("truncated") is True:
+        score += 1
+        signals.append("body_truncated")
+    existing = evidence.get("attention_signals") if isinstance(evidence.get("attention_signals"), list) else []
+    return {"score": score, "signals": _merge_unique_strings(signals, existing)}
+
+
+def _workflow_keyword_attention(text: str) -> dict[str, Any]:
+    lowered = text.lower()
+    score = 0
+    signals = []
+    for name, points, keywords in _WORKFLOW_FOCUS_KEYWORDS:
+        if any(keyword.lower() in lowered for keyword in keywords):
+            score += points
+            signals.append(f"topic:{name}")
+    return {"score": score, "signals": signals}
+
+
+def _workflow_action_codes(actions: list[Any]) -> list[str]:
+    codes = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        value = action.get("code") or action.get("action") or action.get("value") or action.get("label") or action.get("name")
+        code = str(value or "").strip()
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _workflow_high_risk_action_count(actions: list[Any]) -> int:
+    return len(
+        [
+            action
+            for action in actions
+            if isinstance(action, dict) and str(action.get("risk") or "").lower() == "high"
+        ]
+    )
+
+
+def _workflow_followup_commands(workflow_type: str, *, affair_id: str, href: str) -> dict[str, str]:
+    if affair_id:
+        target = f"--id {affair_id}"
+    elif href:
+        target = f'--url "{href}"'
+    else:
+        target = ""
+    if not target:
+        return {
+            "list": f"oa workflow brief --type {workflow_type}",
+        }
+    return {
+        "inspect": f"oa workflow inspect --type {workflow_type} {target}",
+        "evidence": f"oa workflow evidence --type {workflow_type} {target}",
+        "timeline": f"oa workflow timeline --type {workflow_type} {target}",
+    }
+
+
+def _inbox_item_summary(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("title") or "").strip(),
+        str(item.get("sender") or "").strip(),
+        str(item.get("date") or "").strip(),
+        str(item.get("category") or "").strip(),
+    ]
+    return " | ".join(part for part in parts if part)
+
+
+def _inbox_recommended_next_step(signals: list[str], *, detail_read: bool) -> str:
+    if "missing_detail_href" in signals:
+        return "refresh_or_open_oa_before_detail_read"
+    if "has_high_risk_actions" in signals or "archive_action_available" in signals:
+        return "review_evidence_before_write"
+    if not detail_read:
+        return "inspect_before_action"
+    return "ready_for_human_review"
+
+
+def _inbox_deep_limit_from_args(args: dict[str, Any]) -> int:
+    value = args.get("deep_limit")
+    if value is None:
+        return 3
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("deep_limit must be an integer") from exc
+
+
+def _merge_unique_strings(*groups: Any) -> list[str]:
+    values: list[str] = []
+    for group in groups:
+        if isinstance(group, str):
+            iterable = [group]
+        elif isinstance(group, list):
+            iterable = group
+        else:
+            iterable = []
+        for item in iterable:
+            value = str(item or "").strip()
+            if value and value not in values:
+                values.append(value)
+    return values
 
 
 def _workflow_timeline_entry(index: int, entry: Any) -> dict[str, Any]:

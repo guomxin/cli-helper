@@ -204,6 +204,10 @@ def _build_oa_parser(oa_sub) -> None:
     workflow_sub = workflow.add_subparsers(dest="oa_action", required=True)
     _add_workflow_parser(workflow_sub)
 
+    inbox = oa_sub.add_parser("inbox")
+    inbox_sub = inbox.add_subparsers(dest="oa_action", required=True)
+    _add_inbox_parser(inbox_sub)
+
     pending = oa_sub.add_parser("pending")
     pending_sub = pending.add_subparsers(dest="oa_action", required=True)
     _add_collection_parser(
@@ -410,6 +414,18 @@ def _add_workflow_parser(subparsers) -> None:
         parser.add_argument("--keyword")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="json")
+
+
+def _add_inbox_parser(subparsers) -> None:
+    analyze = subparsers.add_parser("analyze")
+    analyze.set_defaults(oa_inbox_action="analyze")
+    _add_workflow_type_option(analyze)
+    analyze.add_argument("--keyword")
+    analyze.add_argument("--deep", action="store_true", help="Open detail pages for a limited number of items.")
+    analyze.add_argument("--deep-limit", type=int, dest="deep_limit")
+    analyze.add_argument("--text-limit", type=int, dest="text_limit")
+    _add_daemon_options(analyze)
+    _add_output_options(analyze)
 
 
 def _add_workflow_type_option(parser) -> None:
@@ -645,6 +661,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
         return handle_oa_pending_submit(args)
+    if getattr(args, "oa_inbox_action", None):
+        return handle_oa_inbox(args)
     if getattr(args, "oa_workflow_action", None):
         return handle_oa_workflow(args)
     command = args.oa_command
@@ -667,6 +685,19 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
+
+
+def handle_oa_inbox(args: argparse.Namespace) -> int:
+    action = args.oa_inbox_action
+    if action == "analyze":
+        response = run_oa_daemon_command(args, "inbox_analyze", _inbox_daemon_args_from_cli(args))
+        if not response.get("ok", False):
+            emit_cli_value(response, args)
+            return 0
+        response = _apply_response_options(response, args)
+        emit_cli_value(response, args)
+        return 0
+    raise ValueError(f"unknown inbox action: {action}")
 
 
 def handle_oa_workflow(args: argparse.Namespace) -> int:
@@ -724,6 +755,24 @@ def handle_oa_workflow(args: argparse.Namespace) -> int:
         emit_cli_value(response, args)
         return 0
     raise ValueError(f"unknown workflow action: {action}")
+
+
+def _inbox_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {"type": args.workflow_type}
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    if getattr(args, "limit", None) is not None:
+        payload["limit"] = args.limit
+    if getattr(args, "deep", False):
+        payload["deep"] = True
+    deep_limit = getattr(args, "deep_limit", None)
+    if deep_limit is not None:
+        payload["deep_limit"] = deep_limit
+    text_limit = getattr(args, "text_limit", None)
+    if text_limit is not None:
+        payload["text_limit"] = text_limit
+    return payload
 
 
 def _workflow_daemon_args_from_cli(args: argparse.Namespace) -> dict:

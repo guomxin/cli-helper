@@ -168,6 +168,8 @@ are discovery metadata only; they do not execute page writes.
 Workflow read commands:
 
 ```bash
+python -m bscli.cli.main --home .bscli oa inbox analyze --type pending --limit 10
+python -m bscli.cli.main --home .bscli oa inbox analyze --type pending --deep --deep-limit 2 --text-limit 800
 python -m bscli.cli.main --home .bscli oa workflow list --type pending
 python -m bscli.cli.main --home .bscli oa workflow search --type pending --keyword weekly
 python -m bscli.cli.main --home .bscli oa workflow list --type sent --limit 10
@@ -198,11 +200,19 @@ will not change a pending item's read/unread state. `inspect`, `evidence`, and
 `read_effect` metadata noting that pending detail reads may mark an item as
 read.
 
+`oa inbox analyze` is the higher-level inbox triage command for agents. By
+default it calls the list-only brief reader, ranks work items with deterministic
+attention signals, and returns follow-up commands such as `oa workflow evidence
+--id ...`. It only opens workflow detail pages when `--deep` is passed, and then
+only up to `--deep-limit`; this is useful when an agent needs a small evidence
+packet before asking for or preparing a later write action.
+
 The same workflow surface is also exported to agents through the tool manifest
 and MCP server. Current tool names include `oa__workflow_list`,
 `oa__workflow_brief`, `oa__workflow_inspect`, `oa__workflow_evidence`,
 `oa__workflow_timeline`, `oa__workflow_detail`, `oa__workflow_opinions`,
-`oa__workflow_attachments`, and `oa__workflow_actions`. For example, an agent can call
+`oa__workflow_attachments`, `oa__workflow_actions`, and `oa__inbox_analyze`.
+For example, an agent can call
 `oa__workflow_opinions` with `{"type":"pending","id":"..."}` and let the daemon
 resolve the list item, open the rendered detail page, and return only the
 opinion entries. Opinion entries always include `text`; when the rendered page
@@ -562,6 +572,7 @@ Implemented:
 - Business CLI `oa capabilities`
 - Business CLI `oa detail read`
 - Business CLI `oa detail attachments/workflow`
+- Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`

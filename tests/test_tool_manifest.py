@@ -23,6 +23,7 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__workflow_brief", tools)
         self.assertIn("oa__workflow_evidence", tools)
         self.assertIn("oa__workflow_timeline", tools)
+        self.assertIn("oa__inbox_analyze", tools)
         self.assertIn("oa__workflow_opinions", tools)
         self.assertIn("oa__template_detail", tools)
 
@@ -86,6 +87,26 @@ class ToolManifestTests(unittest.TestCase):
             },
         )
         self.assertEqual(workflow_inspect["metadata"]["access"], "read")
+
+        inbox_analyze = tools["oa__inbox_analyze"]
+        self.assertEqual(
+            inbox_analyze["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "description": "Inbox workflow collection: pending or sent. Defaults to pending."},
+                    "keyword": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "deep": {"type": "boolean", "description": "Open detail pages for a limited number of items when true."},
+                    "deep_limit": {"type": "integer", "description": "Maximum number of detail pages to open in deep mode."},
+                    "text_limit": {"type": "integer"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(inbox_analyze["metadata"]["access"], "read")
+        self.assertEqual(inbox_analyze["metadata"]["strategy"], "daemon_api")
 
         doctor = tools["oa__doctor"]
         self.assertEqual(doctor["input_schema"]["required"], [])
