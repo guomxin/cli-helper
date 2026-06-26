@@ -24,10 +24,13 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__workflow_evidence", tools)
         self.assertIn("oa__workflow_timeline", tools)
         self.assertIn("oa__history_list", tools)
+        self.assertIn("oa__history_profile", tools)
         self.assertIn("oa__history_sections", tools)
         self.assertIn("oa__inbox_analyze", tools)
+        self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__workflow_opinions", tools)
         self.assertIn("oa__template_detail", tools)
+        self.assertIn("oa__template_match", tools)
         self.assertIn("oa__write_discover", tools)
 
         detail = tools["oa__template_detail"]
@@ -115,6 +118,29 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(write_discover["metadata"]["access"], "read")
         self.assertFalse(write_discover["metadata"]["requires_confirmation"])
         self.assertEqual(write_discover["input_schema"]["properties"]["deep_limit"]["type"], "integer")
+        self.assertEqual(write_discover["input_schema"]["properties"]["template_id"]["type"], "string")
+
+        launch_inspect = tools["oa__launch_inspect"]
+        self.assertEqual(launch_inspect["metadata"]["access"], "read")
+        self.assertEqual(launch_inspect["metadata"]["risk"], "low")
+        self.assertFalse(launch_inspect["metadata"]["requires_confirmation"])
+        self.assertEqual(
+            launch_inspect["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "template_id": {"type": "string", "description": "Template id to resolve from oa template list."},
+                    "url": {"type": "string", "description": "Direct launch/new-flow page URL to inspect."},
+                    "settle_ms": {"type": "integer"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+
+        template_match = tools["oa__template_match"]
+        self.assertEqual(template_match["metadata"]["access"], "read")
+        self.assertEqual(template_match["input_schema"]["properties"]["kind"]["type"], "string")
 
         doctor = tools["oa__doctor"]
         self.assertEqual(doctor["input_schema"]["required"], [])

@@ -27,12 +27,39 @@ The parser also reports write hints without leaking values:
 - candidate `.do?method=...` endpoints found in rendered HTML, marked
   `method=UNKNOWN`, `risk=high`, and `tested=false`
 
-Historical workflow samples are now available through:
+The write-discovery pipeline now has three read-only/draft-level layers.
+
+Layer 1, high-frequency history profiling:
 
 ```powershell
 python -m bscli.cli.main --home .bscli oa history sections
 python -m bscli.cli.main --home .bscli oa history list --kind done --limit 20
+python -m bscli.cli.main --home .bscli oa history profile --kind done --limit 50
+python -m bscli.cli.main --home .bscli oa history clusters --kind all --limit 20
+```
+
+`oa history profile` clusters sent/done/tracked workflow rows by title pattern,
+category, status, date range, `affair_id`, and `href`. This is the frequency
+map used to decide which business processes deserve write-action expansion
+first.
+
+Layer 2, template matching:
+
+```powershell
+python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
+```
+
+`oa template match` compares historical clusters with the launchable template
+list and returns candidates with score and evidence. It reports `matched`,
+`ambiguous`, or `unmatched`; ambiguous clusters are not guessed into a concrete
+template.
+
+Layer 3, launch-page inspection:
+
+```powershell
+python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
+python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id>
 ```
 
 `oa history list` discovers the sent/done/tracked tab ids from the rendered home
@@ -41,6 +68,16 @@ It does not click the browser UI. `oa write discover` then opens a bounded
 number of historical detail pages and aggregates the candidate actions found
 there. The result is evidence for future promotion work only; it does not make a
 historical action executable.
+
+`oa launch inspect` opens a template launch page in an inactive Chrome tab and
+extracts forms, normal fields, hidden-field names, buttons, `jsonArrBase`
+actions, CSRF-token presence, and untested endpoint candidates. Opening a launch
+page may create or retain an OA draft, which is allowed for this discovery
+phase. It does not click submit/send/approve/reject/archive/delete/revoke/upload
+controls and does not call suspected write endpoints. `oa write discover
+--source launch` aggregates those launch-page candidates, but every candidate is
+forced to `execute_allowed=false` until a separate user-confirmed execution plan
+exists.
 
 ## Live Read-Only Findings
 

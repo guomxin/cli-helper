@@ -824,6 +824,116 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["args"], {"kind": "done", "keyword": "approval", "limit": 2})
         self.assertEqual(payload["result"]["items"][0]["affair_id"], "done-1")
 
+    def test_oa_history_profile_and_clusters_call_daemon_profile_command(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_history_profile.v1",
+                    "source_count": 2,
+                    "cluster_count": 1,
+                    "clusters": [{"title_pattern": "[Seal] Seal Request", "count": 2}],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            profile = self._run_cli(
+                tmp,
+                "oa",
+                "history",
+                "profile",
+                "--kind",
+                "done",
+                "--keyword",
+                "seal",
+                "--limit",
+                "5",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            clusters = self._run_cli(
+                tmp,
+                "oa",
+                "history",
+                "clusters",
+                "--kind",
+                "done",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(json.loads(profile.stdout)["result"]["schema_version"], "bscli.oa_history_profile.v1")
+        self.assertEqual(json.loads(clusters.stdout)["result"]["cluster_count"], 1)
+        self.assertEqual(seen_payloads[0]["command"], "history_profile")
+        self.assertEqual(seen_payloads[0]["args"], {"kind": "done", "keyword": "seal", "limit": 5})
+        self.assertEqual(seen_payloads[1]["command"], "history_profile")
+        self.assertEqual(seen_payloads[1]["args"], {"kind": "done"})
+
+    def test_oa_template_match_calls_daemon_with_history_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_template_match.v1",
+                    "clusters": [{"match_status": "matched"}],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "template",
+                "match",
+                "--kind",
+                "done",
+                "--keyword",
+                "seal",
+                "--limit",
+                "5",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "template_match")
+        self.assertEqual(seen_payloads[0]["args"], {"kind": "done", "keyword": "seal", "limit": 5})
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_template_match.v1")
+
+    def test_oa_launch_inspect_calls_daemon_with_template_or_url(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_launch_inspection.v1",
+                    "template_id": "tpl-1",
+                    "actions": [],
+                    "safety": {"execute_allowed": False, "submitted_count": 0},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "launch",
+                "inspect",
+                "--template-id",
+                "tpl-1",
+                "--settle-ms",
+                "0",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "launch_inspect")
+        self.assertEqual(seen_payloads[0]["args"], {"template_id": "tpl-1", "settle_ms": 0})
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_launch_inspection.v1")
+
     def test_oa_write_discover_calls_daemon_with_history_arguments(self):
         server, seen_payloads = self._start_daemon(
             {
@@ -874,6 +984,40 @@ class CliOaTests(unittest.TestCase):
             },
         )
         self.assertEqual(payload["result"]["schema_version"], "bscli.oa_write_discovery.v1")
+
+    def test_oa_write_discover_calls_daemon_with_launch_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_write_discovery.v1",
+                    "source": "launch",
+                    "actions": [],
+                    "items": [],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "discover",
+                "--source",
+                "launch",
+                "--template-id",
+                "tpl-1",
+                "--settle-ms",
+                "0",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_discover")
+        self.assertEqual(seen_payloads[0]["args"], {"source": "launch", "template_id": "tpl-1", "settle_ms": 0})
+        self.assertEqual(payload["result"]["source"], "launch")
 
     def test_oa_write_capabilities_preserves_unpromoted_actions(self):
         server, _seen_payloads = self._start_daemon(

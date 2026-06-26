@@ -24,7 +24,11 @@ class McpServerTests(unittest.TestCase):
         tools = {tool["name"]: tool for tool in result["result"]["tools"]}
         self.assertIn("oa__pending_list", tools)
         self.assertIn("oa__session_status", tools)
+        self.assertIn("oa__history_profile", tools)
+        self.assertIn("oa__template_match", tools)
+        self.assertIn("oa__launch_inspect", tools)
         self.assertEqual(tools["oa__session_status"]["inputSchema"]["required"], [])
+        self.assertEqual(tools["oa__launch_inspect"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(
             tools["oa__template_detail"]["inputSchema"],
             {

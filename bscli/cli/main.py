@@ -255,6 +255,27 @@ def _build_oa_parser(oa_sub) -> None:
         show_command="template_detail",
         show_arg_name="template_id",
     )
+    template_match = template_sub.add_parser("match")
+    template_match.set_defaults(oa_command="template_match")
+    template_match.add_argument(
+        "--kind",
+        choices=["sent", "done", "tracked", "all"],
+        default="done",
+        help="Historical collection to profile before matching; defaults to done.",
+    )
+    template_match.add_argument("--keyword")
+    _add_daemon_options(template_match)
+    _add_output_options(template_match)
+
+    launch = oa_sub.add_parser("launch")
+    launch_sub = launch.add_subparsers(dest="oa_action", required=True)
+    launch_inspect = launch_sub.add_parser("inspect")
+    launch_inspect.set_defaults(oa_command="launch_inspect")
+    launch_inspect.add_argument("--template-id", dest="template_id")
+    launch_inspect.add_argument("--url")
+    launch_inspect.add_argument("--settle-ms", type=int, dest="settle_ms")
+    _add_daemon_options(launch_inspect)
+    _add_output_options(launch_inspect)
 
     audit = oa_sub.add_parser("audit")
     audit_sub = audit.add_subparsers(dest="oa_audit_area", required=True)
@@ -373,7 +394,7 @@ def _build_oa_parser(oa_sub) -> None:
     _add_output_options(capabilities)
     discover = write_sub.add_parser("discover")
     discover.set_defaults(oa_write_discover=True)
-    discover.add_argument("--source", choices=["history"], default="history")
+    discover.add_argument("--source", choices=["history", "launch"], default="history")
     discover.add_argument(
         "--kind",
         choices=["sent", "done", "tracked"],
@@ -381,6 +402,9 @@ def _build_oa_parser(oa_sub) -> None:
         help="Historical collection to sample; defaults to done.",
     )
     discover.add_argument("--keyword")
+    discover.add_argument("--template-id", dest="template_id")
+    discover.add_argument("--url")
+    discover.add_argument("--settle-ms", type=int, dest="settle_ms")
     discover.add_argument("--deep-limit", type=int, dest="deep_limit")
     discover.add_argument("--text-limit", type=int, dest="text_limit")
     _add_daemon_options(discover)
@@ -460,6 +484,18 @@ def _add_history_parser(subparsers) -> None:
             parser.add_argument("--keyword")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="csv" if action == "export" else "json")
+    for action in ("profile", "clusters"):
+        parser = subparsers.add_parser(action)
+        parser.set_defaults(oa_history_action=action)
+        parser.add_argument(
+            "--kind",
+            choices=["sent", "done", "tracked", "all"],
+            default="done",
+            help="Historical collection to profile; defaults to done.",
+        )
+        parser.add_argument("--keyword")
+        _add_daemon_options(parser)
+        _add_output_options(parser)
 
 
 def _add_workflow_parser(subparsers) -> None:
@@ -839,6 +875,8 @@ def handle_oa_history(args: argparse.Namespace) -> int:
         response = run_oa_daemon_command(args, "history_sections", _history_daemon_args_from_cli(args))
     elif action in {"list", "search", "export"}:
         response = run_oa_daemon_command(args, "history_list", _history_daemon_args_from_cli(args))
+    elif action in {"profile", "clusters"}:
+        response = run_oa_daemon_command(args, "history_profile", _history_daemon_args_from_cli(args))
     else:
         raise ValueError(f"unknown history action: {action}")
     if not response.get("ok", False):
@@ -953,13 +991,23 @@ def _history_daemon_args_from_cli(args: argparse.Namespace) -> dict:
 def _write_discover_daemon_args_from_cli(args: argparse.Namespace) -> dict:
     payload = {
         "source": args.source,
-        "kind": args.kind,
     }
+    if args.source == "history":
+        payload["kind"] = args.kind
     keyword = getattr(args, "keyword", None)
     if keyword:
         payload["keyword"] = keyword
     if getattr(args, "limit", None) is not None:
         payload["limit"] = args.limit
+    template_id = getattr(args, "template_id", None)
+    if template_id:
+        payload["template_id"] = template_id
+    url = getattr(args, "url", None)
+    if url:
+        payload["url"] = url
+    settle_ms = getattr(args, "settle_ms", None)
+    if settle_ms is not None:
+        payload["settle_ms"] = settle_ms
     deep_limit = getattr(args, "deep_limit", None)
     if deep_limit is not None:
         payload["deep_limit"] = deep_limit
@@ -1469,6 +1517,17 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
         return {"affair_id": args.affair_id}
     if command == "template_detail":
         return {"template_id": args.template_id}
+    if command == "template_match":
+        return _history_daemon_args_from_cli(args)
+    if command == "launch_inspect":
+        payload = {}
+        if getattr(args, "template_id", None):
+            payload["template_id"] = args.template_id
+        if getattr(args, "url", None):
+            payload["url"] = args.url
+        if getattr(args, "settle_ms", None) is not None:
+            payload["settle_ms"] = args.settle_ms
+        return payload
     if command == "detail_read":
         return {"url": args.url}
     if command in {"api_inspect", "api_replay"}:

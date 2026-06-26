@@ -226,6 +226,8 @@ Historical workflow samples:
 python -m bscli.cli.main --home .bscli oa history sections
 python -m bscli.cli.main --home .bscli oa history list --kind done --limit 20
 python -m bscli.cli.main --home .bscli oa history search --kind tracked --keyword contract --limit 10
+python -m bscli.cli.main --home .bscli oa history profile --kind done --limit 50
+python -m bscli.cli.main --home .bscli oa history clusters --kind all --limit 20
 python -m bscli.cli.main --home .bscli oa history export --kind sent --format csv --fields title,status,date,affair_id
 ```
 
@@ -235,6 +237,9 @@ same `sentSection` backend projection API with the selected `panelId`. This
 avoids clicking tabs in the browser while still using the user's real logged-in
 session. Historical detail reads are treated as read-only samples and report
 `read_effect.may_mark_read=false`.
+`oa history profile` clusters historical titles, categories, statuses, dates,
+`affair_id`, and `href` into high-frequency workflow types. `clusters` is the
+same profile view under a more business-oriented name.
 
 Pending, sent, and template objects:
 
@@ -258,11 +263,22 @@ python -m bscli.cli.main --home .bscli oa sent export --format csv --fields titl
 python -m bscli.cli.main --home .bscli oa template list
 python -m bscli.cli.main --home .bscli oa template search --keyword seal
 python -m bscli.cli.main --home .bscli oa template show -6511139737225050501
+python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa template details --limit 10 --include title,fields,attachments
 python -m bscli.cli.main --home .bscli oa template attachments --limit 20
 python -m bscli.cli.main --home .bscli oa template workflow --limit 20
 python -m bscli.cli.main --home .bscli oa template export --format table --fields title,template_id
+
+python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
 ```
+
+`oa template match` maps high-frequency historical workflow clusters to
+launchable templates with `matched`, `ambiguous`, or `unmatched` status.
+`oa launch inspect` opens a template launch page in an inactive Chrome tab and
+extracts forms, fields, hidden-field names, buttons, script actions, CSRF
+presence, and untested endpoint candidates. It may leave an OA draft, but it
+does not click or call submit, approve, archive, delete, revoke, upload, or send
+actions.
 
 Page/API discovery:
 
@@ -295,6 +311,7 @@ through the Chrome extension bridge:
 python -m bscli.cli.main --home .bscli oa write actions --format table --fields code,label,action_type,promotion_status,verification_method
 python -m bscli.cli.main --home .bscli oa write capabilities --type pending --limit 10 --format table --fields title,category,affair_id,verification_method
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5 --format json
+python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id> --format json
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
@@ -316,11 +333,14 @@ items and reports each item's `category`, `affair_id`, current state,
 use `pending_disappearance` verification. Meeting reply actions use
 `meeting_reply_readback` verification because a replied meeting can remain
 visible in pending even after `myReply.feedbackFlag` has changed.
-`discover` is the read-only history sampler for expanding write coverage. It
-uses `oa history list`, opens up to `--deep-limit` historical detail pages, and
-aggregates the candidate write actions seen there. The top-level `actions`
-array is the cross-workflow action dictionary; the per-workflow `items` array is
-the supporting evidence. Dry-run-only actions such as `Archive` remain
+`discover` is the read-only sampler for expanding write coverage. With
+`--source history`, it uses `oa history list`, opens up to `--deep-limit`
+historical detail pages, and aggregates the candidate write actions seen there.
+With `--source launch`, it reuses `oa launch inspect` to read a template's new
+flow page and collect launch-page action and button candidates. The top-level
+`actions` array is the cross-workflow action dictionary; the per-workflow
+`items` array is the supporting evidence. Launch-source candidates are always
+`execute_allowed=false`; dry-run-only actions such as `Archive` also remain
 `execute_allowed=false` until separately promoted.
 For workflow items, the action inventory is intentionally split:
 
@@ -628,7 +648,9 @@ Implemented:
 - Business CLI `oa detail attachments/workflow`
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
-- Business CLI `oa history sections/list/search/export`
+- Business CLI `oa history sections/list/search/profile/clusters/export`
+- Business CLI `oa template match`
+- Business CLI `oa launch inspect`
 - Business CLI `oa write actions`
 - Business CLI `oa write discover`
 - Business CLI `oa write preflight`

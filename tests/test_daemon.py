@@ -3015,6 +3015,316 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["items"][0]["actions"][0]["code"], "ContinueSubmit")
             self.assertEqual(result["read_effect"]["detail_page_opened"], True)
 
+    def test_run_history_profile_clusters_high_frequency_history(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "kind": "done",
+                            "source_count": 3,
+                            "items": [
+                                {
+                                    "title": "[Seal] Seal Request - Alice",
+                                    "status": "finished",
+                                    "date": "2026-06-01",
+                                    "category": "Collaboration",
+                                    "affair_id": "done-1",
+                                    "href": "http://oa.example.test/detail/done-1",
+                                    "history_kind": "done",
+                                },
+                                {
+                                    "title": "[Seal] Seal Request - Bob",
+                                    "status": "finished",
+                                    "date": "2026-06-02",
+                                    "category": "Collaboration",
+                                    "affair_id": "done-2",
+                                    "href": "http://oa.example.test/detail/done-2",
+                                    "history_kind": "done",
+                                },
+                                {
+                                    "title": "[Purchase] Contract Review - Carol",
+                                    "status": "finished",
+                                    "date": "2026-06-03",
+                                    "category": "Contract",
+                                    "affair_id": "done-3",
+                                    "href": "http://oa.example.test/detail/done-3",
+                                    "history_kind": "done",
+                                },
+                                {
+                                    "title": "(\u81ea\u52a8\u53d1\u8d77)\u3010HR\u3011Monthly Attendance-Chris-2026-05",
+                                    "status": "finished",
+                                    "date": "2026-06-04",
+                                    "category": "Collaboration",
+                                    "affair_id": "done-4",
+                                    "href": "http://oa.example.test/detail/done-4",
+                                    "history_kind": "done",
+                                },
+                            ],
+                        },
+                    },
+                )
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "history_profile",
+                    "args": {"kind": "done", "limit": 20},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["history_list"])
+            self.assertEqual(calls[0][1], {"kind": "done", "limit": 20})
+            self.assertEqual(result["schema_version"], "bscli.oa_history_profile.v1")
+            self.assertEqual(result["source_count"], 4)
+            self.assertEqual(result["cluster_count"], 3)
+            self.assertEqual(result["clusters"][0]["title_pattern"], "[Seal] Seal Request")
+            self.assertEqual(result["clusters"][0]["category_tag"], "Seal")
+            self.assertEqual(result["clusters"][0]["count"], 2)
+            self.assertEqual(result["clusters"][0]["date_range"], {"start": "2026-06-01", "end": "2026-06-02"})
+            self.assertEqual(result["clusters"][0]["sample_items"][0]["affair_id"], "done-1")
+            self.assertIn(
+                "\u3010HR\u3011Monthly Attendance",
+                [cluster["title_pattern"] for cluster in result["clusters"]],
+            )
+
+    def test_run_template_match_matches_history_clusters_to_template_candidates(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_history_profile.v1",
+                            "source_count": 3,
+                            "cluster_count": 1,
+                            "clusters": [
+                                {
+                                    "cluster_id": "seal-request",
+                                    "title_pattern": "[Seal] Seal Request",
+                                    "category_tag": "Seal",
+                                    "subject": "Seal Request",
+                                    "count": 3,
+                                    "sample_items": [{"title": "[Seal] Seal Request - Alice"}],
+                                }
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "[Seal] Seal Request",
+                                    "template_id": "tpl-seal",
+                                    "href": "http://oa.example.test/new?templateId=tpl-seal",
+                                },
+                                {
+                                    "title": "[Purchase] Contract Review",
+                                    "template_id": "tpl-purchase",
+                                    "href": "http://oa.example.test/new?templateId=tpl-purchase",
+                                },
+                            ]
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "template_match",
+                    "args": {"kind": "done", "limit": 20},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["history_profile", "template_list_api"])
+            self.assertEqual(calls[0][1], {"kind": "done", "limit": 20})
+            self.assertEqual(result["schema_version"], "bscli.oa_template_match.v1")
+            self.assertEqual(result["clusters"][0]["match_status"], "matched")
+            self.assertEqual(result["clusters"][0]["best_template"]["template_id"], "tpl-seal")
+            self.assertGreaterEqual(result["clusters"][0]["candidates"][0]["score"], 0.8)
+            self.assertIn("exact", result["clusters"][0]["candidates"][0]["evidence"])
+
+    def test_run_launch_inspect_resolves_template_and_reads_rendered_page_without_submit(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            template_url = "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&templateId=tpl-1"
+            nested_calls = []
+            state._run_nested_oa_command = lambda command, args, timeout_seconds: nested_calls.append(
+                (command, args, timeout_seconds)
+            ) or DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "items": [
+                            {
+                                "title": "Seal Request",
+                                "template_id": "tpl-1",
+                                "href": template_url,
+                            }
+                        ]
+                    },
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "rendered_html_snapshot")
+                self.assertEqual(tasks[0]["payload"]["url"], template_url)
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "url": template_url,
+                            "html": """
+                            <html><body>
+                              <h1 id="summarySubject">Seal Request</h1>
+                              <form><input name="subject"><button id="ContinueSubmit">Submit</button></form>
+                              <script>var jsonArrBase = '[{"codes":["ContinueSubmit"],"label":"Submit","id":"ContinueSubmit"}]';</script>
+                            </body></html>
+                            """,
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "launch_inspect",
+                    "args": {"template_id": "tpl-1", "settle_ms": 0},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(nested_calls[0][0], "template_list_api")
+            self.assertEqual(result["schema_version"], "bscli.oa_launch_inspection.v1")
+            self.assertEqual(result["template_id"], "tpl-1")
+            self.assertEqual(result["template"]["title"], "Seal Request")
+            self.assertEqual(result["actions"][0]["code"], "ContinueSubmit")
+            self.assertFalse(result["safety"]["execute_allowed"])
+            self.assertEqual(result["safety"]["submitted_count"], 0)
+
+    def test_run_oa_write_discover_from_launch_aggregates_inspection_actions(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_inspection.v1",
+                            "template_id": "tpl-1",
+                            "template": {"title": "Seal Request"},
+                            "title": "Seal Request",
+                            "url": "http://oa.example.test/new?templateId=tpl-1",
+                            "actions": [{"code": "ContinueSubmit", "label": "Submit", "risk": "high"}],
+                            "buttons": [
+                                {
+                                    "id": "ContinueSubmit",
+                                    "text": "Submit",
+                                    "risk": "high",
+                                    "action_like": True,
+                                }
+                            ],
+                            "safety": {"execute_allowed": False, "submitted_count": 0},
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_discover",
+                    "args": {"source": "launch", "template_id": "tpl-1"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["launch_inspect"])
+            self.assertEqual(calls[0][1], {"source": "launch", "template_id": "tpl-1"})
+            self.assertEqual(result["schema_version"], "bscli.oa_write_discovery.v1")
+            self.assertEqual(result["source"], "launch")
+            self.assertEqual(result["actions"][0]["code"], "ContinueSubmit")
+            self.assertFalse(result["actions"][0]["execute_allowed"])
+            self.assertEqual(result["items"][0]["button_candidates"][0]["id"], "ContinueSubmit")
+            self.assertEqual(result["read_effect"]["launch_page_opened"], True)
+            self.assertEqual(result["read_effect"]["submitted_count"], 0)
+
     def test_run_oa_write_capabilities_reports_workflow_and_meeting_actions(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

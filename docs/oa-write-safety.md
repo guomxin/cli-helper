@@ -21,6 +21,13 @@ logged-in Chrome session after explicit confirmation.
   read-only sample-mining commands. They use historical sent/done/tracked pages
   to find candidate actions and promotion evidence, but they do not authorize or
   execute any write action.
+- `oa history profile`, `oa template match`, `oa launch inspect`, and
+  `oa write discover --source launch` are the launch-page discovery path.
+  `launch inspect` may open a new-flow page and therefore may create or keep an
+  OA draft, but it only reads DOM, forms, buttons, scripts, hidden-field names,
+  CSRF presence, and untested endpoint candidates. Launch-source candidates are
+  forced to `execute_allowed=false` even when the same action code is executable
+  in another governed context.
 - `oa write actions` reads the local write-action registry. The registry is the
   promotion source of truth for labels, risk, action type, execution status,
   and verification method.

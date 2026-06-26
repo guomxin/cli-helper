@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, UTC
+from difflib import SequenceMatcher
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +15,7 @@ from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
     extract_history_sections,
+    parse_launch_page,
     parse_oa_detail,
     parse_navigation_inventory,
     parse_pending_list,
@@ -75,6 +77,7 @@ WORKFLOW_READ_COMMANDS = {
 HISTORY_READ_COMMANDS = {
     "history_sections",
     "history_list",
+    "history_profile",
 }
 
 INBOX_READ_COMMANDS = {
@@ -229,6 +232,16 @@ class DaemonState:
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return self._run_oa_history_read_command(
                 command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "template_match":
+            return self._run_oa_template_match_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "launch_inspect":
+            return self._run_oa_launch_inspect_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -797,6 +810,8 @@ class DaemonState:
             return self._run_oa_history_sections_command(args, timeout_seconds)
         if command == "history_list":
             return self._run_oa_history_list_command(args, timeout_seconds)
+        if command == "history_profile":
+            return self._run_oa_history_profile_command(args, timeout_seconds)
         raise ValueError(f"unsupported history command: {command}")
 
     def _run_oa_history_sections_command(
@@ -921,6 +936,172 @@ class DaemonState:
             },
         )
 
+    def _run_oa_history_profile_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        kind = _history_profile_kind(args)
+        kinds = ["done", "sent", "tracked"] if kind == "all" else [kind]
+        list_results = []
+        task_ids = []
+        for one_kind in kinds:
+            list_args: dict[str, Any] = {"kind": one_kind}
+            for key in ("keyword", "limit"):
+                if args.get(key) is not None:
+                    list_args[key] = args[key]
+            response = self._run_nested_oa_command("history_list", list_args, timeout_seconds)
+            if response.status != 200 or response.body.get("ok") is False:
+                return response
+            if response.body.get("task_id"):
+                task_ids.append(response.body.get("task_id"))
+            result = response.body.get("result") if isinstance(response.body, dict) else {}
+            if isinstance(result, dict):
+                list_results.append(result)
+        profile = _build_oa_history_profile(kind=kind, list_results=list_results)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": task_ids[0] if task_ids else None,
+                "result": profile,
+            },
+        )
+
+    def _run_oa_template_match_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        profile_args = {}
+        for key in ("kind", "keyword", "limit"):
+            if args.get(key) is not None:
+                profile_args[key] = args[key]
+        profile_response = self._run_nested_oa_command("history_profile", profile_args, timeout_seconds)
+        if profile_response.status != 200 or profile_response.body.get("ok") is False:
+            return profile_response
+        template_response = self._run_nested_oa_command("template_list_api", {}, timeout_seconds)
+        if template_response.status != 200 or template_response.body.get("ok") is False:
+            return template_response
+        profile = profile_response.body.get("result") if isinstance(profile_response.body, dict) else {}
+        templates = template_response.body.get("result") if isinstance(template_response.body, dict) else {}
+        if not isinstance(profile, dict):
+            profile = {}
+        if not isinstance(templates, dict):
+            templates = {}
+        result = _build_oa_template_match(profile, templates)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": template_response.body.get("task_id") or profile_response.body.get("task_id"),
+                "result": result,
+            },
+        )
+
+    def _run_oa_launch_inspect_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        template_id = str(args.get("template_id") or "").strip()
+        url = str(args.get("url") or "").strip()
+        template_item: dict[str, Any] = {}
+        if not url and template_id:
+            template_response = self._run_nested_oa_command("template_list_api", {}, timeout_seconds)
+            if template_response.status != 200 or template_response.body.get("ok") is False:
+                return template_response
+            template_result = template_response.body.get("result") if isinstance(template_response.body, dict) else {}
+            if not isinstance(template_result, dict):
+                template_result = {}
+            for item in template_result.get("items") or []:
+                if isinstance(item, dict) and str(item.get("template_id") or "") == template_id:
+                    template_item = item
+                    url = str(item.get("href") or "")
+                    break
+            if not url:
+                return DaemonResponse(
+                    404,
+                    {
+                        "ok": False,
+                        "error": f"template launch URL not found: {template_id}",
+                        "result": {"schema_version": "bscli.oa_launch_inspection.v1", "template_id": template_id},
+                    },
+                )
+        if not url:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": "oa launch inspect requires template_id or url",
+                    "result": {"schema_version": "bscli.oa_launch_inspection.v1"},
+                },
+            )
+        if not self.bridge.list_clients():
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "error": "no Chrome extension client connected; start Chrome, load the BSCLI extension, and open the OA tab",
+                },
+            )
+        target_client_id = self._select_client_id_for_system("oa")
+        if target_client_id is None:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "error": "no browser client is currently registered for system: oa; open the matching system tab and wait for the extension to register it",
+                },
+            )
+        task_id = self.bridge.enqueue_task(
+            system="oa",
+            kind="rendered_html_snapshot",
+            payload={"url": url, "settle_ms": int(args.get("settle_ms", 1500))},
+            target_client_id=target_client_id,
+        )
+        result = self.bridge.wait_for_result(task_id, timeout_seconds=timeout_seconds)
+        if result is None:
+            return DaemonResponse(
+                504,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "error": "command timed out waiting for rendered launch page",
+                },
+            )
+        if not result["ok"]:
+            return DaemonResponse(
+                500,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "error": result.get("error") or "rendered launch page failed",
+                },
+            )
+        snapshot = result.get("result") or {}
+        html = str(snapshot.get("html") or snapshot.get("text") or "")
+        inspected = parse_launch_page(html, base_url=snapshot.get("url") or url)
+        if template_id:
+            inspected["template_id"] = template_id
+        if template_item:
+            inspected["template"] = {
+                "template_id": str(template_item.get("template_id") or template_id),
+                "title": template_item.get("title", ""),
+                "href": template_item.get("href", ""),
+            }
+        inspected["read_effect"] = _launch_read_effect(page_opened=True)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": task_id,
+                "result": inspected,
+            },
+        )
+
     def _run_oa_write_discover_command(
         self,
         args: dict[str, Any],
@@ -928,6 +1109,8 @@ class DaemonState:
         timeout_seconds: float,
     ) -> DaemonResponse:
         source = str(args.get("source") or "history").strip().lower() or "history"
+        if source == "launch":
+            return self._run_oa_write_discover_from_launch(args, timeout_seconds=timeout_seconds)
         if source != "history":
             return DaemonResponse(
                 400,
@@ -1016,6 +1199,91 @@ class DaemonState:
                     "items": discovered_items,
                     "errors": errors,
                     "read_effect": _history_read_effect(kind, detail_page_opened=detail_attempt_count > 0),
+                },
+            },
+        )
+
+    def _run_oa_write_discover_from_launch(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        inspect_args = {"source": "launch"}
+        for key in ("template_id", "url", "settle_ms"):
+            if args.get(key) is not None:
+                inspect_args[key] = args[key]
+        inspect_response = self._run_nested_oa_command("launch_inspect", inspect_args, timeout_seconds)
+        if inspect_response.status != 200 or inspect_response.body.get("ok") is False:
+            return inspect_response
+        inspection = inspect_response.body.get("result") if isinstance(inspect_response.body, dict) else {}
+        if not isinstance(inspection, dict):
+            inspection = {}
+        action_index: dict[str, dict[str, Any]] = {}
+        actions = inspection.get("actions") if isinstance(inspection.get("actions"), list) else []
+        summaries = [_summarize_oa_write_action(action) for action in actions if isinstance(action, dict)]
+        workflow = {
+            "title": inspection.get("title", ""),
+            "affair_id": "",
+            "href": inspection.get("url", ""),
+            "history_kind": "",
+        }
+        for summary in summaries:
+            _merge_write_discovery_action(action_index, summary, workflow)
+        button_candidates = [
+            button
+            for button in inspection.get("buttons") or []
+            if isinstance(button, dict) and button.get("action_like")
+        ]
+        for button in button_candidates:
+            summary = {
+                "code": str(button.get("id") or button.get("name") or button.get("text") or ""),
+                "label": str(button.get("text") or button.get("id") or ""),
+                "risk": str(button.get("risk") or "medium"),
+            }
+            _merge_write_discovery_action(action_index, summary, workflow)
+        aggregated_actions = sorted(
+            action_index.values(),
+            key=lambda item: (-int(item.get("seen_count") or 0), str(item.get("code") or "")),
+        )
+        for action in aggregated_actions:
+            action["execute_allowed"] = False
+            action["promotion_status"] = "launch_discovery_only"
+            blocked = action.get("blocked_reasons") if isinstance(action.get("blocked_reasons"), list) else []
+            reason = "Launch-page discovery records candidates only; execution requires a separate confirmed write plan."
+            if reason not in blocked:
+                blocked.append(reason)
+            action["blocked_reasons"] = blocked
+        item = {
+            "title": inspection.get("title", ""),
+            "template_id": inspection.get("template_id", ""),
+            "template": inspection.get("template") if isinstance(inspection.get("template"), dict) else {},
+            "href": inspection.get("url", ""),
+            "launch_inspected": True,
+            "actions": summaries,
+            "action_count": len(summaries),
+            "button_candidates": button_candidates,
+            "button_candidate_count": len(button_candidates),
+            "safety": inspection.get("safety") if isinstance(inspection.get("safety"), dict) else {},
+        }
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": inspect_response.body.get("task_id"),
+                "result": {
+                    "schema_version": "bscli.oa_write_discovery.v1",
+                    "source": "launch",
+                    "kind": "",
+                    "source_count": 1,
+                    "detail_attempt_count": 0,
+                    "launch_attempt_count": 1,
+                    "count": 1,
+                    "action_count": len(aggregated_actions),
+                    "actions": aggregated_actions,
+                    "items": [item],
+                    "errors": [],
+                    "read_effect": _launch_read_effect(page_opened=True),
                 },
             },
         )
@@ -2955,6 +3223,8 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command in {"template_match", "launch_inspect"}:
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_discover":
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_endpoint_candidates":
@@ -3235,6 +3505,234 @@ def _summarize_oa_write_action(action: Any) -> dict[str, str]:
     }
 
 
+def _history_profile_kind(args: dict[str, Any]) -> str:
+    kind = str(args.get("kind") or "done").strip().lower()
+    aliases = {"track": "tracked", "tracking": "tracked", "follow": "tracked", "finished": "done"}
+    kind = aliases.get(kind, kind)
+    if kind not in {"sent", "done", "tracked", "all"}:
+        raise ValueError(f"unsupported history profile kind: {kind}")
+    return kind
+
+
+def _build_oa_history_profile(*, kind: str, list_results: list[dict[str, Any]]) -> dict[str, Any]:
+    source_items = []
+    for result in list_results:
+        result_kind = str(result.get("kind") or "")
+        for item in result.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            source_items.append({**item, "history_kind": item.get("history_kind") or result_kind})
+    clusters_by_key: dict[str, dict[str, Any]] = {}
+    for item in source_items:
+        title = str(item.get("title") or "")
+        parts = _history_cluster_parts(title, str(item.get("category") or ""))
+        key = _normal_match_text(parts["title_pattern"])
+        cluster = clusters_by_key.setdefault(
+            key,
+            {
+                "cluster_id": _slug(parts["title_pattern"]) or f"cluster-{len(clusters_by_key) + 1}",
+                "title_pattern": parts["title_pattern"],
+                "category_tag": parts["category_tag"],
+                "subject": parts["subject"],
+                "count": 0,
+                "kinds": set(),
+                "categories": set(),
+                "statuses": set(),
+                "dates": [],
+                "sample_items": [],
+            },
+        )
+        cluster["count"] += 1
+        if item.get("history_kind"):
+            cluster["kinds"].add(str(item.get("history_kind")))
+        if item.get("category"):
+            cluster["categories"].add(str(item.get("category")))
+        if item.get("status"):
+            cluster["statuses"].add(str(item.get("status")))
+        if item.get("date"):
+            cluster["dates"].append(str(item.get("date")))
+        samples = cluster["sample_items"]
+        if len(samples) < 5:
+            samples.append(
+                {
+                    "title": item.get("title", ""),
+                    "status": item.get("status", ""),
+                    "date": item.get("date", ""),
+                    "category": item.get("category", ""),
+                    "affair_id": str(item.get("affair_id") or ""),
+                    "href": item.get("href", ""),
+                    "history_kind": item.get("history_kind", ""),
+                }
+            )
+    source_count = len(source_items)
+    clusters = []
+    for cluster in clusters_by_key.values():
+        dates = sorted(date for date in cluster.pop("dates") if date)
+        count = int(cluster["count"])
+        clusters.append(
+            {
+                **cluster,
+                "share": round(count / source_count, 4) if source_count else 0,
+                "kinds": sorted(cluster["kinds"]),
+                "categories": sorted(cluster["categories"]),
+                "statuses": sorted(cluster["statuses"]),
+                "date_range": {"start": dates[0], "end": dates[-1]} if dates else {"start": "", "end": ""},
+            }
+        )
+    clusters.sort(key=lambda row: (-int(row.get("count") or 0), str(row.get("title_pattern") or "")))
+    return {
+        "schema_version": "bscli.oa_history_profile.v1",
+        "kind": kind,
+        "source": "history_list",
+        "source_count": source_count,
+        "cluster_count": len(clusters),
+        "clusters": clusters,
+    }
+
+
+def _history_cluster_parts(title: str, category: str = "") -> dict[str, str]:
+    title = _clean_title(title)
+    for pattern, opener, closer in (
+        (r"^【([^】]+)】\s*([^-–—(（]+)", "【", "】"),
+        (r"^\[([^\]]+)\]\s*([^-–—(（]+)", "[", "]"),
+    ):
+        match = re.match(pattern, title)
+        if match:
+            category_tag = match.group(1).strip()
+            subject = _clean_title(match.group(2))
+            return {
+                "category_tag": category_tag,
+                "subject": subject,
+                "title_pattern": f"{opener}{category_tag}{closer} {subject}" if opener == "[" else f"{opener}{category_tag}{closer}{subject}",
+            }
+    subject = _clean_title(re.split(r"\s*[-–—(（]\s*", title, maxsplit=1)[0])
+    return {
+        "category_tag": category,
+        "subject": subject,
+        "title_pattern": subject,
+    }
+
+
+def _clean_title(value: str) -> str:
+    value = re.sub(r"^\s*[（(]\s*自动发起\s*[）)]\s*", " ", str(value or ""))
+    value = re.sub(r"\s*\(auto(?:matically)? started\)\s*", " ", str(value or ""), flags=re.I)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value[:300]
+
+
+def _build_oa_template_match(profile: dict[str, Any], templates: dict[str, Any]) -> dict[str, Any]:
+    template_items = [item for item in templates.get("items") or [] if isinstance(item, dict)]
+    matched_clusters = []
+    for cluster in profile.get("clusters") or []:
+        if not isinstance(cluster, dict):
+            continue
+        candidates = _rank_template_candidates(cluster, template_items)
+        top = candidates[0] if candidates else None
+        second = candidates[1] if len(candidates) > 1 else None
+        if top and top["score"] >= 0.78 and (second is None or top["score"] - second["score"] >= 0.08):
+            status = "matched"
+            best_template = {
+                "template_id": top["template_id"],
+                "title": top["title"],
+                "href": top["href"],
+                "score": top["score"],
+            }
+        elif top and top["score"] >= 0.45:
+            status = "ambiguous"
+            best_template = {}
+        else:
+            status = "unmatched"
+            best_template = {}
+        matched_clusters.append(
+            {
+                **cluster,
+                "match_status": status,
+                "best_template": best_template,
+                "candidates": candidates[:3],
+            }
+        )
+    return {
+        "schema_version": "bscli.oa_template_match.v1",
+        "source": "history_profile+template_list_api",
+        "history_profile": {
+            "kind": profile.get("kind", ""),
+            "source_count": profile.get("source_count", 0),
+            "cluster_count": profile.get("cluster_count", 0),
+        },
+        "template_count": len(template_items),
+        "cluster_count": len(matched_clusters),
+        "clusters": matched_clusters,
+    }
+
+
+def _rank_template_candidates(cluster: dict[str, Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates = []
+    for template in templates:
+        score, evidence = _template_match_score(cluster, template)
+        if score <= 0:
+            continue
+        candidates.append(
+            {
+                "template_id": str(template.get("template_id") or ""),
+                "title": template.get("title", ""),
+                "href": template.get("href", ""),
+                "score": round(score, 4),
+                "evidence": evidence,
+            }
+        )
+    candidates.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("title") or "")))
+    return candidates
+
+
+def _template_match_score(cluster: dict[str, Any], template: dict[str, Any]) -> tuple[float, list[str]]:
+    cluster_title = str(cluster.get("title_pattern") or "")
+    subject = str(cluster.get("subject") or "")
+    category = str(cluster.get("category_tag") or "")
+    template_title = str(template.get("title") or "")
+    cluster_norm = _normal_match_text(cluster_title)
+    subject_norm = _normal_match_text(subject)
+    category_norm = _normal_match_text(category)
+    template_norm = _normal_match_text(template_title)
+    if not cluster_norm or not template_norm:
+        return 0.0, []
+    evidence = []
+    score = SequenceMatcher(None, cluster_norm, template_norm).ratio()
+    if cluster_norm == template_norm:
+        score = max(score, 0.95)
+        evidence.append("exact")
+    elif cluster_norm in template_norm or template_norm in cluster_norm:
+        score = max(score, 0.86)
+        evidence.append("substring")
+    if subject_norm and subject_norm in template_norm:
+        score = max(score, 0.82)
+        evidence.append("subject")
+    if category_norm and category_norm in template_norm:
+        score = min(max(score + 0.08, score), 0.99)
+        evidence.append("category")
+    overlap = _char_overlap(cluster_norm, template_norm)
+    if overlap >= 0.5:
+        score = max(score, overlap * 0.75)
+        evidence.append("overlap")
+    return min(score, 0.99), evidence or ["similarity"]
+
+
+def _normal_match_text(value: str) -> str:
+    return re.sub(r"[\W_]+", "", str(value or "").lower(), flags=re.UNICODE)
+
+
+def _char_overlap(left: str, right: str) -> float:
+    left_set = {char for char in left if char.strip()}
+    right_set = {char for char in right if char.strip()}
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set & right_set) / len(left_set | right_set)
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug[:80]
+
+
 def _attach_oa_write_promotion_evidence(
     plan: dict[str, Any],
     *,
@@ -3483,6 +3981,15 @@ def _history_read_effect(kind: str, *, detail_page_opened: bool) -> dict[str, An
         "may_mark_read": False,
         "note": "Historical detail pages are used as read-only samples for discovery." if detail_page_opened else "",
         "kind": kind,
+    }
+
+
+def _launch_read_effect(*, page_opened: bool) -> dict[str, Any]:
+    return {
+        "launch_page_opened": page_opened,
+        "may_create_draft": page_opened,
+        "submitted_count": 0,
+        "note": "Launch pages may create or keep a draft; no submit/approve/archive/delete action is executed.",
     }
 
 

@@ -373,6 +373,39 @@ def parse_oa_detail(html: str, *, base_url: str) -> dict:
     }
 
 
+def parse_launch_page(html: str, *, base_url: str) -> dict:
+    root = _parse_html(html)
+    title = _detail_title(root)
+    fields = _parse_launch_fields(root)
+    hidden_fields = _parse_launch_hidden_fields(root)
+    buttons = _parse_launch_buttons(root)
+    forms = _parse_launch_forms(root, base_url=base_url)
+    actions = _parse_detail_write_actions(html)
+    return {
+        "schema_version": "bscli.oa_launch_inspection.v1",
+        "title": title,
+        "url": base_url,
+        "text": _clean(root.text(), 10000),
+        "forms": forms,
+        "form_count": len(forms),
+        "fields": fields,
+        "field_count": len(fields),
+        "hidden_fields": hidden_fields,
+        "hidden_field_count": len(hidden_fields),
+        "buttons": buttons,
+        "button_count": len(buttons),
+        "actions": actions,
+        "action_count": len(actions),
+        "write_hints": _parse_detail_write_hints(root, html, base_url=base_url),
+        "safety": {
+            "read_only": True,
+            "draft_page_opened": True,
+            "execute_allowed": False,
+            "submitted_count": 0,
+        },
+    }
+
+
 def _detail_title(root: _Node) -> str:
     for node in root.descendants():
         if node.tag in {"h1", "h2"}:
@@ -418,6 +451,197 @@ def _parse_detail_fields(root: _Node) -> list[dict]:
         if len(fields) >= 200:
             break
     return fields
+
+
+def _parse_launch_forms(root: _Node, *, base_url: str) -> list[dict]:
+    forms = []
+    for index, form in enumerate(_find_all(root, tag="form")):
+        field_count = 0
+        hidden_count = 0
+        button_count = 0
+        for node in form.descendants():
+            if _is_launch_field(node):
+                if node.tag == "input" and node.attr("type").lower() == "hidden":
+                    hidden_count += 1
+                else:
+                    field_count += 1
+            if _is_launch_button(node):
+                button_count += 1
+        action = form.attr("action")
+        forms.append(
+            {
+                "index": index,
+                "id": form.attr("id"),
+                "name": form.attr("name"),
+                "method": (form.attr("method") or "GET").upper(),
+                "action": _join_app_url(base_url, action) if action else "",
+                "field_count": field_count,
+                "hidden_field_count": hidden_count,
+                "button_count": button_count,
+            }
+        )
+    return forms
+
+
+def _parse_launch_fields(root: _Node) -> list[dict]:
+    labels = _launch_label_index(root)
+    fields = []
+    seen = set()
+    for node in root.descendants():
+        if not _is_launch_field(node):
+            continue
+        if node.tag == "input" and node.attr("type").lower() == "hidden":
+            continue
+        name = node.attr("name") or node.attr("id")
+        field_id = node.attr("id")
+        key = (node.tag, name, field_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        field = {
+            "tag": node.tag,
+            "type": _launch_field_type(node),
+            "name": name,
+            "id": field_id,
+            "label": _launch_field_label(node, labels),
+            "required": "required" in node.attrs,
+            "readonly": "readonly" in node.attrs,
+            "disabled": "disabled" in node.attrs,
+            "value_present": bool(node.attr("value")),
+        }
+        if node.tag == "select":
+            field["options_count"] = len(_find_all(node, tag="option"))
+        fields.append(field)
+        if len(fields) >= 300:
+            break
+    return fields
+
+
+def _parse_launch_hidden_fields(root: _Node) -> list[dict]:
+    hidden_fields = []
+    seen = set()
+    for node in root.descendants():
+        if node.tag != "input" or node.attr("type").lower() != "hidden":
+            continue
+        name = node.attr("name") or node.attr("id")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        hidden_fields.append(
+            {
+                "name": name,
+                "id": node.attr("id"),
+                "value_present": bool(node.attr("value")),
+            }
+        )
+        if len(hidden_fields) >= 200:
+            break
+    return hidden_fields
+
+
+def _parse_launch_buttons(root: _Node) -> list[dict]:
+    buttons = []
+    seen = set()
+    for node in root.descendants():
+        if not _is_launch_button(node):
+            continue
+        text = _clean(node.text() or node.attr("value") or node.attr("title") or node.attr("aria-label"), 200)
+        code = _clean(node.attr("id") or node.attr("name") or text, 100)
+        risk = write_action_risk(code, text)
+        action_like = risk == "high" or _launch_button_type(node) == "submit" or _looks_like_write_button(code, text)
+        key = (node.tag, code, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        buttons.append(
+            {
+                "tag": node.tag,
+                "type": _launch_button_type(node),
+                "id": node.attr("id"),
+                "name": node.attr("name"),
+                "text": text,
+                "risk": risk,
+                "action_like": action_like,
+                "requires_confirmation": action_like,
+            }
+        )
+        if len(buttons) >= 200:
+            break
+    return buttons
+
+
+def _launch_label_index(root: _Node) -> dict[str, str]:
+    labels = {}
+    for label in _find_all(root, tag="label"):
+        text = _clean(label.text(), 200)
+        if not text:
+            continue
+        target = label.attr("for")
+        if target:
+            labels[target] = text
+    return labels
+
+
+def _launch_field_label(node: _Node, labels: dict[str, str]) -> str:
+    for key in (node.attr("id"), node.attr("name")):
+        if key and labels.get(key):
+            return labels[key]
+    return _clean(node.attr("title") or node.attr("placeholder") or node.attr("aria-label"), 200)
+
+
+def _is_launch_field(node: _Node) -> bool:
+    if node.tag in {"select", "textarea"}:
+        return True
+    return node.tag == "input" and node.attr("type").lower() not in {"button", "submit", "reset", "image"}
+
+
+def _launch_field_type(node: _Node) -> str:
+    if node.tag == "input":
+        return node.attr("type").lower() or "text"
+    return node.tag
+
+
+def _is_launch_button(node: _Node) -> bool:
+    if node.tag == "button":
+        return True
+    if node.tag == "input" and node.attr("type").lower() in {"button", "submit", "reset", "image"}:
+        return True
+    if node.tag != "a":
+        return False
+    marker = " ".join(
+        node.attr(name).lower()
+        for name in ("class", "role", "onclick", "href")
+        if node.attr(name)
+    )
+    return any(value in marker for value in ("button", "btn", "submit", "save", "delete", "archive"))
+
+
+def _launch_button_type(node: _Node) -> str:
+    if node.tag == "input":
+        return node.attr("type").lower() or "button"
+    if node.tag == "button":
+        return node.attr("type").lower() or "button"
+    return "link"
+
+
+def _looks_like_write_button(code: str, text: str) -> bool:
+    value = f"{code} {text}".lower()
+    return any(
+        marker in value
+        for marker in (
+            "submit",
+            "send",
+            "approve",
+            "agree",
+            "reject",
+            "return",
+            "archive",
+            "delete",
+            "revoke",
+            "upload",
+            "continuesubmit",
+        )
+    )
 
 
 def _field_name(value: str) -> str:

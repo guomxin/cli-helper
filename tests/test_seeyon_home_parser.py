@@ -3,6 +3,7 @@ import unittest
 
 from bscli.adapters.seeyon_home import (
     extract_history_sections,
+    parse_launch_page,
     parse_navigation_inventory,
     parse_oa_detail,
     parse_pending_list,
@@ -257,6 +258,74 @@ class SeeyonHomeParserTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_parse_launch_page_extracts_forms_fields_buttons_and_safe_hints(self):
+        html = """
+        <html>
+          <head>
+            <title>Seal launch - OA</title>
+            <script>
+              var CSRFTOKEN = 'csrf-from-page';
+              var jsonArrBase = '[{"codes":["ContinueSubmit"],"label":"Submit","id":"ContinueSubmit"},{"codes":["Archive"],"label":"Archive","id":"Archive"}]';
+              function finish() {
+                return '/collaboration/collaboration.do?method=finishWorkItem';
+              }
+            </script>
+          </head>
+          <body>
+            <h1 id="summarySubject">Seal launch</h1>
+            <form id="newColl" name="newColl" method="post"
+                  action="/collaboration/collaboration.do?method=saveOrUpdate">
+              <input type="hidden" name="contentAffairId" value="affair-1">
+              <label for="subject">Subject</label>
+              <input id="subject" name="subject" type="text" required>
+              <textarea id="reason" name="reason" title="Reason"></textarea>
+              <select id="sealType" name="sealType">
+                <option value="contract">Contract seal</option>
+              </select>
+              <button id="saveDraft" type="button">Save draft</button>
+              <button id="ContinueSubmit" type="button">Submit</button>
+            </form>
+          </body>
+        </html>
+        """
+
+        result = parse_launch_page(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&templateId=tpl-1",
+        )
+
+        self.assertEqual(result["schema_version"], "bscli.oa_launch_inspection.v1")
+        self.assertEqual(result["title"], "Seal launch")
+        self.assertEqual(result["form_count"], 1)
+        self.assertEqual(
+            result["forms"][0],
+            {
+                "index": 0,
+                "id": "newColl",
+                "name": "newColl",
+                "method": "POST",
+                "action": "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=saveOrUpdate",
+                "field_count": 3,
+                "hidden_field_count": 1,
+                "button_count": 2,
+            },
+        )
+        self.assertEqual([field["name"] for field in result["fields"]], ["subject", "reason", "sealType"])
+        self.assertEqual(result["fields"][0]["label"], "Subject")
+        self.assertTrue(result["fields"][0]["required"])
+        self.assertEqual(result["fields"][2]["options_count"], 1)
+        self.assertEqual(result["hidden_fields"], [{"name": "contentAffairId", "id": "", "value_present": True}])
+        buttons = {button["id"]: button for button in result["buttons"]}
+        self.assertEqual(buttons["saveDraft"]["risk"], "medium")
+        self.assertFalse(buttons["saveDraft"]["action_like"])
+        self.assertEqual(buttons["ContinueSubmit"]["risk"], "high")
+        self.assertTrue(buttons["ContinueSubmit"]["requires_confirmation"])
+        self.assertEqual(result["actions"][0]["code"], "ContinueSubmit")
+        self.assertEqual(result["write_hints"]["csrf_tokens"], [{"name": "CSRFTOKEN", "value_present": True}])
+        self.assertEqual(result["write_hints"]["endpoint_candidates"][0]["tested"], False)
+        self.assertFalse(result["safety"]["execute_allowed"])
+        self.assertEqual(result["safety"]["submitted_count"], 0)
 
     def test_parse_pending_list_extracts_structured_rows(self):
         html = """

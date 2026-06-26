@@ -205,6 +205,34 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="history_profile",
+            description="Cluster Seeyon OA historical workflows by title pattern, category, status, and frequency.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collection to profile: sent, done, tracked, or all. Defaults to done.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "source_count": {"type": "integer"},
+                    "cluster_count": {"type": "integer"},
+                    "clusters": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.clusters"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="page_inventory",
             description="Inventory the current Seeyon OA page structure for adapter discovery.",
             access="read",
@@ -301,6 +329,60 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="template_match",
+            description="Match high-frequency Seeyon OA historical workflow clusters to launchable form templates.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collection to profile before matching: sent, done, tracked, or all.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "clusters": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.clusters"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="launch_inspect",
+            description="Open a Seeyon OA template launch page and inspect fields, buttons, and write hints without submitting.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "template_id": {"type": "string", "description": "Template id to resolve from oa template list."},
+                "url": {"type": "string", "description": "Direct launch/new-flow page URL to inspect."},
+                "settle_ms": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "fields": {"type": "array"},
+                    "buttons": {"type": "array"},
+                    "actions": {"type": "array"},
+                    "safety": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.safety"},
         )
     )
     registry.register(
@@ -580,7 +662,7 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
         CommandDefinition(
             system="oa",
             name="write_discover",
-            description="Discover and aggregate candidate write actions from read-only historical OA workflow detail pages.",
+            description="Discover and aggregate candidate write actions from historical details or launch-page inspection without executing writes.",
             access="read",
             strategy="daemon_api",
             risk="low",
@@ -588,7 +670,7 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
             args_schema={
                 "source": {
                     "type": "string",
-                    "description": "Discovery source; currently history is supported.",
+                    "description": "Discovery source: history or launch.",
                 },
                 "kind": {
                     "type": "string",
@@ -596,6 +678,9 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
                 "keyword": {"type": "string"},
                 "limit": {"type": "integer"},
+                "template_id": {"type": "string"},
+                "url": {"type": "string"},
+                "settle_ms": {"type": "integer"},
                 "deep_limit": {
                     "type": "integer",
                     "description": "Maximum number of detail pages to open for action discovery.",
