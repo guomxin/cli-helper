@@ -278,6 +278,7 @@ through the Chrome extension bridge:
 python -m bscli.cli.main --home .bscli oa write capabilities --type pending --limit 10 --format table --fields title,category,affair_id,verification_method
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
+python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
 ```
 
@@ -324,12 +325,19 @@ and returns a machine-readable report with `checks`, `missing`,
 `blocked_reasons`, `suggestions`, `target.source_item`, and `precheck`
 metadata. It never dispatches a browser write task, and writes a sanitized audit
 row under `.bscli/audit/oa-write-plans.jsonl` with opinion text redacted.
+`preflight` is the agent-facing execution gate. It runs the same read-only
+precheck as `dry-run`, returns a sanitized `plan`, a `decision.status`
+(`ready_for_execute`, `dry_run_only`, or `blocked`), and an
+`execution_contract` with the command template that still requires human
+confirmation. It never dispatches a browser write task and never probes
+write-like endpoint candidates.
 `execute` requires `--confirm`; after confirmation it reruns the same precheck,
 dispatches the browser write task only if the target action is available, then
 reads the pending list again and records whether the `affair_id` disappeared.
 Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
-`oa__write_draft`, `oa__write_dry_run`, `oa__write_execute`, and
+`oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
+`oa__write_execute`, and
 `oa__pending_submit`; executable tools require a `confirm` argument in their
 schema before they can perform a production write. Agents can also call
 `oa__write_capabilities` first to decide which write command is applicable.
@@ -574,6 +582,7 @@ Implemented:
 - Business CLI `oa detail attachments/workflow`
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
+- Business CLI `oa write preflight`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`

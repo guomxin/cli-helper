@@ -21,6 +21,10 @@ logged-in Chrome session after explicit confirmation.
   daemon and does not create an audit row.
 - `oa write dry-run ...` builds the same local write plan and appends a
   sanitized audit row to `.bscli/audit/oa-write-plans.jsonl`.
+- `oa write preflight ...` runs the same read-only precheck as dry-run, appends
+  a sanitized audit row, and returns an agent-facing decision packet. It reports
+  `ready_for_execute`, `dry_run_only`, or `blocked`, plus the confirmation
+  contract an agent must satisfy before any production execution.
 - `oa write execute ... --confirm` contacts the daemon, sends a
   `seeyon_write_execute` browser task, opens the source detail page in an
   inactive tab, verifies the target `affairId`, writes the opinion into
@@ -74,6 +78,11 @@ Dry-run may also attach `promotion.evidence` after reading the detail page. This
 evidence can include the matched page action, safe hidden-field names,
 CSRF-token presence, and untested endpoint candidates from rendered HTML. It is
 for promotion analysis only and does not authorize execution.
+Preflight wraps this same evidence in a sanitized `bscli.oa_write_preflight.v1`
+packet. The packet's `execution_contract.will_execute` is always false,
+`request_sent` is always false, and `network_probe_sent` is always false.
+Only a later human-gated execute command with `confirm=true` can cross the
+production boundary.
 `promotion.evidence.endpoint_analysis` and `oa write endpoints` use static URL
 classification only. Automatic network probes are disabled because candidates
 often contain write-like methods such as `save`, `finish`, or `archive`.
@@ -167,12 +176,13 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__write_draft`
 - `oa__write_dry_run`
 - `oa__write_endpoint_candidates`
+- `oa__write_preflight`
 - `oa__write_execute`
 - `oa__pending_submit`
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
 
-`write_capabilities`, `write_draft`, `write_dry_run`, and
+`write_capabilities`, `write_draft`, `write_dry_run`, `write_preflight`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
 do not mutate OA state. `write_execute`, `pending_submit`, and
 `meeting_reply_execute` are exposed as write/high-risk human-gate tools and

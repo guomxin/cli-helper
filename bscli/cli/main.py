@@ -335,6 +335,21 @@ def _build_oa_parser(oa_sub) -> None:
     endpoints.add_argument("--source-url", default="")
     _add_daemon_options(endpoints)
     _add_output_options(endpoints)
+    preflight = write_sub.add_parser("preflight")
+    preflight.set_defaults(oa_write_preflight=True)
+    preflight.add_argument(
+        "--type",
+        choices=["pending"],
+        default="pending",
+        dest="workflow_type",
+        help="Workflow collection to resolve; currently pending is supported.",
+    )
+    preflight.add_argument("--affair-id", required=True)
+    preflight.add_argument("--action", required=True)
+    preflight.add_argument("--opinion", default="")
+    preflight.add_argument("--source-url", default="")
+    _add_daemon_options(preflight)
+    _add_output_options(preflight)
     for mode in ("draft", "dry-run", "execute"):
         write_cmd = write_sub.add_parser(mode)
         write_cmd.set_defaults(oa_write_mode=mode)
@@ -657,6 +672,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_write_capabilities(args)
     if getattr(args, "oa_write_endpoints", False):
         return handle_oa_write_endpoints(args)
+    if getattr(args, "oa_write_preflight", False):
+        return handle_oa_write_preflight(args)
     if getattr(args, "oa_write_mode", None):
         return handle_oa_write(args, home)
     if getattr(args, "oa_pending_submit", False):
@@ -1047,6 +1064,19 @@ def handle_oa_write_endpoints(args: argparse.Namespace) -> int:
     if args.source_url:
         command_args["source_url"] = args.source_url
     response = run_oa_daemon_command(args, "write_endpoint_candidates", command_args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write_preflight(args: argparse.Namespace) -> int:
+    command_args = {
+        "type": args.workflow_type,
+        "affair_id": args.affair_id,
+        "action": args.action,
+        "opinion": args.opinion,
+        "source_url": args.source_url,
+    }
+    response = run_oa_daemon_command(args, "write_preflight", command_args)
     emit_cli_value(response, args)
     return 0
 

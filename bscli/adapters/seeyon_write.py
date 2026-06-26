@@ -301,6 +301,95 @@ def build_oa_write_plan(
     }
 
 
+def build_oa_write_preflight(
+    plan: dict,
+    *,
+    precheck_passed: bool,
+    precheck_error: str = "",
+) -> dict:
+    sanitized_plan = sanitize_oa_write_plan_for_audit(plan)
+    promotion = plan.get("promotion") if isinstance(plan.get("promotion"), dict) else {}
+    target = plan.get("target") if isinstance(plan.get("target"), dict) else {}
+    action = plan.get("action") if isinstance(plan.get("action"), dict) else {}
+    blocked_reasons = list(plan.get("blocked_reasons") or [])
+    if precheck_error and precheck_error != "write precheck blocked" and precheck_error not in blocked_reasons:
+        blocked_reasons.append(precheck_error)
+    if not precheck_passed:
+        status = "blocked"
+    elif promotion.get("execute_allowed") is True:
+        status = "ready_for_execute"
+    elif promotion.get("dry_run_allowed") is True:
+        status = "dry_run_only"
+        blocked_reasons.extend(reason for reason in promotion.get("blocked_reasons") or [] if reason not in blocked_reasons)
+    else:
+        status = "blocked"
+        blocked_reasons.extend(reason for reason in promotion.get("blocked_reasons") or [] if reason not in blocked_reasons)
+
+    affair_id = str(target.get("affair_id") or "")
+    action_code = str(action.get("code") or "")
+    dry_run_template = _write_command_template("dry-run", affair_id=affair_id, action=action_code)
+    execute_template = (
+        _write_command_template("execute", affair_id=affair_id, action=action_code, confirm=True)
+        if status == "ready_for_execute"
+        else ""
+    )
+    detail_opened = any(
+        isinstance(check, dict) and check.get("name") == "detail_read"
+        for check in plan.get("checks") or []
+    )
+    return {
+        "schema_version": "bscli.oa_write_preflight.v1",
+        "target": sanitized_plan.get("target", {}),
+        "action": sanitized_plan.get("action", {}),
+        "decision": {
+            "status": status,
+            "dry_run_passed": bool(precheck_passed),
+            "dry_run_allowed": bool(promotion.get("dry_run_allowed")),
+            "execute_allowed": status == "ready_for_execute",
+            "requires_confirmation": True,
+            "verification_method": promotion.get("verification_method", ""),
+            "blocked_reasons": blocked_reasons,
+            "missing": list(plan.get("missing") or []),
+            "suggestions": list(plan.get("suggestions") or []),
+        },
+        "execution_contract": {
+            "will_execute": False,
+            "request_sent": False,
+            "network_probe_sent": False,
+            "confirmation_required_for_execute": True,
+            "confirm_argument": "confirm=true",
+            "confirm_flag": "--confirm",
+            "dry_run_command_template": dry_run_template,
+            "execute_command_template": execute_template,
+        },
+        "read_effect": {
+            "detail_page_opened": detail_opened,
+            "may_mark_read": detail_opened,
+            "note": "Preflight reads a pending detail page and may change its read/unread state." if detail_opened else "",
+        },
+        "probe_policy": {
+            "automatic_network_probe": False,
+            "reason": "preflight does not call endpoint candidates or execute page write functions",
+        },
+        "plan": sanitized_plan,
+    }
+
+
+def _write_command_template(
+    mode: str,
+    *,
+    affair_id: str,
+    action: str,
+    confirm: bool = False,
+) -> str:
+    if not affair_id or not action:
+        return ""
+    command = f"oa write {mode} --affair-id {affair_id} --action {action} --opinion <opinion>"
+    if confirm:
+        command = f"{command} --confirm"
+    return command
+
+
 def sanitize_oa_write_plan_for_audit(plan: dict) -> dict:
     sanitized = json.loads(json.dumps(plan, ensure_ascii=False))
     opinion = sanitized.get("opinion")

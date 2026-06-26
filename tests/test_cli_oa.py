@@ -1176,6 +1176,50 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_write_preflight_calls_daemon_for_execution_decision(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_write_preflight.v1",
+                    "decision": {"status": "ready_for_execute", "execute_allowed": True},
+                    "plan": {"opinion": {"length": 8}},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "preflight",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--source-url",
+                "http://oa.example.test/detail?affairId=affair-1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_preflight")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "type": "pending",
+                "affair_id": "affair-1",
+                "action": "ContinueSubmit",
+                "opinion": "approved",
+                "source_url": "http://oa.example.test/detail?affairId=affair-1",
+            },
+        )
+        self.assertEqual(payload["result"]["decision"]["status"], "ready_for_execute")
+
     def test_oa_write_execute_without_confirm_stays_local_blocked(self):
         with TemporaryDirectory() as tmp:
             result = self._run_cli(

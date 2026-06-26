@@ -815,6 +815,36 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="write_preflight",
+            description="Build a non-executing Seeyon OA write preflight packet with dry-run decision, confirmation contract, and sanitized plan.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "type": {
+                    "type": "string",
+                    "description": "Workflow collection to resolve; currently pending is supported.",
+                },
+                "affair_id": {"type": "string", "required": True},
+                "action": {"type": "string", "required": True},
+                "opinion": {"type": "string"},
+                "source_url": {"type": "string"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "object"},
+                    "execution_contract": {"type": "object"},
+                    "plan": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.decision.status"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="write_execute",
             description="Execute a confirmed Seeyon OA ContinueSubmit write through the logged-in Chrome bridge.",
             access="write",

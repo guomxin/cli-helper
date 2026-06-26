@@ -239,6 +239,12 @@ class ToolManifestTests(unittest.TestCase):
             "Workflow collection to inspect; currently pending is the supported write target.",
         )
 
+        preflight = tools["oa__write_preflight"]
+        self.assertEqual(preflight["metadata"]["access"], "read")
+        self.assertEqual(preflight["metadata"]["risk"], "low")
+        self.assertFalse(preflight["metadata"]["requires_confirmation"])
+        self.assertEqual(preflight["input_schema"]["required"], ["affair_id", "action"])
+
         dry_run = tools["oa__meeting_reply_dry_run"]
         self.assertEqual(dry_run["metadata"]["access"], "read")
         self.assertEqual(dry_run["metadata"]["strategy"], "daemon_api")

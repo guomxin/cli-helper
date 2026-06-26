@@ -3083,6 +3083,185 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(audit_rows[0]["precheck"]["status"], "passed")
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
 
+    def test_run_oa_write_preflight_reports_ready_without_executing(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "url": "http://oa.example.test/detail?affairId=affair-1",
+                            "actions": [{"code": "ContinueSubmit", "label": "Submit", "risk": "high"}],
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_preflight",
+                    "args": {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            audit_path = Path(tmp) / "audit" / "oa-write-plans.jsonl"
+            audit_rows = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["pending_list_api", "detail_read"])
+            self.assertEqual(result["schema_version"], "bscli.oa_write_preflight.v1")
+            self.assertEqual(result["decision"]["status"], "ready_for_execute")
+            self.assertTrue(result["decision"]["execute_allowed"])
+            self.assertTrue(result["decision"]["requires_confirmation"])
+            self.assertFalse(result["plan"]["safety"]["will_execute"])
+            self.assertNotIn("approved", json.dumps(result, ensure_ascii=False))
+            self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
+            self.assertEqual(state.bridge.pending_tasks, [])
+            self.assertIn("--confirm", result["execution_contract"]["execute_command_template"])
+
+    def test_run_oa_write_preflight_reports_dry_run_only_for_archive(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Contract archive",
+                                    "affair_id": "archive-1",
+                                    "href": "http://oa.example.test/detail?affairId=archive-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Contract archive",
+                            "url": "http://oa.example.test/detail?affairId=archive-1",
+                            "actions": [{"code": "Archive", "label": "Archive", "risk": "high"}],
+                        },
+                    },
+                ),
+            ]
+            state._run_nested_oa_command = lambda *_args: responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_preflight",
+                    "args": {"affair_id": "archive-1", "action": "Archive"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(result["decision"]["status"], "dry_run_only")
+            self.assertFalse(result["decision"]["execute_allowed"])
+            self.assertTrue(result["decision"]["dry_run_allowed"])
+            self.assertEqual(result["decision"]["verification_method"], "not_promoted")
+            self.assertIn("execute not promoted for Archive", result["decision"]["blocked_reasons"])
+            self.assertEqual(result["execution_contract"]["execute_command_template"], "")
+            self.assertFalse(result["probe_policy"]["automatic_network_probe"])
+            self.assertEqual(state.bridge.pending_tasks, [])
+
+    def test_run_oa_write_preflight_reports_blocked_when_action_missing(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "items": [
+                                {
+                                    "title": "Weekly report",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                }
+                            ]
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Weekly report",
+                            "actions": [{"code": "Track", "label": "Track", "risk": "medium"}],
+                        },
+                    },
+                ),
+            ]
+            state._run_nested_oa_command = lambda *_args: responses.pop(0)
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_preflight",
+                    "args": {"affair_id": "affair-1", "action": "ContinueSubmit"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(result["decision"]["status"], "blocked")
+            self.assertFalse(result["decision"]["execute_allowed"])
+            self.assertIn("target action is not available", result["decision"]["blocked_reasons"][0])
+            self.assertEqual(result["plan"]["precheck"]["status"], "blocked")
+            self.assertEqual(result["execution_contract"]["execute_command_template"], "")
+            self.assertEqual(state.bridge.pending_tasks, [])
+
     def test_run_oa_write_dry_run_adds_promotion_evidence_for_archive(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

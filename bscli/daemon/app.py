@@ -25,6 +25,7 @@ from bscli.adapters.seeyon_write import (
     append_oa_write_audit,
     append_oa_write_verification_audit,
     build_oa_write_plan,
+    build_oa_write_preflight,
     build_write_governance,
     classify_write_endpoint_candidates,
     is_dry_run_only_write_action,
@@ -226,6 +227,11 @@ class DaemonState:
             )
         if system == "oa" and command == "write_endpoint_candidates":
             return self._run_oa_write_endpoint_candidates_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "write_preflight":
+            return self._run_oa_write_preflight_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1811,6 +1817,36 @@ class DaemonState:
             },
         )
 
+    def _run_oa_write_preflight_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        plan = build_oa_write_plan(
+            affair_id=str(args.get("affair_id") or ""),
+            action=str(args.get("action") or ""),
+            opinion=str(args.get("opinion") or ""),
+            mode="dry-run",
+            source_url=str(args.get("source_url") or ""),
+        )
+        precheck = self._precheck_oa_write_plan(plan, args, timeout_seconds)
+        append_oa_write_audit(self.config_store.root, plan)
+        result = build_oa_write_preflight(
+            plan,
+            precheck_passed=precheck["passed"],
+            precheck_error=precheck.get("error", ""),
+        )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": False,
+                "confirmed": False,
+                "result": result,
+            },
+        )
+
     def _precheck_oa_write_plan(
         self,
         plan: dict[str, Any],
@@ -2588,6 +2624,8 @@ class DaemonState:
         if system == "oa" and command == "write_capabilities":
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_endpoint_candidates":
+            return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "write_preflight":
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in {"write_draft", "write_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}

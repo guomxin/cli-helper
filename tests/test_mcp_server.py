@@ -448,6 +448,49 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertFalse(result["result"]["structuredContent"]["safety"]["will_execute"])
 
+    def test_call_oa_write_preflight_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"decision": {"status": "ready_for_execute"}, "plan": {"safety": {"will_execute": False}}}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 151,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__write_preflight",
+                    "arguments": {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "write_preflight",
+                    {
+                        "type": "pending",
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["decision"]["status"], "ready_for_execute")
+
     def test_call_oa_pending_submit_maps_to_daemon_command(self):
         calls = []
 
