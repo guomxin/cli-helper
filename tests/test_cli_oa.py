@@ -965,6 +965,46 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[1]["args"], {"id": "seal-request", "kind": "all", "with_launch": True})
         self.assertEqual(seen_payloads[2]["command"], "matter_profile")
 
+    def test_oa_matter_preflight_calls_daemon_with_business_intent(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_intent_preflight.v1",
+                    "scene": "received_pending",
+                    "intent": {"code": "approve"},
+                    "binding": {"action": "ContinueSubmit"},
+                    "decision": {"status": "ready_for_execute"},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "preflight",
+                "--keyword",
+                "周报",
+                "--intent",
+                "approve",
+                "--opinion",
+                "已阅",
+                "--limit",
+                "1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_matter_intent_preflight.v1")
+        self.assertEqual(seen_payloads[0]["command"], "matter_preflight")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"keyword": "周报", "intent": "approve", "opinion": "已阅", "limit": 1},
+        )
+
     def test_oa_launch_inspect_calls_daemon_with_template_or_url(self):
         server, seen_payloads = self._start_daemon(
             {

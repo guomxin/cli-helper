@@ -426,6 +426,40 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="matter_preflight",
+            description="Precheck a business-level Seeyon OA matter intent for a received pending item without executing writes.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "description": "Pending workflow affair id to preflight."},
+                "keyword": {"type": "string", "description": "Keyword used to resolve one pending workflow item."},
+                "intent": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Business intent such as approve or archive.",
+                },
+                "opinion": {"type": "string"},
+                "limit": {"type": "integer"},
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "scene": {"type": "string"},
+                    "intent": {"type": "object"},
+                    "binding": {"type": "object"},
+                    "decision": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.decision.status"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="launch_inspect",
             description="Open a Seeyon OA template launch page and inspect fields, buttons, and write hints without submitting.",
             access="read",

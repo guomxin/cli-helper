@@ -25,6 +25,7 @@ from bscli.adapters.seeyon_home import (
     parse_template_projection,
     parse_template_list,
 )
+from bscli.adapters.seeyon_matter_intent import build_matter_intent_preflight
 from bscli.adapters.seeyon_write import (
     append_oa_launch_draft_audit,
     append_oa_write_audit,
@@ -248,6 +249,11 @@ class DaemonState:
         if system == "oa" and command in {"matter_profile", "matter_inspect"}:
             return self._run_oa_matter_command(
                 command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "matter_preflight":
+            return self._run_oa_matter_preflight_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1092,6 +1098,96 @@ class DaemonState:
                 "ok": True,
                 "task_id": profile_response.body.get("task_id"),
                 "result": _build_oa_matter_inspection(profile, matter, launch_inspection=launch_inspection),
+            },
+        )
+
+    def _run_oa_matter_preflight_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        workflow_id = str(args.get("id") or "").strip()
+        if not workflow_id:
+            list_args: dict[str, Any] = {"type": "pending"}
+            for key in ("keyword", "limit"):
+                if args.get(key) is not None:
+                    list_args[key] = args[key]
+            list_response = self._run_nested_oa_command("workflow_list", list_args, timeout_seconds)
+            if list_response.status != 200 or list_response.body.get("ok") is False:
+                return list_response
+            list_result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+            if not isinstance(list_result, dict):
+                list_result = {}
+            source_items = self._workflow_items_from_result(list_result)
+            if not source_items:
+                return DaemonResponse(
+                    404,
+                    {
+                        "ok": False,
+                        "error": "no pending matter matched the preflight target",
+                        "result": {
+                            "schema_version": "bscli.oa_matter_intent_preflight.v1",
+                            "scene": "received_pending",
+                            "query": {
+                                "keyword": str(args.get("keyword") or ""),
+                                "limit": args.get("limit"),
+                            },
+                        },
+                    },
+                )
+            source_item = source_items[0] if isinstance(source_items[0], dict) else {}
+            workflow_id = str(source_item.get("affair_id") or "")
+            if not workflow_id:
+                return DaemonResponse(
+                    409,
+                    {
+                        "ok": False,
+                        "error": "matched pending matter has no affair_id",
+                        "result": {"source_item": source_item},
+                    },
+                )
+        evidence_args: dict[str, Any] = {"type": "pending", "id": workflow_id}
+        if args.get("text_limit") is not None:
+            evidence_args["text_limit"] = args.get("text_limit")
+        evidence_response = self._run_nested_oa_command("workflow_evidence", evidence_args, timeout_seconds)
+        if evidence_response.status != 200 or evidence_response.body.get("ok") is False:
+            return evidence_response
+        evidence_result = evidence_response.body.get("result") if isinstance(evidence_response.body, dict) else {}
+        if not isinstance(evidence_result, dict):
+            evidence_result = {}
+        source_item = evidence_result.get("source_item") if isinstance(evidence_result.get("source_item"), dict) else {}
+        evidence = evidence_result.get("evidence") if isinstance(evidence_result.get("evidence"), dict) else {}
+        try:
+            result = build_matter_intent_preflight(
+                source_item=source_item,
+                evidence=evidence,
+                intent=str(args.get("intent") or ""),
+                opinion=str(args.get("opinion") or ""),
+            )
+        except ValueError as exc:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "result": {
+                        "schema_version": "bscli.oa_matter_intent_preflight.v1",
+                        "scene": "received_pending",
+                    },
+                },
+            )
+        result["read_effect"] = evidence_result.get(
+            "read_effect",
+            _workflow_read_effect("pending", detail_page_opened=True),
+        )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": False,
+                "confirmed": False,
+                "result": result,
             },
         )
 

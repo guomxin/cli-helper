@@ -4231,6 +4231,99 @@ class DaemonTests(unittest.TestCase):
             self.assertNotIn("approved", json.dumps(result, ensure_ascii=False))
             self.assertEqual(state.bridge.pending_tasks, [])
 
+    def test_run_oa_matter_preflight_maps_business_intent_without_executing(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                if command == "workflow_list":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "type": "pending",
+                                "items": [
+                                    {
+                                        "title": "(自动发起)【综合】周报发送流程-25周",
+                                        "affair_id": "affair-1",
+                                        "href": "http://oa.example.test/detail?affairId=affair-1",
+                                    }
+                                ],
+                            },
+                        },
+                    )
+                if command == "workflow_evidence":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "type": "pending",
+                                "source_item": {
+                                    "title": "(自动发起)【综合】周报发送流程-25周",
+                                    "affair_id": "affair-1",
+                                    "href": "http://oa.example.test/detail?affairId=affair-1",
+                                },
+                                "evidence": {
+                                    "identity": {
+                                        "title": "(自动发起)【综合】周报发送流程-25周",
+                                        "affair_id": "affair-1",
+                                        "url": "http://oa.example.test/detail?affairId=affair-1",
+                                    },
+                                    "actions": {
+                                        "codes": ["ContinueSubmit", "Archive"],
+                                        "items": [
+                                            {
+                                                "code": "ContinueSubmit",
+                                                "label": "提交",
+                                                "risk": "high",
+                                            },
+                                            {
+                                                "code": "Archive",
+                                                "label": "处理后归档",
+                                                "risk": "high",
+                                            },
+                                        ],
+                                    },
+                                },
+                                "read_effect": {"detail_page_opened": True, "may_mark_read": True},
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_preflight",
+                    "args": {"keyword": "周报", "intent": "approve", "opinion": "已阅", "limit": 1},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["workflow_list", "workflow_evidence"])
+            self.assertEqual(calls[0][1], {"type": "pending", "keyword": "周报", "limit": 1})
+            self.assertEqual(calls[1][1], {"type": "pending", "id": "affair-1"})
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_intent_preflight.v1")
+            self.assertEqual(result["scene"], "received_pending")
+            self.assertEqual(result["intent"]["code"], "approve")
+            self.assertEqual(result["binding"]["action"], "ContinueSubmit")
+            self.assertEqual(result["decision"]["status"], "ready_for_execute")
+            self.assertEqual(result["decision"]["verification_method"], "pending_disappearance")
+            self.assertFalse(result["execution_contract"]["will_execute"])
+            self.assertNotIn("已阅", json.dumps(result, ensure_ascii=False))
+            self.assertEqual(state.bridge.pending_tasks, [])
+
     def test_run_oa_write_dry_run_adds_promotion_evidence_for_archive(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

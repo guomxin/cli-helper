@@ -50,6 +50,8 @@ python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
+python -m bscli.cli.main --home .bscli oa matter preflight --keyword <pending_keyword> --intent approve
+python -m bscli.cli.main --home .bscli oa matter preflight --id <pending_affair_id> --intent archive
 ```
 
 `oa template match` compares historical clusters with the launchable template
@@ -61,6 +63,10 @@ has a stable `matter_id`, historical samples, template match state, and the
 atomic write/read commands that are safe to consider next. `oa matter inspect`
 reads one matter entry; it opens the launch page only when `--with-launch` is
 passed.
+`oa matter preflight` is the received-pending business-intent bridge. It keeps
+agent-facing commands at the matter/intent level (`approve`, `archive`) while
+reporting the internal binding (`ContinueSubmit`, `Archive`) for governance and
+debugging. It is read-only and does not promote any action by itself.
 
 Layer 3, launch-page inspection and write discovery:
 

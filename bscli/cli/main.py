@@ -226,6 +226,16 @@ def _build_oa_parser(oa_sub) -> None:
     matter_inspect.add_argument("--settle-ms", type=int, dest="settle_ms")
     _add_daemon_options(matter_inspect)
     _add_output_options(matter_inspect)
+    matter_preflight = matter_sub.add_parser("preflight")
+    matter_preflight.set_defaults(oa_command="matter_preflight")
+    matter_preflight_target = matter_preflight.add_mutually_exclusive_group(required=True)
+    matter_preflight_target.add_argument("--id", dest="workflow_id")
+    matter_preflight_target.add_argument("--keyword")
+    matter_preflight.add_argument("--intent", required=True, choices=["approve", "archive"])
+    matter_preflight.add_argument("--opinion", default="")
+    matter_preflight.add_argument("--text-limit", type=int, dest="text_limit")
+    _add_daemon_options(matter_preflight)
+    _add_output_options(matter_preflight)
 
     detail = oa_sub.add_parser("detail")
     detail_sub = detail.add_subparsers(dest="oa_action", required=True)
@@ -943,6 +953,8 @@ def handle_oa_matter(args: argparse.Namespace) -> int:
         response = run_oa_daemon_command(args, "matter_profile", _matter_daemon_args_from_cli(args))
     elif action == "inspect":
         response = run_oa_daemon_command(args, "matter_inspect", _matter_daemon_args_from_cli(args))
+    elif action == "preflight":
+        response = run_oa_daemon_command(args, "matter_preflight", _matter_preflight_daemon_args_from_cli(args))
     else:
         raise ValueError(f"unknown matter action: {action}")
     if not response.get("ok", False):
@@ -1067,6 +1079,24 @@ def _matter_daemon_args_from_cli(args: argparse.Namespace) -> dict:
         payload["with_launch"] = True
     if getattr(args, "settle_ms", None) is not None:
         payload["settle_ms"] = args.settle_ms
+    return payload
+
+
+def _matter_preflight_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {
+        "intent": args.intent,
+        "opinion": args.opinion,
+    }
+    workflow_id = getattr(args, "workflow_id", None)
+    if workflow_id:
+        payload["id"] = workflow_id
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    if getattr(args, "limit", None) is not None:
+        payload["limit"] = args.limit
+    if getattr(args, "text_limit", None) is not None:
+        payload["text_limit"] = args.text_limit
     return payload
 
 

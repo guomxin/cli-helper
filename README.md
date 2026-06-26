@@ -232,6 +232,8 @@ python -m bscli.cli.main --home .bscli oa history export --kind sent --format cs
 python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
+python -m bscli.cli.main --home .bscli oa matter preflight --keyword "weekly" --intent approve --opinion "read"
+python -m bscli.cli.main --home .bscli oa matter preflight --id <pending_affair_id> --intent archive --opinion "read"
 ```
 
 `oa history` reads historical tabs such as sent, done, and tracked from the OA
@@ -250,6 +252,14 @@ actions such as `launch_save_draft`.
 `oa matter inspect` reads one matter entry by id or name. By default it does not
 open the template launch page; add `--with-launch` when you explicitly want the
 matched template's fields and save-draft controls inspected.
+`oa matter preflight` is the first business-intent layer for received pending
+items. It lets agents ask for an intent such as `approve` or `archive` without
+choosing raw OA action codes. The daemon resolves the pending item, reads
+workflow evidence, maps the intent to an internal binding such as
+`ContinueSubmit` or `Archive`, and returns a read-only
+`bscli.oa_matter_intent_preflight.v1` packet. It does not execute writes,
+enqueue extension tasks, or echo the opinion text; `Archive` remains
+dry-run-only until separately promoted.
 
 Pending, sent, and template objects:
 
@@ -682,7 +692,7 @@ Implemented:
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa history sections/list/search/profile/clusters/export`
-- Business CLI `oa matter profile/inspect`
+- Business CLI `oa matter profile/inspect/preflight`
 - Business CLI `oa template match`
 - Business CLI `oa launch inspect`
 - Business CLI `oa write actions`
