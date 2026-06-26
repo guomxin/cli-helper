@@ -388,6 +388,66 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="launch_dry_run",
+            description="Precheck a Seeyon OA template launch-page save-draft operation without mutating OA state.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "template_id": {"type": "string", "description": "Template id to resolve from oa template list."},
+                "url": {"type": "string", "description": "Direct launch/new-flow page URL to precheck."},
+                "fields": {"type": "object", "description": "Field name/id/label to value mapping to validate."},
+                "settle_ms": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "fields": {"type": "array"},
+                    "safety": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.safety.will_execute"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="launch_save_draft",
+            description="Execute a confirmed Seeyon OA launch-page save-draft operation through the logged-in Chrome bridge without sending the workflow.",
+            access="write",
+            strategy="human_gate",
+            risk="medium",
+            requires_confirmation=True,
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "template_id": {"type": "string", "description": "Template id to resolve from oa template list."},
+                "url": {"type": "string", "description": "Direct launch/new-flow page URL to save as draft."},
+                "fields": {"type": "object", "required": True, "description": "Field name/id/label to value mapping to fill."},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm creating or updating a launch-page draft.",
+                },
+                "settle_ms": {"type": "integer"},
+                "keep_tab": {"type": "boolean"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "draft_saved": {"type": "boolean"},
+                    "submitted_count": {"type": "integer"},
+                    "plan": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.draft_saved"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="workflow_list",
             description="Read Seeyon OA workflow items from the pending or sent collection.",
             access="read",

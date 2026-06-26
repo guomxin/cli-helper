@@ -27,8 +27,12 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("oa__history_profile", tools)
         self.assertIn("oa__template_match", tools)
         self.assertIn("oa__launch_inspect", tools)
+        self.assertIn("oa__launch_dry_run", tools)
+        self.assertIn("oa__launch_save_draft", tools)
         self.assertEqual(tools["oa__session_status"]["inputSchema"]["required"], [])
         self.assertEqual(tools["oa__launch_inspect"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__launch_dry_run"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__launch_save_draft"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(
             tools["oa__template_detail"]["inputSchema"],
             {
@@ -451,6 +455,43 @@ class McpServerTests(unittest.TestCase):
             ],
         )
         self.assertFalse(result["result"]["structuredContent"]["safety"]["will_execute"])
+
+    def test_call_oa_launch_save_draft_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {"draft_saved": True, "submitted_count": 0}
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 150,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__launch_save_draft",
+                    "arguments": {
+                        "template_id": "tpl-1",
+                        "fields": {"subject": "Draft subject"},
+                        "confirm": True,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "launch_save_draft",
+                    {"template_id": "tpl-1", "fields": {"subject": "Draft subject"}, "confirm": True},
+                )
+            ],
+        )
+        self.assertTrue(result["result"]["structuredContent"]["draft_saved"])
 
     def test_call_oa_write_preflight_maps_to_daemon_command(self):
         calls = []

@@ -356,6 +356,231 @@ def build_oa_write_plan(
     }
 
 
+def build_oa_launch_draft_plan(
+    *,
+    template_id: str,
+    url: str,
+    fields: Any,
+    mode: str,
+    inspection: dict[str, Any] | None = None,
+) -> dict:
+    field_values = normalize_launch_field_values(fields)
+    inspection = inspection if isinstance(inspection, dict) else {}
+    target_url = str(inspection.get("url") or url or "")
+    target_template_id = str(inspection.get("template_id") or template_id or "")
+    matched_fields, missing = _launch_draft_field_plan(field_values, inspection)
+    save_button = find_launch_save_draft_button(inspection)
+    checks = [
+        {
+            "name": "target_resolved",
+            "passed": bool(target_url),
+            "detail": "launch URL resolved" if target_url else "template_id or url is required",
+        },
+        {
+            "name": "save_draft_button",
+            "passed": bool(save_button),
+            "detail": "save draft control found" if save_button else "save draft control was not found",
+        },
+        {
+            "name": "fields_writable",
+            "passed": not missing,
+            "detail": "all requested fields are writable" if not missing else "some requested fields are missing or not writable",
+        },
+    ]
+    blocked_reasons = []
+    if not target_url:
+        blocked_reasons.append("template_id or url is required")
+    if not save_button:
+        blocked_reasons.append("save draft control was not found on the launch page")
+    blocked_reasons.extend(missing)
+    execute_ready = not blocked_reasons
+    request_status = "not_sent" if mode == "dry-run" else "blocked"
+    request_reason = "dry-run only; no page mutation will be performed"
+    if mode == "save-draft":
+        request_reason = (
+            "confirmed save-draft will use the Chrome extension launch-page workflow"
+            if execute_ready
+            else "save-draft is blocked until precheck passes"
+        )
+    return {
+        "schema_version": "bscli.oa_launch_draft_plan.v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "mode": str(mode or ""),
+        "system": "oa",
+        "target": {
+            "template_id": target_template_id,
+            "url": target_url,
+            "title": str(inspection.get("title") or ""),
+        },
+        "action": {
+            "code": "SaveDraft",
+            "label": "保存待发",
+            "risk": "medium",
+        },
+        "fields": matched_fields,
+        "field_count": len(matched_fields),
+        "checks": checks,
+        "missing": missing,
+        "blocked_reasons": blocked_reasons,
+        "safety": {
+            "will_execute": False,
+            "requires_confirmation": True,
+            "risk": "medium",
+            "submitted_count": 0,
+            "forbidden_actions": ["sendId_a", "ContinueSubmit", "Submit", "发送", "提交"],
+            "only_allowed_action": "SaveDraft",
+            "execute_ready": execute_ready,
+        },
+        "governance": build_write_governance(
+            "workflow.launch.save_draft",
+            verification_method="draft_save_scheduled_ack",
+        ),
+        "request": {
+            "status": request_status,
+            "method": "browser_click" if mode == "save-draft" and execute_ready else None,
+            "url": target_url,
+            "body": None,
+            "payload_preview": {
+                "templateId": target_template_id,
+                "fieldCount": len(matched_fields),
+                "fieldNames": [field["name"] for field in matched_fields],
+                "actionCode": "SaveDraft",
+            },
+            "payload_fields": matched_fields,
+            "reason": request_reason,
+        },
+        "read_effect": {
+            "launch_page_opened": bool(inspection),
+            "may_create_draft": mode == "save-draft",
+            "submitted_count": 0,
+        },
+    }
+
+
+def normalize_launch_field_values(fields: Any) -> dict[str, str]:
+    if fields is None:
+        return {}
+    if not isinstance(fields, dict):
+        raise ValueError("fields must be an object")
+    normalized = {}
+    for key, value in fields.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        normalized[name] = "" if value is None else str(value)
+    return normalized
+
+
+def find_launch_save_draft_button(inspection: dict[str, Any]) -> dict[str, Any]:
+    buttons = inspection.get("buttons") if isinstance(inspection, dict) else []
+    if not isinstance(buttons, list):
+        return {}
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        code = str(button.get("id") or button.get("name") or "")
+        text = str(button.get("text") or "")
+        if _is_launch_save_draft_marker(code, text):
+            return {
+                "id": code,
+                "name": str(button.get("name") or ""),
+                "text": text,
+                "tag": str(button.get("tag") or ""),
+                "type": str(button.get("type") or ""),
+            }
+    return {}
+
+
+def _launch_draft_field_plan(field_values: dict[str, str], inspection: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    available = inspection.get("fields") if isinstance(inspection.get("fields"), list) else []
+    planned = []
+    missing = []
+    for input_key, value in field_values.items():
+        field = _match_launch_field(input_key, available)
+        if not field:
+            missing.append(f"field:{input_key}")
+            planned.append(
+                {
+                    "input_key": input_key,
+                    "name": input_key,
+                    "matched": False,
+                    "writable": False,
+                    "value_present": bool(value),
+                    "length": len(value),
+                }
+            )
+            continue
+        readonly = bool(field.get("readonly")) or bool(field.get("disabled"))
+        if readonly:
+            missing.append(f"field_not_writable:{input_key}")
+        planned.append(
+            {
+                "input_key": input_key,
+                "name": str(field.get("name") or field.get("id") or input_key),
+                "id": str(field.get("id") or ""),
+                "label": str(field.get("label") or ""),
+                "type": str(field.get("type") or ""),
+                "matched": True,
+                "writable": not readonly,
+                "value_present": bool(value),
+                "length": len(value),
+            }
+        )
+    return planned, missing
+
+
+def _match_launch_field(input_key: str, available: list[Any]) -> dict[str, Any]:
+    normalized_key = _normalize_launch_lookup(input_key)
+    for field in available:
+        if not isinstance(field, dict):
+            continue
+        candidates = (
+            field.get("name"),
+            field.get("id"),
+            field.get("label"),
+        )
+        if any(_normalize_launch_lookup(candidate) == normalized_key for candidate in candidates):
+            return field
+    return {}
+
+
+def _normalize_launch_lookup(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_launch_save_draft_marker(code: str, text: str) -> bool:
+    value = f"{code} {text}".lower()
+    return any(marker in value for marker in ("savedraft", "save draft", "保存待发", "保存草稿", "暂存待发"))
+
+
+def mark_oa_launch_draft_plan_for_execution(plan: dict[str, Any]) -> None:
+    safety = plan.setdefault("safety", {})
+    safety["will_execute"] = True
+    safety["dry_run_only"] = False
+    request = plan.setdefault("request", {})
+    request["status"] = "queued"
+    request["reason"] = "confirmed save-draft task queued for Chrome extension execution"
+
+
+def sanitize_oa_launch_draft_plan_for_audit(plan: dict) -> dict:
+    sanitized = json.loads(json.dumps(plan, ensure_ascii=False))
+    request = sanitized.get("request")
+    if isinstance(request, dict):
+        request["body"] = None
+    return sanitized
+
+
+def append_oa_launch_draft_audit(home: Path, plan: dict) -> Path:
+    audit_dir = home / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = audit_dir / "oa-launch-drafts.jsonl"
+    sanitized = sanitize_oa_launch_draft_plan_for_audit(plan)
+    with audit_path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(sanitized, ensure_ascii=False, sort_keys=True))
+        file.write("\n")
+    return audit_path
+
+
 def build_oa_write_preflight(
     plan: dict,
     *,

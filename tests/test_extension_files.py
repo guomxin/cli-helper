@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import unittest
 
 
@@ -16,6 +18,18 @@ class ExtensionFilesTests(unittest.TestCase):
     def test_extension_scripts_exist(self):
         self.assertTrue(Path("extension/background.js").exists())
         self.assertTrue(Path("extension/content.js").exists())
+
+    def test_background_js_syntax_is_valid_when_node_is_available(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        result = subprocess.run(
+            [node, "--check", "extension/background.js"],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_background_contains_page_inventory_collector(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")
@@ -78,6 +92,26 @@ class ExtensionFilesTests(unittest.TestCase):
         self.assertIn("dealSubmitFunc", background)
         self.assertIn("content_deal_comment", background)
         self.assertNotIn("findSeeyonCommentElement();", background)
+
+    def test_background_contains_launch_save_draft_executor_with_submit_guard(self):
+        background = Path("extension/background.js").read_text(encoding="utf-8")
+
+        self.assertIn("seeyon_launch_save_draft", background)
+        self.assertIn("executeSeeyonLaunchSaveDraft", background)
+        self.assertIn("runSeeyonLaunchSaveDraft", background)
+        self.assertIn("saveDraft", background)
+        self.assertIn("sendId_a", background)
+        self.assertIn("ContinueSubmit", background)
+        self.assertIn("submitted_count: 0", background)
+        self.assertIn("click_scheduled: true", background)
+        self.assertIn("handlerVersion = \"launch-save-draft-v3-scheduled-fill-click\"", background)
+        self.assertIn("script_timeout_ms", background)
+        self.assertIn("withTimeout(", background)
+        self.assertIn("scheduled_fields", background)
+        self.assertIn("freshSaveDraftControl.click()", background)
+        self.assertIn("window.__bscliLaunchSaveDraftLast", background)
+        self.assertIn("value.includes(\"\\u53d1\\u9001\")", background)
+        self.assertNotIn("function findSeeyonLaunchField", background)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,9 @@
 This document describes the BSCLI/OA write-operation layer. The current
 implementation can discover candidate actions, create write plans, record audit
 entries, and execute the Seeyon `ContinueSubmit` action through the user's
-logged-in Chrome session after explicit confirmation.
+logged-in Chrome session after explicit confirmation. It can also execute a
+confirmed launch-page `SaveDraft` action that creates or updates an OA draft
+without sending the workflow.
 
 ## Safety Boundary
 
@@ -28,6 +30,16 @@ logged-in Chrome session after explicit confirmation.
   CSRF presence, and untested endpoint candidates. Launch-source candidates are
   forced to `execute_allowed=false` even when the same action code is executable
   in another governed context.
+- `oa launch dry-run ...` is the launch-page save-draft precheck. It opens the
+  launch page, validates requested field names/ids/labels against writable
+  fields, verifies that a `saveDraft` / "保存待发" control exists, records a
+  redacted audit row, and does not fill fields or click anything.
+- `oa launch save-draft ... --confirm` is the governed launch-page draft write.
+  It reuses the dry-run precheck, sends a `seeyon_launch_save_draft` browser
+  task only after confirmation, fills requested fields, and clicks only the
+  save-draft control. The extension explicitly refuses `sendId_a`,
+  `ContinueSubmit`, `Submit`, "发送", and "提交" controls. Its successful result
+  must include `draft_saved=true` and `submitted_count=0`.
 - `oa write actions` reads the local write-action registry. The registry is the
   promotion source of truth for labels, risk, action type, execution status,
   and verification method.
@@ -67,9 +79,10 @@ logged-in Chrome session after explicit confirmation.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Only collaboration `ContinueSubmit` and meeting reply are executable at this
-stage. Reject, archive, delete, revoke, return, upload, and other write actions
-remain blocked until each has a dedicated mapping and tests.
+Only launch-page `SaveDraft`, collaboration `ContinueSubmit`, and meeting reply
+are executable at this stage. Reject, archive, delete, revoke, return, upload,
+send, and other write actions remain blocked until each has a dedicated mapping
+and tests.
 
 `Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
 may call `oa write dry-run --affair-id <id> --action Archive` to prove the
@@ -87,6 +100,13 @@ Promoted write actions share the same lifecycle:
 4. Execute through the logged-in Chrome bridge or a promoted backend API.
 5. Read OA state back with the action-specific verification method.
 6. Write a sanitized audit row that does not store opinion or feedback text.
+
+For launch-page drafts, the verification method is
+`draft_save_scheduled_ack`: the extension must acknowledge that it validated the
+launch page, scheduled field filling plus the save-draft click, and reported
+`submitted_count=0`. This is intentionally weaker than pending-list
+disappearance because saving a draft does not move a pending workflow item. It
+is still a real write because it may create or update a draft in OA.
 
 The plan objects expose this as `governance.lifecycle`, together with
 `governance.verification_method`, so agents can distinguish the safety protocol
@@ -138,6 +158,24 @@ Audit rows remove `opinion.text` and keep only metadata such as opinion length.
 They also keep request bodies null and redact
 `request.payload_preview.opinionText`, so sensitive payload text is not written
 to disk.
+
+Launch draft plans use `schema_version=bscli.oa_launch_draft_plan.v1` and
+contain:
+
+- `mode`: `dry-run` or `save-draft`.
+- `target`: `template_id`, launch `url`, and page title when known.
+- `action`: fixed to `SaveDraft` / "保存待发" with medium risk.
+- `fields`: requested fields with `name`, `id`, `label`, `matched`,
+  `writable`, `value_present`, and `length`; raw field values are not stored.
+- `safety`: `submitted_count=0`, `only_allowed_action=SaveDraft`, and explicit
+  forbidden send/submit action markers.
+- `request`: a browser-click plan with a payload preview, never a backend write
+  URL or raw body.
+
+Launch draft audit rows are written to `.bscli/audit/oa-launch-drafts.jsonl`.
+They store field names and value lengths only; raw field text is not written to
+disk.
+
 The CLI audit reader preserves that boundary. `oa audit writes show --index N`
 returns a sanitized single record, and `oa audit writes search` returns
 summaries filtered by `affair_id`, action, or status. Lists and indexes are
@@ -203,6 +241,8 @@ at discovery, draft, and dry-run only.
 
 The safe planning commands are registered in the normal BSCLI command registry:
 
+- `oa__launch_dry_run`
+- `oa__launch_save_draft`
 - `oa__write_capabilities`
 - `oa__write_discover`
 - `oa__write_draft`
@@ -215,13 +255,14 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
 
-`write_capabilities`, `write_discover`, `write_draft`, `write_dry_run`,
-`write_preflight`, `write_prepare`, and
+`launch_dry_run`, `write_capabilities`, `write_discover`, `write_draft`,
+`write_dry_run`, `write_preflight`, `write_prepare`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
-do not mutate OA state. `write_execute`, `pending_submit`, and
-`meeting_reply_execute` are exposed as write/high-risk human-gate tools and
-require `confirm` in their input schema before they can perform a production
-write. Confirmed `ContinueSubmit` executions are delivered through the Chrome
-extension bridge and verified by pending disappearance. Confirmed meeting
-replies are delivered through `meetingAjaxManager.reply` and verified by
-`meetingView.myReply.feedbackFlag`.
+do not mutate OA state. `launch_save_draft`, `write_execute`, `pending_submit`,
+and `meeting_reply_execute` are exposed as write/human-gate tools and require
+`confirm` in their input schema before they can perform a write. Confirmed
+launch drafts are delivered through the Chrome extension bridge and verified by
+`draft_save_scheduled_ack` with `submitted_count=0`. Confirmed `ContinueSubmit`
+executions are delivered through the Chrome extension bridge and verified by
+pending disappearance. Confirmed meeting replies are delivered through
+`meetingAjaxManager.reply` and verified by `meetingView.myReply.feedbackFlag`.

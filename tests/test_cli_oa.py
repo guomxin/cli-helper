@@ -10,6 +10,8 @@ import threading
 import unittest
 from tempfile import TemporaryDirectory
 
+from bscli.cli.main import _daemon_client_timeout_seconds
+
 
 class CliOaTests(unittest.TestCase):
     def test_oa_pending_list_maps_to_api_command_and_filters_items(self):
@@ -933,6 +935,88 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["command"], "launch_inspect")
         self.assertEqual(seen_payloads[0]["args"], {"template_id": "tpl-1", "settle_ms": 0})
         self.assertEqual(payload["result"]["schema_version"], "bscli.oa_launch_inspection.v1")
+
+    def test_oa_launch_dry_run_calls_daemon_with_fields(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_launch_draft_plan.v1",
+                    "mode": "dry-run",
+                    "safety": {"will_execute": False, "submitted_count": 0},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "launch",
+                "dry-run",
+                "--template-id",
+                "tpl-1",
+                "--field",
+                "subject=Draft subject",
+                "--field",
+                "remark=Hello",
+                "--settle-ms",
+                "0",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "launch_dry_run")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"template_id": "tpl-1", "fields": {"subject": "Draft subject", "remark": "Hello"}, "settle_ms": 0},
+        )
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_launch_draft_plan.v1")
+
+    def test_oa_launch_save_draft_requires_confirm_and_calls_daemon(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": {
+                    "draft_saved": True,
+                    "submitted_count": 0,
+                    "plan": {"schema_version": "bscli.oa_launch_draft_plan.v1"},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "launch",
+                "save-draft",
+                "--url",
+                "http://oa.example.test/new?templateId=tpl-1",
+                "--field",
+                "subject=Draft subject",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "launch_save_draft")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "url": "http://oa.example.test/new?templateId=tpl-1",
+                "fields": {"subject": "Draft subject"},
+                "confirm": True,
+            },
+        )
+        self.assertTrue(payload["result"]["draft_saved"])
+
+    def test_oa_launch_save_draft_client_timeout_covers_nested_inspect(self):
+        self.assertGreaterEqual(_daemon_client_timeout_seconds(60, "launch_save_draft"), 140)
 
     def test_oa_write_discover_calls_daemon_with_history_arguments(self):
         server, seen_payloads = self._start_daemon(

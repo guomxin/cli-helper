@@ -58,6 +58,8 @@ Layer 3, launch-page inspection:
 
 ```powershell
 python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
 python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id>
 ```
@@ -78,6 +80,12 @@ controls and does not call suspected write endpoints. `oa write discover
 --source launch` aggregates those launch-page candidates, but every candidate is
 forced to `execute_allowed=false` until a separate user-confirmed execution plan
 exists.
+
+The first promoted launch-page execution plan is save draft. `oa launch dry-run`
+validates requested fields and the `saveDraft` / "保存待发" control without
+mutation. `oa launch save-draft --confirm` schedules field filling plus a
+save-draft click through the extension; it refuses send/submit controls and must
+return `draft_save_scheduled_ack` with `submitted_count=0`.
 
 ## Live Read-Only Findings
 

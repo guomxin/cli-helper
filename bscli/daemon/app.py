@@ -25,14 +25,18 @@ from bscli.adapters.seeyon_home import (
     parse_template_list,
 )
 from bscli.adapters.seeyon_write import (
+    append_oa_launch_draft_audit,
     append_oa_write_audit,
     append_oa_write_verification_audit,
+    build_oa_launch_draft_plan,
     build_oa_write_plan,
     build_oa_write_preflight,
     build_write_governance,
     classify_write_endpoint_candidates,
     is_dry_run_only_write_action,
+    mark_oa_launch_draft_plan_for_execution,
     normalize_write_action,
+    normalize_launch_field_values,
     write_action_promotion,
     write_action_type,
 )
@@ -242,6 +246,12 @@ class DaemonState:
             )
         if system == "oa" and command == "launch_inspect":
             return self._run_oa_launch_inspect_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in {"launch_dry_run", "launch_save_draft"}:
+            return self._run_oa_launch_draft_command(
+                command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1102,6 +1112,185 @@ class DaemonState:
             },
         )
 
+    def _run_oa_launch_draft_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        mode = "dry-run" if command == "launch_dry_run" else "save-draft"
+        try:
+            fields = normalize_launch_field_values(args.get("fields") or {})
+        except ValueError as exc:
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "requires_confirmation": mode == "save-draft",
+                    "error": str(exc),
+                    "result": build_oa_launch_draft_plan(
+                        template_id=str(args.get("template_id") or ""),
+                        url=str(args.get("url") or ""),
+                        fields={},
+                        mode=mode,
+                    ),
+                },
+            )
+        if mode == "save-draft" and args.get("confirm") is not True:
+            plan = build_oa_launch_draft_plan(
+                template_id=str(args.get("template_id") or ""),
+                url=str(args.get("url") or ""),
+                fields=fields,
+                mode=mode,
+            )
+            append_oa_launch_draft_audit(self.config_store.root, plan)
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa launch save-draft requires confirm=true",
+                    "result": plan,
+                },
+            )
+
+        inspect_args = {}
+        for key in ("template_id", "url", "settle_ms"):
+            if args.get(key) is not None:
+                inspect_args[key] = args[key]
+        inspect_response = self._run_nested_oa_command("launch_inspect", inspect_args, timeout_seconds)
+        if inspect_response.status != 200 or inspect_response.body.get("ok") is False:
+            return inspect_response
+        inspection = inspect_response.body.get("result") if isinstance(inspect_response.body, dict) else {}
+        if not isinstance(inspection, dict):
+            inspection = {}
+        plan = build_oa_launch_draft_plan(
+            template_id=str(args.get("template_id") or ""),
+            url=str(args.get("url") or ""),
+            fields=fields,
+            mode=mode,
+            inspection=inspection,
+        )
+        append_oa_launch_draft_audit(self.config_store.root, plan)
+        if plan.get("blocked_reasons"):
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": mode == "save-draft",
+                    "confirmed": args.get("confirm") is True if mode == "save-draft" else False,
+                    "error": "oa launch save-draft precheck blocked",
+                    "result": plan,
+                    "suggestions": [
+                        "Run oa launch inspect for this template and use field names, ids, or labels from the inspection.",
+                        "Confirm the launch page exposes a 保存待发/saveDraft control before executing.",
+                    ],
+                },
+            )
+        if mode == "dry-run":
+            return DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "task_id": inspect_response.body.get("task_id"),
+                    "requires_confirmation": False,
+                    "confirmed": False,
+                    "result": plan,
+                },
+            )
+
+        mark_oa_launch_draft_plan_for_execution(plan)
+        append_oa_launch_draft_audit(self.config_store.root, plan)
+        if not self.bridge.list_clients():
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "no Chrome extension client connected; start Chrome, load the BSCLI extension, and open the OA tab",
+                    "result": plan,
+                },
+            )
+        target_client_id = self._select_client_id_for_system("oa")
+        if target_client_id is None:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "no browser client is currently registered for system: oa; open the matching system tab and wait for the extension to register it",
+                    "result": plan,
+                },
+            )
+        task_id = self.bridge.enqueue_task(
+            system="oa",
+            kind="seeyon_launch_save_draft",
+            payload={
+                "template_id": plan.get("target", {}).get("template_id", ""),
+                "url": plan.get("target", {}).get("url", ""),
+                "fields": fields,
+                "confirm": True,
+                "settle_ms": int(args.get("settle_ms") if args.get("settle_ms") is not None else 1500),
+                "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 10000),
+                "keep_tab": args.get("keep_tab") is True,
+            },
+            target_client_id=target_client_id,
+        )
+        result = self.bridge.wait_for_result(task_id, timeout_seconds=timeout_seconds)
+        if result is None:
+            return DaemonResponse(
+                504,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "command timed out waiting for Chrome extension draft result: oa.launch_save_draft",
+                    "result": plan,
+                },
+            )
+        if not result["ok"]:
+            return DaemonResponse(
+                500,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": result.get("error") or "extension launch save-draft task failed",
+                    "result": plan,
+                },
+            )
+        saved = result.get("result") or {}
+        if not isinstance(saved, dict) or saved.get("draft_saved") is not True:
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "task_id": task_id,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "extension launch save-draft task returned no draft confirmation",
+                    "result": plan,
+                },
+            )
+        saved.setdefault("submitted_count", 0)
+        saved.setdefault("plan", plan)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": task_id,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": saved,
+            },
+        )
+
     def _run_oa_write_discover_command(
         self,
         args: dict[str, Any],
@@ -1917,10 +2106,10 @@ class DaemonState:
         return {
             "read": read,
             "write": {
-                "executable": ["workflow.submit", "meeting.reply"],
+                "executable": ["workflow.submit", "meeting.reply", "workflow.launch.save_draft"],
                 "dry_run_only": ["workflow.archive"],
                 "blocked": ["workflow.delete", "workflow.revoke", "workflow.return", "workflow.upload"],
-                "human_gate_commands": ["write_execute", "pending_submit", "meeting_reply_execute"],
+                "human_gate_commands": ["write_execute", "pending_submit", "meeting_reply_execute", "launch_save_draft"],
                 "policy": "write actions require dry-run/precheck, explicit confirmation, read-back verification, and sanitized audit",
             },
             "discovered": discovered,
@@ -3223,8 +3412,10 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"template_match", "launch_inspect"}:
+        if system == "oa" and command in {"template_match", "launch_inspect", "launch_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "launch_save_draft":
+            return {"access": "write", "strategy": "human_gate"}
         if system == "oa" and command == "write_discover":
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_endpoint_candidates":

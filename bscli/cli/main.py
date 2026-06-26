@@ -276,6 +276,24 @@ def _build_oa_parser(oa_sub) -> None:
     launch_inspect.add_argument("--settle-ms", type=int, dest="settle_ms")
     _add_daemon_options(launch_inspect)
     _add_output_options(launch_inspect)
+    for action, command in (("dry-run", "launch_dry_run"), ("save-draft", "launch_save_draft")):
+        launch_write = launch_sub.add_parser(action)
+        launch_write.set_defaults(oa_command=command)
+        launch_write.add_argument("--template-id", dest="template_id")
+        launch_write.add_argument("--url")
+        launch_write.add_argument(
+            "--field",
+            action="append",
+            default=[],
+            help="Field assignment in name=value form; may be repeated.",
+        )
+        launch_write.add_argument("--fields-json", default="{}", help="JSON object of field name/id/label to value.")
+        launch_write.add_argument("--settle-ms", type=int, dest="settle_ms")
+        if action == "save-draft":
+            launch_write.add_argument("--confirm", action="store_true")
+            launch_write.add_argument("--keep-tab", action="store_true", dest="keep_tab")
+        _add_daemon_options(launch_write)
+        _add_output_options(launch_write)
 
     audit = oa_sub.add_parser("audit")
     audit_sub = audit.add_subparsers(dest="oa_audit_area", required=True)
@@ -1508,6 +1526,8 @@ def run_oa_daemon_command(
 def _daemon_client_timeout_seconds(timeout_seconds: float, command: str) -> float:
     if command in {"write_prepare"}:
         return max(float(timeout_seconds) * 3 + 5, 10)
+    if command in {"launch_save_draft"}:
+        return max(float(timeout_seconds) * 2 + 20, 30)
     return max(float(timeout_seconds) + 5, 10)
 
 
@@ -1525,6 +1545,20 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
             payload["template_id"] = args.template_id
         if getattr(args, "url", None):
             payload["url"] = args.url
+        if getattr(args, "settle_ms", None) is not None:
+            payload["settle_ms"] = args.settle_ms
+        return payload
+    if command in {"launch_dry_run", "launch_save_draft"}:
+        payload = {}
+        if getattr(args, "template_id", None):
+            payload["template_id"] = args.template_id
+        if getattr(args, "url", None):
+            payload["url"] = args.url
+        payload["fields"] = _launch_fields_from_cli(args)
+        if command == "launch_save_draft" and getattr(args, "confirm", False):
+            payload["confirm"] = True
+        if command == "launch_save_draft" and getattr(args, "keep_tab", False):
+            payload["keep_tab"] = True
         if getattr(args, "settle_ms", None) is not None:
             payload["settle_ms"] = args.settle_ms
         return payload
@@ -1553,6 +1587,22 @@ def _discovered_run_args_from_cli(args: argparse.Namespace) -> dict:
         if reserved in extra:
             raise ValueError(f"--json cannot contain reserved discovered argument: {reserved}")
     return {"name": args.name, **extra}
+
+
+def _launch_fields_from_cli(args: argparse.Namespace) -> dict[str, str]:
+    fields_json = json.loads(getattr(args, "fields_json", "{}") or "{}")
+    if not isinstance(fields_json, dict):
+        raise ValueError("--fields-json must decode to an object")
+    fields = {str(key): "" if value is None else str(value) for key, value in fields_json.items()}
+    for assignment in getattr(args, "field", []) or []:
+        if "=" not in assignment:
+            raise ValueError("--field must use name=value format")
+        name, value = assignment.split("=", 1)
+        name = name.strip()
+        if not name:
+            raise ValueError("--field name cannot be empty")
+        fields[name] = value
+    return fields
 
 
 def _api_args_from_oa_cli(args: argparse.Namespace) -> dict:

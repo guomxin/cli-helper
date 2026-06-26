@@ -138,6 +138,20 @@ class ToolManifestTests(unittest.TestCase):
             },
         )
 
+        launch_dry_run = tools["oa__launch_dry_run"]
+        self.assertEqual(launch_dry_run["metadata"]["access"], "read")
+        self.assertEqual(launch_dry_run["metadata"]["risk"], "low")
+        self.assertFalse(launch_dry_run["metadata"]["requires_confirmation"])
+        self.assertEqual(launch_dry_run["input_schema"]["properties"]["fields"]["type"], "object")
+
+        launch_save_draft = tools["oa__launch_save_draft"]
+        self.assertEqual(launch_save_draft["metadata"]["access"], "write")
+        self.assertEqual(launch_save_draft["metadata"]["risk"], "medium")
+        self.assertEqual(launch_save_draft["metadata"]["strategy"], "human_gate")
+        self.assertTrue(launch_save_draft["metadata"]["requires_confirmation"])
+        self.assertEqual(launch_save_draft["input_schema"]["required"], ["fields", "confirm"])
+        self.assertEqual(launch_save_draft["input_schema"]["properties"]["confirm"]["type"], "boolean")
+
         template_match = tools["oa__template_match"]
         self.assertEqual(template_match["metadata"]["access"], "read")
         self.assertEqual(template_match["input_schema"]["properties"]["kind"]["type"], "string")

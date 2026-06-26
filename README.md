@@ -270,6 +270,8 @@ python -m bscli.cli.main --home .bscli oa template workflow --limit 20
 python -m bscli.cli.main --home .bscli oa template export --format table --fields title,template_id
 
 python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
 ```
 
 `oa template match` maps high-frequency historical workflow clusters to
@@ -279,6 +281,17 @@ extracts forms, fields, hidden-field names, buttons, script actions, CSRF
 presence, and untested endpoint candidates. It may leave an OA draft, but it
 does not click or call submit, approve, archive, delete, revoke, upload, or send
 actions.
+`oa launch dry-run` uses the same launch-page inspection path, validates that
+the requested field names, ids, or labels are writable, verifies that a
+`saveDraft` / "保存待发" control exists, and returns a sanitized
+`bscli.oa_launch_draft_plan.v1` plan without filling or clicking anything.
+`oa launch save-draft --confirm` is the first promoted launch-page write action:
+it validates the target page through the logged-in Chrome bridge, schedules
+field filling plus a click on only the save-draft control, and reports
+`draft_save_scheduled_ack` with `submitted_count=0`. It refuses `sendId_a`,
+`ContinueSubmit`, "发送", and "提交" controls, and writes a redacted audit row
+under `.bscli/audit/oa-launch-drafts.jsonl`. It may create or update an OA
+draft, but it must not send the workflow.
 
 Page/API discovery:
 
@@ -317,6 +330,8 @@ python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --actio
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write prepare --affair-id <id> --action ContinueSubmit --opinion "agree" --text-limit 800
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
 python -m bscli.cli.main --home .bscli oa audit writes list --limit 10
 python -m bscli.cli.main --home .bscli oa audit writes show --index 1
 python -m bscli.cli.main --home .bscli oa audit writes search --affair-id <id>
@@ -389,16 +404,23 @@ write-like endpoint candidates.
 `write_preflight`, then returns the workflow evidence summary, preflight
 decision, sanitized plan, and `next_steps` in one response. It is the preferred
 read-only step before asking the user to confirm a production write.
+`oa launch dry-run` and `oa launch save-draft --confirm` are the launch-page
+draft path. They target a new-flow template page rather than an existing pending
+workflow item. `dry-run` validates fields and the save-draft control without
+mutation. `save-draft` is confirmation-gated and may leave a draft in OA, but it
+is guarded to click only the save-draft control and always reports
+`submitted_count=0`.
 `execute` requires `--confirm`; after confirmation it reruns the same precheck,
 dispatches the browser write task only if the target action is available, then
 reads the pending list again and records whether the `affair_id` disappeared.
 Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
-`oa__write_discover`, `oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
-`oa__write_prepare`, `oa__write_execute`, and
-`oa__pending_submit`; executable tools require a `confirm` argument in their
-schema before they can perform a production write. Agents can also call
-`oa__write_capabilities` first to decide which write command is applicable.
+`oa__launch_dry_run`, `oa__launch_save_draft`, `oa__write_discover`,
+`oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
+`oa__write_prepare`, `oa__write_execute`, and `oa__pending_submit`; executable
+tools require a `confirm` argument in their schema before they can perform a
+write. Agents can also call `oa__write_capabilities` first to decide which
+write command is applicable.
 `oa audit writes list` and `oa audit verifications list` summarize local audit
 rows while keeping opinion text redacted; newest rows are shown first. Use
 `show --index N` to inspect one sanitized audit record and `search` to filter by

@@ -3325,6 +3325,184 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["read_effect"]["launch_page_opened"], True)
             self.assertEqual(result["read_effect"]["submitted_count"], 0)
 
+    def test_run_oa_launch_dry_run_validates_fields_without_sending(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_inspection.v1",
+                            "template_id": "tpl-1",
+                            "title": "Seal Request",
+                            "url": "http://oa.example.test/new?templateId=tpl-1",
+                            "fields": [
+                                {"name": "subject", "id": "subject", "label": "Subject", "disabled": False, "readonly": False},
+                                {"name": "remark", "id": "remark", "label": "Remark", "disabled": False, "readonly": False},
+                            ],
+                            "buttons": [{"id": "saveDraft_a", "text": "保存待发", "risk": "medium"}],
+                            "safety": {"execute_allowed": False, "submitted_count": 0},
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "launch_dry_run",
+                    "args": {"template_id": "tpl-1", "fields": {"subject": "Draft subject", "remark": "Hello"}},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["launch_inspect"])
+            self.assertEqual(result["schema_version"], "bscli.oa_launch_draft_plan.v1")
+            self.assertEqual(result["mode"], "dry-run")
+            self.assertFalse(result["safety"]["will_execute"])
+            self.assertEqual(result["action"]["code"], "SaveDraft")
+            self.assertEqual(result["governance"]["verification_method"], "draft_save_scheduled_ack")
+            self.assertEqual(result["target"]["template_id"], "tpl-1")
+            self.assertEqual(result["fields"][0]["name"], "subject")
+            self.assertEqual(result["fields"][0]["length"], len("Draft subject"))
+            self.assertNotIn("Draft subject", json.dumps(result, ensure_ascii=False))
+            self.assertEqual(result["safety"]["submitted_count"], 0)
+
+    def test_run_oa_launch_save_draft_requires_confirm_before_opening_page(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            state._run_nested_oa_command = lambda command, args, timeout_seconds: calls.append(
+                (command, args, timeout_seconds)
+            ) or DaemonResponse(500, {"ok": False, "error": "should not inspect before confirm"})
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "launch_save_draft",
+                    "args": {"template_id": "tpl-1", "fields": {"subject": "Draft subject"}},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertEqual(calls, [])
+            self.assertTrue(response.body["requires_confirmation"])
+            self.assertEqual(response.body["result"]["mode"], "save-draft")
+            self.assertEqual(response.body["result"]["safety"]["submitted_count"], 0)
+
+    def test_run_oa_launch_save_draft_with_confirm_dispatches_extension_task_and_audits_redacted(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def fake_nested(command, args, timeout_seconds):
+                self.assertEqual(command, "launch_inspect")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_inspection.v1",
+                            "template_id": "tpl-1",
+                            "title": "Seal Request",
+                            "url": "http://oa.example.test/new?templateId=tpl-1",
+                            "fields": [
+                                {"name": "subject", "id": "subject", "label": "Subject", "disabled": False, "readonly": False}
+                            ],
+                            "buttons": [{"id": "saveDraft_a", "text": "保存待发", "risk": "medium"}],
+                            "safety": {"execute_allowed": False, "submitted_count": 0},
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+            seen_tasks = []
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                seen_tasks.extend(tasks)
+                self.assertEqual(tasks[0]["kind"], "seeyon_launch_save_draft")
+                self.assertEqual(tasks[0]["payload"]["fields"], {"subject": "Draft subject"})
+                self.assertEqual(tasks[0]["payload"]["template_id"], "tpl-1")
+                self.assertEqual(tasks[0]["payload"]["script_timeout_ms"], 10000)
+                self.assertTrue(tasks[0]["payload"]["confirm"])
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "draft_saved": True,
+                            "save_attempt_mode": "scheduled_fill_click_ack",
+                            "action": "SaveDraft",
+                            "clicked": {"id": "saveDraft_a", "text": "保存待发"},
+                            "scheduled_fields": [{"name": "subject", "length": len("Draft subject")}],
+                            "submitted_count": 0,
+                            "url": "http://oa.example.test/new?templateId=tpl-1",
+                            "title": "Seal Request",
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "launch_save_draft",
+                    "args": {"template_id": "tpl-1", "fields": {"subject": "Draft subject"}, "confirm": True},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(seen_tasks[0]["kind"], "seeyon_launch_save_draft")
+            self.assertTrue(result["draft_saved"])
+            self.assertEqual(result["submitted_count"], 0)
+            self.assertEqual(result["save_attempt_mode"], "scheduled_fill_click_ack")
+            self.assertEqual(result["plan"]["governance"]["verification_method"], "draft_save_scheduled_ack")
+            self.assertEqual(result["plan"]["safety"]["submitted_count"], 0)
+            audit_text = (Path(tmp) / "audit" / "oa-launch-drafts.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"schema_version": "bscli.oa_launch_draft_plan.v1"', audit_text)
+            self.assertNotIn("Draft subject", audit_text)
+
     def test_run_oa_write_capabilities_reports_workflow_and_meeting_actions(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
