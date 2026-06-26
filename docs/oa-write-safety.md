@@ -17,6 +17,9 @@ logged-in Chrome session after explicit confirmation.
   Workflow page actions are split into three layers: promoted
   `supported_write_actions`, dry-run-only `unpromoted_write_actions`, and raw
   `discovered_write_actions`.
+- `oa write actions` reads the local write-action registry. The registry is the
+  promotion source of truth for labels, risk, action type, execution status,
+  and verification method.
 - `oa write draft ...` builds a local write plan only. It does not contact the
   daemon and does not create an audit row.
 - `oa write dry-run ...` builds the same local write plan and appends a
@@ -49,6 +52,9 @@ logged-in Chrome session after explicit confirmation.
 - `oa write endpoints ...` classifies endpoint candidates found during dry-run
   evidence collection. It does not call the candidates and marks each result
   with `safe_to_call=false`.
+- `oa write smoke` is the fixed live validation for write-action development.
+  It reads pending items first and refuses to run a confirmed no-op validation
+  if the default no-match keyword is present.
 
 Only collaboration `ContinueSubmit` and meeting reply are executable at this
 stage. Reject, archive, delete, revoke, return, upload, and other write actions
@@ -121,6 +127,10 @@ Audit rows remove `opinion.text` and keep only metadata such as opinion length.
 They also keep request bodies null and redact
 `request.payload_preview.opinionText`, so sensitive payload text is not written
 to disk.
+The CLI audit reader preserves that boundary. `oa audit writes show --index N`
+returns a sanitized single record, and `oa audit writes search` returns
+summaries filtered by `affair_id`, action, or status. Lists and indexes are
+newest-first.
 
 Batch submit verification rows are written separately to
 `.bscli/audit/oa-write-verifications.jsonl`. Each row uses
@@ -163,6 +173,8 @@ All write actions require confirmation metadata even when they are dry-run only.
 
 Before a new OA write action can become executable, it must have:
 
+- A local write-action spec with action type, risk, promotion status, and
+  verification method.
 - A discovered endpoint or UI workflow mapped to the exact business action.
 - Required parameters identified from DOM, page scripts, or captured network
   records.
@@ -170,6 +182,7 @@ Before a new OA write action can become executable, it must have:
 - A dry-run validator that can build the request without sending it.
 - An explicit confirmation gate.
 - A test proving that execution remains blocked without confirmation.
+- A passing `oa write smoke` run against the real bridge.
 - A production-risk note covering rollback limitations.
 
 Until those conditions are met and reviewed for that action, BSCLI must keep it

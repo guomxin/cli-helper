@@ -275,6 +275,7 @@ Safe write planning is available, and confirmed `ContinueSubmit` writes can run
 through the Chrome extension bridge:
 
 ```bash
+python -m bscli.cli.main --home .bscli oa write actions --format table --fields code,label,action_type,promotion_status,verification_method
 python -m bscli.cli.main --home .bscli oa write capabilities --type pending --limit 10 --format table --fields title,category,affair_id,verification_method
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
@@ -282,9 +283,15 @@ python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --act
 python -m bscli.cli.main --home .bscli oa write prepare --affair-id <id> --action ContinueSubmit --opinion "agree" --text-limit 800
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
 python -m bscli.cli.main --home .bscli oa audit writes list --limit 10
+python -m bscli.cli.main --home .bscli oa audit writes show --index 1
+python -m bscli.cli.main --home .bscli oa audit writes search --affair-id <id>
 python -m bscli.cli.main --home .bscli oa audit verifications list --limit 10
+python -m bscli.cli.main --home .bscli oa write smoke --timeout 60
 ```
 
+`actions` is the local write-action registry. It is the first place to check
+before promoting or adding an action because it centralizes labels, risk,
+action type, promotion status, and verification method.
 `capabilities` is the read-only inventory command for agents. It reads pending
 items and reports each item's `category`, `affair_id`, current state,
 `supported_write_actions`, and `verification_method`. Workflow submit actions
@@ -349,7 +356,13 @@ The same safe planning capabilities are also registered as agent-callable tools:
 schema before they can perform a production write. Agents can also call
 `oa__write_capabilities` first to decide which write command is applicable.
 `oa audit writes list` and `oa audit verifications list` summarize local audit
-rows while keeping opinion text redacted; newest rows are shown first.
+rows while keeping opinion text redacted; newest rows are shown first. Use
+`show --index N` to inspect one sanitized audit record and `search` to filter by
+`affair_id`, action, or status.
+`oa write smoke` is the fixed live safety check for write-action development.
+It first reads pending items and refuses to continue if the default no-match
+keyword is present. Only after proving zero matches does it call the confirmed
+batch-submit path, which must return `target_count=0` and `submitted_count=0`.
 
 For repeated pending items, use the governed batch submit command. It runs in
 the daemon execution layer, so CLI and agent tools share the same confirmation
@@ -591,9 +604,11 @@ Implemented:
 - Business CLI `oa detail attachments/workflow`
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
+- Business CLI `oa write actions`
 - Business CLI `oa write preflight`
 - Business CLI `oa write prepare`
-- Business CLI `oa audit writes/verifications list`
+- Business CLI `oa write smoke`
+- Business CLI `oa audit writes/verifications list/show/search`
 - Business CLI `oa pending/sent/template list/search/show/export`
 - Business CLI `oa pending/sent/template details/attachments/workflow`
 - Business CLI `oa probe/api/discovered ...`

@@ -1327,6 +1327,131 @@ class CliOaTests(unittest.TestCase):
         self.assertNotIn("approved", writes.stdout)
         self.assertEqual(verifications_payload["result"]["items"][0]["verification_status"], "disappeared")
 
+    def test_oa_audit_show_and_search_return_sanitized_recent_rows(self):
+        with TemporaryDirectory() as tmp:
+            audit_dir = Path(tmp) / "audit"
+            audit_dir.mkdir(parents=True)
+            (audit_dir / "oa-write-plans.jsonl").write_text(
+                json.dumps(
+                    {
+                        "created_at": "2026-06-26T01:00:00+00:00",
+                        "target": {"affair_id": "a1"},
+                        "action": {"code": "ContinueSubmit"},
+                        "opinion": {"text": "secret approval", "length": 15},
+                        "precheck": {"status": "passed"},
+                        "safety": {"will_execute": False},
+                        "request": {"payload_preview": {"opinionText": "secret approval"}},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "created_at": "2026-06-26T01:05:00+00:00",
+                        "target": {"affair_id": "a2"},
+                        "action": {"code": "Archive"},
+                        "opinion": {"length": 0},
+                        "precheck": {"status": "passed"},
+                        "safety": {"will_execute": False},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            shown = self._run_cli(tmp, "oa", "audit", "writes", "show", "--index", "2")
+            searched = self._run_cli(
+                tmp,
+                "oa",
+                "audit",
+                "writes",
+                "search",
+                "--affair-id",
+                "a1",
+            )
+
+        shown_payload = json.loads(shown.stdout)
+        searched_payload = json.loads(searched.stdout)
+        self.assertEqual(shown_payload["result"]["index"], 2)
+        self.assertEqual(shown_payload["result"]["record"]["target"]["affair_id"], "a1")
+        self.assertNotIn("secret approval", shown.stdout)
+        self.assertEqual(searched_payload["result"]["count"], 1)
+        self.assertEqual(searched_payload["result"]["items"][0]["affair_id"], "a1")
+        self.assertNotIn("secret approval", searched.stdout)
+
+    def test_oa_write_smoke_prechecks_no_match_before_confirmed_noop(self):
+        server, seen_payloads = self._start_daemon(
+            [
+                {"ok": True, "result": {"items": [{"title": "Normal task", "affair_id": "a1"}]}},
+                {
+                    "ok": True,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "result": {"target_count": 0, "submitted_count": 0, "stopped": False, "items": []},
+                },
+            ]
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "smoke",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api", "pending_submit"])
+        self.assertEqual(seen_payloads[1]["args"]["keyword"], "__BSCLI_NO_MATCH_VALIDATION__")
+        self.assertTrue(seen_payloads[1]["args"]["confirm"])
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["checks"][0]["status"], "passed")
+        self.assertEqual(payload["result"]["submitted_count"], 0)
+
+    def test_oa_write_smoke_refuses_if_keyword_matches_before_confirmed_call(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"items": [{"title": "__BSCLI_NO_MATCH_VALIDATION__", "affair_id": "a1"}]}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "smoke",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual([entry["command"] for entry in seen_payloads], ["pending_list_api"])
+        self.assertFalse(payload["ok"])
+        self.assertIn("matched pending items", payload["error"])
+        self.assertEqual(payload["result"]["target_count"], 1)
+
+    def test_oa_write_smoke_rejects_custom_keyword_without_override(self):
+        server, seen_payloads = self._start_daemon({"ok": True, "result": {"items": []}})
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "smoke",
+                "--keyword",
+                "real",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads, [])
+        self.assertFalse(payload["ok"])
+        self.assertIn("custom smoke keyword", payload["error"])
+
     def test_oa_write_execute_without_confirm_stays_local_blocked(self):
         with TemporaryDirectory() as tmp:
             result = self._run_cli(

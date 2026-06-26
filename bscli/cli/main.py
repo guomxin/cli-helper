@@ -17,7 +17,12 @@ from bscli.adapters.seeyon_home import (
     parse_pending_list,
     parse_template_list,
 )
-from bscli.adapters.seeyon_write import append_oa_write_audit, build_oa_write_plan
+from bscli.adapters.seeyon_write import (
+    append_oa_write_audit,
+    build_oa_write_plan,
+    list_write_action_specs,
+    sanitize_oa_write_plan_for_audit,
+)
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
 from bscli.core.registry import CommandRegistry
@@ -25,6 +30,9 @@ from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
 from bscli.daemon.app import serve
 from bscli.mcp.server import BscliMcpServer
+
+
+DEFAULT_OA_WRITE_SMOKE_KEYWORD = "__BSCLI_NO_MATCH_VALIDATION__"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -250,8 +258,18 @@ def _build_oa_parser(oa_sub) -> None:
         area_parser = audit_sub.add_parser(area)
         area_sub = area_parser.add_subparsers(dest="oa_audit_action", required=True)
         list_parser = area_sub.add_parser("list")
-        list_parser.set_defaults(oa_audit_kind=kind)
+        list_parser.set_defaults(oa_audit_kind=kind, oa_audit_action="list")
         _add_output_options(list_parser)
+        show_parser = area_sub.add_parser("show")
+        show_parser.set_defaults(oa_audit_kind=kind, oa_audit_action="show")
+        show_parser.add_argument("--index", type=int, required=True)
+        _add_output_options(show_parser)
+        search_parser = area_sub.add_parser("search")
+        search_parser.set_defaults(oa_audit_kind=kind, oa_audit_action="search")
+        search_parser.add_argument("--affair-id")
+        search_parser.add_argument("--action")
+        search_parser.add_argument("--status")
+        _add_output_options(search_parser)
 
     probe = oa_sub.add_parser("probe")
     probe_sub = probe.add_subparsers(dest="oa_action", required=True)
@@ -325,6 +343,18 @@ def _build_oa_parser(oa_sub) -> None:
 
     write = oa_sub.add_parser("write")
     write_sub = write.add_subparsers(dest="oa_action", required=True)
+    actions = write_sub.add_parser("actions")
+    actions.set_defaults(oa_write_actions=True)
+    _add_output_options(actions)
+    smoke = write_sub.add_parser("smoke")
+    smoke.set_defaults(oa_write_smoke=True)
+    smoke.add_argument("--keyword", default=DEFAULT_OA_WRITE_SMOKE_KEYWORD)
+    smoke.add_argument("--allow-custom-keyword", action="store_true")
+    smoke.add_argument("--action", default="ContinueSubmit")
+    smoke.add_argument("--opinion", default="read")
+    smoke.add_argument("--verify-wait", type=float, default=0.0)
+    _add_daemon_options(smoke)
+    _add_output_options(smoke)
     capabilities = write_sub.add_parser("capabilities")
     capabilities.set_defaults(oa_write_capabilities=True)
     capabilities.add_argument(
@@ -695,6 +725,10 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_audit(args, home)
     if getattr(args, "oa_meeting_reply_mode", None):
         return handle_oa_meeting_reply(args)
+    if getattr(args, "oa_write_actions", False):
+        return handle_oa_write_actions(args)
+    if getattr(args, "oa_write_smoke", False):
+        return handle_oa_write_smoke(args)
     if getattr(args, "oa_write_capabilities", False):
         return handle_oa_write_capabilities(args)
     if getattr(args, "oa_write_endpoints", False):
@@ -735,11 +769,19 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
 
 def handle_oa_audit(args: argparse.Namespace, home: Path) -> int:
     if args.oa_audit_kind == "write_plans":
-        response = _oa_audit_result(home, filename="oa-write-plans.jsonl", kind="write_plans")
+        filename = "oa-write-plans.jsonl"
+        kind = "write_plans"
     elif args.oa_audit_kind == "write_verifications":
-        response = _oa_audit_result(home, filename="oa-write-verifications.jsonl", kind="write_verifications")
+        filename = "oa-write-verifications.jsonl"
+        kind = "write_verifications"
     else:
         raise ValueError(f"unknown OA audit kind: {args.oa_audit_kind}")
+    if args.oa_audit_action == "show":
+        response = _oa_audit_show_result(home, filename=filename, kind=kind, index=args.index)
+    elif args.oa_audit_action == "search":
+        response = _oa_audit_search_result(home, filename=filename, kind=kind, args=args)
+    else:
+        response = _oa_audit_result(home, filename=filename, kind=kind)
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
@@ -1085,6 +1127,115 @@ def handle_oa_meeting_reply(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_oa_write_actions(args: argparse.Namespace) -> int:
+    items = [asdict(spec) for spec in list_write_action_specs()]
+    response = {
+        "ok": True,
+        "result": {
+            "schema_version": "bscli.oa_write_actions.v1",
+            "count": len(items),
+            "items": items,
+        },
+    }
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write_smoke(args: argparse.Namespace) -> int:
+    keyword = str(args.keyword or "")
+    if keyword != DEFAULT_OA_WRITE_SMOKE_KEYWORD and not args.allow_custom_keyword:
+        emit_cli_value(
+            {
+                "ok": False,
+                "error": "custom smoke keyword requires --allow-custom-keyword",
+                "result": {
+                    "schema_version": "bscli.oa_write_smoke.v1",
+                    "checks": [],
+                    "target_count": 0,
+                    "submitted_count": 0,
+                },
+            },
+            args,
+        )
+        return 0
+
+    list_response = run_oa_daemon_command(args, "pending_list_api", {})
+    if list_response.get("ok") is not True:
+        emit_cli_value(
+            {
+                "ok": False,
+                "error": list_response.get("error") or "pending list precheck failed",
+                "source": list_response,
+                "result": {
+                    "schema_version": "bscli.oa_write_smoke.v1",
+                    "checks": [{"name": "pending_no_match_precheck", "status": "failed"}],
+                    "target_count": 0,
+                    "submitted_count": 0,
+                },
+            },
+            args,
+        )
+        return 0
+
+    matches = _filter_oa_items_by_keyword(_items_from_oa_response(list_response), keyword)
+    if args.limit is not None:
+        matches = matches[: max(args.limit, 0)]
+    if matches:
+        emit_cli_value(
+            {
+                "ok": False,
+                "error": "smoke keyword matched pending items; refusing confirmed write validation",
+                "result": {
+                    "schema_version": "bscli.oa_write_smoke.v1",
+                    "checks": [{"name": "pending_no_match_precheck", "status": "failed"}],
+                    "target_count": len(matches),
+                    "submitted_count": 0,
+                    "items": [_smoke_match_summary(item) for item in matches],
+                },
+            },
+            args,
+        )
+        return 0
+
+    submit_response = run_oa_daemon_command(
+        args,
+        "pending_submit",
+        {
+            "keyword": keyword,
+            "action": args.action,
+            "opinion": args.opinion,
+            "limit": args.limit,
+            "confirm": True,
+            "verify_wait": args.verify_wait,
+        },
+    )
+    result = submit_response.get("result") if isinstance(submit_response.get("result"), dict) else {}
+    target_count = int(result.get("target_count") or 0)
+    submitted_count = int(result.get("submitted_count") or 0)
+    ok = submit_response.get("ok") is True and target_count == 0 and submitted_count == 0
+    response = {
+        "ok": ok,
+        "error": "" if ok else submit_response.get("error") or "smoke validation did not prove confirmed no-op",
+        "result": {
+            "schema_version": "bscli.oa_write_smoke.v1",
+            "keyword": keyword,
+            "checks": [
+                {"name": "pending_no_match_precheck", "status": "passed"},
+                {
+                    "name": "confirmed_pending_submit_noop",
+                    "status": "passed" if ok else "failed",
+                },
+            ],
+            "target_count": target_count,
+            "submitted_count": submitted_count,
+            "daemon_response": submit_response,
+        },
+    }
+    emit_cli_value(response, args)
+    return 0
+
+
 def handle_oa_write_capabilities(args: argparse.Namespace) -> int:
     command_args = {"type": args.workflow_type}
     if args.keyword:
@@ -1261,21 +1412,93 @@ def _api_args_from_oa_cli(args: argparse.Namespace) -> dict:
 
 
 def _oa_audit_result(home: Path, *, filename: str, kind: str) -> dict:
-    path = home / "audit" / filename
-    rows = list(reversed(_read_jsonl(path)))
-    if kind == "write_plans":
-        items = [_oa_write_audit_summary(row, index) for index, row in enumerate(rows, start=1)]
-    else:
-        items = [_oa_write_verification_summary(row, index) for index, row in enumerate(rows, start=1)]
+    entries = _oa_audit_entries(home, filename=filename, kind=kind)
     return {
         "ok": True,
         "result": {
             "kind": kind,
-            "path": str(path),
-            "count": len(items),
-            "items": items,
+            "path": str(home / "audit" / filename),
+            "count": len(entries),
+            "items": [entry["summary"] for entry in entries],
         },
     }
+
+
+def _oa_audit_show_result(home: Path, *, filename: str, kind: str, index: int) -> dict:
+    entries = _oa_audit_entries(home, filename=filename, kind=kind)
+    for entry in entries:
+        if entry["index"] == index:
+            return {
+                "ok": True,
+                "result": {
+                    "kind": kind,
+                    "path": str(home / "audit" / filename),
+                    "index": index,
+                    "summary": entry["summary"],
+                    "record": entry["record"],
+                },
+            }
+    return {
+        "ok": False,
+        "error": f"OA audit row index not found: {index}",
+        "result": {
+            "kind": kind,
+            "path": str(home / "audit" / filename),
+            "index": index,
+            "count": len(entries),
+        },
+    }
+
+
+def _oa_audit_search_result(home: Path, *, filename: str, kind: str, args: argparse.Namespace) -> dict:
+    entries = _oa_audit_entries(home, filename=filename, kind=kind)
+    filtered = []
+    for entry in entries:
+        summary = entry["summary"]
+        if args.affair_id and str(summary.get("affair_id") or "") != str(args.affair_id):
+            continue
+        if args.action and str(summary.get("action") or "") != str(args.action):
+            continue
+        if args.status and not _oa_audit_summary_has_status(summary, args.status):
+            continue
+        filtered.append(summary)
+    return {
+        "ok": True,
+        "result": {
+            "kind": kind,
+            "path": str(home / "audit" / filename),
+            "count": len(filtered),
+            "items": filtered,
+        },
+    }
+
+
+def _oa_audit_entries(home: Path, *, filename: str, kind: str) -> list[dict]:
+    rows = list(reversed(_read_jsonl(home / "audit" / filename)))
+    entries = []
+    for index, row in enumerate(rows, start=1):
+        record = _sanitize_oa_audit_row(row, kind=kind)
+        summary = (
+            _oa_write_audit_summary(record, index)
+            if kind == "write_plans"
+            else _oa_write_verification_summary(record, index)
+        )
+        entries.append({"index": index, "summary": summary, "record": record})
+    return entries
+
+
+def _sanitize_oa_audit_row(row: dict, *, kind: str) -> dict:
+    if kind == "write_plans":
+        return sanitize_oa_write_plan_for_audit(row)
+    return json.loads(json.dumps(row, ensure_ascii=False))
+
+
+def _oa_audit_summary_has_status(summary: dict, status: str) -> bool:
+    needle = str(status or "")
+    return any(
+        str(summary.get(key) or "") == needle
+        for key in ("precheck_status", "request_status", "verification_status")
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -1331,6 +1554,36 @@ def _oa_write_verification_summary(row: dict, index: int) -> dict:
         "before_present": verification.get("before_present"),
         "after_present": verification.get("after_present"),
         "task_id": submit.get("task_id", ""),
+    }
+
+
+def _items_from_oa_response(response: dict) -> list[dict]:
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return []
+    items = result.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _filter_oa_items_by_keyword(items: list[dict], keyword: str) -> list[dict]:
+    if not keyword:
+        return list(items)
+    needle = keyword.lower()
+    return [
+        item
+        for item in items
+        if needle in json.dumps(item, ensure_ascii=False).lower()
+    ]
+
+
+def _smoke_match_summary(item: dict) -> dict:
+    return {
+        "title": item.get("title", ""),
+        "affair_id": str(item.get("affair_id") or ""),
+        "sender": item.get("sender", ""),
+        "date": item.get("date", ""),
     }
 
 

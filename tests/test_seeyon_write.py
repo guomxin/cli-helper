@@ -6,10 +6,24 @@ import unittest
 from bscli.adapters.seeyon_write import (
     append_oa_write_audit,
     build_oa_write_plan,
+    get_write_action_spec,
+    list_write_action_specs,
 )
 
 
 class SeeyonWriteTests(unittest.TestCase):
+    def test_write_action_specs_centralize_promotion_and_verification(self):
+        specs = {spec.code: spec for spec in list_write_action_specs()}
+
+        self.assertEqual(specs["ContinueSubmit"].action_type, "workflow.submit")
+        self.assertEqual(specs["ContinueSubmit"].promotion_status, "promoted")
+        self.assertEqual(specs["ContinueSubmit"].verification_method, "pending_disappearance")
+        self.assertTrue(specs["ContinueSubmit"].execute_allowed)
+        self.assertEqual(specs["Archive"].promotion_status, "dry_run_only")
+        self.assertEqual(specs["Archive"].verification_method, "not_promoted")
+        self.assertFalse(specs["Archive"].execute_allowed)
+        self.assertEqual(get_write_action_spec("UnknownAction").action_type, "workflow.unpromoted")
+
     def test_build_write_plan_includes_non_sent_payload_preview(self):
         plan = build_oa_write_plan(
             affair_id="affair-1",

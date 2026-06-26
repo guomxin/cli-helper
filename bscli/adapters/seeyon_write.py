@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+
+@dataclass(frozen=True)
+class WriteActionSpec:
+    code: str
+    label: str
+    action_type: str
+    risk: str
+    promotion_status: str
+    execute_allowed: bool
+    dry_run_allowed: bool
+    verification_method: str
+    requirements: tuple[str, ...] = ()
+    blocked_reasons: tuple[str, ...] = ()
 
 
 ACTION_LABELS = {
@@ -84,38 +99,78 @@ def build_write_governance(
 
 
 def write_action_type(code: str) -> str:
-    return ACTION_TYPES.get(str(code or "").strip(), "workflow.unpromoted")
+    return get_write_action_spec(code).action_type
 
 
 def is_dry_run_only_write_action(code: str) -> bool:
-    code = str(code or "").strip()
-    return code in DRY_RUN_ONLY_WRITE_CODES and code not in PROMOTED_EXECUTABLE_CODES
+    spec = get_write_action_spec(code)
+    return spec.dry_run_allowed and not spec.execute_allowed
 
 
 def write_action_promotion(code: str) -> dict:
-    code = str(code or "").strip()
-    if code in PROMOTED_EXECUTABLE_CODES:
+    spec = get_write_action_spec(code)
+    if spec.execute_allowed:
         return {
-            "status": "promoted",
+            "status": spec.promotion_status,
             "execute_allowed": True,
-            "dry_run_allowed": True,
-            "verification_method": "pending_disappearance",
+            "dry_run_allowed": spec.dry_run_allowed,
+            "verification_method": spec.verification_method,
             "requirements": [],
             "blocked_reasons": [],
         }
-    requirements = [
-        f"execution mapping for {code or 'this action'}",
+    return {
+        "status": spec.promotion_status,
+        "execute_allowed": False,
+        "dry_run_allowed": spec.dry_run_allowed,
+        "verification_method": spec.verification_method,
+        "requirements": list(spec.requirements),
+        "blocked_reasons": list(spec.blocked_reasons),
+    }
+
+
+def list_write_action_specs() -> list[WriteActionSpec]:
+    codes = sorted(
+        set(ACTION_LABELS)
+        | set(ACTION_TYPES)
+        | set(PROMOTED_EXECUTABLE_CODES)
+        | set(DRY_RUN_ONLY_WRITE_CODES)
+    )
+    return [get_write_action_spec(code) for code in codes]
+
+
+def get_write_action_spec(code: str) -> WriteActionSpec:
+    normalized = str(code or "").strip()
+    label = ACTION_LABELS.get(normalized, normalized)
+    risk = write_action_risk(normalized, label)
+    action_type = ACTION_TYPES.get(normalized, "workflow.unpromoted")
+    if normalized in PROMOTED_EXECUTABLE_CODES:
+        return WriteActionSpec(
+            code=normalized,
+            label=label,
+            action_type=action_type,
+            risk=risk,
+            promotion_status="promoted",
+            execute_allowed=True,
+            dry_run_allowed=True,
+            verification_method="pending_disappearance",
+        )
+    requirements = (
+        f"execution mapping for {normalized or 'this action'}",
         "post-write verification method",
         "real OA dry-run evidence and user-confirmed production test",
-    ]
-    return {
-        "status": "dry_run_only",
-        "execute_allowed": False,
-        "dry_run_allowed": True,
-        "verification_method": "not_promoted",
-        "requirements": requirements,
-        "blocked_reasons": [f"execute not promoted for {code or 'this action'}"],
-    }
+    )
+    return WriteActionSpec(
+        code=normalized,
+        label=label,
+        action_type=action_type,
+        risk=risk,
+        promotion_status="dry_run_only",
+        execute_allowed=False,
+        dry_run_allowed=True,
+        verification_method="not_promoted",
+        requirements=requirements,
+        blocked_reasons=(f"execute not promoted for {normalized or 'this action'}",),
+    )
 
 
 def classify_write_endpoint_candidates(candidates: Any, *, action: str) -> list[dict[str, Any]]:
