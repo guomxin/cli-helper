@@ -55,6 +55,36 @@ class SeeyonHomeParserTests(unittest.TestCase):
         )
         self.assertEqual(result["workflow"][0]["text"], "Node Manager approval Opinion: approved")
 
+    def test_parse_oa_detail_omits_script_and_style_text_from_visible_text(self):
+        html = """
+        <html>
+          <head>
+            <title>HR handover - OA</title>
+            <style>.secret { color: red; }</style>
+            <script>
+              var _sessionid = 'SECRET_SESSION_ID';
+              var jsonArrBase = '[{"codes":["ContinueSubmit"],"label":"Submit"}]';
+            </script>
+          </head>
+          <body>
+            <h1 id="summarySubject">HR handover</h1>
+            <div class="content">Please review the handover checklist.</div>
+          </body>
+        </html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary",
+        )
+
+        self.assertIn("Please review the handover checklist.", result["text"])
+        self.assertNotIn("_sessionid", result["text"])
+        self.assertNotIn("SECRET_SESSION_ID", result["text"])
+        self.assertNotIn("jsonArrBase", result["text"])
+        self.assertNotIn(".secret", result["text"])
+        self.assertEqual(result["actions"][0]["code"], "ContinueSubmit")
+
     def test_parse_oa_detail_filters_script_like_workflow_noise(self):
         html = """
         <html>

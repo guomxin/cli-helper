@@ -31,6 +31,8 @@ class _Node:
         return class_name in self.attr("class").split()
 
     def text(self) -> str:
+        if self.tag in {"script", "style"}:
+            return ""
         parts = [*self.text_parts]
         for child in self.children:
             parts.append(child.text())
