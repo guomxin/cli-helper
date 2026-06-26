@@ -211,13 +211,30 @@ The same workflow surface is also exported to agents through the tool manifest
 and MCP server. Current tool names include `oa__workflow_list`,
 `oa__workflow_brief`, `oa__workflow_inspect`, `oa__workflow_evidence`,
 `oa__workflow_timeline`, `oa__workflow_detail`, `oa__workflow_opinions`,
-`oa__workflow_attachments`, `oa__workflow_actions`, and `oa__inbox_analyze`.
+`oa__workflow_attachments`, `oa__workflow_actions`, `oa__history_list`,
+`oa__history_sections`, and `oa__inbox_analyze`.
 For example, an agent can call
 `oa__workflow_opinions` with `{"type":"pending","id":"..."}` and let the daemon
 resolve the list item, open the rendered detail page, and return only the
 opinion entries. Opinion entries always include `text`; when the rendered page
 has a recognizable pattern they also include structured `handler`, `opinion`,
 and `time` fields.
+
+Historical workflow samples:
+
+```bash
+python -m bscli.cli.main --home .bscli oa history sections
+python -m bscli.cli.main --home .bscli oa history list --kind done --limit 20
+python -m bscli.cli.main --home .bscli oa history search --kind tracked --keyword contract --limit 10
+python -m bscli.cli.main --home .bscli oa history export --kind sent --format csv --fields title,status,date,affair_id
+```
+
+`oa history` reads historical tabs such as sent, done, and tracked from the OA
+home page. It discovers tab ids from `navigation_inventory`, then replays the
+same `sentSection` backend projection API with the selected `panelId`. This
+avoids clicking tabs in the browser while still using the user's real logged-in
+session. Historical detail reads are treated as read-only samples and report
+`read_effect.may_mark_read=false`.
 
 Pending, sent, and template objects:
 
@@ -277,6 +294,7 @@ through the Chrome extension bridge:
 ```bash
 python -m bscli.cli.main --home .bscli oa write actions --format table --fields code,label,action_type,promotion_status,verification_method
 python -m bscli.cli.main --home .bscli oa write capabilities --type pending --limit 10 --format table --fields title,category,affair_id,verification_method
+python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5 --format json
 python -m bscli.cli.main --home .bscli oa write draft --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
@@ -298,6 +316,12 @@ items and reports each item's `category`, `affair_id`, current state,
 use `pending_disappearance` verification. Meeting reply actions use
 `meeting_reply_readback` verification because a replied meeting can remain
 visible in pending even after `myReply.feedbackFlag` has changed.
+`discover` is the read-only history sampler for expanding write coverage. It
+uses `oa history list`, opens up to `--deep-limit` historical detail pages, and
+aggregates the candidate write actions seen there. The top-level `actions`
+array is the cross-workflow action dictionary; the per-workflow `items` array is
+the supporting evidence. Dry-run-only actions such as `Archive` remain
+`execute_allowed=false` until separately promoted.
 For workflow items, the action inventory is intentionally split:
 
 - `supported_write_actions`: promoted actions with both dry-run and confirmed
@@ -350,7 +374,7 @@ dispatches the browser write task only if the target action is available, then
 reads the pending list again and records whether the `affair_id` disappeared.
 Other write actions remain blocked until they have their own mappings.
 The same safe planning capabilities are also registered as agent-callable tools:
-`oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
+`oa__write_discover`, `oa__write_draft`, `oa__write_dry_run`, `oa__write_preflight`,
 `oa__write_prepare`, `oa__write_execute`, and
 `oa__pending_submit`; executable tools require a `confirm` argument in their
 schema before they can perform a production write. Agents can also call
@@ -604,7 +628,9 @@ Implemented:
 - Business CLI `oa detail attachments/workflow`
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
+- Business CLI `oa history sections/list/search/export`
 - Business CLI `oa write actions`
+- Business CLI `oa write discover`
 - Business CLI `oa write preflight`
 - Business CLI `oa write prepare`
 - Business CLI `oa write smoke`

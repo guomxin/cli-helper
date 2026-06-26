@@ -17,6 +17,10 @@ logged-in Chrome session after explicit confirmation.
   Workflow page actions are split into three layers: promoted
   `supported_write_actions`, dry-run-only `unpromoted_write_actions`, and raw
   `discovered_write_actions`.
+- `oa history list ...` and `oa write discover --source history ...` are
+  read-only sample-mining commands. They use historical sent/done/tracked pages
+  to find candidate actions and promotion evidence, but they do not authorize or
+  execute any write action.
 - `oa write actions` reads the local write-action registry. The registry is the
   promotion source of truth for labels, risk, action type, execution status,
   and verification method.
@@ -193,6 +197,7 @@ at discovery, draft, and dry-run only.
 The safe planning commands are registered in the normal BSCLI command registry:
 
 - `oa__write_capabilities`
+- `oa__write_discover`
 - `oa__write_draft`
 - `oa__write_dry_run`
 - `oa__write_endpoint_candidates`
@@ -203,8 +208,8 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
 
-`write_capabilities`, `write_draft`, `write_dry_run`, `write_preflight`,
-`write_prepare`, and
+`write_capabilities`, `write_discover`, `write_draft`, `write_dry_run`,
+`write_preflight`, `write_prepare`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
 do not mutate OA state. `write_execute`, `pending_submit`, and
 `meeting_reply_execute` are exposed as write/high-risk human-gate tools and

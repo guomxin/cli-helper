@@ -791,6 +791,90 @@ class CliOaTests(unittest.TestCase):
         )
         self.assertEqual(payload["result"]["items"][0]["supported_write_actions"][0]["name"], "workflow.submit")
 
+    def test_oa_history_list_calls_daemon_with_kind_and_filters(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "kind": "done",
+                    "count": 1,
+                    "items": [{"title": "Historical approval", "affair_id": "done-1"}],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "history",
+                "list",
+                "--kind",
+                "done",
+                "--keyword",
+                "approval",
+                "--limit",
+                "2",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "history_list")
+        self.assertEqual(seen_payloads[0]["args"], {"kind": "done", "keyword": "approval", "limit": 2})
+        self.assertEqual(payload["result"]["items"][0]["affair_id"], "done-1")
+
+    def test_oa_write_discover_calls_daemon_with_history_arguments(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_write_discovery.v1",
+                    "source": "history",
+                    "kind": "done",
+                    "actions": [],
+                    "items": [],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "discover",
+                "--source",
+                "history",
+                "--kind",
+                "done",
+                "--keyword",
+                "archive",
+                "--limit",
+                "5",
+                "--deep-limit",
+                "2",
+                "--text-limit",
+                "800",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "write_discover")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "source": "history",
+                "kind": "done",
+                "keyword": "archive",
+                "limit": 5,
+                "deep_limit": 2,
+                "text_limit": 800,
+            },
+        )
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_write_discovery.v1")
+
     def test_oa_write_capabilities_preserves_unpromoted_actions(self):
         server, _seen_payloads = self._start_daemon(
             {
@@ -1471,6 +1555,27 @@ class CliOaTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"], "oa write execute requires --confirm")
         self.assertFalse(payload["plan"]["safety"]["will_execute"])
+
+    def test_oa_write_draft_accepts_output_options(self):
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "write",
+                "draft",
+                "--affair-id",
+                "affair-1",
+                "--action",
+                "ContinueSubmit",
+                "--opinion",
+                "approved",
+                "--format",
+                "json",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["mode"], "draft")
+        self.assertEqual(payload["action"]["code"], "ContinueSubmit")
 
     def test_oa_write_execute_with_confirm_calls_daemon(self):
         server, seen_payloads = self._start_daemon(

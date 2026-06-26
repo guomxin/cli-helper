@@ -4,6 +4,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import parse_qs, urlparse
 
 from bscli.core.config import ConfigStore
 from bscli.core.config import SystemProfile
@@ -1062,6 +1063,154 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["source"], "section_api")
             self.assertEqual(response.body["result"]["items"][0]["affair_id"], "sent-123")
             self.assertEqual(response.body["result"]["items"][0]["status"], "已结束")
+
+    def test_run_history_list_replays_sent_section_with_done_panel_id(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            section_id = "2760387438530088138"
+            sent_panel_id = "-1871849768923019549"
+            done_panel_id = "-5966659239995619621"
+            sent_url = (
+                "http://10.10.50.110/seeyon/ajax.do?method=ajaxAction"
+                "&managerName=sectionManager&managerMethod=doProjection"
+                "&arguments=%7B%22sectionBeanId%22%3A%22sentSection%22%2C"
+                f"%22entityId%22%3A%22{section_id}%22%2C"
+                f"%22panelId%22%3A%22{sent_panel_id}%22%7D"
+            )
+
+            def extension_worker():
+                seen_kinds = []
+                for _ in range(3):
+                    tasks = []
+                    for _attempt in range(40):
+                        tasks = state.handle(
+                            "GET",
+                            "/extension/tasks",
+                            query={"client_id": "chrome-1"},
+                        ).body["tasks"]
+                        if tasks:
+                            break
+                        time.sleep(0.01)
+                    self.assertEqual(len(tasks), 1)
+                    task = tasks[0]
+                    seen_kinds.append(task["kind"])
+                    if task["kind"] == "html_snapshot":
+                        state.handle(
+                            "POST",
+                            "/extension/results",
+                            body={
+                                "client_id": "chrome-1",
+                                "task_id": task["id"],
+                                "ok": True,
+                                "result": {
+                                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                                    "html": f"""
+                                    <div id="section_{section_id}">
+                                      <li id="sectionName_{sent_panel_id}" title="&#24050;&#21457;&#20107;&#39033;" class="current"
+                                          onclick="javascript:changeTabAndReloadSection(&quot;{section_id}&quot;,&quot;{sent_panel_id}&quot;)">
+                                        &#24050;&#21457;&#20107;&#39033;
+                                      </li>
+                                      <li id="sectionName_{done_panel_id}" title="&#24050;&#21150;&#20107;&#39033;"
+                                          onclick="javascript:changeTabAndReloadSection(&quot;{section_id}&quot;,&quot;{done_panel_id}&quot;)">
+                                        &#24050;&#21150;&#20107;&#39033;
+                                      </li>
+                                    </div>
+                                    """,
+                                },
+                            },
+                        )
+                    elif task["kind"] == "network_log_snapshot":
+                        state.handle(
+                            "POST",
+                            "/extension/results",
+                            body={
+                                "client_id": "chrome-1",
+                                "task_id": task["id"],
+                                "ok": True,
+                                "result": {
+                                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                                    "resources": [
+                                        {
+                                            "initiatorType": "xmlhttprequest",
+                                            "name": sent_url,
+                                        }
+                                    ],
+                                    "records": [],
+                                },
+                            },
+                        )
+                    elif task["kind"] == "page_fetch":
+                        fetched = task["payload"]["url"]
+                        arguments = json.loads(parse_qs(urlparse(fetched).query)["arguments"][0])
+                        self.assertEqual(arguments["sectionBeanId"], "sentSection")
+                        self.assertEqual(arguments["entityId"], section_id)
+                        self.assertEqual(arguments["panelId"], done_panel_id)
+                        state.handle(
+                            "POST",
+                            "/extension/results",
+                            body={
+                                "client_id": "chrome-1",
+                                "task_id": task["id"],
+                                "ok": True,
+                                "result": {
+                                    "status": 200,
+                                    "ok": True,
+                                    "url": fetched,
+                                    "json": {
+                                        "Name": "done",
+                                        "Data": {
+                                            "dataCount": 1,
+                                            "pageNo": 1,
+                                            "rows": [
+                                                {
+                                                    "cells": [
+                                                        {
+                                                            "cellContentHTML": "Historical approval",
+                                                            "id": "done-123",
+                                                            "linkURL": "/collaboration/collaboration.do?method=summary&openFrom=listDone&affairId=done-123&showTab=true",
+                                                        },
+                                                        {"cellContentHTML": "Finished"},
+                                                        {"cellContentHTML": "2026-06-20"},
+                                                        {"cellContentHTML": "Collaboration"},
+                                                    ]
+                                                }
+                                            ],
+                                        },
+                                    },
+                                },
+                            },
+                        )
+                self.assertEqual(seen_kinds, ["html_snapshot", "network_log_snapshot", "page_fetch"])
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "history_list",
+                    "args": {"kind": "done"},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["kind"], "done")
+            self.assertEqual(response.body["result"]["history_tab"]["tab_id"], done_panel_id)
+            self.assertEqual(response.body["result"]["items"][0]["affair_id"], "done-123")
+            self.assertEqual(response.body["result"]["items"][0]["history_kind"], "done")
 
     def test_run_template_list_api_replays_discovered_section_api(self):
         with TemporaryDirectory() as tmp:
@@ -2779,6 +2928,92 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(plan["current_reply"]["feedbackFlag"], -100)
             self.assertFalse(plan["safety"]["will_execute"])
             self.assertNotIn("will attend", json.dumps(audit_rows[0], ensure_ascii=False))
+
+    def test_run_oa_write_discover_aggregates_history_detail_actions(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "kind": "done",
+                            "source_count": 2,
+                            "items": [
+                                {
+                                    "title": "Done weekly",
+                                    "affair_id": "done-1",
+                                    "href": "http://oa.example.test/detail/done-1",
+                                },
+                                {
+                                    "title": "Done archive",
+                                    "affair_id": "done-2",
+                                    "href": "http://oa.example.test/detail/done-2",
+                                },
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Done weekly",
+                            "actions": [
+                                {"code": "ContinueSubmit", "label": "Submit", "risk": "high"},
+                                {"code": "Archive", "label": "Archive", "risk": "high"},
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "title": "Done archive",
+                            "actions": [
+                                {"code": "Archive", "label": "Archive", "risk": "high"},
+                            ],
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_discover",
+                    "args": {"source": "history", "kind": "done", "limit": 5, "deep_limit": 2},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["history_list", "detail_read", "detail_read"])
+            self.assertEqual(calls[0][1], {"kind": "done", "limit": 5})
+            result = response.body["result"]
+            self.assertEqual(result["schema_version"], "bscli.oa_write_discovery.v1")
+            self.assertEqual(result["source"], "history")
+            self.assertEqual(result["kind"], "done")
+            self.assertEqual(result["detail_attempt_count"], 2)
+            actions = {item["code"]: item for item in result["actions"]}
+            self.assertEqual(actions["Archive"]["seen_count"], 2)
+            self.assertFalse(actions["Archive"]["execute_allowed"])
+            self.assertEqual(actions["ContinueSubmit"]["seen_count"], 1)
+            self.assertEqual(result["items"][0]["actions"][0]["code"], "ContinueSubmit")
+            self.assertEqual(result["read_effect"]["detail_page_opened"], True)
 
     def test_run_oa_write_capabilities_reports_workflow_and_meeting_actions(self):
         with TemporaryDirectory() as tmp:

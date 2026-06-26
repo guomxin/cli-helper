@@ -123,7 +123,7 @@ def parse_pending_projection(projection: dict, *, base_url: str) -> dict:
             continue
         title_cell = cells[0]
         raw_href = title_cell.get("linkURL") or ""
-        title = _clean(_strip_html(title_cell.get("cellContentHTML") or ""), 500)
+        title = _cell_title(title_cell)
         if not title:
             continue
         items.append(
@@ -145,7 +145,7 @@ def parse_pending_projection(projection: dict, *, base_url: str) -> dict:
         "source": "section_api",
         "name": projection.get("Name") if isinstance(projection, dict) else "",
         "count": len(items),
-        "total": data.get("dataCount"),
+        "total": data.get("dataCount") if data.get("dataCount") is not None else data.get("dataNum"),
         "page": data.get("pageNo"),
         "items": items,
     }
@@ -163,7 +163,7 @@ def parse_sent_projection(projection: dict, *, base_url: str) -> dict:
             continue
         title_cell = cells[0]
         raw_href = title_cell.get("linkURL") or ""
-        title = _clean(_strip_html(title_cell.get("cellContentHTML") or ""), 500)
+        title = _cell_title(title_cell)
         if not title:
             continue
         items.append(
@@ -184,7 +184,7 @@ def parse_sent_projection(projection: dict, *, base_url: str) -> dict:
         "source": "section_api",
         "name": projection.get("Name") if isinstance(projection, dict) else "",
         "count": len(items),
-        "total": data.get("dataCount"),
+        "total": data.get("dataCount") if data.get("dataCount") is not None else data.get("dataNum"),
         "page": data.get("pageNo"),
         "items": items,
     }
@@ -309,6 +309,44 @@ def parse_navigation_inventory(html: str, *, base_url: str) -> dict:
         "shortcuts": shortcuts,
         "section_count": len(sections),
         "sections": sections,
+    }
+
+
+def extract_history_sections(inventory: dict) -> dict:
+    items = []
+    sections = inventory.get("sections") if isinstance(inventory, dict) else []
+    if not isinstance(sections, list):
+        sections = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        section_id = str(section.get("section_id") or "")
+        tabs = section.get("tabs") if isinstance(section.get("tabs"), list) else []
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                continue
+            kind = _history_kind_from_name(str(tab.get("name") or ""))
+            if not kind:
+                continue
+            items.append(
+                {
+                    "index": len(items),
+                    "kind": kind,
+                    "name": tab.get("name", ""),
+                    "section_name": section.get("name", ""),
+                    "section_id": section_id,
+                    "tab_id": str(tab.get("tab_id") or ""),
+                    "count": tab.get("count"),
+                    "active": bool(tab.get("active")),
+                    "onclick": tab.get("onclick", ""),
+                    "section_bean_id": "sentSection",
+                }
+            )
+    return {
+        "schema_version": "bscli.oa_history_sections.v1",
+        "source": "navigation_inventory",
+        "count": len(items),
+        "items": items,
     }
 
 
@@ -758,6 +796,20 @@ def _parse_sections(root: _Node) -> list[dict]:
     return sections
 
 
+def _history_kind_from_name(name: str) -> str:
+    compact = _clean(str(name or ""), 100).replace(" ", "")
+    lowered = compact.lower()
+    if not compact:
+        return ""
+    if "\u5df2\u53d1" in compact or lowered in {"sent", "listsent"}:
+        return "sent"
+    if "\u5df2\u529e" in compact or lowered in {"done", "finished", "processed"}:
+        return "done"
+    if "\u8ddf\u8e2a" in compact or lowered in {"tracked", "followed", "tracking"}:
+        return "tracked"
+    return ""
+
+
 def _parse_html(html: str) -> _Node:
     parser = _TreeBuilder()
     parser.feed(_normalize_html_input(html))
@@ -786,7 +838,20 @@ def _cell_text(cells: list[dict], index: int) -> str:
     if index >= len(cells):
         return ""
     cell = cells[index] or {}
-    return _clean(_strip_html(cell.get("cellContentHTML") or cell.get("alt") or ""), 300)
+    return _clean(_strip_html(cell.get("cellContentHTML") or cell.get("cellContent") or cell.get("alt") or ""), 300)
+
+
+def _cell_title(cell: dict) -> str:
+    return _clean(
+        _strip_html(
+            cell.get("cellContentHTML")
+            or cell.get("cellContent")
+            or cell.get("alt")
+            or cell.get("title")
+            or ""
+        ),
+        500,
+    )
 
 
 def _strip_html(value: str) -> str:

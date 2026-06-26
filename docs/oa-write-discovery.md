@@ -5,7 +5,7 @@ Date: 2026-06-24
 Scope: read-only exploration through the Chrome extension bridge. No OA submit,
 approve, reject, archive, revoke, delete, upload, or send endpoint was invoked.
 
-## Current Discovery Source
+## Current Discovery Sources
 
 Rendered OA collaboration detail pages contain a JavaScript action array named
 `jsonArrBase`. BSCLI parses this array from the rendered HTML snapshot and
@@ -26,6 +26,21 @@ The parser also reports write hints without leaking values:
 - hidden input names and whether each has a value
 - candidate `.do?method=...` endpoints found in rendered HTML, marked
   `method=UNKNOWN`, `risk=high`, and `tested=false`
+
+Historical workflow samples are now available through:
+
+```powershell
+python -m bscli.cli.main --home .bscli oa history sections
+python -m bscli.cli.main --home .bscli oa history list --kind done --limit 20
+python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
+```
+
+`oa history list` discovers the sent/done/tracked tab ids from the rendered home
+page and replays the `sentSection` projection API with the selected `panelId`.
+It does not click the browser UI. `oa write discover` then opens a bounded
+number of historical detail pages and aggregates the candidate actions found
+there. The result is evidence for future promotion work only; it does not make a
+historical action executable.
 
 ## Live Read-Only Findings
 

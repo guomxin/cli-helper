@@ -2,6 +2,7 @@ import json
 import unittest
 
 from bscli.adapters.seeyon_home import (
+    extract_history_sections,
     parse_navigation_inventory,
     parse_oa_detail,
     parse_pending_list,
@@ -415,6 +416,41 @@ class SeeyonHomeParserTests(unittest.TestCase):
             "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
         )
 
+    def test_parse_sent_projection_uses_cell_content_when_html_is_null(self):
+        projection = {
+            "Name": "done",
+            "Data": {
+                "dataNum": 1,
+                "pageNo": 0,
+                "rows": [
+                    {
+                        "cells": [
+                            {
+                                "cellContent": "Historical approval",
+                                "cellContentHTML": None,
+                                "alt": "Historical approval alt",
+                                "linkURL": "/collaboration/collaboration.do?method=summary&affairId=done-1",
+                            },
+                            {"cellContentHTML": "<span title='Finished'>Finished</span>"},
+                            {"cellContentHTML": "<span title='2026-06-20'>2026-06-20</span>"},
+                            {"cellContentHTML": "Collaboration"},
+                        ]
+                    }
+                ],
+            },
+        }
+
+        result = parse_sent_projection(
+            projection,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["items"][0]["title"], "Historical approval")
+        self.assertEqual(result["items"][0]["status"], "Finished")
+        self.assertEqual(result["items"][0]["affair_id"], "done-1")
+
     def test_parse_template_projection_extracts_rows_from_section_api(self):
         projection = {
             "Name": "我的模板",
@@ -560,6 +596,54 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["sections"][0]["section_id"], "556815601453123423")
         self.assertEqual(result["sections"][0]["tabs"][0]["name"], "全部待办")
         self.assertEqual(result["sections"][0]["tabs"][0]["count"], 5)
+
+    def test_extract_history_sections_maps_sent_done_and_tracked_tabs(self):
+        inventory = {
+            "sections": [
+                {
+                    "section_id": "2760387438530088138",
+                    "name": "\u5df2\u53d1\u4e8b\u9879",
+                    "tabs": [
+                        {
+                            "name": "\u5df2\u53d1\u4e8b\u9879",
+                            "tab_id": "-1871849768923019549",
+                            "active": True,
+                            "count": None,
+                            "onclick": 'javascript:changeTabAndReloadSection("2760387438530088138","-1871849768923019549")',
+                        },
+                        {
+                            "name": "\u5df2\u529e\u4e8b\u9879",
+                            "tab_id": "-5966659239995619621",
+                            "active": False,
+                            "count": None,
+                            "onclick": 'javascript:changeTabAndReloadSection("2760387438530088138","-5966659239995619621")',
+                        },
+                        {
+                            "name": "\u8ddf\u8e2a\u4e8b\u9879",
+                            "tab_id": "-9074445271168823642",
+                            "active": False,
+                            "count": 27,
+                            "onclick": 'javascript:changeTabAndReloadSection("2760387438530088138","-9074445271168823642")',
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = extract_history_sections(inventory)
+
+        self.assertEqual(result["schema_version"], "bscli.oa_history_sections.v1")
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(
+            [(item["kind"], item["tab_id"], item["section_bean_id"]) for item in result["items"]],
+            [
+                ("sent", "-1871849768923019549", "sentSection"),
+                ("done", "-5966659239995619621", "sentSection"),
+                ("tracked", "-9074445271168823642", "sentSection"),
+            ],
+        )
+        self.assertTrue(result["items"][0]["active"])
+        self.assertEqual(result["items"][2]["count"], 27)
 
 
 if __name__ == "__main__":

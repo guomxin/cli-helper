@@ -23,9 +23,12 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__workflow_brief", tools)
         self.assertIn("oa__workflow_evidence", tools)
         self.assertIn("oa__workflow_timeline", tools)
+        self.assertIn("oa__history_list", tools)
+        self.assertIn("oa__history_sections", tools)
         self.assertIn("oa__inbox_analyze", tools)
         self.assertIn("oa__workflow_opinions", tools)
         self.assertIn("oa__template_detail", tools)
+        self.assertIn("oa__write_discover", tools)
 
         detail = tools["oa__template_detail"]
         self.assertEqual(detail["description"], "Read one Seeyon OA form template metadata from the current home page by template_id.")
@@ -107,6 +110,11 @@ class ToolManifestTests(unittest.TestCase):
         )
         self.assertEqual(inbox_analyze["metadata"]["access"], "read")
         self.assertEqual(inbox_analyze["metadata"]["strategy"], "daemon_api")
+
+        write_discover = tools["oa__write_discover"]
+        self.assertEqual(write_discover["metadata"]["access"], "read")
+        self.assertFalse(write_discover["metadata"]["requires_confirmation"])
+        self.assertEqual(write_discover["input_schema"]["properties"]["deep_limit"]["type"], "integer")
 
         doctor = tools["oa__doctor"]
         self.assertEqual(doctor["input_schema"]["required"], [])

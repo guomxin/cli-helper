@@ -151,6 +151,60 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="history_sections",
+            description="Read Seeyon OA historical workflow tabs such as sent, done, and tracked.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Optional historical collection filter: sent, done, or tracked.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="history_list",
+            description="Read Seeyon OA historical workflows from the sentSection tab API without clicking the page.",
+            access="read",
+            strategy="daemon_api",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collection: sent, done, or tracked. Defaults to done.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="page_inventory",
             description="Inventory the current Seeyon OA page structure for adapter discovery.",
             access="read",
@@ -520,6 +574,46 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.items"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="write_discover",
+            description="Discover and aggregate candidate write actions from read-only historical OA workflow detail pages.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "source": {
+                    "type": "string",
+                    "description": "Discovery source; currently history is supported.",
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collection to sample: sent, done, or tracked. Defaults to done.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+                "deep_limit": {
+                    "type": "integer",
+                    "description": "Maximum number of detail pages to open for action discovery.",
+                },
+                "text_limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "source": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "actions": {"type": "array"},
+                    "items": {"type": "array"},
+                    "read_effect": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.actions"},
         )
     )
     registry.register(

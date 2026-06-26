@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
+    extract_history_sections,
     parse_oa_detail,
     parse_navigation_inventory,
     parse_pending_list,
@@ -69,6 +70,11 @@ WORKFLOW_READ_COMMANDS = {
     "workflow_attachments",
     "workflow_actions",
     "workflow_timeline",
+}
+
+HISTORY_READ_COMMANDS = {
+    "history_sections",
+    "history_list",
 }
 
 INBOX_READ_COMMANDS = {
@@ -220,8 +226,19 @@ class DaemonState:
             return self._run_oa_doctor_command()
         if system == "oa" and command == "capability_map":
             return self._run_oa_capability_map_command()
+        if system == "oa" and command in HISTORY_READ_COMMANDS:
+            return self._run_oa_history_read_command(
+                command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
         if system == "oa" and command == "write_capabilities":
             return self._run_oa_write_capabilities_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "write_discover":
+            return self._run_oa_write_discover_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -403,6 +420,7 @@ class DaemonState:
         section_bean_id: str,
         parser,
         command_name: str,
+        section_arguments: dict[str, Any] | None = None,
     ) -> DaemonResponse:
         snapshot_task_id = self.bridge.enqueue_task(
             system=system,
@@ -445,6 +463,10 @@ class DaemonState:
                     "error": f"{section_bean_id} API candidate not found; refresh the OA home page or run DOM fallback",
                 },
             )
+        section_url = _section_url_with_arguments(
+            section_url,
+            {"sectionBeanId": section_bean_id, **(section_arguments or {})},
+        )
         fetch_task_id = self.bridge.enqueue_task(
             system=system,
             kind="page_fetch",
@@ -763,6 +785,257 @@ class DaemonState:
                 },
             },
         )
+
+    def _run_oa_history_read_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if command == "history_sections":
+            return self._run_oa_history_sections_command(args, timeout_seconds)
+        if command == "history_list":
+            return self._run_oa_history_list_command(args, timeout_seconds)
+        raise ValueError(f"unsupported history command: {command}")
+
+    def _run_oa_history_sections_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        nav_response = self._run_nested_oa_command("navigation_inventory", {}, timeout_seconds)
+        if nav_response.status != 200 or nav_response.body.get("ok") is False:
+            return nav_response
+        nav_result = nav_response.body.get("result") if isinstance(nav_response.body, dict) else {}
+        if not isinstance(nav_result, dict):
+            nav_result = {}
+        projected = extract_history_sections(nav_result)
+        kind = self._history_kind(args, default="")
+        if kind:
+            items = [item for item in projected["items"] if item.get("kind") == kind]
+            projected = {**projected, "kind": kind, "count": len(items), "items": items}
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": nav_response.body.get("task_id"),
+                "result": projected,
+            },
+        )
+
+    def _run_oa_history_list_command(
+        self,
+        args: dict[str, Any],
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        kind = self._history_kind(args)
+        sections_response = self._run_oa_history_sections_command({"kind": kind}, timeout_seconds)
+        if sections_response.status != 200 or sections_response.body.get("ok") is False:
+            return sections_response
+        sections_result = sections_response.body.get("result") if isinstance(sections_response.body, dict) else {}
+        section_items = sections_result.get("items") if isinstance(sections_result, dict) else []
+        if not isinstance(section_items, list):
+            section_items = []
+        history_tab = next((item for item in section_items if isinstance(item, dict) and item.get("kind") == kind), None)
+        if history_tab is None:
+            return DaemonResponse(
+                404,
+                {
+                    "ok": False,
+                    "error": f"history tab not found: {kind}",
+                    "result": {"kind": kind, "count": 0, "items": []},
+                    "suggestions": [
+                        "Run: python -m bscli.cli.main --home .bscli oa history sections --format json",
+                        "Refresh the OA home page if the historical section is not loaded.",
+                    ],
+                },
+            )
+        if not self.bridge.list_clients():
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "error": "no Chrome extension client connected; start Chrome, load the BSCLI extension, and open the OA tab",
+                },
+            )
+        target_client_id = self._select_client_id_for_system("oa")
+        if target_client_id is None:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "error": "no browser client is currently registered for system: oa; open the matching system tab and wait for the extension to register it",
+                },
+            )
+        list_response = self._run_section_api_command(
+            "oa",
+            target_client_id,
+            timeout_seconds,
+            section_bean_id=str(history_tab.get("section_bean_id") or "sentSection"),
+            parser=parse_sent_projection,
+            command_name="history_list",
+            section_arguments={
+                "entityId": history_tab.get("section_id", ""),
+                "panelId": history_tab.get("tab_id", ""),
+            },
+        )
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(result, dict):
+            result = {}
+        source_items = self._workflow_items_from_result(result)
+        enriched = []
+        for item in source_items:
+            if not isinstance(item, dict):
+                continue
+            enriched.append(
+                {
+                    **item,
+                    "history_kind": kind,
+                    "history_name": history_tab.get("name", ""),
+                    "history_tab_id": history_tab.get("tab_id", ""),
+                }
+            )
+        filtered = self._filter_workflow_items(enriched, args)
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": list_response.body.get("task_id"),
+                "result": {
+                    "schema_version": "bscli.oa_history_list.v1",
+                    "kind": kind,
+                    "source": "history_section_api",
+                    "base_source": result.get("source") or "section_api",
+                    "name": result.get("name", ""),
+                    "total": result.get("total"),
+                    "page": result.get("page"),
+                    "history_tab": history_tab,
+                    "source_count": len(enriched),
+                    "count": len(filtered),
+                    "items": filtered,
+                    "read_effect": _history_read_effect(kind, detail_page_opened=False),
+                },
+            },
+        )
+
+    def _run_oa_write_discover_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        source = str(args.get("source") or "history").strip().lower() or "history"
+        if source != "history":
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "error": f"unsupported write discovery source: {source}",
+                    "result": {"schema_version": "bscli.oa_write_discovery.v1", "source": source, "actions": [], "items": []},
+                },
+            )
+        kind = self._history_kind(args)
+        list_args = {"kind": kind}
+        for key in ("keyword", "limit"):
+            if args.get(key) is not None:
+                list_args[key] = args[key]
+        list_response = self._run_nested_oa_command("history_list", list_args, timeout_seconds)
+        if list_response.status != 200 or list_response.body.get("ok") is False:
+            return list_response
+        list_result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+        if not isinstance(list_result, dict):
+            list_result = {}
+        source_items = self._workflow_items_from_result(list_result)
+        deep_limit = self._write_discover_deep_limit(args, len(source_items))
+        discovered_items: list[dict[str, Any]] = []
+        action_index: dict[str, dict[str, Any]] = {}
+        errors = []
+        detail_attempt_count = 0
+        for item in source_items[:deep_limit]:
+            if not isinstance(item, dict):
+                continue
+            href = str(item.get("href") or "").strip()
+            row = {
+                "title": item.get("title", ""),
+                "affair_id": str(item.get("affair_id") or ""),
+                "href": href,
+                "history_kind": kind,
+                "detail_read": False,
+                "actions": [],
+                "action_count": 0,
+            }
+            if not href:
+                row["error"] = "history item has no detail href"
+                discovered_items.append(row)
+                continue
+            detail_attempt_count += 1
+            detail_response = self._run_nested_oa_command("detail_read", {"url": href}, timeout_seconds)
+            if detail_response.status != 200 or detail_response.body.get("ok") is False:
+                error = detail_response.body.get("error") or f"HTTP {detail_response.status}"
+                row["error"] = error
+                errors.append({"affair_id": row["affair_id"], "title": row["title"], "error": error})
+                discovered_items.append(row)
+                continue
+            detail = detail_response.body.get("result") if isinstance(detail_response.body, dict) else {}
+            if not isinstance(detail, dict):
+                detail = {}
+            actions = detail.get("actions") if isinstance(detail.get("actions"), list) else []
+            summaries = [_summarize_oa_write_action(action) for action in actions]
+            row.update(
+                {
+                    "detail_read": True,
+                    "detail_title": detail.get("title", ""),
+                    "actions": summaries,
+                    "action_count": len(summaries),
+                }
+            )
+            discovered_items.append(row)
+            for summary in summaries:
+                _merge_write_discovery_action(action_index, summary, row)
+        actions = sorted(
+            action_index.values(),
+            key=lambda item: (-int(item.get("seen_count") or 0), str(item.get("code") or "")),
+        )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": list_response.body.get("task_id"),
+                "result": {
+                    "schema_version": "bscli.oa_write_discovery.v1",
+                    "source": source,
+                    "kind": kind,
+                    "source_count": len(source_items),
+                    "detail_attempt_count": detail_attempt_count,
+                    "count": len(discovered_items),
+                    "action_count": len(actions),
+                    "actions": actions,
+                    "items": discovered_items,
+                    "errors": errors,
+                    "read_effect": _history_read_effect(kind, detail_page_opened=detail_attempt_count > 0),
+                },
+            },
+        )
+
+    def _history_kind(self, args: dict[str, Any], *, default: str = "done") -> str:
+        kind = str(args.get("kind") or default).strip().lower()
+        aliases = {"track": "tracked", "tracking": "tracked", "follow": "tracked", "finished": "done"}
+        kind = aliases.get(kind, kind)
+        if kind not in {"", "sent", "done", "tracked"}:
+            raise ValueError(f"unsupported history kind: {kind}")
+        return kind
+
+    def _write_discover_deep_limit(self, args: dict[str, Any], source_count: int) -> int:
+        value = args.get("deep_limit")
+        if value is None:
+            return min(source_count, 10)
+        try:
+            return min(max(int(value), 0), source_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("deep_limit must be an integer") from exc
 
     def _run_oa_workflow_list_command(
         self,
@@ -2680,6 +2953,10 @@ class DaemonState:
     def _trace_metadata(self, system: str, command: str, args: dict[str, Any]) -> dict[str, str]:
         if system == "oa" and command == "write_capabilities":
             return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command in HISTORY_READ_COMMANDS:
+            return {"access": "read", "strategy": "daemon_api"}
+        if system == "oa" and command == "write_discover":
+            return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_endpoint_candidates":
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "write_preflight":
@@ -3198,6 +3475,56 @@ def _workflow_read_effect(workflow_type: str, *, detail_page_opened: bool) -> di
             else ""
         ),
     }
+
+
+def _history_read_effect(kind: str, *, detail_page_opened: bool) -> dict[str, Any]:
+    return {
+        "detail_page_opened": detail_page_opened,
+        "may_mark_read": False,
+        "note": "Historical detail pages are used as read-only samples for discovery." if detail_page_opened else "",
+        "kind": kind,
+    }
+
+
+def _merge_write_discovery_action(
+    action_index: dict[str, dict[str, Any]],
+    action: dict[str, Any],
+    workflow: dict[str, Any],
+) -> None:
+    code = str(action.get("code") or "")
+    label = str(action.get("label") or code)
+    key = code or label
+    if not key:
+        return
+    promotion = write_action_promotion(code)
+    row = action_index.setdefault(
+        key,
+        {
+            "code": code,
+            "label": label,
+            "name": write_action_type(code),
+            "risk": str(action.get("risk") or "medium"),
+            "seen_count": 0,
+            "dry_run_allowed": promotion["dry_run_allowed"],
+            "execute_allowed": promotion["execute_allowed"],
+            "promotion_status": promotion["status"],
+            "verification_method": promotion["verification_method"],
+            "requirements": promotion["requirements"],
+            "blocked_reasons": promotion["blocked_reasons"],
+            "sample_workflows": [],
+        },
+    )
+    row["seen_count"] = int(row.get("seen_count") or 0) + 1
+    samples = row.get("sample_workflows") if isinstance(row.get("sample_workflows"), list) else []
+    sample = {
+        "title": workflow.get("title", ""),
+        "affair_id": workflow.get("affair_id", ""),
+        "href": workflow.get("href", ""),
+        "history_kind": workflow.get("history_kind", ""),
+    }
+    if sample not in samples and len(samples) < 5:
+        samples.append(sample)
+    row["sample_workflows"] = samples
 
 
 _WORKFLOW_FOCUS_KEYWORDS = (
@@ -3746,3 +4073,22 @@ def _query_param(url: str, name: str) -> str:
         return parse_qs(parsed.query).get(name, [""])[0]
     except Exception:
         return ""
+
+
+def _section_url_with_arguments(url: str, updates: dict[str, Any]) -> str:
+    if not updates:
+        return url
+    parsed = urlparse(str(url or ""))
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    raw_arguments = query.get("arguments", ["{}"])[0] or "{}"
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    for key, value in updates.items():
+        if value is not None:
+            arguments[key] = str(value)
+    query["arguments"] = [json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()

@@ -193,6 +193,10 @@ def _build_oa_parser(oa_sub) -> None:
     _add_daemon_options(nav_list)
     _add_output_options(nav_list)
 
+    history = oa_sub.add_parser("history")
+    history_sub = history.add_subparsers(dest="oa_action", required=True)
+    _add_history_parser(history_sub)
+
     detail = oa_sub.add_parser("detail")
     detail_sub = detail.add_subparsers(dest="oa_action", required=True)
     detail_read = detail_sub.add_parser("read")
@@ -367,6 +371,20 @@ def _build_oa_parser(oa_sub) -> None:
     capabilities.add_argument("--keyword")
     _add_daemon_options(capabilities)
     _add_output_options(capabilities)
+    discover = write_sub.add_parser("discover")
+    discover.set_defaults(oa_write_discover=True)
+    discover.add_argument("--source", choices=["history"], default="history")
+    discover.add_argument(
+        "--kind",
+        choices=["sent", "done", "tracked"],
+        default="done",
+        help="Historical collection to sample; defaults to done.",
+    )
+    discover.add_argument("--keyword")
+    discover.add_argument("--deep-limit", type=int, dest="deep_limit")
+    discover.add_argument("--text-limit", type=int, dest="text_limit")
+    _add_daemon_options(discover)
+    _add_output_options(discover)
     endpoints = write_sub.add_parser("endpoints")
     endpoints.set_defaults(oa_write_endpoints=True)
     endpoints.add_argument("--affair-id", required=True)
@@ -418,6 +436,30 @@ def _build_oa_parser(oa_sub) -> None:
             write_cmd.add_argument("--confirm", action="store_true")
             _add_daemon_options(write_cmd)
         _add_output_options(write_cmd)
+
+
+def _add_history_parser(subparsers) -> None:
+    sections = subparsers.add_parser("sections")
+    sections.set_defaults(oa_history_action="sections")
+    sections.add_argument("--kind", choices=["sent", "done", "tracked"])
+    _add_daemon_options(sections)
+    _add_output_options(sections)
+
+    for action in ("list", "search", "export"):
+        parser = subparsers.add_parser(action)
+        parser.set_defaults(oa_history_action=action)
+        parser.add_argument(
+            "--kind",
+            choices=["sent", "done", "tracked"],
+            default="done",
+            help="Historical collection to read; defaults to done.",
+        )
+        if action == "search":
+            parser.add_argument("--keyword", required=True)
+        else:
+            parser.add_argument("--keyword")
+        _add_daemon_options(parser)
+        _add_output_options(parser, default_format="csv" if action == "export" else "json")
 
 
 def _add_workflow_parser(subparsers) -> None:
@@ -731,6 +773,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_write_smoke(args)
     if getattr(args, "oa_write_capabilities", False):
         return handle_oa_write_capabilities(args)
+    if getattr(args, "oa_write_discover", False):
+        return handle_oa_write_discover(args)
     if getattr(args, "oa_write_endpoints", False):
         return handle_oa_write_endpoints(args)
     if getattr(args, "oa_write_preflight", False):
@@ -743,6 +787,8 @@ def handle_oa(args: argparse.Namespace, home: Path) -> int:
         return handle_oa_pending_submit(args)
     if getattr(args, "oa_inbox_action", None):
         return handle_oa_inbox(args)
+    if getattr(args, "oa_history_action", None):
+        return handle_oa_history(args)
     if getattr(args, "oa_workflow_action", None):
         return handle_oa_workflow(args)
     command = args.oa_command
@@ -782,6 +828,22 @@ def handle_oa_audit(args: argparse.Namespace, home: Path) -> int:
         response = _oa_audit_search_result(home, filename=filename, kind=kind, args=args)
     else:
         response = _oa_audit_result(home, filename=filename, kind=kind)
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_history(args: argparse.Namespace) -> int:
+    action = args.oa_history_action
+    if action == "sections":
+        response = run_oa_daemon_command(args, "history_sections", _history_daemon_args_from_cli(args))
+    elif action in {"list", "search", "export"}:
+        response = run_oa_daemon_command(args, "history_list", _history_daemon_args_from_cli(args))
+    else:
+        raise ValueError(f"unknown history action: {action}")
+    if not response.get("ok", False):
+        emit_cli_value(response, args)
+        return 0
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
@@ -866,6 +928,38 @@ def _inbox_daemon_args_from_cli(args: argparse.Namespace) -> dict:
         payload["limit"] = args.limit
     if getattr(args, "deep", False):
         payload["deep"] = True
+    deep_limit = getattr(args, "deep_limit", None)
+    if deep_limit is not None:
+        payload["deep_limit"] = deep_limit
+    text_limit = getattr(args, "text_limit", None)
+    if text_limit is not None:
+        payload["text_limit"] = text_limit
+    return payload
+
+
+def _history_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {}
+    kind = getattr(args, "kind", None)
+    if kind:
+        payload["kind"] = kind
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    if getattr(args, "limit", None) is not None:
+        payload["limit"] = args.limit
+    return payload
+
+
+def _write_discover_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {
+        "source": args.source,
+        "kind": args.kind,
+    }
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    if getattr(args, "limit", None) is not None:
+        payload["limit"] = args.limit
     deep_limit = getattr(args, "deep_limit", None)
     if deep_limit is not None:
         payload["deep_limit"] = deep_limit
@@ -1243,6 +1337,13 @@ def handle_oa_write_capabilities(args: argparse.Namespace) -> int:
     if args.limit is not None:
         command_args["limit"] = args.limit
     response = run_oa_daemon_command(args, "write_capabilities", command_args)
+    response = _apply_response_options(response, args)
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_write_discover(args: argparse.Namespace) -> int:
+    response = run_oa_daemon_command(args, "write_discover", _write_discover_daemon_args_from_cli(args))
     response = _apply_response_options(response, args)
     emit_cli_value(response, args)
     return 0
