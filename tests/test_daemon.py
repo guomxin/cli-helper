@@ -126,6 +126,36 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["clients"][0]["client_id"], "chrome-1")
             self.assertEqual(response.body["result"]["clients"][0]["matches_system"], True)
 
+    def test_run_session_status_warns_when_oa_client_does_not_look_logged_in(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "http://10.10.50.110/seeyon/main.do?method=main",
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "session_status",
+                    "args": {},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.body["result"]["connected"], True)
+            self.assertIn("single browser session owner", response.body["result"]["warnings"][0])
+            self.assertIn("Playwright", response.body["result"]["warnings"][0])
+
     def test_run_command_routes_task_to_matching_oa_client(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
@@ -1212,7 +1242,7 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["items"][0]["affair_id"], "done-123")
             self.assertEqual(response.body["result"]["items"][0]["history_kind"], "done")
 
-    def test_run_template_list_api_replays_discovered_section_api(self):
+    def test_run_template_list_api_reads_template_center_rest_endpoint(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
             state.handle(
@@ -1226,14 +1256,13 @@ class DaemonTests(unittest.TestCase):
                 },
             )
             template_url = (
-                "http://10.10.50.110/seeyon/ajax.do?method=ajaxAction"
-                "&managerName=sectionManager&managerMethod=doProjection"
-                "&arguments=%7B%22sectionBeanId%22%3A%22templeteSection%22%7D"
+                "http://10.10.50.110/seeyon/rest/template/myTemplate"
+                "?option.n_a_s=1&fragmentId=-6503951670357636432&ordinal=0"
             )
 
             def extension_worker():
                 seen_kinds = []
-                for _ in range(2):
+                for _ in range(1):
                     tasks = []
                     for _attempt in range(20):
                         tasks = state.handle(
@@ -1301,7 +1330,7 @@ class DaemonTests(unittest.TestCase):
                                 },
                             },
                         )
-                self.assertEqual(seen_kinds, ["network_log_snapshot", "page_fetch"])
+                self.assertEqual(seen_kinds, ["page_fetch"])
 
             worker = threading.Thread(target=extension_worker)
             worker.start()
@@ -1318,7 +1347,7 @@ class DaemonTests(unittest.TestCase):
             worker.join()
 
             self.assertEqual(response.status, 200)
-            self.assertEqual(response.body["result"]["source"], "section_api")
+            self.assertEqual(response.body["result"]["source"], "template_center_api")
             self.assertEqual(response.body["result"]["items"][0]["template_id"], "-6511139737225050501")
 
     def test_run_pending_detail_filters_parsed_html_snapshot(self):

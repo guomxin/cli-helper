@@ -9,6 +9,11 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from bscli.adapters.seeyon_write import write_action_risk
 
+TEMPLATE_CENTER_API_URL = (
+    "/seeyon/rest/template/myTemplate"
+    "?option.n_a_s=1&fragmentId=-6503951670357636432&ordinal=0"
+)
+
 
 _WORKFLOW_OPINION_RE = re.compile(
     r"(?P<handler>\S+)\s+"
@@ -252,6 +257,68 @@ def parse_template_projection(projection: dict, *, base_url: str) -> dict:
         "count": len(items),
         "total": data.get("dataCount") if data.get("dataCount") is not None else data.get("dataNum"),
         "page": data.get("pageNo"),
+        "items": items,
+    }
+
+
+def parse_template_center_response(payload: dict, *, base_url: str) -> dict:
+    raw_items = list(_iter_template_center_items(payload))
+    items = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_items:
+        template_id = _string_value(raw, "id", "templateId", "template_id", "optionId")
+        title = _clean(
+            _strip_html(
+                _string_value(
+                    raw,
+                    "subject",
+                    "templateName",
+                    "template_name",
+                    "title",
+                    "name",
+                    "subjectHTML",
+                )
+            ),
+            500,
+        )
+        if not template_id or not title:
+            continue
+        dedupe_key = (template_id, title)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        raw_href = _string_value(raw, "href", "link", "linkURL", "url")
+        href = _join_app_url(base_url, raw_href) if raw_href else _template_launch_url(base_url, template_id)
+        items.append(
+            {
+                "index": len(items),
+                "title": title,
+                "subject": title,
+                "template_id": template_id,
+                "form_app_id": _string_value(raw, "formAppId", "form_app_id"),
+                "category_name": _clean(_string_value(raw, "categoryName", "category_name", "category"), 200),
+                "category_id": _string_value(raw, "categoryId", "category_id"),
+                "module_type": _string_value(raw, "moduleType", "module_type"),
+                "body_type": _string_value(raw, "bodyType", "body_type"),
+                "href": href,
+                "raw_href": raw_href,
+                "raw_text": title,
+            }
+        )
+
+    if not items and isinstance(payload, dict):
+        fallback = parse_template_projection(payload, base_url=base_url)
+        return {
+            **fallback,
+            "schema_version": "bscli.oa_template_list.v2",
+            "source": "template_center_api",
+        }
+
+    return {
+        "schema_version": "bscli.oa_template_list.v2",
+        "source": "template_center_api",
+        "count": len(items),
+        "total": _template_center_total(payload, len(items)),
         "items": items,
     }
 
@@ -1032,6 +1099,73 @@ def _history_kind_from_name(name: str) -> str:
     if "\u8ddf\u8e2a" in compact or lowered in {"tracked", "followed", "tracking"}:
         return "tracked"
     return ""
+
+
+def _iter_template_center_items(value) -> Iterable[dict]:
+    if isinstance(value, dict):
+        if _looks_like_template_center_item(value):
+            yield value
+        for child in value.values():
+            yield from _iter_template_center_items(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_template_center_items(child)
+
+
+def _looks_like_template_center_item(value: dict) -> bool:
+    if not isinstance(value, dict):
+        return False
+    has_id = any(value.get(key) not in (None, "") for key in ("id", "templateId", "template_id", "optionId"))
+    has_title = any(
+        value.get(key) not in (None, "")
+        for key in ("subject", "templateName", "template_name", "title", "name", "subjectHTML")
+    )
+    has_template_metadata = any(
+        key in value
+        for key in (
+            "formAppId",
+            "form_app_id",
+            "categoryName",
+            "category_name",
+            "moduleType",
+            "module_type",
+            "bodyType",
+            "body_type",
+        )
+    )
+    return has_id and has_title and has_template_metadata
+
+
+def _string_value(source: dict, *keys: str) -> str:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _template_launch_url(base_url: str, template_id: str) -> str:
+    raw_href = (
+        "/collaboration/collaboration.do?method=newColl&from=templateNewColl"
+        f"&templateId={template_id}&showTab=true"
+    )
+    return _join_app_url(base_url, raw_href)
+
+
+def _template_center_total(payload: dict, fallback: int) -> int:
+    if not isinstance(payload, dict):
+        return fallback
+    for key in ("total", "count", "dataCount", "dataNum"):
+        value = payload.get(key)
+        if isinstance(value, int):
+            return value
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("total", "count", "dataCount", "dataNum"):
+            value = data.get(key)
+            if isinstance(value, int):
+                return value
+    return fallback
 
 
 def _parse_html(html: str) -> _Node:

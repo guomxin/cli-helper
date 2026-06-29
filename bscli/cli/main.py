@@ -294,6 +294,7 @@ def _build_oa_parser(oa_sub) -> None:
         list_command="template_list_api",
         show_command="template_detail",
         show_arg_name="template_id",
+        category_filter=True,
     )
     template_match = template_sub.add_parser("match")
     template_match.set_defaults(oa_command="template_match")
@@ -650,6 +651,7 @@ def _add_collection_parser(
     list_command: str,
     show_command: str | None,
     show_arg_name: str | None,
+    category_filter: bool = False,
 ) -> None:
     for action in ("list", "search", "export"):
         parser = subparsers.add_parser(action)
@@ -658,6 +660,8 @@ def _add_collection_parser(
             parser.add_argument("--keyword", required=True)
         else:
             parser.add_argument("--keyword")
+        if category_filter:
+            parser.add_argument("--category")
         _add_daemon_options(parser)
         _add_output_options(parser, default_format="csv" if action == "export" else "json")
     for action in ("details", "attachments", "workflow", "actions"):
@@ -1934,6 +1938,14 @@ def _apply_collection_options(
             for item in filtered
             if needle in json.dumps(item, ensure_ascii=False).lower()
         ]
+    category = getattr(args, "category", None)
+    if category:
+        needle = str(category).lower()
+        filtered = [
+            item
+            for item in filtered
+            if _item_matches_category(item, needle)
+        ]
     limit = getattr(args, "limit", None)
     if limit is not None:
         filtered = filtered[: max(limit, 0)]
@@ -1944,6 +1956,19 @@ def _apply_collection_options(
             for item in filtered
         ]
     return filtered
+
+
+def _item_matches_category(item, needle: str) -> bool:
+    if not isinstance(item, dict):
+        return False
+    values = [
+        item.get("category_name"),
+        item.get("category"),
+        item.get("categoryName"),
+        item.get("category_id"),
+        item.get("categoryId"),
+    ]
+    return any(needle in str(value or "").lower() for value in values)
 
 
 def _project_detail_response(response: dict, args: argparse.Namespace) -> dict:

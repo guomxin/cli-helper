@@ -315,7 +315,7 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
         CommandDefinition(
             system="oa",
             name="template_list_api",
-            description="Read structured form templates by replaying the discovered Seeyon templeteSection API.",
+            description="Read structured form templates from the Seeyon template center REST API.",
             access="read",
             strategy="page_fetch",
             args_schema={},

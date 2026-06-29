@@ -75,6 +75,38 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_template_list_filters_items_by_category(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "source": "template_center_api",
+                    "count": 2,
+                    "items": [
+                        {"title": "【报销】差旅费审批报销单", "category_name": "财务审批"},
+                        {"title": "【HR】请假申请单", "category_name": "人事审批"},
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "template",
+                "list",
+                "--category",
+                "财务审批",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "template_list_api")
+        self.assertEqual(payload["result"]["count"], 1)
+        self.assertEqual(payload["result"]["items"][0]["title"], "【报销】差旅费审批报销单")
+
     def test_oa_detail_read_maps_url_to_detail_read(self):
         server, seen_payloads = self._start_daemon(
             {

@@ -10,11 +10,12 @@ from pathlib import Path
 import re
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
+    TEMPLATE_CENTER_API_URL,
     extract_history_sections,
     parse_launch_page,
     parse_oa_detail,
@@ -22,7 +23,7 @@ from bscli.adapters.seeyon_home import (
     parse_pending_list,
     parse_pending_projection,
     parse_sent_projection,
-    parse_template_projection,
+    parse_template_center_response,
     parse_template_list,
 )
 from bscli.adapters.seeyon_matter_intent import build_matter_intent_preflight
@@ -65,7 +66,7 @@ COMMAND_TASKS = {
     ("oa", "sent_list_api"): "section_api_replay",
     ("oa", "template_detail"): "html_snapshot",
     ("oa", "template_list"): "html_snapshot",
-    ("oa", "template_list_api"): "section_api_replay",
+    ("oa", "template_list_api"): "page_fetch",
 }
 
 WORKFLOW_READ_COMMANDS = {
@@ -366,13 +367,10 @@ class DaemonState:
                 command_name="sent_list_api",
             )
         if command == "template_list_api":
-            return self._run_section_api_command(
+            return self._run_template_center_command(
                 system,
                 target_client_id,
                 timeout_seconds,
-                section_bean_id="templeteSection",
-                parser=parse_template_projection,
-                command_name="template_list_api",
             )
         if command == "api_inspect":
             return self._run_api_inspect_command(system, target_client_id, args, timeout_seconds)
@@ -559,6 +557,67 @@ class DaemonState:
                 "result": parser(
                     projection,
                     base_url=replay.get("url") or "",
+                ),
+            },
+        )
+
+    def _run_template_center_command(
+        self,
+        system: str,
+        target_client_id: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        profile = self._load_system_profile(system)
+        base_url = profile.base_url if profile is not None else ""
+        replay_response = self._run_page_fetch(
+            system,
+            target_client_id,
+            {
+                "method": "GET",
+                "url": urljoin(base_url, TEMPLATE_CENTER_API_URL),
+                "headers": {},
+                "body": None,
+                "max_text": 1000000,
+            },
+            timeout_seconds,
+        )
+        if replay_response.status != 200:
+            return replay_response
+        replay = replay_response.body["result"]
+        if not replay.get("ok"):
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "task_id": replay_response.body["task_id"],
+                    "error": f"template center API returned HTTP {replay.get('status')}",
+                },
+            )
+        payload = replay.get("json")
+        if not isinstance(payload, dict):
+            text = str(replay.get("text") or "")
+            try:
+                loaded = json.loads(text)
+            except json.JSONDecodeError:
+                loaded = None
+            payload = loaded if isinstance(loaded, dict) else None
+        if not isinstance(payload, dict):
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "task_id": replay_response.body["task_id"],
+                    "error": "template center API response was not JSON",
+                },
+            )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": replay_response.body["task_id"],
+                "result": parse_template_center_response(
+                    payload,
+                    base_url=replay.get("url") or base_url,
                 ),
             },
         )
@@ -3683,19 +3742,32 @@ class DaemonState:
         clients = []
         for client in self.bridge.list_clients():
             matches_system = self._client_matches_system(client, profile)
-            clients.append({**client, "matches_system": matches_system})
+            looks_logged_in = _looks_like_logged_in_oa_client(client) if matches_system else False
+            clients.append({**client, "matches_system": matches_system, "looks_logged_in": looks_logged_in})
         matched = [client for client in clients if client["matches_system"]]
+        logged_in = [client for client in matched if client["looks_logged_in"]]
         suggestions = []
+        warnings = []
         if not matched:
             suggestions = [
                 "Start Chrome, load the BSCLI extension, and open the OA tab: http://10.10.50.110/seeyon/main.do?method=main",
                 "After login, run: python -m bscli.cli.main --home .bscli daemon status",
             ]
+        elif not logged_in:
+            warnings.append(
+                "OA uses a single browser session owner: if Playwright MCP is logged in, the default Chrome extension bridge may be kicked out; make default Chrome the active logged-in OA owner before bridge tests."
+            )
         return {
             "connected": bool(matched),
             "client_count": len(matched),
             "clients": clients,
+            "warnings": warnings,
             "suggestions": suggestions,
+            "session_owner": {
+                "exclusive_login": True,
+                "active_bridge": "chrome_extension" if matched else "none",
+                "logged_in_client_count": len(logged_in),
+            },
         }
 
     def _select_client_id_for_system(self, system: str | None) -> str | None:
@@ -3729,6 +3801,19 @@ class DaemonState:
             return False
         origin = f"{parsed.scheme}://{parsed.netloc}"
         return origin in profile.allowed_origins
+
+
+def _looks_like_logged_in_oa_client(client: dict[str, Any]) -> bool:
+    title = str(client.get("title") or "").strip()
+    url = str(client.get("url") or "").strip()
+    lowered = title.lower()
+    if not title:
+        return False
+    if title == url or lowered.startswith(("http://", "https://")):
+        return False
+    if any(marker in title for marker in ("登录", "登陆", "用户登录")) or "login" in lowered:
+        return False
+    return True
 
 
 def serve(home: Path, host: str = "127.0.0.1", port: int = 8765) -> None:

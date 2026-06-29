@@ -9,6 +9,7 @@ from bscli.adapters.seeyon_home import (
     parse_pending_list,
     parse_pending_projection,
     parse_sent_projection,
+    parse_template_center_response,
     parse_template_list,
     parse_template_projection,
 )
@@ -584,6 +585,55 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["title"], "【用印】用印申请单")
         self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
         self.assertEqual(result["items"][0]["open_type"], "4")
+        self.assertEqual(
+            result["items"][0]["href"],
+            "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
+        )
+
+    def test_parse_template_center_response_extracts_business_metadata(self):
+        payload = {
+            "code": 0,
+            "data": {
+                "groups": [
+                    {
+                        "name": "行政审批",
+                        "templates": [
+                            {
+                                "id": "-6511139737225050501",
+                                "subject": "【用印】用印申请单",
+                                "formAppId": "2995503502343291344",
+                                "categoryName": "行政审批",
+                                "moduleType": "1",
+                                "bodyType": "20",
+                            },
+                            {
+                                "id": "-7765568933726502821",
+                                "subject": "【HR】请假申请单",
+                                "formAppId": "6773919591095560889",
+                                "categoryName": "人事审批",
+                                "moduleType": "1",
+                                "bodyType": "20",
+                            },
+                        ],
+                    }
+                ]
+            },
+            "message": "ok",
+        }
+
+        result = parse_template_center_response(
+            payload,
+            base_url="http://10.10.50.110/seeyon/main.do?method=main",
+        )
+
+        self.assertEqual(result["source"], "template_center_api")
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["items"][0]["title"], "【用印】用印申请单")
+        self.assertEqual(result["items"][0]["template_id"], "-6511139737225050501")
+        self.assertEqual(result["items"][0]["form_app_id"], "2995503502343291344")
+        self.assertEqual(result["items"][0]["category_name"], "行政审批")
+        self.assertEqual(result["items"][0]["module_type"], "1")
+        self.assertEqual(result["items"][0]["body_type"], "20")
         self.assertEqual(
             result["items"][0]["href"],
             "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&from=templateNewColl&templateId=-6511139737225050501&showTab=true",
