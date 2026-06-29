@@ -102,7 +102,12 @@ current live templates, the visible `subject` field is read-only; prefer
 `content_coll` or `formTextId` for low-risk field dry-runs. Rendered snapshots
 also collect same-tab frame HTML and merge it into launch-page parsing, because
 some Seeyon business forms render their real fields inside frames or embedded
-dynamic form surfaces.
+dynamic form surfaces. When CAP4 dynamic-form text is visible, `launch inspect`
+also emits a read-only `business_form` profile with the detected title,
+sections, field candidates, and table-column candidates. These candidates are
+semantic evidence only: they are not merged into writable `fields` and cannot be
+used by save-draft/write commands until a workflow-specific promotion validates
+the underlying DOM/API behavior.
 
 First launch-side expansion batch:
 
@@ -110,9 +115,9 @@ First launch-side expansion batch:
   shell supports `content_coll` dry-run. Business form field extraction still
   needs frame/dynamic-form verification.
 - `【报销】差旅费审批报销单`: template id `-2046021869351779722`; outer launch
-  shell matches the same collaboration save-draft pattern. A 4-second rendered
-  wait still showed only shell fields, so this is the primary target for the
-  new frame-aware snapshot path.
+  shell matches the same collaboration save-draft pattern. Frame-aware rendered
+  snapshots now expose the CAP4 business form text, and `business_form` reports
+  its sections, semantic field candidates, and table-column candidates.
 - `新建会议`: navigation URL
   `/seeyon/meeting.do?method=editor&showTab=true`; not a template-center item.
   `oa meeting create inspect` reads meeting fields such as `title`, `mtTitle`,

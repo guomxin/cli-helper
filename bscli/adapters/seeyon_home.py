@@ -15,6 +15,67 @@ TEMPLATE_CENTER_API_URL = (
 )
 
 
+_CAP4_SECTION_HEADINGS = (
+    "发起者信息",
+    "申请人信息",
+    "基本信息",
+    "申请信息",
+    "会议信息",
+    "费用信息",
+    "出差日程及住宿费",
+    "出差补助",
+    "在途交通",
+    "异地交通",
+    "费用统计",
+    "账户信息",
+    "审批信息",
+    "附件信息",
+    "差旅报销须知",
+)
+
+_CAP4_FIELD_LABELS = (
+    "流水号",
+    "姓名",
+    "工号",
+    "部门",
+    "申请人",
+    "申请部门",
+    "申请日期",
+    "填报日期",
+    "费用归算类型",
+    "费用归属部门",
+    "结算实体",
+    "费用归属事项",
+    "财务编号",
+    "关联出差申请单",
+    "是否申请补助",
+    "住宿费小计",
+    "在途交通费小计",
+    "异地交通费小计",
+    "补助小计",
+    "应付金额合计",
+    "应付金额大写",
+    "稽核会计",
+    "主管会计",
+    "稽核日期",
+    "账户类型",
+    "收款账户",
+    "账户名称",
+    "收款账号",
+    "银行账户",
+    "收款账户开户行",
+    "开户银行",
+    "备注",
+)
+
+_CAP4_TABLE_COLUMNS = {
+    "出差日程及住宿费": ("日程及住宿起止日期", "出差城市", "住宿金额", "扣除", "稽核", "电子发票"),
+    "在途交通": ("费用日期", "出发地点", "到达地点", "交通方式", "金额", "扣除", "稽核", "电子发票"),
+    "异地交通": ("费用日期", "出发地点", "到达地点", "事由", "金额", "扣除", "稽核", "电子发票"),
+    "出差补助": ("补助起止日期", "出差补助", "高原补贴", "境外补贴", "补助扣除", "补助稽核", "备注"),
+}
+
+
 _WORKFLOW_OPINION_RE = re.compile(
     r"(?P<handler>\S+)\s+"
     r"(?P<opinion>已阅|同意|不同意|退回|驳回|通过|批准|已处理|阅)\s+"
@@ -448,6 +509,7 @@ def parse_launch_page(html: str, *, base_url: str) -> dict:
     buttons = _parse_launch_buttons(root)
     forms = _parse_launch_forms(root, base_url=base_url)
     actions = _parse_detail_write_actions(html)
+    business_form = _parse_cap4_business_form(root)
     return {
         "schema_version": "bscli.oa_launch_inspection.v1",
         "title": title,
@@ -463,6 +525,7 @@ def parse_launch_page(html: str, *, base_url: str) -> dict:
         "button_count": len(buttons),
         "actions": actions,
         "action_count": len(actions),
+        "business_form": business_form,
         "write_hints": _parse_detail_write_hints(root, html, base_url=base_url),
         "safety": {
             "read_only": True,
@@ -635,6 +698,143 @@ def _parse_launch_buttons(root: _Node) -> list[dict]:
         if len(buttons) >= 200:
             break
     return buttons
+
+
+def _parse_cap4_business_form(root: _Node) -> dict:
+    text = _clean(root.text(), 20000)
+    empty = _empty_business_form()
+    if "cap4" not in text.lower():
+        return empty
+
+    title = _cap4_title(text)
+    section_positions = _cap4_section_positions(text)
+    sections = [section for _, section in section_positions]
+    field_candidates = _cap4_field_candidates(text, section_positions)
+    table_candidates = _cap4_table_candidates(text)
+    if not title and not sections and not field_candidates and not table_candidates:
+        return empty
+    return {
+        "detected": True,
+        "source": "cap4_text",
+        "title": title,
+        "sections": sections,
+        "section_count": len(sections),
+        "field_candidates": field_candidates,
+        "field_count": len(field_candidates),
+        "table_candidates": table_candidates,
+        "table_count": len(table_candidates),
+    }
+
+
+def _empty_business_form() -> dict:
+    return {
+        "detected": False,
+        "source": "",
+        "title": "",
+        "sections": [],
+        "section_count": 0,
+        "field_candidates": [],
+        "field_count": 0,
+        "table_candidates": [],
+        "table_count": 0,
+    }
+
+
+def _cap4_title(text: str) -> str:
+    tokens = _cap4_token_positions(text)
+    for index, (_, token) in enumerate(tokens):
+        if token.lower() == "cap4" and index + 1 < len(tokens):
+            candidate = tokens[index + 1][1]
+            if candidate and candidate.lower() != "cap4":
+                return _clean(candidate, 200)
+    return ""
+
+
+def _cap4_section_positions(text: str) -> list[tuple[int, str]]:
+    tokens = _cap4_token_positions(text)
+    token_positions = {}
+    for position, token in tokens:
+        token_positions.setdefault(token, position)
+    positions = []
+    seen = set()
+    for heading in _CAP4_SECTION_HEADINGS:
+        position = token_positions.get(heading)
+        if position is None:
+            position = text.find(heading)
+        if position < 0 or heading in seen:
+            continue
+        seen.add(heading)
+        positions.append((position, heading))
+    positions.sort(key=lambda item: item[0])
+    return positions
+
+
+def _cap4_field_candidates(text: str, section_positions: list[tuple[int, str]]) -> list[dict]:
+    label_set = set(_CAP4_FIELD_LABELS)
+    matches = []
+    seen = set()
+    for position, token in _cap4_token_positions(text):
+        if token not in label_set or token in seen:
+            continue
+        seen.add(token)
+        matches.append(
+            {
+                "position": position,
+                "label": token,
+                "section": _cap4_section_for_position(position, section_positions),
+                "source": "cap4_text",
+                "writable": None,
+            }
+        )
+        if len(matches) >= 200:
+            break
+    matches.sort(key=lambda item: item["position"])
+    for candidate in matches:
+        del candidate["position"]
+    return matches
+
+
+def _cap4_table_candidates(text: str) -> list[dict]:
+    token_values = {token for _, token in _cap4_token_positions(text)}
+    tables = []
+    for name, known_columns in _CAP4_TABLE_COLUMNS.items():
+        if name not in token_values and text.find(name) < 0:
+            continue
+        columns = [column for column in known_columns if column in token_values or text.find(column) >= 0]
+        if not columns:
+            continue
+        tables.append(
+            {
+                "name": name,
+                "columns": columns,
+                "column_count": len(columns),
+                "source": "cap4_text",
+            }
+        )
+    return tables
+
+
+def _cap4_section_for_position(position: int, section_positions: list[tuple[int, str]]) -> str:
+    current = ""
+    for section_position, section in section_positions:
+        if section_position > position:
+            break
+        current = section
+    return current
+
+
+def _cap4_token_positions(text: str) -> list[tuple[int, str]]:
+    tokens = []
+    cursor = 0
+    for raw_token in text.split():
+        position = text.find(raw_token, cursor)
+        if position < 0:
+            position = cursor
+        cursor = position + len(raw_token)
+        token = raw_token.strip(" \t\r\n:：；;，,。.*")
+        if token:
+            tokens.append((position, token))
+    return tokens
 
 
 def _launch_label_index(root: _Node) -> dict[str, str]:

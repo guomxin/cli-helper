@@ -327,6 +327,56 @@ class SeeyonHomeParserTests(unittest.TestCase):
         self.assertEqual(result["write_hints"]["endpoint_candidates"][0]["tested"], False)
         self.assertFalse(result["safety"]["execute_allowed"])
         self.assertEqual(result["safety"]["submitted_count"], 0)
+        self.assertFalse(result["business_form"]["detected"])
+
+    def test_parse_launch_page_extracts_cap4_business_form_profile(self):
+        html = """
+        <html>
+          <body>
+            <div id="cap4Frame">
+              cap4 差旅费审批报销单
+              流水号 流水号
+              发起者信息 姓名 工号 部门
+              费用信息 费用归算类型 费用归属部门 结算实体 关联出差申请单
+              出差日程及住宿费 日程及住宿起止日期 出差城市 住宿金额 扣除 稽核 电子发票
+              在途交通 费用日期 出发地点 到达地点 交通方式 金额 扣除 稽核 电子发票
+              异地交通 费用日期 出发地点 到达地点 事由 金额 扣除 稽核 电子发票
+              费用统计 住宿费小计 在途交通费小计 异地交通费小计 应付金额合计
+              账户信息 账户类型 收款账户 开户银行
+            </div>
+          </body>
+        </html>
+        """
+
+        result = parse_launch_page(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=newColl&templateId=travel-1",
+        )
+
+        self.assertEqual(result["fields"], [])
+        self.assertEqual(result["field_count"], 0)
+        self.assertTrue(result["business_form"]["detected"])
+        self.assertEqual(result["business_form"]["source"], "cap4_text")
+        self.assertEqual(result["business_form"]["title"], "差旅费审批报销单")
+        self.assertIn("费用信息", result["business_form"]["sections"])
+        self.assertIn("出差日程及住宿费", result["business_form"]["sections"])
+        labels = [candidate["label"] for candidate in result["business_form"]["field_candidates"]]
+        self.assertIn("费用归算类型", labels)
+        self.assertIn("关联出差申请单", labels)
+        self.assertIn("应付金额合计", labels)
+        first_label = result["business_form"]["field_candidates"][0]
+        self.assertEqual(first_label["source"], "cap4_text")
+        self.assertIsNone(first_label["writable"])
+        tables = {table["name"]: table for table in result["business_form"]["table_candidates"]}
+        self.assertEqual(
+            tables["出差日程及住宿费"]["columns"],
+            ["日程及住宿起止日期", "出差城市", "住宿金额", "扣除", "稽核", "电子发票"],
+        )
+        self.assertEqual(
+            tables["在途交通"]["columns"],
+            ["费用日期", "出发地点", "到达地点", "交通方式", "金额", "扣除", "稽核", "电子发票"],
+        )
+        self.assertEqual(result["business_form"]["table_count"], 3)
 
     def test_parse_pending_list_extracts_structured_rows(self):
         html = """

@@ -310,7 +310,12 @@ actions. The Chrome bridge treats a launch tab as readable once the DOM can be
 scripted, even if Chrome still reports the tab as loading; this avoids false
 timeouts on OA pages that keep background resources open. In current live
 Seeyon pages, `subject` is often read-only, so use writable fields such as
-`content_coll` or `formTextId` for launch dry-runs.
+`content_coll` or `formTextId` for launch dry-runs. If CAP4 dynamic-form text is
+visible in the rendered page or same-tab frames, `launch inspect` also reports a
+read-only `business_form` profile with the form title, sections, field
+candidates, and table-column candidates. These candidates are not merged into
+writable `fields`; they are evidence for later workflow-specific write-action
+promotion.
 `oa launch dry-run` uses the same launch-page inspection path, validates that
 the requested field names, ids, or labels are writable, verifies that a
 `saveDraft` / "保存待发" control exists, and returns a sanitized
