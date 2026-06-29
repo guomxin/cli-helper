@@ -33,6 +33,7 @@ from bscli.mcp.server import BscliMcpServer
 
 
 DEFAULT_OA_WRITE_SMOKE_KEYWORD = "__BSCLI_NO_MATCH_VALIDATION__"
+OA_MEETING_CREATE_URL = "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -420,6 +421,25 @@ def _build_oa_parser(oa_sub) -> None:
 
     meeting = oa_sub.add_parser("meeting")
     meeting_sub = meeting.add_subparsers(dest="oa_meeting_area", required=True)
+    create = meeting_sub.add_parser("create")
+    create_sub = create.add_subparsers(dest="oa_meeting_create_action", required=True)
+    create_inspect = create_sub.add_parser("inspect")
+    create_inspect.set_defaults(oa_meeting_create_mode="inspect")
+    create_inspect.add_argument("--settle-ms", type=int, dest="settle_ms")
+    _add_daemon_options(create_inspect)
+    _add_output_options(create_inspect)
+    create_dry_run = create_sub.add_parser("dry-run")
+    create_dry_run.set_defaults(oa_meeting_create_mode="dry-run")
+    create_dry_run.add_argument(
+        "--field",
+        action="append",
+        default=[],
+        help="Meeting field assignment in name=value form; may be repeated.",
+    )
+    create_dry_run.add_argument("--fields-json", default="{}", help="JSON object of meeting field name/id/label to value.")
+    create_dry_run.add_argument("--settle-ms", type=int, dest="settle_ms")
+    _add_daemon_options(create_dry_run)
+    _add_output_options(create_dry_run)
     reply = meeting_sub.add_parser("reply")
     reply_sub = reply.add_subparsers(dest="oa_meeting_action", required=True)
     for mode in ("dry-run", "execute"):
@@ -874,6 +894,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
 def handle_oa(args: argparse.Namespace, home: Path) -> int:
     if getattr(args, "oa_audit_kind", None):
         return handle_oa_audit(args, home)
+    if getattr(args, "oa_meeting_create_mode", None):
+        return handle_oa_meeting_create(args)
     if getattr(args, "oa_meeting_reply_mode", None):
         return handle_oa_meeting_reply(args)
     if getattr(args, "oa_write_actions", False):
@@ -1394,6 +1416,19 @@ def handle_oa_meeting_reply(args: argparse.Namespace) -> int:
         "meeting_reply_dry_run" if args.oa_meeting_reply_mode == "dry-run" else "meeting_reply_execute",
         command_args,
     )
+    emit_cli_value(response, args)
+    return 0
+
+
+def handle_oa_meeting_create(args: argparse.Namespace) -> int:
+    command_args: dict[str, object] = {"url": OA_MEETING_CREATE_URL}
+    if getattr(args, "settle_ms", None) is not None:
+        command_args["settle_ms"] = args.settle_ms
+    command = "launch_inspect"
+    if args.oa_meeting_create_mode == "dry-run":
+        command = "launch_dry_run"
+        command_args["fields"] = _launch_fields_from_cli(args)
+    response = run_oa_daemon_command(args, command, command_args)
     emit_cli_value(response, args)
     return 0
 

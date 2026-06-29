@@ -87,6 +87,10 @@ without sending the workflow.
 - `oa meeting reply execute ... --confirm` posts the reply through
   `meetingAjaxManager.reply`, then reads `meetingView` again and succeeds only
   when `myReply.feedbackFlag` matches the requested attitude.
+- `oa meeting create inspect` and `oa meeting create dry-run` are fixed-entry
+  wrappers around the OA meeting editor page. They open the editor page and
+  validate fields such as `title` and `mtTitle`, but they do not fill, save, or
+  send a meeting.
 - `oa write endpoints ...` classifies endpoint candidates found during dry-run
   evidence collection. It does not call the candidates and marks each result
   with `safe_to_call=false`.

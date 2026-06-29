@@ -480,10 +480,15 @@ through the `meetingAjaxManager` API rather than the collaboration page submit
 workflow:
 
 ```bash
+python -m bscli.cli.main --home .bscli oa meeting create inspect --settle-ms 3000
+python -m bscli.cli.main --home .bscli oa meeting create dry-run --field title="Planning" --field mtTitle="Project sync" --settle-ms 3000
 python -m bscli.cli.main --home .bscli oa meeting reply dry-run --id <pending_affair_id> --attitude join
 python -m bscli.cli.main --home .bscli oa meeting reply execute --id <pending_affair_id> --attitude join --confirm
 ```
 
+`meeting create inspect` and `meeting create dry-run` are thin, read-only
+wrappers around the fixed OA meeting editor URL. They validate the editor page
+and its writable fields, but they do not fill, save, or send a meeting.
 The execute form requires `--confirm`, posts the reply through the logged-in
 Chrome bridge, then reads `meetingView` again and succeeds only when
 `myReply.feedbackFlag` matches the requested attitude. The agent-facing tool

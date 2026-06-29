@@ -88,6 +88,66 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_background_rendered_snapshot_collects_all_frames(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const sandbox = {
+  console,
+  URL,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      create: async () => ({ id: 7 }),
+      remove: async () => undefined,
+      onActivated: { addListener: () => undefined },
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      get: (tabId, callback) => callback({ id: tabId, status: "complete" }),
+    },
+    scripting: {
+      executeScript: async (options) => {
+        if (options.target && options.target.allFrames) {
+          return [
+            { frameId: 0, result: { url: "http://oa.example.test/top", title: "Top", html: "<html>top</html>" } },
+            { frameId: 2, result: { url: "http://oa.example.test/frame", title: "Frame", html: "<html>frame</html>" } },
+          ];
+        }
+        return [{ frameId: 0, result: { url: "http://oa.example.test/top", title: "Top", html: "<html>top</html>" } }];
+      },
+    },
+  },
+};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
+(async () => {
+  const result = await sandbox.collectRenderedHtmlSnapshot({ url: "http://oa.example.test/top", settle_ms: 0 });
+  if (!Array.isArray(result.frames) || result.frames.length !== 2) {
+    throw new Error(`expected two rendered frames, got ${JSON.stringify(result.frames)}`);
+  }
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_contains_page_inventory_collector(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")
 

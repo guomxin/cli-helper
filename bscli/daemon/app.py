@@ -1369,7 +1369,7 @@ class DaemonState:
                 },
             )
         snapshot = result.get("result") or {}
-        html = str(snapshot.get("html") or snapshot.get("text") or "")
+        html = _rendered_snapshot_html(snapshot)
         inspected = parse_launch_page(html, base_url=snapshot.get("url") or url)
         if template_id:
             inspected["template_id"] = template_id
@@ -4307,8 +4307,8 @@ def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) ->
             for action in available
         ],
         "next_commands": [
-            f"oa launch dry-run --template-id {template_id} --field subject=\"Draft subject\"",
-            f"oa launch save-draft --template-id {template_id} --field subject=\"Draft subject\" --confirm",
+            f"oa launch dry-run --template-id {template_id} --field content_coll=\"Draft note\"",
+            f"oa launch save-draft --template-id {template_id} --field content_coll=\"Draft note\" --confirm",
         ],
     }
 
@@ -4481,6 +4481,21 @@ def _matter_next_steps(matter: dict[str, Any], launch_inspection: dict[str, Any]
     if not launch_inspection:
         steps.insert(0, f"oa matter inspect --id {matter.get('matter_id')} --with-launch")
     return steps
+
+
+def _rendered_snapshot_html(snapshot: Any) -> str:
+    if not isinstance(snapshot, dict):
+        return ""
+    parts = [str(snapshot.get("html") or snapshot.get("text") or "")]
+    frames = snapshot.get("frames")
+    if isinstance(frames, list):
+        for frame in frames:
+            if not isinstance(frame, dict):
+                continue
+            frame_html = str(frame.get("html") or frame.get("text") or "")
+            if frame_html:
+                parts.append(frame_html)
+    return "\n".join(part for part in parts if part)
 
 
 def _rank_template_candidates(cluster: dict[str, Any], templates: list[dict[str, Any]]) -> list[dict[str, Any]]:

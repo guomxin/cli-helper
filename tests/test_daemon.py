@@ -3658,6 +3658,70 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["read_effect"]["launch_page_opened"], True)
             self.assertEqual(result["read_effect"]["submitted_count"], 0)
 
+    def test_run_oa_launch_inspect_merges_rendered_frame_fields(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _ in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(tasks[0]["kind"], "rendered_html_snapshot")
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": tasks[0]["id"],
+                        "ok": True,
+                        "result": {
+                            "url": "http://oa.example.test/new",
+                            "html": "<html><body><h1>Outer launch</h1></body></html>",
+                            "frames": [
+                                {
+                                    "url": "http://oa.example.test/form-frame",
+                                    "html": "<html><body><label for='amount'>Amount</label><input id='amount' name='amount'></body></html>",
+                                }
+                            ],
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "launch_inspect",
+                    "args": {"url": "http://oa.example.test/new", "settle_ms": 0},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            field_names = [field.get("name") for field in response.body["result"]["fields"]]
+            self.assertEqual(response.status, 200)
+            self.assertIn("amount", field_names)
+
     def test_run_oa_launch_dry_run_validates_fields_without_sending(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

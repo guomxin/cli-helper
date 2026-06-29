@@ -186,11 +186,21 @@ async function collectRenderedHtmlSnapshot(payload) {
     if (settleMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, settleMs));
     }
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+    const frameInjections = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
       func: collectHtmlSnapshot,
     });
-    return injection.result;
+    const frames = frameInjections
+      .map((injection) => ({
+        frameId: injection.frameId ?? 0,
+        ...(injection.result || {}),
+      }))
+      .filter((frame) => frame.html || frame.text || frame.url);
+    const top = frames.find((frame) => frame.frameId === 0) || frames[0] || {};
+    return {
+      ...top,
+      frames,
+    };
   } finally {
     if (tab.id) {
       await chrome.tabs.remove(tab.id).catch(() => {});

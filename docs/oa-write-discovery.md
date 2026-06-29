@@ -74,6 +74,8 @@ Layer 3, launch-page inspection and write discovery:
 python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id> --settle-ms 0
 python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0
 python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
+python -m bscli.cli.main --home .bscli oa meeting create inspect --settle-ms 3000
+python -m bscli.cli.main --home .bscli oa meeting create dry-run --field title="Planning" --field mtTitle="Project sync" --settle-ms 3000
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
 python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id>
 ```
@@ -97,7 +99,26 @@ exists. The bridge waits for the page to become script-readable rather than
 requiring Chrome's tab status to reach `complete`, because Seeyon launch pages
 can keep background resources loading after the usable DOM is available. In
 current live templates, the visible `subject` field is read-only; prefer
-`content_coll` or `formTextId` for low-risk field dry-runs.
+`content_coll` or `formTextId` for low-risk field dry-runs. Rendered snapshots
+also collect same-tab frame HTML and merge it into launch-page parsing, because
+some Seeyon business forms render their real fields inside frames or embedded
+dynamic form surfaces.
+
+First launch-side expansion batch:
+
+- `【用印】用印申请单`: template id `-6511139737225050501`; outer launch
+  shell supports `content_coll` dry-run. Business form field extraction still
+  needs frame/dynamic-form verification.
+- `【报销】差旅费审批报销单`: template id `-2046021869351779722`; outer launch
+  shell matches the same collaboration save-draft pattern. A 4-second rendered
+  wait still showed only shell fields, so this is the primary target for the
+  new frame-aware snapshot path.
+- `新建会议`: navigation URL
+  `/seeyon/meeting.do?method=editor&showTab=true`; not a template-center item.
+  `oa meeting create inspect` reads meeting fields such as `title`, `mtTitle`,
+  `meetingTime`, `conferees`, `leader`, and `tel`. `oa meeting create dry-run`
+  validates fields and the `save_a` / "保存待发" control without filling or
+  clicking anything.
 
 The first promoted launch-page execution plan is save draft. `oa launch dry-run`
 validates requested fields and the `saveDraft` / "保存待发" control without

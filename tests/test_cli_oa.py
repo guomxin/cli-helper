@@ -820,6 +820,45 @@ class CliOaTests(unittest.TestCase):
             {"id": "affair-1", "attitude": "join", "feedback": "will attend"},
         )
 
+    def test_oa_meeting_create_dry_run_calls_launch_dry_run_with_editor_url(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_launch_draft_plan.v1",
+                    "mode": "dry-run",
+                    "safety": {"will_execute": False, "submitted_count": 0},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "create",
+                "dry-run",
+                "--field",
+                "title=Planning",
+                "--field",
+                "mtTitle=Project sync",
+                "--settle-ms",
+                "3000",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "launch_dry_run")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "url": "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true",
+                "fields": {"title": "Planning", "mtTitle": "Project sync"},
+                "settle_ms": 3000,
+            },
+        )
+
     def test_oa_write_capabilities_calls_daemon_with_plain_arguments(self):
         server, seen_payloads = self._start_daemon(
             {
