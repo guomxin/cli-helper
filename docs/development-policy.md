@@ -20,5 +20,6 @@ or push partially verified write-action code.
 ```bash
 python -m unittest discover
 python -m bscli.cli.main --home .bscli oa write smoke --timeout 60 --format json
-python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject" --timeout 60 --format json
+python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id> --settle-ms 0 --timeout 60 --format json
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0 --timeout 60 --format json
 ```

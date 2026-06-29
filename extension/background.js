@@ -182,7 +182,7 @@ async function collectRenderedHtmlSnapshot(payload) {
   const settleMs = Number(payload.settle_ms || 1500);
   const tab = await chrome.tabs.create({ url, active: false });
   try {
-    await waitForTabComplete(tab.id, 20000);
+    await waitForTabReadable(tab.id, 20000);
     if (settleMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, settleMs));
     }
@@ -211,7 +211,7 @@ async function executeSeeyonWrite(payload) {
   }
   const tab = await chrome.tabs.create({ url, active: false });
   try {
-    await waitForTabComplete(tab.id, 30000);
+    await waitForTabReadable(tab.id, 30000);
     await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 2000)));
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -241,7 +241,7 @@ async function executeSeeyonLaunchSaveDraft(payload) {
   }
   const tab = await chrome.tabs.create({ url, active: false });
   try {
-    await waitForTabComplete(tab.id, 30000);
+    await waitForTabReadable(tab.id, 30000);
     await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 1500)));
     const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
     const [injection] = await withTimeout(
@@ -566,6 +566,54 @@ function withTimeout(promise, timeoutMs, message) {
       timer = setTimeout(() => reject(new Error(message)), timeoutMs);
     }),
   ]);
+}
+
+async function waitForTabReadable(tabId, timeoutMs, probeIntervalMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const tab = await getTab(tabId);
+      if (tab && tab.status === "complete") {
+        return;
+      }
+      if (await canReadTabDom(tabId)) {
+        return;
+      }
+    } catch (error) {
+      lastError = String(error && error.message ? error.message : error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(probeIntervalMs, Math.max(0, deadline - Date.now()))));
+  }
+  throw new Error(lastError ? `timed out waiting for rendered tab load: ${lastError}` : "timed out waiting for rendered tab load");
+}
+
+function getTab(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(tab);
+    });
+  });
+}
+
+async function canReadTabDom(tabId) {
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        readyState: document.readyState,
+        hasBody: Boolean(document.body),
+      }),
+    });
+    const readyState = injection?.result?.readyState || "";
+    return Boolean(injection?.result?.hasBody) || readyState === "interactive" || readyState === "complete";
+  } catch (_error) {
+    return false;
+  }
 }
 
 function waitForTabComplete(tabId, timeoutMs) {

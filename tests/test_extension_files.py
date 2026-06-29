@@ -31,6 +31,63 @@ class ExtensionFilesTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_background_waits_for_readable_page_when_tab_never_completes(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const listeners = [];
+const sandbox = {
+  console,
+  URL,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      onActivated: { addListener: () => undefined },
+      onUpdated: {
+        addListener: (listener) => listeners.push(listener),
+        removeListener: (listener) => {
+          const index = listeners.indexOf(listener);
+          if (index >= 0) listeners.splice(index, 1);
+        },
+      },
+      get: (tabId, callback) => callback({ id: tabId, status: "loading" }),
+    },
+    scripting: {
+      executeScript: async () => [{ result: { readyState: "interactive" } }],
+    },
+  },
+};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
+(async () => {
+  if (typeof sandbox.waitForTabReadable !== "function") {
+    throw new Error("waitForTabReadable is not exported in background context");
+  }
+  await sandbox.waitForTabReadable(7, 100, 10);
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_contains_page_inventory_collector(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")
 

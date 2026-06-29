@@ -71,9 +71,9 @@ debugging. It is read-only and does not promote any action by itself.
 Layer 3, launch-page inspection and write discovery:
 
 ```powershell
-python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
-python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
-python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
+python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id> --settle-ms 0
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
 python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id>
 ```
@@ -93,7 +93,11 @@ phase. It does not click submit/send/approve/reject/archive/delete/revoke/upload
 controls and does not call suspected write endpoints. `oa write discover
 --source launch` aggregates those launch-page candidates, but every candidate is
 forced to `execute_allowed=false` until a separate user-confirmed execution plan
-exists.
+exists. The bridge waits for the page to become script-readable rather than
+requiring Chrome's tab status to reach `complete`, because Seeyon launch pages
+can keep background resources loading after the usable DOM is available. In
+current live templates, the visible `subject` field is read-only; prefer
+`content_coll` or `formTextId` for low-risk field dry-runs.
 
 The first promoted launch-page execution plan is save draft. `oa launch dry-run`
 validates requested fields and the `saveDraft` / "保存待发" control without

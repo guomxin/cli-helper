@@ -295,9 +295,9 @@ python -m bscli.cli.main --home .bscli oa template attachments --limit 20
 python -m bscli.cli.main --home .bscli oa template workflow --limit 20
 python -m bscli.cli.main --home .bscli oa template export --format table --fields title,template_id
 
-python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id>
-python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
-python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
+python -m bscli.cli.main --home .bscli oa launch inspect --template-id <template_id> --settle-ms 0
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
 ```
 
 `oa template match` maps high-frequency historical workflow clusters to
@@ -306,7 +306,11 @@ launchable templates with `matched`, `ambiguous`, or `unmatched` status.
 extracts forms, fields, hidden-field names, buttons, script actions, CSRF
 presence, and untested endpoint candidates. It may leave an OA draft, but it
 does not click or call submit, approve, archive, delete, revoke, upload, or send
-actions.
+actions. The Chrome bridge treats a launch tab as readable once the DOM can be
+scripted, even if Chrome still reports the tab as loading; this avoids false
+timeouts on OA pages that keep background resources open. In current live
+Seeyon pages, `subject` is often read-only, so use writable fields such as
+`content_coll` or `formTextId` for launch dry-runs.
 `oa launch dry-run` uses the same launch-page inspection path, validates that
 the requested field names, ids, or labels are writable, verifies that a
 `saveDraft` / "保存待发" control exists, and returns a sanitized
@@ -356,8 +360,8 @@ python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --actio
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write prepare --affair-id <id> --action ContinueSubmit --opinion "agree" --text-limit 800
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
-python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field subject="Draft subject"
-python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field subject="Draft subject" --confirm
+python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0
+python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
 python -m bscli.cli.main --home .bscli oa audit writes list --limit 10
 python -m bscli.cli.main --home .bscli oa audit writes show --index 1
 python -m bscli.cli.main --home .bscli oa audit writes search --affair-id <id>
