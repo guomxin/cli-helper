@@ -542,6 +542,33 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertEqual(result["result"]["structuredContent"]["decision"]["status"], "ready_for_execute")
 
+    def test_call_oa_matter_matrix_maps_to_daemon_command(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {
+                "schema_version": "bscli.oa_matter_matrix.v1",
+                "items": [{"matter_id": "travel-reimburse"}],
+            }
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 152,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__matter_matrix",
+                    "arguments": {"kind": "all", "limit": 20},
+                },
+            }
+        )
+
+        self.assertEqual(calls, [("oa", "matter_matrix", {"kind": "all", "limit": 20})])
+        self.assertEqual(result["result"]["structuredContent"]["items"][0]["matter_id"], "travel-reimburse")
+
     def test_call_oa_write_prepare_maps_to_daemon_command(self):
         calls = []
 

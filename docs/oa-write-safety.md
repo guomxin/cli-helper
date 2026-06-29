@@ -35,6 +35,10 @@ without sending the workflow.
   recommend atomic commands such as `launch_dry_run` or `launch_save_draft`.
   They are read-only; `matter inspect` opens a template launch page only when
   `--with-launch` is explicitly supplied.
+- `oa matter matrix` is the agent-facing capability table for that catalog. It
+  summarizes launch draft readiness, received-pending preflight readiness,
+  coverage status, and next safe commands. It does not open launch pages, read
+  pending details, dispatch browser write tasks, or authorize execution.
 - `oa matter preflight ...` is the business-intent preflight layer for received
   pending items. It resolves one pending item by id or keyword, reads workflow
   evidence, maps an intent such as `approve` or `archive` to an internal action
@@ -255,6 +259,7 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__launch_dry_run`
 - `oa__launch_save_draft`
 - `oa__matter_profile`
+- `oa__matter_matrix`
 - `oa__matter_inspect`
 - `oa__matter_preflight`
 - `oa__write_capabilities`
@@ -269,9 +274,9 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
 
-`matter_profile`, `matter_inspect`, `matter_preflight`, `launch_dry_run`,
-`write_capabilities`, `write_discover`, `write_draft`, `write_dry_run`,
-`write_preflight`, `write_prepare`, and
+`matter_profile`, `matter_matrix`, `matter_inspect`, `matter_preflight`,
+`launch_dry_run`, `write_capabilities`, `write_discover`, `write_draft`,
+`write_dry_run`, `write_preflight`, `write_prepare`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
 do not mutate OA state. `launch_save_draft`, `write_execute`, `pending_submit`,
 and `meeting_reply_execute` are exposed as write/human-gate tools and require

@@ -158,10 +158,20 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(template_match["metadata"]["access"], "read")
         self.assertEqual(template_match["input_schema"]["properties"]["kind"]["type"], "string")
 
+        template_list_api = tools["oa__template_list_api"]
+        self.assertEqual(template_list_api["metadata"]["access"], "read")
+        self.assertEqual(template_list_api["input_schema"]["properties"]["category"]["type"], "string")
+        self.assertEqual(template_list_api["input_schema"]["properties"]["keyword"]["type"], "string")
+
         matter_profile = tools["oa__matter_profile"]
         self.assertEqual(matter_profile["metadata"]["access"], "read")
         self.assertEqual(matter_profile["metadata"]["strategy"], "daemon_api")
         self.assertEqual(matter_profile["input_schema"]["properties"]["kind"]["type"], "string")
+
+        matter_matrix = tools["oa__matter_matrix"]
+        self.assertEqual(matter_matrix["metadata"]["access"], "read")
+        self.assertEqual(matter_matrix["metadata"]["strategy"], "daemon_api")
+        self.assertEqual(matter_matrix["input_schema"]["properties"]["kind"]["type"], "string")
 
         matter_inspect = tools["oa__matter_inspect"]
         self.assertEqual(matter_inspect["metadata"]["access"], "read")

@@ -318,7 +318,11 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
             description="Read structured form templates from the Seeyon template center REST API.",
             access="read",
             strategy="page_fetch",
-            args_schema={},
+            args_schema={
+                "keyword": {"type": "string", "description": "Filter templates by keyword across title and metadata."},
+                "category": {"type": "string", "description": "Filter templates by category name or category id."},
+                "limit": {"type": "integer", "description": "Maximum number of templates to return."},
+            },
             output_schema={
                 "type": "object",
                 "properties": {
@@ -385,6 +389,35 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 },
             },
             verify={"type": "json_path", "path": "$.matters"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="matter_matrix",
+            description="Summarize Seeyon OA matter-level launch and received-handling capabilities without executing writes.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collections to profile: sent, done, tracked, or all. Defaults to all.",
+                },
+                "keyword": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "coverage": {"type": "object"},
+                    "count": {"type": "integer"},
+                    "items": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.items"},
         )
     )
     registry.register(

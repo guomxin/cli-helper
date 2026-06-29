@@ -230,6 +230,7 @@ python -m bscli.cli.main --home .bscli oa history profile --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa history clusters --kind all --limit 20
 python -m bscli.cli.main --home .bscli oa history export --kind sent --format csv --fields title,status,date,affair_id
 python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
+python -m bscli.cli.main --home .bscli oa matter matrix --kind all --limit 50
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
 python -m bscli.cli.main --home .bscli oa matter preflight --keyword "weekly" --intent approve --opinion "read"
@@ -249,6 +250,10 @@ same profile view under a more business-oriented name.
 matching each matter type to the user's launchable OA templates. It reports
 matched and unmatched templates, sample historical items, and available atomic
 actions such as `launch_save_draft`.
+`oa matter matrix` projects the same catalog into an agent-facing capability
+matrix. Each matter row summarizes launch handling, received-pending handling,
+coverage status, next safe commands, and verification requirements without
+opening launch pages or executing writes.
 `oa matter inspect` reads one matter entry by id or name. By default it does not
 open the template launch page; add `--with-launch` when you explicitly want the
 matched template's fields and save-draft controls inspected.
@@ -282,6 +287,7 @@ python -m bscli.cli.main --home .bscli oa sent export --format csv --fields titl
 
 python -m bscli.cli.main --home .bscli oa template list
 python -m bscli.cli.main --home .bscli oa template search --keyword seal
+python -m bscli.cli.main --home .bscli oa template list --category 财务审批 --fields title,template_id,form_app_id,category_name
 python -m bscli.cli.main --home .bscli oa template show -6511139737225050501
 python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa template details --limit 10 --include title,fields,attachments
@@ -512,10 +518,11 @@ Read form templates from the OA home page without opening new forms:
 python -m bscli.cli.main --home .bscli command run oa template_list --timeout 30
 ```
 
-Read form templates through the discovered `sectionManager` backend API:
+Read form templates through the template center REST API:
 
 ```bash
 python -m bscli.cli.main --home .bscli command run oa template_list_api --timeout 30
+python -m bscli.cli.main --home .bscli command run oa template_list_api --timeout 30 --json "{\"category\":\"财务审批\",\"keyword\":\"差旅\",\"limit\":5}"
 ```
 
 Read one form template metadata record by `template_id`:
@@ -524,9 +531,11 @@ Read one form template metadata record by `template_id`:
 python -m bscli.cli.main --home .bscli command run oa template_detail --timeout 30 --json "{\"template_id\":\"-6511139737225050501\"}"
 ```
 
-These home-page commands ask the extension for a raw HTML snapshot and parse it in
-the Python daemon. That keeps Seeyon business extraction logic reusable for
-extension, Playwright, saved-page, and future API-replay paths.
+The DOM-oriented home-page commands ask the extension for a raw HTML snapshot
+and parse it in the Python daemon. `template_list_api` instead performs a
+logged-in page-context fetch against the template center REST endpoint, which
+returns stable template metadata such as `template_id`, `form_app_id`,
+`category_name`, `module_type`, and `body_type`.
 
 Parse a saved OA home-page HTML fragment offline:
 
@@ -692,7 +701,7 @@ Implemented:
 - Business CLI `oa inbox analyze`
 - Business CLI `oa workflow list/search/brief/inspect/evidence/timeline/detail/opinions/attachments/actions`
 - Business CLI `oa history sections/list/search/profile/clusters/export`
-- Business CLI `oa matter profile/inspect/preflight`
+- Business CLI `oa matter profile/matrix/inspect/preflight`
 - Business CLI `oa template match`
 - Business CLI `oa launch inspect`
 - Business CLI `oa write actions`

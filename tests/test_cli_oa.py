@@ -107,6 +107,43 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(payload["result"]["count"], 1)
         self.assertEqual(payload["result"]["items"][0]["title"], "【报销】差旅费审批报销单")
 
+    def test_oa_matter_matrix_maps_to_daemon_command(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_matrix.v1",
+                    "count": 1,
+                    "items": [
+                        {
+                            "matter_id": "travel-reimburse",
+                            "name": "【报销】差旅费审批报销单",
+                            "launch_handling": {"status": "draft_ready"},
+                        }
+                    ],
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "matrix",
+                "--kind",
+                "all",
+                "--limit",
+                "20",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads[0]["command"], "matter_matrix")
+        self.assertEqual(seen_payloads[0]["args"], {"kind": "all", "limit": 20})
+        self.assertEqual(payload["result"]["items"][0]["matter_id"], "travel-reimburse")
+
     def test_oa_detail_read_maps_url_to_detail_read(self):
         server, seen_payloads = self._start_daemon(
             {

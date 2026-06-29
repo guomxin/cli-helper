@@ -253,6 +253,11 @@ class DaemonState:
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
+        if system == "oa" and command == "matter_matrix":
+            return self._run_oa_matter_matrix_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
         if system == "oa" and command == "matter_preflight":
             return self._run_oa_matter_preflight_command(
                 body.get("args") or {},
@@ -370,6 +375,7 @@ class DaemonState:
             return self._run_template_center_command(
                 system,
                 target_client_id,
+                args,
                 timeout_seconds,
             )
         if command == "api_inspect":
@@ -565,6 +571,7 @@ class DaemonState:
         self,
         system: str,
         target_client_id: str,
+        args: dict[str, Any],
         timeout_seconds: float,
     ) -> DaemonResponse:
         profile = self._load_system_profile(system)
@@ -610,15 +617,23 @@ class DaemonState:
                     "error": "template center API response was not JSON",
                 },
             )
+        parsed = parse_template_center_response(
+            payload,
+            base_url=replay.get("url") or base_url,
+        )
+        filtered = _filter_template_items(parsed.get("items") or [], args)
+        result = {
+            **parsed,
+            "source_count": len(parsed.get("items") or []),
+            "items": filtered,
+            "count": len(filtered),
+        }
         return DaemonResponse(
             200,
             {
                 "ok": True,
                 "task_id": replay_response.body["task_id"],
-                "result": parse_template_center_response(
-                    payload,
-                    base_url=replay.get("url") or base_url,
-                ),
+                "result": result,
             },
         )
 
@@ -1157,6 +1172,28 @@ class DaemonState:
                 "ok": True,
                 "task_id": profile_response.body.get("task_id"),
                 "result": _build_oa_matter_inspection(profile, matter, launch_inspection=launch_inspection),
+            },
+        )
+
+    def _run_oa_matter_matrix_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        profile_args = _matter_profile_args(args)
+        profile_response = self._run_nested_oa_command("matter_profile", profile_args, timeout_seconds)
+        if profile_response.status != 200 or profile_response.body.get("ok") is False:
+            return profile_response
+        profile = profile_response.body.get("result") if isinstance(profile_response.body, dict) else {}
+        if not isinstance(profile, dict):
+            profile = {}
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": profile_response.body.get("task_id"),
+                "result": _build_oa_matter_matrix(profile, profile_args),
             },
         )
 
@@ -3652,7 +3689,7 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"template_match", "matter_profile", "matter_inspect", "launch_inspect", "launch_dry_run"}:
+        if system == "oa" and command in {"template_match", "matter_profile", "matter_matrix", "matter_inspect", "launch_inspect", "launch_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command == "launch_save_draft":
             return {"access": "write", "strategy": "human_gate"}
@@ -3910,6 +3947,35 @@ def _pending_items_from_response_body(response_body: dict[str, Any]) -> list[dic
     return [item for item in items if isinstance(item, dict)]
 
 
+def _filter_template_items(items: list, args: dict[str, Any]) -> list[dict[str, Any]]:
+    filtered = [item for item in items if isinstance(item, dict)]
+    keyword = str(args.get("keyword") or "").strip()
+    if keyword:
+        needle = keyword.lower()
+        filtered = [
+            item
+            for item in filtered
+            if needle in json.dumps(item, ensure_ascii=False).lower()
+        ]
+    category = str(args.get("category") or "").strip()
+    if category:
+        needle = category.lower()
+        filtered = [
+            item
+            for item in filtered
+            if any(
+                needle in str(item.get(key) or "").lower()
+                for key in ("category_name", "category", "categoryName", "category_id", "categoryId")
+            )
+        ]
+    if args.get("limit") is not None:
+        try:
+            filtered = filtered[: max(int(args.get("limit")), 0)]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
+    return filtered
+
+
 def _apply_pending_submit_filters(
     items: list[dict[str, Any]],
     *,
@@ -4163,6 +4229,120 @@ def _build_oa_matter_profile(template_match: dict[str, Any], args: dict[str, Any
             "submitted_count": 0,
         },
     }
+
+
+def _build_oa_matter_matrix(profile: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    matters = [matter for matter in profile.get("matters") or [] if isinstance(matter, dict)]
+    items = [_matter_matrix_item(matter) for matter in matters]
+    launch_ready = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "draft_ready")
+    template_unmatched = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "template_unmatched")
+    return {
+        "schema_version": "bscli.oa_matter_matrix.v1",
+        "source": "matter_profile",
+        "kind": args.get("kind", profile.get("kind", "all")),
+        "keyword": args.get("keyword", profile.get("keyword", "")),
+        "source_count": profile.get("source_count", 0),
+        "template_count": profile.get("template_count", 0),
+        "matter_count": profile.get("matter_count", len(items)),
+        "count": len(items),
+        "coverage": {
+            "launch_draft_ready": launch_ready,
+            "template_unmatched": template_unmatched,
+            "received_preflight_ready": len(items),
+            "write_execution_newly_enabled": 0,
+        },
+        "items": items,
+        "read_effect": {
+            "history_read": True,
+            "template_list_read": True,
+            "launch_page_opened": False,
+            "pending_detail_opened": False,
+            "submitted_count": 0,
+        },
+    }
+
+
+def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
+    template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
+    launch = _matter_launch_handling(matter, template)
+    received = _matter_received_handling(matter)
+    return {
+        "matter_id": matter.get("matter_id", ""),
+        "name": matter.get("name", ""),
+        "subject": matter.get("subject", ""),
+        "category_tag": matter.get("category_tag", ""),
+        "frequency": matter.get("frequency") if isinstance(matter.get("frequency"), dict) else {},
+        "template_match_status": matter.get("template_match_status", ""),
+        "template": template,
+        "launch_handling": launch,
+        "received_handling": received,
+        "coverage_status": _matter_coverage_status(launch, received),
+        "sample_items": matter.get("sample_items") if isinstance(matter.get("sample_items"), list) else [],
+    }
+
+
+def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
+    template_id = str(template.get("template_id") or "")
+    available = [
+        action
+        for action in matter.get("available_actions") or []
+        if isinstance(action, dict) and action.get("status") == "available"
+    ]
+    if not template_id:
+        return {
+            "status": "template_unmatched",
+            "verification": "template_match_required",
+            "supported_actions": [],
+            "next_commands": ["oa matter profile --kind all --limit 50"],
+        }
+    return {
+        "status": "draft_ready",
+        "verification": "launch_dry_run_required",
+        "supported_actions": [
+            {
+                "name": action.get("name", ""),
+                "command": action.get("command", ""),
+                "requires_confirmation": bool(action.get("requires_confirmation")),
+            }
+            for action in available
+        ],
+        "next_commands": [
+            f"oa launch dry-run --template-id {template_id} --field subject=\"Draft subject\"",
+            f"oa launch save-draft --template-id {template_id} --field subject=\"Draft subject\" --confirm",
+        ],
+    }
+
+
+def _matter_received_handling(matter: dict[str, Any]) -> dict[str, Any]:
+    keyword = str(matter.get("name") or matter.get("subject") or matter.get("matter_id") or "")
+    return {
+        "status": "pending_item_required",
+        "verification": "matter_preflight_required",
+        "supported_intents": [
+            {
+                "intent": "approve",
+                "binding": "ContinueSubmit",
+                "execution": "governed_when_pending_action_is_available",
+            },
+            {
+                "intent": "archive",
+                "binding": "Archive",
+                "execution": "dry_run_only",
+            },
+        ],
+        "next_commands": [
+            f"oa matter preflight --keyword \"{keyword}\" --intent approve --opinion \"read\"",
+            f"oa matter preflight --keyword \"{keyword}\" --intent archive --opinion \"read\"",
+        ],
+    }
+
+
+def _matter_coverage_status(launch: dict[str, Any], received: dict[str, Any]) -> str:
+    if launch.get("status") == "draft_ready" and received.get("status") == "pending_item_required":
+        return "launch_ready_received_preflight_ready"
+    if launch.get("status") == "template_unmatched":
+        return "needs_template_match"
+    return "partial"
 
 
 def _matter_from_template_cluster(cluster: dict[str, Any]) -> dict[str, Any]:

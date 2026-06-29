@@ -210,6 +210,17 @@ def _build_oa_parser(oa_sub) -> None:
     matter_profile.add_argument("--keyword")
     _add_daemon_options(matter_profile)
     _add_output_options(matter_profile)
+    matter_matrix = matter_sub.add_parser("matrix")
+    matter_matrix.set_defaults(oa_command="matter_matrix")
+    matter_matrix.add_argument(
+        "--kind",
+        choices=["sent", "done", "tracked", "all"],
+        default="all",
+        help="Historical collections to profile before building the matter capability matrix; defaults to all.",
+    )
+    matter_matrix.add_argument("--keyword")
+    _add_daemon_options(matter_matrix)
+    _add_output_options(matter_matrix)
     matter_inspect = matter_sub.add_parser("inspect")
     matter_inspect.set_defaults(oa_command="matter_inspect")
     matter_target = matter_inspect.add_mutually_exclusive_group(required=True)
@@ -955,6 +966,8 @@ def handle_oa_matter(args: argparse.Namespace) -> int:
     action = args.oa_matter_action
     if action == "profile":
         response = run_oa_daemon_command(args, "matter_profile", _matter_daemon_args_from_cli(args))
+    elif action == "matrix":
+        response = run_oa_daemon_command(args, "matter_matrix", _matter_daemon_args_from_cli(args))
     elif action == "inspect":
         response = run_oa_daemon_command(args, "matter_inspect", _matter_daemon_args_from_cli(args))
     elif action == "preflight":
@@ -1635,6 +1648,12 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
         return {"affair_id": args.affair_id}
     if command == "template_detail":
         return {"template_id": args.template_id}
+    if command == "template_list_api":
+        payload = {}
+        for key in ("keyword", "category", "limit"):
+            if getattr(args, key, None) is not None:
+                payload[key] = getattr(args, key)
+        return payload
     if command == "template_match":
         return _history_daemon_args_from_cli(args)
     if command == "launch_inspect":

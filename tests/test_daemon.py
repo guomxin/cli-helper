@@ -1350,6 +1350,89 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["source"], "template_center_api")
             self.assertEqual(response.body["result"]["items"][0]["template_id"], "-6511139737225050501")
 
+    def test_run_template_list_api_applies_daemon_filters(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            def extension_worker():
+                tasks = []
+                for _attempt in range(20):
+                    tasks = state.handle(
+                        "GET",
+                        "/extension/tasks",
+                        query={"client_id": "chrome-1"},
+                    ).body["tasks"]
+                    if tasks:
+                        break
+                    time.sleep(0.01)
+                task = tasks[0]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task["id"],
+                        "ok": True,
+                        "result": {
+                            "status": 200,
+                            "ok": True,
+                            "url": task["payload"]["url"],
+                            "json": {
+                                "data": {
+                                    "templates": [
+                                        {
+                                            "id": "tpl-travel",
+                                            "subject": "【报销】差旅费审批报销单",
+                                            "formAppId": "form-travel",
+                                            "categoryName": "财务审批",
+                                            "moduleType": "1",
+                                            "bodyType": "20",
+                                        },
+                                        {
+                                            "id": "tpl-leave",
+                                            "subject": "【HR】请假申请单",
+                                            "formAppId": "form-leave",
+                                            "categoryName": "人事审批",
+                                            "moduleType": "1",
+                                            "bodyType": "20",
+                                        },
+                                    ]
+                                }
+                            },
+                        },
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "template_list_api",
+                    "args": {"category": "财务", "keyword": "差旅", "limit": 1},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(result["source_count"], 2)
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(result["items"][0]["template_id"], "tpl-travel")
+
     def test_run_pending_detail_filters_parsed_html_snapshot(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
@@ -3285,6 +3368,81 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["matters"][1]["template"], {})
             self.assertRegex(result["matters"][1]["matter_id"], r"^matter-[a-f0-9]{10}$")
             self.assertEqual(result["matters"][1]["available_actions"][0]["status"], "blocked")
+
+    def test_run_matter_matrix_summarizes_launch_and_received_capabilities(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                self.assertEqual(command, "matter_profile")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "kind": "all",
+                            "matter_count": 2,
+                            "matched_template_count": 1,
+                            "matters": [
+                                {
+                                    "matter_id": "travel-reimburse",
+                                    "name": "【报销】差旅费审批报销单",
+                                    "category_tag": "报销",
+                                    "frequency": {"count": 5, "kinds": ["done", "sent"]},
+                                    "template": {
+                                        "template_id": "tpl-travel",
+                                        "title": "【报销】差旅费审批报销单",
+                                        "href": "http://oa.example.test/new?templateId=tpl-travel",
+                                    },
+                                    "available_actions": [
+                                        {
+                                            "name": "launch.save_draft",
+                                            "command": "launch_save_draft",
+                                            "status": "available",
+                                            "requires_confirmation": True,
+                                        }
+                                    ],
+                                    "sample_items": [{"title": "【报销】差旅费审批报销单 - Alice"}],
+                                },
+                                {
+                                    "matter_id": "unknown",
+                                    "name": "Unknown matter",
+                                    "frequency": {"count": 1, "kinds": ["tracked"]},
+                                    "template": {},
+                                    "available_actions": [{"command": "launch_save_draft", "status": "blocked"}],
+                                    "sample_items": [],
+                                },
+                            ],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_matrix",
+                    "args": {"kind": "all", "limit": 20},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertEqual(calls[0][1], {"kind": "all", "limit": 20})
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_matrix.v1")
+            self.assertEqual(result["count"], 2)
+            self.assertEqual(result["items"][0]["matter_id"], "travel-reimburse")
+            self.assertEqual(result["items"][0]["launch_handling"]["status"], "draft_ready")
+            self.assertIn("oa launch dry-run --template-id tpl-travel", result["items"][0]["launch_handling"]["next_commands"][0])
+            self.assertEqual(result["items"][0]["received_handling"]["status"], "pending_item_required")
+            self.assertEqual(result["items"][1]["launch_handling"]["status"], "template_unmatched")
 
     def test_run_matter_inspect_resolves_matter_and_optionally_reads_launch_fields(self):
         with TemporaryDirectory() as tmp:
