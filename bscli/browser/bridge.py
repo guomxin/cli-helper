@@ -33,6 +33,7 @@ class ExtensionBridge:
         self.clients: dict[str, ExtensionClient] = {}
         self.pending_tasks: list[ExtensionTask] = []
         self.results: dict[str, dict[str, Any]] = {}
+        self.task_events: dict[str, list[dict[str, Any]]] = {}
         self._condition = threading.Condition()
 
     def register_client(self, client_id: str, *, tab_id: int, url: str, title: str) -> None:
@@ -108,10 +109,36 @@ class ExtensionBridge:
             }
             self._condition.notify_all()
 
+    def submit_event(
+        self,
+        *,
+        client_id: str,
+        task_id: str,
+        stage: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        with self._condition:
+            self._prune_stale_clients()
+            if client_id not in self.clients:
+                raise KeyError(f"extension client not registered: {client_id}")
+            self.task_events.setdefault(task_id, []).append(
+                {
+                    "client_id": client_id,
+                    "task_id": task_id,
+                    "stage": stage,
+                    "detail": detail or {},
+                    "created_at": self._now(),
+                }
+            )
+            self._condition.notify_all()
+
     def get_result(self, task_id: str) -> dict[str, Any]:
         if task_id not in self.results:
             raise KeyError(f"task result not found: {task_id}")
         return self.results[task_id]
+
+    def get_events(self, task_id: str) -> list[dict[str, Any]]:
+        return list(self.task_events.get(task_id, []))
 
     def list_clients(self) -> list[dict[str, Any]]:
         with self._condition:

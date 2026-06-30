@@ -43,6 +43,19 @@ async function getJson(path) {
   return await response.json();
 }
 
+async function postTaskEvent(clientId, task, stage, detail = {}) {
+  try {
+    await postJson("/extension/task-events", {
+      client_id: clientId,
+      task_id: task.id,
+      stage,
+      detail,
+    });
+  } catch (_error) {
+    // Diagnostics must not prevent task execution.
+  }
+}
+
 async function registerTab(baseClientId, tab) {
   const clientId = clientIdForTab(baseClientId, tab.id);
   await postJson("/extension/register", {
@@ -75,6 +88,7 @@ async function pollTasks() {
 
 async function executeTask(clientId, tabId, task) {
   try {
+    await postTaskEvent(clientId, task, "claimed", { kind: task.kind });
     let injection;
     if (task.kind === "dom_snapshot") {
       const selector = task.payload?.selector || "body";
@@ -97,7 +111,9 @@ async function executeTask(clientId, tabId, task) {
       const result = await collectRenderedHtmlSnapshot(task.payload || {});
       injection = { result };
     } else if (task.kind === "seeyon_write_execute") {
-      const result = await executeSeeyonWrite(task.payload || {});
+      const result = await executeSeeyonWrite(task.payload || {}, (stage, detail) =>
+        postTaskEvent(clientId, task, stage, detail),
+      );
       injection = { result };
     } else if (task.kind === "seeyon_launch_save_draft") {
       const result = await executeSeeyonLaunchSaveDraft(task.payload || {});
@@ -208,7 +224,7 @@ async function collectRenderedHtmlSnapshot(payload) {
   }
 }
 
-async function executeSeeyonWrite(payload) {
+async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
   if (payload.confirm !== true) {
     throw new Error("confirm=true is required for seeyon_write_execute");
   }
@@ -219,11 +235,20 @@ async function executeSeeyonWrite(payload) {
   if (!url) {
     throw new Error("source_url is required for seeyon_write_execute");
   }
+  await reportEvent("opening_detail_tab", { source_url: String(url).slice(0, 1000) });
   const tab = await chrome.tabs.create({ url, active: false });
+  await reportEvent("detail_tab_created", { tab_id: tab.id || null });
   try {
-    await waitForTabReadable(tab.id, 30000);
+    await reportEvent("waiting_detail_tab_readable", { tab_id: tab.id || null });
+    await withTimeout(
+      waitForTabReadable(tab.id, Number(payload.detail_timeout_ms || 30000)),
+      Number(payload.detail_timeout_ms || 30000),
+      "Seeyon write detail tab timed out before becoming readable",
+    );
+    await reportEvent("detail_tab_readable", { tab_id: tab.id || null });
     await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 2000)));
     const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
+    await reportEvent("injecting_submit_script", { tab_id: tab.id || null, script_timeout_ms: scriptTimeoutMs });
     const [injection] = await withTimeout(
       chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -237,10 +262,16 @@ async function executeSeeyonWrite(payload) {
     if (!injection || !injection.result) {
       throw new Error("Seeyon submit script returned no result");
     }
+    await reportEvent("submit_script_returned", {
+      handler_version: injection.result.handler_version || "",
+      submit_entry: injection.result.submit_entry || "",
+    });
     await new Promise((resolve) => setTimeout(resolve, Number(payload.after_submit_wait_ms || 8000)));
+    await reportEvent("after_submit_wait_complete", { tab_id: tab.id || null });
     return injection.result;
   } finally {
     if (tab.id && payload.keep_tab !== true) {
+      await reportEvent("closing_detail_tab", { tab_id: tab.id });
       await chrome.tabs.remove(tab.id).catch(() => {});
     }
   }

@@ -5165,6 +5165,75 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["error"], "extension write task returned no submission confirmation")
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "error")
 
+    def test_run_oa_write_execute_timeout_reports_extension_task_events(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            state._run_nested_oa_command = lambda *_args: DaemonResponse(
+                200,
+                {
+                    "ok": True,
+                    "result": {
+                        "title": "Weekly report",
+                        "actions": [{"code": "ContinueSubmit", "label": "提交", "risk": "high"}],
+                    },
+                },
+            )
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/task-events",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "stage": "detail_tab_created",
+                        "detail": {"tab_id": 99},
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "write_execute",
+                    "args": {
+                        "affair_id": "affair-1",
+                        "action": "ContinueSubmit",
+                        "opinion": "approved",
+                        "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 0.2,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 504)
+            self.assertEqual(response.body["task_events"][0]["stage"], "detail_tab_created")
+            self.assertEqual(response.body["task_events"][0]["detail"], {"tab_id": 99})
+
     def test_run_oa_pending_submit_executes_each_item_and_records_verification_audit(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
