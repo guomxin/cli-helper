@@ -4682,6 +4682,9 @@ def _mark_oa_write_plan_for_execution(plan: dict[str, Any]) -> None:
     request = plan.setdefault("request", {})
     request["status"] = "sent_by_extension"
     request["reason"] = "confirmed OA write dispatched through the Chrome extension bridge"
+    payload_preview = request.get("payload_preview")
+    if isinstance(payload_preview, dict):
+        payload_preview["dryRunOnly"] = False
 
 
 def _normalize_oa_meeting_attitude(value: str) -> dict[str, Any]:

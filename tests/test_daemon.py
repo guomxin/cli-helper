@@ -4908,6 +4908,7 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(len(audit_rows), 1)
             self.assertTrue(audit_rows[0]["safety"]["will_execute"])
             self.assertFalse(audit_rows[0]["safety"]["dry_run_only"])
+            self.assertFalse(audit_rows[0]["request"]["payload_preview"]["dryRunOnly"])
             self.assertNotIn("approved", json.dumps(audit_rows[0], ensure_ascii=False))
             self.assertEqual(state.trace_store.list_runs()[0]["status"], "ok")
 

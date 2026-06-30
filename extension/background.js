@@ -277,6 +277,7 @@ async function executeSeeyonLaunchSaveDraft(payload) {
 }
 
 async function runSeeyonContinueSubmit(payload) {
+  const handlerVersion = "continue-submit-v2-scheduled-attitude";
   const expectedAffairId = String(payload.affair_id || "");
   const opinion = String(payload.opinion || "");
   if (!expectedAffairId) {
@@ -323,8 +324,64 @@ async function runSeeyonContinueSubmit(payload) {
     }
     return null;
   };
+  const setElementValue = (element, value) => {
+    const valueSetter = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value")?.set;
+    if (valueSetter) {
+      valueSetter.call(element, value);
+    } else {
+      element.value = value;
+    }
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const selectAgreeAttitude = () => {
+    const result = {
+      radio_selected: false,
+      hidden_code_set: false,
+      hidden_value_set: false,
+      nodeattitude_set: false,
+    };
+    const radios = Array.from(document.querySelectorAll("input[type='radio'][name='attitude']"));
+    const agreeRadio = radios.find((radio) => {
+      const code = String(radio.getAttribute("code") || "").toLowerCase();
+      const value = String(radio.value || "").toLowerCase();
+      return code === "agree" || code === "haveread" || value === "agree" || value === "haveread";
+    });
+    if (agreeRadio) {
+      agreeRadio.checked = true;
+      agreeRadio.dispatchEvent(new Event("input", { bubbles: true }));
+      agreeRadio.dispatchEvent(new Event("change", { bubbles: true }));
+      result.radio_selected = true;
+    }
+    const attitudeCode = agreeRadio?.getAttribute("code") || agreeRadio?.value || "agree";
+    const hiddenCode = document.querySelector("#hidAttitudeCode");
+    if (hiddenCode) {
+      setElementValue(hiddenCode, attitudeCode);
+      result.hidden_code_set = true;
+    }
+    const hiddenValue = document.querySelector("#hidAttitude");
+    if (hiddenValue) {
+      setElementValue(hiddenValue, attitudeCode);
+      result.hidden_value_set = true;
+    }
+    const nodeAttitude = document.querySelector("#nodeattitude");
+    if (nodeAttitude) {
+      setElementValue(nodeAttitude, attitudeCode);
+      result.nodeattitude_set = true;
+    }
+    return result;
+  };
   const originalConfirm = window.confirm;
   const originalAlert = window.alert;
+  let dialogsRestored = false;
+  const restoreDialogs = () => {
+    if (dialogsRestored) {
+      return;
+    }
+    dialogsRestored = true;
+    window.confirm = originalConfirm;
+    window.alert = originalAlert;
+  };
 
   window.confirm = function bscliWriteConfirm(message) {
     dialogs.push({ type: "confirm", message: String(message || "").slice(0, 1000), accepted: true });
@@ -340,30 +397,49 @@ async function runSeeyonContinueSubmit(payload) {
     if (!comment) {
       throw new Error("content_deal_comment was not found on the detail page");
     }
-    const valueSetter = Object.getOwnPropertyDescriptor(comment.constructor.prototype, "value")?.set;
-    if (valueSetter) {
-      valueSetter.call(comment, opinion);
-    } else {
-      comment.value = opinion;
-    }
-    comment.dispatchEvent(new Event("input", { bubbles: true }));
-    comment.dispatchEvent(new Event("change", { bubbles: true }));
+    setElementValue(comment, opinion);
+    const attitude = selectAgreeAttitude();
+    const runSubmit = () => {
+      const outcome = {
+        ok: true,
+        handler_version: handlerVersion,
+        submit_scheduled: true,
+        affair_id: expectedAffairId,
+        action: "ContinueSubmit",
+        opinion_length: opinion.length,
+        url: location.href,
+        title: document.title,
+        dialogs,
+      };
+      try {
+        submitFn.call(window);
+      } catch (error) {
+        outcome.ok = false;
+        outcome.error = String(error && error.message ? error.message : error);
+        console.error("BSCLI scheduled Seeyon ContinueSubmit failed", error);
+      } finally {
+        window.__bscliContinueSubmitLast = outcome;
+        setTimeout(restoreDialogs, Number(payload.dialog_restore_ms || 3000));
+      }
+    };
 
-    submitFn.call(window);
-  } finally {
-    window.confirm = originalConfirm;
-    window.alert = originalAlert;
+    window.setTimeout(runSubmit, 0);
+    return {
+      submitted: true,
+      handler_version: handlerVersion,
+      submit_scheduled: true,
+      affair_id: expectedAffairId,
+      action: "ContinueSubmit",
+      opinion_length: opinion.length,
+      url: location.href,
+      title: document.title,
+      attitude,
+      dialogs: [],
+    };
+  } catch (error) {
+    restoreDialogs();
+    throw error;
   }
-
-  return {
-    submitted: true,
-    affair_id: expectedAffairId,
-    action: "ContinueSubmit",
-    opinion_length: opinion.length,
-    url: location.href,
-    title: document.title,
-    dialogs,
-  };
 }
 
 function runSeeyonLaunchSaveDraft(payload) {

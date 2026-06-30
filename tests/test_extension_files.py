@@ -208,6 +208,11 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         self.assertIn("runSeeyonContinueSubmit", background)
         self.assertIn("dealSubmitFunc", background)
         self.assertIn("content_deal_comment", background)
+        self.assertIn("handlerVersion = \"continue-submit-v2-scheduled-attitude\"", background)
+        self.assertIn("selectAgreeAttitude", background)
+        self.assertIn("hidAttitudeCode", background)
+        self.assertIn("submit_scheduled: true", background)
+        self.assertIn("window.setTimeout(runSubmit, 0)", background)
         self.assertNotIn("findSeeyonCommentElement();", background)
 
     def test_background_contains_launch_save_draft_executor_with_submit_guard(self):
