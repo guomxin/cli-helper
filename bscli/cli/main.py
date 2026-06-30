@@ -1672,7 +1672,7 @@ def run_oa_daemon_command(
 def _daemon_client_timeout_seconds(timeout_seconds: float, command: str) -> float:
     if command in {"write_prepare"}:
         return max(float(timeout_seconds) * 3 + 5, 10)
-    if command in {"launch_save_draft"}:
+    if command in {"launch_save_draft", "write_execute", "pending_submit"}:
         return max(float(timeout_seconds) * 2 + 20, 30)
     return max(float(timeout_seconds) + 5, 10)
 

@@ -1792,6 +1792,12 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(cli_main._daemon_client_timeout_seconds(30, "write_prepare"), 95)
         self.assertEqual(cli_main._daemon_client_timeout_seconds(30, "write_preflight"), 35)
 
+    def test_write_execute_uses_longer_client_timeout_for_precheck_and_extension_wait(self):
+        from bscli.cli import main as cli_main
+
+        self.assertGreaterEqual(cli_main._daemon_client_timeout_seconds(60, "write_execute"), 140)
+        self.assertGreaterEqual(cli_main._daemon_client_timeout_seconds(60, "pending_submit"), 140)
+
     def test_oa_audit_writes_and_verifications_list_local_sanitized_rows(self):
         with TemporaryDirectory() as tmp:
             audit_dir = Path(tmp) / "audit"
