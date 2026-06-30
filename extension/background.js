@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v5-task-claim-state";
+const BACKGROUND_VERSION = "background-v6-cap4-interview-approval";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -315,7 +315,7 @@ async function executeSeeyonLaunchSaveDraft(payload) {
 }
 
 async function runSeeyonContinueSubmit(payload) {
-  const handlerVersion = "continue-submit-v3-page-submit-click";
+  const handlerVersion = "continue-submit-v4-cap4-interview-approval";
   const expectedAffairId = String(payload.affair_id || "");
   const opinion = String(payload.opinion || "");
   if (!expectedAffairId) {
@@ -371,8 +371,52 @@ async function runSeeyonContinueSubmit(payload) {
     } else {
       element.value = value;
     }
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
+    const eventView = element.ownerDocument?.defaultView || window;
+    element.dispatchEvent(new eventView.Event("input", { bubbles: true }));
+    element.dispatchEvent(new eventView.Event("change", { bubbles: true }));
+    element.dispatchEvent(new eventView.Event("blur", { bubbles: true }));
+  };
+  const fillCap4InterviewApproval = () => {
+    const result = {
+      detected: false,
+      opinion_set: false,
+      trial_agree_clicked: false,
+      selected_text: "",
+    };
+    const frame = document.querySelector("#zwIframe");
+    const frameDocument = frame?.contentDocument;
+    const frameText = String(frameDocument?.body?.innerText || "");
+    if (
+      !frameDocument ||
+      !frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
+      !frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u610f\u89c1") ||
+      !frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u662f\u5426\u540c\u610f\u8bd5\u7528")
+    ) {
+      return result;
+    }
+    result.detected = true;
+    const opinionField =
+      frameDocument.querySelector("#field0038_id textarea:not([tabindex='-1'])") ||
+      frameDocument.querySelector("#field0038_id textarea");
+    if (opinionField) {
+      opinionField.focus?.();
+      setElementValue(opinionField, opinion);
+      result.opinion_set = true;
+    }
+    const radioField = frameDocument.querySelector("#field0041_id");
+    const trialAgreeItem = Array.from(radioField?.querySelectorAll(".cap4-radio__item") || []).find((item) => {
+      const text = String(item.innerText || "").replace(/\s+/g, "");
+      return text.includes("\u540c\u610f\u8bd5\u7528") && !text.includes("\u4e0d\u540c\u610f\u8bd5\u7528");
+    });
+    if (trialAgreeItem) {
+      trialAgreeItem.click();
+      result.trial_agree_clicked = true;
+      result.selected_text = String(trialAgreeItem.innerText || "").replace(/\s+/g, " ").trim();
+    }
+    if (!result.opinion_set || !result.trial_agree_clicked) {
+      throw new Error("CAP4 interview approval fields were detected but could not be filled");
+    }
+    return result;
   };
   const selectAgreeAttitude = () => {
     const result = {
@@ -439,6 +483,7 @@ async function runSeeyonContinueSubmit(payload) {
     }
     setElementValue(comment, opinion);
     const attitude = selectAgreeAttitude();
+    const businessForm = fillCap4InterviewApproval();
     const runSubmit = () => {
       const outcome = {
         ok: true,
@@ -450,6 +495,7 @@ async function runSeeyonContinueSubmit(payload) {
         url: location.href,
         title: document.title,
         submit_entry: submitEntry.name,
+        business_form: businessForm,
         dialogs,
       };
       try {
@@ -475,6 +521,7 @@ async function runSeeyonContinueSubmit(payload) {
       url: location.href,
       title: document.title,
       attitude,
+      business_form: businessForm,
       submit_entry: submitEntry.name,
       dialogs: [],
     };
