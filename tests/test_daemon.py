@@ -231,6 +231,33 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(response.body["result"]["title"], "Seeyon OA")
 
+    def test_select_oa_client_prefers_main_tab_over_newer_detail_tab(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "main-tab",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "致远A8-V5协同管理软件 V8.2, 辛国茂,您好!",
+                },
+            )
+            time.sleep(0.001)
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "detail-tab",
+                    "tab_id": 8,
+                    "url": "http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary&affairId=1",
+                    "title": "【HR】面试审批单",
+                },
+            )
+
+            self.assertEqual(state._select_client_id_for_system("oa"), "main-tab")
+
     def test_run_command_uses_saved_system_profile_for_target_matching(self):
         with TemporaryDirectory() as tmp:
             store = ConfigStore(Path(tmp))

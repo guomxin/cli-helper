@@ -3832,9 +3832,21 @@ class DaemonState:
         profile = self._load_system_profile(system)
         if profile is None:
             return None
-        for client in self.bridge.list_clients():
-            if self._client_matches_system(client, profile):
-                return client["client_id"]
+        matched_clients = [
+            client
+            for client in self.bridge.list_clients()
+            if self._client_matches_system(client, profile)
+        ]
+        if system == "oa":
+            main_clients = [
+                client
+                for client in matched_clients
+                if _is_seeyon_main_client(client) and _looks_like_logged_in_oa_client(client)
+            ]
+            if main_clients:
+                return main_clients[0]["client_id"]
+        if matched_clients:
+            return matched_clients[0]["client_id"]
         return None
 
     def _load_system_profile(self, system: str | None) -> SystemProfile | None:
@@ -3872,6 +3884,12 @@ def _looks_like_logged_in_oa_client(client: dict[str, Any]) -> bool:
     if any(marker in title for marker in ("登录", "登陆", "用户登录")) or "login" in lowered:
         return False
     return True
+
+
+def _is_seeyon_main_client(client: dict[str, Any]) -> bool:
+    parsed = urlparse(str(client.get("url") or ""))
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    return parsed.path.endswith("/seeyon/main.do") and query.get("method", [""])[0] == "main"
 
 
 def serve(home: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
