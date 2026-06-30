@@ -141,6 +141,7 @@ class DaemonState:
                 tab_id=int(body["tab_id"]),
                 url=body["url"],
                 title=body.get("title", ""),
+                extension_version=str(body.get("extension_version") or ""),
             )
             return DaemonResponse(200, {"ok": True})
 
@@ -176,6 +177,10 @@ class DaemonState:
         if method == "GET" and path.startswith("/extension/task-events/"):
             task_id = path.removeprefix("/extension/task-events/")
             return DaemonResponse(200, {"events": self.bridge.get_events(task_id)})
+
+        if method == "GET" and path.startswith("/extension/task-state/"):
+            task_id = path.removeprefix("/extension/task-state/")
+            return DaemonResponse(200, self.bridge.get_task_state(task_id))
 
         if method == "POST" and path == "/explore/dom-snapshot":
             target_client_id = self._select_client_id_for_system(body["system"])
@@ -2726,6 +2731,7 @@ class DaemonState:
                         "requires_confirmation": True,
                         "confirmed": True,
                         "error": "command timed out waiting for Chrome extension write result: oa.write_execute",
+                        "task_state": self.bridge.get_task_state(task_id),
                         "task_events": self.bridge.get_events(task_id),
                         "result": plan,
                     },

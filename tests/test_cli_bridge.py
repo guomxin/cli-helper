@@ -309,6 +309,29 @@ class CliAndBridgeTests(unittest.TestCase):
         self.assertEqual(events[0]["stage"], "detail_tab_created")
         self.assertEqual(events[0]["detail"], {"tab_id": 99})
 
+    def test_extension_bridge_reports_task_claim_state(self):
+        bridge = ExtensionBridge()
+
+        bridge.register_client("chrome-1", tab_id=12, url=OA_URL, title="OA")
+        task_id = bridge.enqueue_task(
+            system="oa",
+            kind="seeyon_write_execute",
+            payload={"affair_id": "affair-1"},
+            target_client_id="chrome-1",
+        )
+
+        before = bridge.get_task_state(task_id)
+        self.assertFalse(before["claimed"])
+        self.assertTrue(before["pending"])
+
+        bridge.poll_tasks("chrome-1")
+
+        after = bridge.get_task_state(task_id)
+        self.assertTrue(after["claimed"])
+        self.assertFalse(after["pending"])
+        self.assertEqual(after["claimed_by"], "chrome-1")
+        self.assertEqual(after["target_client_id"], "chrome-1")
+
     def test_extension_bridge_routes_targeted_tasks_to_matching_client(self):
         bridge = ExtensionBridge()
 

@@ -16,6 +16,7 @@ class ExtensionClient:
     url: str
     title: str
     registered_at: str
+    extension_version: str = ""
 
 
 @dataclass
@@ -31,12 +32,22 @@ class ExtensionTask:
 class ExtensionBridge:
     def __init__(self) -> None:
         self.clients: dict[str, ExtensionClient] = {}
+        self.tasks: dict[str, ExtensionTask] = {}
+        self.task_claims: dict[str, dict[str, Any]] = {}
         self.pending_tasks: list[ExtensionTask] = []
         self.results: dict[str, dict[str, Any]] = {}
         self.task_events: dict[str, list[dict[str, Any]]] = {}
         self._condition = threading.Condition()
 
-    def register_client(self, client_id: str, *, tab_id: int, url: str, title: str) -> None:
+    def register_client(
+        self,
+        client_id: str,
+        *,
+        tab_id: int,
+        url: str,
+        title: str,
+        extension_version: str = "",
+    ) -> None:
         with self._condition:
             self.clients[client_id] = ExtensionClient(
                 client_id=client_id,
@@ -44,6 +55,7 @@ class ExtensionBridge:
                 url=url,
                 title=title,
                 registered_at=self._now(),
+                extension_version=extension_version,
             )
 
     def enqueue_task(
@@ -56,15 +68,17 @@ class ExtensionBridge:
     ) -> str:
         task_id = str(uuid.uuid4())
         with self._condition:
+            task = ExtensionTask(
+                id=task_id,
+                system=system,
+                kind=kind,
+                payload=payload,
+                created_at=self._now(),
+                target_client_id=target_client_id,
+            )
+            self.tasks[task_id] = task
             self.pending_tasks.append(
-                ExtensionTask(
-                    id=task_id,
-                    system=system,
-                    kind=kind,
-                    payload=payload,
-                    created_at=self._now(),
-                    target_client_id=target_client_id,
-                )
+                task
             )
             self._condition.notify_all()
         return task_id
@@ -80,6 +94,13 @@ class ExtensionBridge:
                 if task.target_client_id is None or task.target_client_id == client_id
             ]
             claimed_ids = {task.id for task in claimable}
+            claimed_at = self._now()
+            for task in claimable:
+                self.task_claims[task.id] = {
+                    "claimed": True,
+                    "claimed_by": client_id,
+                    "claimed_at": claimed_at,
+                }
             self.pending_tasks = [
                 task for task in self.pending_tasks if task.id not in claimed_ids
             ]
@@ -139,6 +160,26 @@ class ExtensionBridge:
 
     def get_events(self, task_id: str) -> list[dict[str, Any]]:
         return list(self.task_events.get(task_id, []))
+
+    def get_task_state(self, task_id: str) -> dict[str, Any]:
+        with self._condition:
+            task = self.tasks.get(task_id)
+            pending = any(item.id == task_id for item in self.pending_tasks)
+            claim = self.task_claims.get(task_id, {})
+            return {
+                "task_id": task_id,
+                "known": task is not None,
+                "system": task.system if task else "",
+                "kind": task.kind if task else "",
+                "target_client_id": task.target_client_id if task else None,
+                "created_at": task.created_at if task else "",
+                "pending": pending,
+                "claimed": bool(claim.get("claimed")),
+                "claimed_by": claim.get("claimed_by", ""),
+                "claimed_at": claim.get("claimed_at", ""),
+                "event_count": len(self.task_events.get(task_id, [])),
+                "has_result": task_id in self.results,
+            }
 
     def list_clients(self) -> list[dict[str, Any]]:
         with self._condition:

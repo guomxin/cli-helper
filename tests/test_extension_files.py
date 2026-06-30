@@ -204,6 +204,8 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         background = Path("extension/background.js").read_text(encoding="utf-8")
 
         self.assertIn("seeyon_write_execute", background)
+        self.assertIn("BACKGROUND_VERSION", background)
+        self.assertIn("extension_version", background)
         self.assertIn("executeSeeyonWrite", background)
         self.assertIn("runSeeyonContinueSubmit", background)
         self.assertIn("submitClickFunc", background)

@@ -5231,6 +5231,8 @@ class DaemonTests(unittest.TestCase):
             worker.join()
 
             self.assertEqual(response.status, 504)
+            self.assertTrue(response.body["task_state"]["claimed"])
+            self.assertEqual(response.body["task_state"]["claimed_by"], "chrome-1")
             self.assertEqual(response.body["task_events"][0]["stage"], "detail_tab_created")
             self.assertEqual(response.body["task_events"][0]["detail"], {"tab_id": 99})
 

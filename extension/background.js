@@ -1,5 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
+const BACKGROUND_VERSION = "background-v5-task-claim-state";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -63,6 +64,7 @@ async function registerTab(baseClientId, tab) {
     tab_id: tab.id,
     url: tab.url,
     title: tab.title || "",
+    extension_version: BACKGROUND_VERSION,
   });
   return { clientId, tab };
 }
