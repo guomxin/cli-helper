@@ -223,12 +223,17 @@ async function executeSeeyonWrite(payload) {
   try {
     await waitForTabReadable(tab.id, 30000);
     await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 2000)));
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: "MAIN",
-      func: runSeeyonContinueSubmit,
-      args: [payload],
-    });
+    const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
+    const [injection] = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: "MAIN",
+        func: runSeeyonContinueSubmit,
+        args: [payload],
+      }),
+      scriptTimeoutMs,
+      "Seeyon write execute script timed out before scheduling submit",
+    );
     if (!injection || !injection.result) {
       throw new Error("Seeyon submit script returned no result");
     }

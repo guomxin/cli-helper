@@ -2699,6 +2699,7 @@ class DaemonState:
                     "opinion": plan["opinion"]["text"],
                     "source_url": plan["target"].get("source_url", ""),
                     "confirm": True,
+                    "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 10000),
                 },
                 target_client_id=target_client_id,
             )

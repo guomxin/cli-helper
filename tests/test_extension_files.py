@@ -214,6 +214,7 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         self.assertIn("hidAttitudeCode", background)
         self.assertIn("submit_entry", background)
         self.assertIn("submit_scheduled: true", background)
+        self.assertIn("Seeyon write execute script timed out before scheduling submit", background)
         self.assertIn("window.setTimeout(runSubmit, 0)", background)
         self.assertNotIn("findSeeyonCommentElement();", background)
 
