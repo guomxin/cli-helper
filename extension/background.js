@@ -277,7 +277,7 @@ async function executeSeeyonLaunchSaveDraft(payload) {
 }
 
 async function runSeeyonContinueSubmit(payload) {
-  const handlerVersion = "continue-submit-v2-scheduled-attitude";
+  const handlerVersion = "continue-submit-v3-page-submit-click";
   const expectedAffairId = String(payload.affair_id || "");
   const opinion = String(payload.opinion || "");
   if (!expectedAffairId) {
@@ -298,14 +298,16 @@ async function runSeeyonContinueSubmit(payload) {
   if (String(pageAffairId) !== expectedAffairId) {
     throw new Error(`affair_id mismatch: page=${pageAffairId || "(empty)"} expected=${expectedAffairId}`);
   }
-  const submitFn =
-    typeof window.dealSubmitFunc === "function"
-      ? window.dealSubmitFunc
-      : window.$ && window.$.content && window.$.content.callback && typeof window.$.content.callback.dealSubmit === "function"
-        ? window.$.content.callback.dealSubmit
-        : null;
-  if (!submitFn) {
-    throw new Error("Seeyon submit function dealSubmitFunc was not found on the detail page");
+  const submitEntry =
+    typeof window.submitClickFunc === "function"
+      ? { name: "submitClickFunc", fn: window.submitClickFunc }
+      : typeof window.dealSubmitFunc === "function"
+        ? { name: "dealSubmitFunc", fn: window.dealSubmitFunc }
+        : window.$ && window.$.content && window.$.content.callback && typeof window.$.content.callback.dealSubmit === "function"
+          ? { name: "$.content.callback.dealSubmit", fn: window.$.content.callback.dealSubmit }
+          : null;
+  if (!submitEntry) {
+    throw new Error("Seeyon submit function submitClickFunc/dealSubmitFunc was not found on the detail page");
   }
 
   const dialogs = [];
@@ -409,10 +411,11 @@ async function runSeeyonContinueSubmit(payload) {
         opinion_length: opinion.length,
         url: location.href,
         title: document.title,
+        submit_entry: submitEntry.name,
         dialogs,
       };
       try {
-        submitFn.call(window);
+        submitEntry.fn.call(window);
       } catch (error) {
         outcome.ok = false;
         outcome.error = String(error && error.message ? error.message : error);
@@ -434,6 +437,7 @@ async function runSeeyonContinueSubmit(payload) {
       url: location.href,
       title: document.title,
       attitude,
+      submit_entry: submitEntry.name,
       dialogs: [],
     };
   } catch (error) {
