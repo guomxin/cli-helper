@@ -4932,7 +4932,7 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(seen_tasks[0]["payload"]["action"], "ContinueSubmit")
             self.assertEqual(seen_tasks[0]["payload"]["opinion"], "approved")
             self.assertTrue(seen_tasks[0]["payload"]["confirm"])
-            self.assertEqual(seen_tasks[0]["payload"]["script_timeout_ms"], 10000)
+            self.assertEqual(seen_tasks[0]["payload"]["script_timeout_ms"], 20000)
             self.assertEqual(len(audit_rows), 1)
             self.assertTrue(audit_rows[0]["safety"]["will_execute"])
             self.assertFalse(audit_rows[0]["safety"]["dry_run_only"])

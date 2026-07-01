@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v6-cap4-interview-approval";
+const BACKGROUND_VERSION = "background-v7-cap4-interview-wait";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -267,6 +267,8 @@ async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
     await reportEvent("submit_script_returned", {
       handler_version: injection.result.handler_version || "",
       submit_entry: injection.result.submit_entry || "",
+      business_form_detected: injection.result.business_form?.detected === true,
+      cap4_wait_attempts: injection.result.business_form?.cap4_wait_attempts || 0,
     });
     await new Promise((resolve) => setTimeout(resolve, Number(payload.after_submit_wait_ms || 8000)));
     await reportEvent("after_submit_wait_complete", { tab_id: tab.id || null });
@@ -376,25 +378,67 @@ async function runSeeyonContinueSubmit(payload) {
     element.dispatchEvent(new eventView.Event("change", { bubbles: true }));
     element.dispatchEvent(new eventView.Event("blur", { bubbles: true }));
   };
-  const fillCap4InterviewApproval = () => {
+  const isInterviewApprovalPage = () => {
+    const pageText = `${document.title || ""} ${document.body?.innerText || ""}`;
+    return pageText.includes("\u9762\u8bd5\u5ba1\u6279\u5355");
+  };
+  const cap4InterviewSnapshot = () => {
+    const frame = document.querySelector("#zwIframe");
+    const frameDocument = frame?.contentDocument || null;
+    const frameText = String(frameDocument?.body?.innerText || "");
+    const ready =
+      Boolean(frameDocument) &&
+      frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") &&
+      frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u610f\u89c1") &&
+      frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u662f\u5426\u540c\u610f\u8bd5\u7528");
+    return {
+      frame_present: Boolean(frame),
+      frame_document_present: Boolean(frameDocument),
+      frame_text_length: frameText.length,
+      frameDocument,
+      ready,
+    };
+  };
+  const waitForCap4InterviewApproval = async () => {
+    const expectsInterviewApproval = isInterviewApprovalPage();
+    let snapshot = cap4InterviewSnapshot();
+    if (!expectsInterviewApproval && !snapshot.frame_present) {
+      return { ...snapshot, cap4_wait_attempts: 0, timed_out: false };
+    }
+    const deadline = Date.now() + Number(payload.business_form_wait_ms || 8000);
+    let attempts = 0;
+    while (Date.now() <= deadline) {
+      attempts += 1;
+      snapshot = cap4InterviewSnapshot();
+      if (snapshot.ready) {
+        return { ...snapshot, cap4_wait_attempts: attempts, timed_out: false };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return { ...snapshot, cap4_wait_attempts: attempts, timed_out: true };
+  };
+  const fillCap4InterviewApproval = async () => {
     const result = {
       detected: false,
       opinion_set: false,
       trial_agree_clicked: false,
       selected_text: "",
+      cap4_wait_attempts: 0,
+      frame_present: false,
+      frame_text_length: 0,
     };
-    const frame = document.querySelector("#zwIframe");
-    const frameDocument = frame?.contentDocument;
-    const frameText = String(frameDocument?.body?.innerText || "");
-    if (
-      !frameDocument ||
-      !frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
-      !frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u610f\u89c1") ||
-      !frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u662f\u5426\u540c\u610f\u8bd5\u7528")
-    ) {
+    const readiness = await waitForCap4InterviewApproval();
+    result.cap4_wait_attempts = readiness.cap4_wait_attempts || 0;
+    result.frame_present = readiness.frame_present === true;
+    result.frame_text_length = readiness.frame_text_length || 0;
+    if (!readiness.ready) {
+      if (isInterviewApprovalPage()) {
+        throw new Error("CAP4 interview approval frame was not ready before submit");
+      }
       return result;
     }
     result.detected = true;
+    const frameDocument = readiness.frameDocument;
     const opinionField =
       frameDocument.querySelector("#field0038_id textarea:not([tabindex='-1'])") ||
       frameDocument.querySelector("#field0038_id textarea");
@@ -483,7 +527,7 @@ async function runSeeyonContinueSubmit(payload) {
     }
     setElementValue(comment, opinion);
     const attitude = selectAgreeAttitude();
-    const businessForm = fillCap4InterviewApproval();
+    const businessForm = await fillCap4InterviewApproval();
     const runSubmit = () => {
       const outcome = {
         ok: true,
