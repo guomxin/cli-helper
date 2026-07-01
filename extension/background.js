@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v8-cap4-outer-wait";
+const BACKGROUND_VERSION = "background-v9-cap4-field-readiness";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -260,6 +260,9 @@ async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
       ready: businessFormReadiness.ready === true,
       frame_present: businessFormReadiness.frame_present === true,
       frame_text_length: businessFormReadiness.frame_text_length || 0,
+      frame_html_length: businessFormReadiness.frame_html_length || 0,
+      field0038_present: businessFormReadiness.field0038_present === true,
+      field0041_present: businessFormReadiness.field0041_present === true,
       cap4_wait_attempts: businessFormReadiness.cap4_wait_attempts || 0,
     });
     const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
@@ -323,7 +326,7 @@ async function waitSeeyonWriteBusinessFormReady(tabId, timeoutMs, probeIntervalM
   }
   const detail = lastError
     ? `last_error=${lastError}`
-    : `frame_present=${latest.frame_present === true}, frame_text_length=${latest.frame_text_length || 0}`;
+    : `frame_present=${latest.frame_present === true}, frame_text_length=${latest.frame_text_length || 0}, frame_html_length=${latest.frame_html_length || 0}, field0038_present=${latest.field0038_present === true}, field0041_present=${latest.field0041_present === true}`;
   throw new Error(`CAP4 interview approval frame was not ready before submit: ${detail}`);
 }
 
@@ -332,26 +335,33 @@ function collectSeeyonWriteBusinessFormReadiness() {
   const frame = document.querySelector("#zwIframe");
   let frameDocument = null;
   let frameText = "";
+  let frameHtml = "";
   let frame_error = "";
   try {
     frameDocument = frame?.contentDocument || null;
-    frameText = String(frameDocument?.body?.innerText || "");
+    frameText = String(frameDocument?.body?.textContent || "");
+    frameHtml = String(frameDocument?.documentElement?.outerHTML || "");
   } catch (error) {
     frame_error = String(error && error.message ? error.message : error);
   }
+  const field0038Present = Boolean(frameDocument?.querySelector("#field0038_id"));
+  const field0041Present = Boolean(frameDocument?.querySelector("#field0041_id"));
+  const hasInterviewMarker =
+    pageText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
+    frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
+    frameHtml.includes("\u9762\u8bd5\u5ba1\u6279\u5355");
   const expectsInterviewApproval =
-    pageText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") || frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355");
-  const ready =
-    Boolean(frameDocument) &&
-    frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") &&
-    frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u610f\u89c1") &&
-    frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u662f\u5426\u540c\u610f\u8bd5\u7528");
+    hasInterviewMarker || (field0038Present && field0041Present);
+  const ready = Boolean(frameDocument) && hasInterviewMarker && field0038Present && field0041Present;
   return {
     expects_interview_approval: expectsInterviewApproval,
     ready,
     frame_present: Boolean(frame),
     frame_document_present: Boolean(frameDocument),
     frame_text_length: frameText.length,
+    frame_html_length: frameHtml.length,
+    field0038_present: field0038Present,
+    field0041_present: field0041Present,
     frame_error,
   };
 }
@@ -456,19 +466,24 @@ function runSeeyonContinueSubmit(payload) {
   const cap4InterviewSnapshot = () => {
     const frame = document.querySelector("#zwIframe");
     const frameDocument = frame?.contentDocument || null;
-    const frameText = String(frameDocument?.body?.innerText || "");
+    const frameText = String(frameDocument?.body?.textContent || "");
+    const frameHtml = String(frameDocument?.documentElement?.outerHTML || "");
     const pageText = `${document.title || ""} ${document.body?.innerText || ""}`;
-    const ready =
-      Boolean(frameDocument) &&
-      frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") &&
-      frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u610f\u89c1") &&
-      frameText.includes("\u4e8c\u7ea7\u5ba1\u6279\u662f\u5426\u540c\u610f\u8bd5\u7528");
+    const field0038Present = Boolean(frameDocument?.querySelector("#field0038_id"));
+    const field0041Present = Boolean(frameDocument?.querySelector("#field0041_id"));
+    const hasInterviewMarker =
+      pageText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
+      frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") ||
+      frameHtml.includes("\u9762\u8bd5\u5ba1\u6279\u5355");
+    const ready = Boolean(frameDocument) && hasInterviewMarker && field0038Present && field0041Present;
     return {
       frame_present: Boolean(frame),
       frame_document_present: Boolean(frameDocument),
       frame_text_length: frameText.length,
-      expects_interview_approval:
-        pageText.includes("\u9762\u8bd5\u5ba1\u6279\u5355") || frameText.includes("\u9762\u8bd5\u5ba1\u6279\u5355"),
+      frame_html_length: frameHtml.length,
+      field0038_present: field0038Present,
+      field0041_present: field0041Present,
+      expects_interview_approval: hasInterviewMarker || (field0038Present && field0041Present),
       frameDocument,
       ready,
     };
@@ -482,11 +497,17 @@ function runSeeyonContinueSubmit(payload) {
       cap4_wait_attempts: 0,
       frame_present: false,
       frame_text_length: 0,
+      frame_html_length: 0,
+      field0038_present: false,
+      field0041_present: false,
     };
     const readiness = cap4InterviewSnapshot();
     result.cap4_wait_attempts = payload.business_form_wait_result?.cap4_wait_attempts || 0;
     result.frame_present = readiness.frame_present === true;
     result.frame_text_length = readiness.frame_text_length || 0;
+    result.frame_html_length = readiness.frame_html_length || 0;
+    result.field0038_present = readiness.field0038_present === true;
+    result.field0041_present = readiness.field0041_present === true;
     if (!readiness.ready) {
       if (readiness.expects_interview_approval === true) {
         throw new Error("CAP4 interview approval frame was not ready before submit");

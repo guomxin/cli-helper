@@ -2044,6 +2044,10 @@ class CliOaTests(unittest.TestCase):
                 "approved",
                 "--source-url",
                 "http://oa.example.test/detail?affairId=affair-1",
+                "--business-form-wait-ms",
+                "30000",
+                "--script-timeout-ms",
+                "45000",
                 "--confirm",
                 "--daemon-url",
                 f"http://127.0.0.1:{server.server_port}",
@@ -2056,6 +2060,8 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[0]["args"]["action"], "ContinueSubmit")
         self.assertEqual(seen_payloads[0]["args"]["opinion"], "approved")
         self.assertEqual(seen_payloads[0]["args"]["source_url"], "http://oa.example.test/detail?affairId=affair-1")
+        self.assertEqual(seen_payloads[0]["args"]["business_form_wait_ms"], 30000)
+        self.assertEqual(seen_payloads[0]["args"]["script_timeout_ms"], 45000)
         self.assertTrue(seen_payloads[0]["args"]["confirm"])
 
     def test_oa_pending_submit_executes_each_item_and_verifies_disappearance(self):

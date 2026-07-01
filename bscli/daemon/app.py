@@ -2718,7 +2718,7 @@ class DaemonState:
                     "source_url": plan["target"].get("source_url", ""),
                     "confirm": True,
                     "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 20000),
-                    "business_form_wait_ms": int(args.get("business_form_wait_ms") if args.get("business_form_wait_ms") is not None else 8000),
+                    "business_form_wait_ms": int(args.get("business_form_wait_ms") if args.get("business_form_wait_ms") is not None else 30000),
                 },
                 target_client_id=target_client_id,
             )

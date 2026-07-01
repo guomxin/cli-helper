@@ -548,6 +548,8 @@ def _build_oa_parser(oa_sub) -> None:
             _add_daemon_options(write_cmd)
         if mode == "execute":
             write_cmd.add_argument("--confirm", action="store_true")
+            write_cmd.add_argument("--script-timeout-ms", type=int, dest="script_timeout_ms")
+            write_cmd.add_argument("--business-form-wait-ms", type=int, dest="business_form_wait_ms")
             _add_daemon_options(write_cmd)
         _add_output_options(write_cmd)
 
@@ -816,7 +818,11 @@ def handle_command(args: argparse.Namespace) -> int:
             "args": json.loads(args.json),
             "timeout_seconds": args.timeout,
         }
-        result = post_json(f"{args.daemon_url}/commands/run", payload)
+        result = post_json(
+            f"{args.daemon_url}/commands/run",
+            payload,
+            timeout=_daemon_client_timeout_seconds(float(args.timeout), args.command),
+        )
         print_json(result)
         return 0
     raise ValueError(f"unknown command action: {args.action}")
@@ -1624,16 +1630,21 @@ def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
         return 0
     if args.oa_write_mode == "execute":
         if getattr(args, "confirm", False):
+            command_args = {
+                "affair_id": args.affair_id,
+                "action": args.action,
+                "opinion": args.opinion,
+                "source_url": args.source_url,
+                "confirm": True,
+            }
+            if getattr(args, "script_timeout_ms", None) is not None:
+                command_args["script_timeout_ms"] = args.script_timeout_ms
+            if getattr(args, "business_form_wait_ms", None) is not None:
+                command_args["business_form_wait_ms"] = args.business_form_wait_ms
             response = run_oa_daemon_command(
                 args,
                 "write_execute",
-                {
-                    "affair_id": args.affair_id,
-                    "action": args.action,
-                    "opinion": args.opinion,
-                    "source_url": args.source_url,
-                    "confirm": True,
-                },
+                command_args,
             )
             emit_cli_value(response, args)
             return 0
