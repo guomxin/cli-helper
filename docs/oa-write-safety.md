@@ -83,6 +83,10 @@ without sending the workflow.
   versioned project scripts and be dispatched by the daemon; the extension
   should only need reloads when the bridge protocol, Chrome permissions, or
   generic runner behavior changes.
+- `oa page script-smoke` is the read-only runner probe. It dispatches a fixed
+  `bscli.bridge_smoke.v1` script through `page_script_execute`, returns the
+  current OA page title, URL, ready state, and marker, and does not accept
+  arbitrary JavaScript from the CLI.
 - Without `--confirm`, `oa write execute ...` returns `ok=false` and records only
   a blocked local plan.
 - `oa pending submit ... --confirm` is the governed daemon command for repeated

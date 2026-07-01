@@ -75,6 +75,35 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_page_script_smoke_calls_bridge_smoke_command(self):
+        server, seen_payloads = self._start_daemon(
+            {"ok": True, "result": {"ok": True, "marker": "probe-1", "title": "OA"}}
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "page",
+                "script-smoke",
+                "--marker",
+                "probe-1",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["marker"], "probe-1")
+        self.assertEqual(
+            seen_payloads[0],
+            {
+                "system": "oa",
+                "command": "bridge_script_smoke",
+                "args": {"marker": "probe-1"},
+                "timeout_seconds": 30.0,
+            },
+        )
+
     def test_oa_template_list_filters_items_by_category(self):
         server, seen_payloads = self._start_daemon(
             {

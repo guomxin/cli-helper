@@ -61,6 +61,7 @@ COMMAND_TASKS = {
     ("oa", "network_log_snapshot"): "network_log_snapshot",
     ("oa", "network_probe_install"): "network_probe_install",
     ("oa", "page_inventory"): "page_inventory",
+    ("oa", "bridge_script_smoke"): "page_script_execute",
     ("oa", "pending_detail"): "html_snapshot",
     ("oa", "pending_list"): "html_snapshot",
     ("oa", "pending_list_api"): "section_api_replay",
@@ -403,6 +404,34 @@ class DaemonState:
             return self._run_api_save_command(system, target_client_id, args, timeout_seconds)
         if command == "detail_read":
             return self._run_detail_read_command(system, target_client_id, args, timeout_seconds)
+        if command == "bridge_script_smoke":
+            payload = _oa_bridge_script_smoke_payload(args)
+            task_id = self.bridge.enqueue_task(
+                system=system,
+                kind=task_kind,
+                payload=payload,
+                target_client_id=target_client_id,
+            )
+            result = self.bridge.wait_for_result(task_id, timeout_seconds=timeout_seconds)
+            if result is None:
+                return DaemonResponse(
+                    504,
+                    {
+                        "ok": False,
+                        "task_id": task_id,
+                        "error": f"command timed out waiting for Chrome extension result: {system}.{command}",
+                    },
+                )
+            if not result["ok"]:
+                return DaemonResponse(
+                    500,
+                    {
+                        "ok": False,
+                        "task_id": task_id,
+                        "error": result.get("error") or "extension task failed",
+                    },
+                )
+            return DaemonResponse(200, {"ok": True, "task_id": task_id, "result": result["result"]})
         if command == "api_replay":
             payload = {
                 "method": args.get("method", "GET").upper(),
@@ -4718,6 +4747,27 @@ def _oa_endpoint_probe_policy() -> dict[str, Any]:
         "automatic_network_probe": "disabled",
         "safe_to_call_default": False,
         "reason": "no endpoint candidate was called; write-like URLs require a user-confirmed test plan before any network probe",
+    }
+
+
+def _oa_bridge_script_smoke_payload(args: dict[str, Any]) -> dict[str, Any]:
+    marker = str(args.get("marker") or "bscli-page-script-smoke")
+    return {
+        "confirm": True,
+        "script_name": "bscli.bridge_smoke.v1",
+        "script_payload": {"marker": marker},
+        "script_source": """
+function bscliPageScript(payload) {
+  return {
+    ok: true,
+    marker: String(payload.marker || ""),
+    url: location.href,
+    title: document.title,
+    ready_state: document.readyState,
+    body_text_length: String(document.body && document.body.innerText || "").length
+  };
+}
+""".strip(),
     }
 
 

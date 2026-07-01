@@ -534,6 +534,66 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["ok"], True)
             self.assertEqual(response.body["result"]["buttons"][0]["text"], "查询")
 
+    def test_run_oa_bridge_script_smoke_dispatches_read_only_page_script(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            seen_tasks = []
+
+            def extension_worker():
+                deadline = time.time() + 2
+                tasks = None
+                while time.time() < deadline:
+                    tasks = state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"})
+                    if tasks.body["tasks"]:
+                        break
+                    time.sleep(0.02)
+                seen_tasks.extend(tasks.body["tasks"])
+                task_id = tasks.body["tasks"][0]["id"]
+                state.handle(
+                    "POST",
+                    "/extension/results",
+                    body={
+                        "client_id": "chrome-1",
+                        "task_id": task_id,
+                        "ok": True,
+                        "result": {"ok": True, "marker": "probe-1", "title": "OA"},
+                    },
+                )
+
+            worker = threading.Thread(target=extension_worker)
+            worker.start()
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "bridge_script_smoke",
+                    "args": {"marker": "probe-1"},
+                    "timeout_seconds": 1,
+                },
+            )
+            worker.join()
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(response.body["result"]["marker"], "probe-1")
+            self.assertEqual(seen_tasks[0]["kind"], "page_script_execute")
+            self.assertTrue(seen_tasks[0]["payload"]["confirm"])
+            self.assertEqual(seen_tasks[0]["payload"]["script_name"], "bscli.bridge_smoke.v1")
+            self.assertEqual(seen_tasks[0]["payload"]["script_payload"], {"marker": "probe-1"})
+            self.assertIn("function bscliPageScript", seen_tasks[0]["payload"]["script_source"])
+            self.assertIn("document.readyState", seen_tasks[0]["payload"]["script_source"])
+
     def test_run_network_probe_commands_use_network_task_kinds(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

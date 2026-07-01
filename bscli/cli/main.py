@@ -186,6 +186,11 @@ def _build_oa_parser(oa_sub) -> None:
     inventory.set_defaults(oa_command="page_inventory")
     _add_daemon_options(inventory)
     _add_output_options(inventory)
+    script_smoke = page_sub.add_parser("script-smoke")
+    script_smoke.set_defaults(oa_command="bridge_script_smoke")
+    script_smoke.add_argument("--marker", default="bscli-page-script-smoke")
+    _add_daemon_options(script_smoke)
+    _add_output_options(script_smoke)
 
     nav = oa_sub.add_parser("nav")
     nav_sub = nav.add_subparsers(dest="oa_action", required=True)
@@ -1730,6 +1735,8 @@ def _oa_command_args(args: argparse.Namespace) -> dict:
         return payload
     if command == "detail_read":
         return {"url": args.url}
+    if command == "bridge_script_smoke":
+        return {"marker": args.marker}
     if command in {"api_inspect", "api_replay"}:
         return _api_args_from_oa_cli(args)
     if command == "api_save":
