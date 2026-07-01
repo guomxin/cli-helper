@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from bscli.adapters.page_scripts import load_seeyon_action_page_script
 from bscli.adapters.seeyon_write import (
     append_oa_write_audit,
     build_oa_write_plan,
@@ -12,6 +13,17 @@ from bscli.adapters.seeyon_write import (
 
 
 class SeeyonWriteTests(unittest.TestCase):
+    def test_page_script_registry_loads_continue_submit_and_launch_save_draft(self):
+        continue_submit = load_seeyon_action_page_script("ContinueSubmit")
+        save_draft = load_seeyon_action_page_script("SaveDraft")
+
+        self.assertEqual(continue_submit["script_name"], "seeyon.continue_submit.v1")
+        self.assertIn("function bscliPageScript", continue_submit["script_source"])
+        self.assertEqual(continue_submit["outcome_key"], "__bscliContinueSubmitLast")
+        self.assertEqual(save_draft["script_name"], "seeyon.launch_save_draft.v1")
+        self.assertIn("function bscliPageScript", save_draft["script_source"])
+        self.assertEqual(save_draft["outcome_key"], "__bscliLaunchSaveDraftLast")
+
     def test_write_action_specs_centralize_promotion_and_verification(self):
         specs = {spec.code: spec for spec in list_write_action_specs()}
 

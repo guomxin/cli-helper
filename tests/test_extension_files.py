@@ -343,6 +343,85 @@ if (!pageSandbox.__bscliProbeResult || pageSandbox.__bscliProbeResult.value !== 
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_launch_save_draft_executor_prefers_daemon_supplied_page_script(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+let executeScriptOptions = [];
+const sandbox = {
+  console,
+  URL,
+  URLSearchParams,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      create: async () => ({ id: 77 }),
+      remove: async () => undefined,
+      onActivated: { addListener: () => undefined },
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      get: (tabId, callback) => callback({ id: tabId, status: "complete" }),
+    },
+    scripting: {
+      executeScript: async (options) => {
+        executeScriptOptions.push(options);
+        if (options.func && options.func.name === "runPageScriptSource") {
+          return [{ result: { draft_saved: true, script_runner: true, submitted_count: 0 } }];
+        }
+        if (options.func && options.func.name === "collectPageScriptOutcome") {
+          return [{ result: { ok: true, action: "SaveDraft" } }];
+        }
+        throw new Error(`unexpected injected function: ${options.func && options.func.name}`);
+      },
+    },
+  },
+};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
+(async () => {
+  const result = await sandbox.executeSeeyonLaunchSaveDraft({
+    confirm: true,
+    url: "http://oa.example.test/new?templateId=tpl-1",
+    script_name: "seeyon.launch_save_draft.v1",
+    script_source: "function bscliPageScript(payload) { return { draft_saved: true, submitted_count: 0 }; }",
+    outcome_key: "__bscliLaunchSaveDraftLast",
+    keep_tab: false,
+    settle_ms: 0,
+    after_save_wait_ms: 0,
+  });
+  if (!result.draft_saved || result.script_runner !== true) {
+    throw new Error(`unexpected launch save result: ${JSON.stringify(result)}`);
+  }
+  const injected = executeScriptOptions.find((item) => item.func && item.func.name === "runPageScriptSource");
+  if (!injected) {
+    throw new Error(`runPageScriptSource was not used: ${executeScriptOptions.map((item) => item.func && item.func.name).join(",")}`);
+  }
+  if (injected.args[0].script_name !== "seeyon.launch_save_draft.v1") {
+    throw new Error(`script_name was not forwarded: ${JSON.stringify(injected.args[0])}`);
+  }
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_rendered_snapshot_collects_all_frames(self):
         node = shutil.which("node")
         if node is None:
@@ -511,6 +590,8 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
 
         self.assertIn("seeyon_launch_save_draft", background)
         self.assertIn("executeSeeyonLaunchSaveDraft", background)
+        self.assertIn("runPageScriptSource", background)
+        self.assertIn("script_source", background)
         self.assertIn("runSeeyonLaunchSaveDraft", background)
         self.assertIn("saveDraft", background)
         self.assertIn("sendId_a", background)

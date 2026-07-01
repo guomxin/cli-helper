@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v12-page-script-runner";
+const BACKGROUND_VERSION = "background-v13-launch-page-script";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -560,13 +560,28 @@ async function executeSeeyonLaunchSaveDraft(payload) {
     await waitForTabReadable(tab.id, 30000);
     await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 1500)));
     const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
+    const scriptName = String(payload.script_name || (payload.script_source ? "inline.page_script" : "legacy.runSeeyonLaunchSaveDraft"));
+    const injectionOptions = payload.script_source
+      ? {
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: runPageScriptSource,
+          args: [
+            {
+              script_name: scriptName,
+              script_source: payload.script_source,
+              script_payload: payload,
+            },
+          ],
+        }
+      : {
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: runSeeyonLaunchSaveDraft,
+          args: [payload],
+        };
     const [injection] = await withTimeout(
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "MAIN",
-        func: runSeeyonLaunchSaveDraft,
-        args: [payload],
-      }),
+      chrome.scripting.executeScript(injectionOptions),
       scriptTimeoutMs,
       "Seeyon launch save-draft script timed out before scheduling click",
     );
@@ -574,6 +589,25 @@ async function executeSeeyonLaunchSaveDraft(payload) {
       throw new Error("Seeyon launch save-draft script returned no result");
     }
     await new Promise((resolve) => setTimeout(resolve, Number(payload.after_save_wait_ms || 4000)));
+    if (payload.outcome_key) {
+      try {
+        const [outcomeInjection] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: collectPageScriptOutcome,
+          args: [{ outcome_key: payload.outcome_key }],
+        });
+        const outcome = outcomeInjection?.result || null;
+        if (outcome) {
+          injection.result.save_outcome = outcome;
+          if (outcome.ok === false) {
+            throw new Error(outcome.error || "Seeyon launch save-draft script reported failure");
+          }
+        }
+      } catch (error) {
+        throw error;
+      }
+    }
     return injection.result;
   } finally {
     if (tab.id && payload.keep_tab !== true) {

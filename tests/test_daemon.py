@@ -1821,7 +1821,8 @@ class DaemonTests(unittest.TestCase):
 
             def extension_worker():
                 tasks = []
-                for _ in range(20):
+                deadline = time.time() + 2
+                while time.time() < deadline:
                     tasks = state.handle(
                         "GET",
                         "/extension/tasks",
@@ -1829,7 +1830,8 @@ class DaemonTests(unittest.TestCase):
                     ).body["tasks"]
                     if tasks:
                         break
-                    time.sleep(0.01)
+                    time.sleep(0.02)
+                self.assertTrue(tasks)
                 self.assertEqual(tasks[0]["kind"], "rendered_html_snapshot")
                 self.assertEqual(tasks[0]["payload"]["url"], detail_url)
                 state.handle(
@@ -3939,6 +3941,10 @@ class DaemonTests(unittest.TestCase):
                 self.assertEqual(tasks[0]["kind"], "seeyon_launch_save_draft")
                 self.assertEqual(tasks[0]["payload"]["fields"], {"subject": "Draft subject"})
                 self.assertEqual(tasks[0]["payload"]["template_id"], "tpl-1")
+                self.assertEqual(tasks[0]["payload"]["script_name"], "seeyon.launch_save_draft.v1")
+                self.assertIn("function bscliPageScript", tasks[0]["payload"]["script_source"])
+                self.assertIn("__bscliLaunchSaveDraftLast", tasks[0]["payload"]["script_source"])
+                self.assertEqual(tasks[0]["payload"]["outcome_key"], "__bscliLaunchSaveDraftLast")
                 self.assertEqual(tasks[0]["payload"]["script_timeout_ms"], 10000)
                 self.assertTrue(tasks[0]["payload"]["confirm"])
                 state.handle(

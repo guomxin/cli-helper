@@ -1551,6 +1551,7 @@ class DaemonState:
                     "result": plan,
                 },
             )
+        page_script = load_seeyon_action_page_script("SaveDraft")
         task_id = self.bridge.enqueue_task(
             system="oa",
             kind="seeyon_launch_save_draft",
@@ -1559,6 +1560,9 @@ class DaemonState:
                 "url": plan.get("target", {}).get("url", ""),
                 "fields": fields,
                 "confirm": True,
+                "script_name": page_script["script_name"],
+                "script_source": page_script["script_source"],
+                "outcome_key": page_script.get("outcome_key", ""),
                 "settle_ms": int(args.get("settle_ms") if args.get("settle_ms") is not None else 1500),
                 "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 10000),
                 "keep_tab": args.get("keep_tab") is True,

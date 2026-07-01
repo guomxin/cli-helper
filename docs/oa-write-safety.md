@@ -50,9 +50,11 @@ without sending the workflow.
   fields, verifies that a `saveDraft` / "保存待发" control exists, records a
   redacted audit row, and does not fill fields or click anything.
 - `oa launch save-draft ... --confirm` is the governed launch-page draft write.
-  It reuses the dry-run precheck, sends a `seeyon_launch_save_draft` browser
-  task only after confirmation, fills requested fields, and clicks only the
-  save-draft control. The extension explicitly refuses `sendId_a`,
+  It reuses the dry-run precheck, loads the versioned
+  `seeyon.launch_save_draft.v1` page script, and sends a
+  `seeyon_launch_save_draft` browser task only after confirmation. The extension
+  opens the launch page and runs the daemon-sent script; the script fills
+  requested fields and clicks only the save-draft control. The script refuses `sendId_a`,
   `ContinueSubmit`, `Submit`, "发送", and "提交" controls. Its successful result
   must include `draft_saved=true` and `submitted_count=0`.
 - `oa write actions` reads the local write-action registry. The registry is the

@@ -12,6 +12,11 @@ _SEEYON_ACTION_SCRIPTS = {
         "filename": "continue_submit.js",
         "outcome_key": "__bscliContinueSubmitLast",
     },
+    "SaveDraft": {
+        "script_name": "seeyon.launch_save_draft.v1",
+        "filename": "launch_save_draft.js",
+        "outcome_key": "__bscliLaunchSaveDraftLast",
+    },
 }
 
 
