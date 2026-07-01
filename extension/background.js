@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v11-self-contained-inform-submit";
+const BACKGROUND_VERSION = "background-v12-page-script-runner";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -111,6 +111,11 @@ async function executeTask(clientId, tabId, task) {
       });
     } else if (task.kind === "rendered_html_snapshot") {
       const result = await collectRenderedHtmlSnapshot(task.payload || {});
+      injection = { result };
+    } else if (task.kind === "page_script_execute") {
+      const result = await executePageScriptTask(task.payload || {}, tabId, (stage, detail) =>
+        postTaskEvent(clientId, task, stage, detail),
+      );
       injection = { result };
     } else if (task.kind === "seeyon_write_execute") {
       const result = await executeSeeyonWrite(task.payload || {}, (stage, detail) =>
@@ -226,6 +231,96 @@ async function collectRenderedHtmlSnapshot(payload) {
   }
 }
 
+async function executePageScriptTask(payload, currentTabId, reportEvent = async () => {}) {
+  if (payload.confirm !== true) {
+    throw new Error("confirm=true is required for page_script_execute");
+  }
+  const url = payload.source_url || payload.url || "";
+  const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
+  let tabId = currentTabId;
+  let openedTab = null;
+  if (url) {
+    await reportEvent("opening_page_script_tab", { source_url: String(url).slice(0, 1000) });
+    openedTab = await chrome.tabs.create({ url, active: payload.active === true });
+    tabId = openedTab.id;
+    await reportEvent("page_script_tab_created", { tab_id: tabId || null });
+    await withTimeout(
+      waitForTabReadable(tabId, Number(payload.detail_timeout_ms || 30000)),
+      Number(payload.detail_timeout_ms || 30000),
+      "page script tab timed out before becoming readable",
+    );
+    await new Promise((resolve) => setTimeout(resolve, Number(payload.settle_ms || 1000)));
+  }
+  try {
+    await reportEvent("injecting_page_script", {
+      tab_id: tabId || null,
+      script_name: String(payload.script_name || ""),
+      script_timeout_ms: scriptTimeoutMs,
+    });
+    const [injection] = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: runPageScriptSource,
+        args: [payload],
+      }),
+      scriptTimeoutMs,
+      "page script execution timed out",
+    );
+    if (!injection || typeof injection.result === "undefined") {
+      throw new Error("page script returned no result");
+    }
+    const result = injection.result;
+    if (payload.outcome_key) {
+      try {
+        const [outcomeInjection] = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          func: collectPageScriptOutcome,
+          args: [{ outcome_key: payload.outcome_key }],
+        });
+        if (outcomeInjection?.result) {
+          result.outcome = outcomeInjection.result;
+        }
+      } catch (error) {
+        await reportEvent("page_script_outcome_unavailable", {
+          error: String(error && error.message ? error.message : error).slice(0, 1000),
+        });
+      }
+    }
+    return result;
+  } finally {
+    if (openedTab?.id && payload.keep_tab !== true) {
+      await reportEvent("closing_page_script_tab", { tab_id: openedTab.id });
+      await chrome.tabs.remove(openedTab.id).catch(() => {});
+    }
+  }
+}
+
+function runPageScriptSource(payload) {
+  const scriptName = String(payload.script_name || "inline.page_script");
+  const scriptSource = String(payload.script_source || "");
+  if (!scriptSource.trim()) {
+    throw new Error("script_source is required for page script execution");
+  }
+  const scriptPayload =
+    payload.script_payload && typeof payload.script_payload === "object" ? payload.script_payload : payload;
+  const factory = new Function(`${scriptSource}\n; return typeof bscliPageScript === "function" ? bscliPageScript : null;`);
+  const entry = factory.call(window);
+  if (typeof entry !== "function") {
+    throw new Error(`page script did not define bscliPageScript(payload): ${scriptName}`);
+  }
+  return entry.call(window, scriptPayload);
+}
+
+function collectPageScriptOutcome(payload) {
+  const outcomeKey = String(payload?.outcome_key || "");
+  if (!outcomeKey) {
+    return null;
+  }
+  return window[outcomeKey] || null;
+}
+
 async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
   if (payload.confirm !== true) {
     throw new Error("confirm=true is required for seeyon_write_execute");
@@ -266,14 +361,34 @@ async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
       cap4_wait_attempts: businessFormReadiness.cap4_wait_attempts || 0,
     });
     const scriptTimeoutMs = Number(payload.script_timeout_ms || 10000);
-    await reportEvent("injecting_submit_script", { tab_id: tab.id || null, script_timeout_ms: scriptTimeoutMs });
+    const scriptName = String(payload.script_name || (payload.script_source ? "inline.page_script" : "legacy.runSeeyonContinueSubmit"));
+    await reportEvent("injecting_submit_script", {
+      tab_id: tab.id || null,
+      script_timeout_ms: scriptTimeoutMs,
+      script_name: scriptName,
+    });
+    const scriptPayload = { ...payload, business_form_wait_result: businessFormReadiness };
+    const injectionOptions = payload.script_source
+      ? {
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: runPageScriptSource,
+          args: [
+            {
+              script_name: scriptName,
+              script_source: payload.script_source,
+              script_payload: scriptPayload,
+            },
+          ],
+        }
+      : {
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: runSeeyonContinueSubmit,
+          args: [scriptPayload],
+        };
     const [injection] = await withTimeout(
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "MAIN",
-        func: runSeeyonContinueSubmit,
-        args: [{ ...payload, business_form_wait_result: businessFormReadiness }],
-      }),
+      chrome.scripting.executeScript(injectionOptions),
       scriptTimeoutMs,
       "Seeyon write execute script timed out before scheduling submit",
     );
@@ -293,7 +408,8 @@ async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
       const [outcomeInjection] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         world: "MAIN",
-        func: collectSeeyonSubmitOutcome,
+        func: collectPageScriptOutcome,
+        args: [{ outcome_key: payload.outcome_key || "__bscliContinueSubmitLast" }],
       });
       const submitOutcome = outcomeInjection?.result || null;
       if (submitOutcome) {

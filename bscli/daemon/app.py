@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
+from bscli.adapters.page_scripts import load_seeyon_action_page_script
 from bscli.browser.bridge import ExtensionBridge
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
@@ -2708,6 +2709,7 @@ class DaemonState:
                         "result": plan,
                     },
                 )
+            page_script = load_seeyon_action_page_script(plan["action"]["code"])
             task_id = self.bridge.enqueue_task(
                 system="oa",
                 kind="seeyon_write_execute",
@@ -2717,6 +2719,9 @@ class DaemonState:
                     "opinion": plan["opinion"]["text"],
                     "source_url": plan["target"].get("source_url", ""),
                     "confirm": True,
+                    "script_name": page_script["script_name"],
+                    "script_source": page_script["script_source"],
+                    "outcome_key": page_script.get("outcome_key", ""),
                     "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 20000),
                     "business_form_wait_ms": int(args.get("business_form_wait_ms") if args.get("business_form_wait_ms") is not None else 30000),
                     "after_submit_wait_ms": int(args.get("after_submit_wait_ms") if args.get("after_submit_wait_ms") is not None else 12000),

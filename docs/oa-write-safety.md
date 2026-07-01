@@ -69,11 +69,20 @@ without sending the workflow.
 - `oa write prepare ...` builds the agent task packet. It combines workflow
   evidence with `write_preflight`, returns sanitized next steps, and is the
   preferred command before asking the user for production confirmation.
-- `oa write execute ... --confirm` contacts the daemon, sends a
-  `seeyon_write_execute` browser task, opens the source detail page in an
-  inactive tab, verifies the target `affairId`, writes the opinion into
-  `content_deal_comment`, invokes the page's own `dealSubmitFunc()` submit
-  function, and relies on a follow-up pending-list check for business success.
+- `oa write execute ... --confirm` contacts the daemon, loads a versioned local
+  page script such as `seeyon.continue_submit.v1`, sends a `seeyon_write_execute`
+  browser task, and opens the source detail page in an inactive tab. The Chrome
+  extension is the stable runner: it waits for the page, injects the daemon-sent
+  script source, collects the script result/outcome, and closes the tab. The
+  script verifies the target `affairId`, writes the opinion into
+  `content_deal_comment`, chooses the page's own submit entry such as
+  `dealSubmitFunc()` for inform nodes, and relies on a follow-up pending-list
+  check for business success.
+- The extension also exposes a generic `page_script_execute` bridge task for
+  future governed browser actions. New OA workflow action logic should live in
+  versioned project scripts and be dispatched by the daemon; the extension
+  should only need reloads when the bridge protocol, Chrome permissions, or
+  generic runner behavior changes.
 - Without `--confirm`, `oa write execute ...` returns `ok=false` and records only
   a blocked local plan.
 - `oa pending submit ... --confirm` is the governed daemon command for repeated

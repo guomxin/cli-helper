@@ -278,6 +278,71 @@ if (!pageSandbox.__bscliContinueSubmitLast || pageSandbox.__bscliContinueSubmitL
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_background_runs_page_script_source_in_page_world(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const backgroundSandbox = {
+  console,
+  URL,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      onActivated: { addListener: () => undefined },
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      get: (tabId, callback) => callback({ id: tabId, status: "complete" }),
+    },
+    scripting: { executeScript: async () => [{ result: {} }] },
+  },
+};
+vm.createContext(backgroundSandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), backgroundSandbox);
+
+const pageSandbox = {
+  console,
+  document: { title: "OA Detail" },
+  location: { href: "http://oa.example.test/detail" },
+};
+pageSandbox.window = pageSandbox;
+pageSandbox.payload = {
+  script_name: "probe.script",
+  script_source: `
+function bscliPageScript(payload) {
+  window.__bscliProbeResult = { value: payload.value, title: document.title };
+  return { ok: true, value: payload.value, title: document.title };
+}
+`,
+  script_payload: { value: "from-daemon" },
+};
+vm.createContext(pageSandbox);
+const source = backgroundSandbox.runPageScriptSource.toString();
+const result = vm.runInContext(`(${source})(payload)`, pageSandbox);
+if (!result.ok || result.value !== "from-daemon" || result.title !== "OA Detail") {
+  throw new Error(`unexpected page script result: ${JSON.stringify(result)}`);
+}
+if (!pageSandbox.__bscliProbeResult || pageSandbox.__bscliProbeResult.value !== "from-daemon") {
+  throw new Error(`page global was not updated: ${JSON.stringify(pageSandbox.__bscliProbeResult)}`);
+}
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_rendered_snapshot_collects_all_frames(self):
         node = shutil.which("node")
         if node is None:
@@ -369,6 +434,16 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         self.assertIn("credentials: \"include\"", background)
         self.assertIn("max_text", background)
 
+    def test_background_contains_page_script_runner(self):
+        background = Path("extension/background.js").read_text(encoding="utf-8")
+
+        self.assertIn("page_script_execute", background)
+        self.assertIn("executePageScriptTask", background)
+        self.assertIn("runPageScriptSource", background)
+        self.assertIn("script_source", background)
+        self.assertIn("bscliPageScript", background)
+        self.assertIn("outcome_key", background)
+
     def test_background_contains_oa_pending_list_collector(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")
 
@@ -397,6 +472,8 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         self.assertIn("BACKGROUND_VERSION", background)
         self.assertIn("extension_version", background)
         self.assertIn("executeSeeyonWrite", background)
+        self.assertIn("runPageScriptSource", background)
+        self.assertIn("script_source", background)
         self.assertIn("runSeeyonContinueSubmit", background)
         self.assertIn("submitClickFunc", background)
         self.assertIn("dealSubmitFunc", background)
