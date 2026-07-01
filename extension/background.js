@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v9-cap4-field-readiness";
+const BACKGROUND_VERSION = "background-v10-inform-submit-readback";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -288,6 +288,34 @@ async function executeSeeyonWrite(payload, reportEvent = async () => {}) {
     });
     await new Promise((resolve) => setTimeout(resolve, Number(payload.after_submit_wait_ms || 8000)));
     await reportEvent("after_submit_wait_complete", { tab_id: tab.id || null });
+    let submitOutcomeFailure = "";
+    try {
+      const [outcomeInjection] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: "MAIN",
+        func: collectSeeyonSubmitOutcome,
+      });
+      const submitOutcome = outcomeInjection?.result || null;
+      if (submitOutcome) {
+        injection.result.submit_outcome = submitOutcome;
+        await reportEvent("submit_outcome_collected", {
+          ok: submitOutcome.ok === true,
+          submit_entry: submitOutcome.submit_entry || "",
+          submit_entry_reason: submitOutcome.submit_entry_reason || "",
+          error: submitOutcome.error || "",
+        });
+        if (submitOutcome.ok === false) {
+          submitOutcomeFailure = submitOutcome.error || "Seeyon submit function reported failure";
+        }
+      }
+    } catch (error) {
+      await reportEvent("submit_outcome_unavailable", {
+        error: String(error && error.message ? error.message : error).slice(0, 1000),
+      });
+    }
+    if (submitOutcomeFailure) {
+      throw new Error(submitOutcomeFailure);
+    }
     return injection.result;
   } finally {
     if (tab.id && payload.keep_tab !== true) {
@@ -366,6 +394,43 @@ function collectSeeyonWriteBusinessFormReadiness() {
   };
 }
 
+function collectSeeyonSubmitOutcome() {
+  return window.__bscliContinueSubmitLast || null;
+}
+
+function collectSeeyonSubmitPageSignals() {
+  const subject =
+    document.querySelector("#subject")?.value ||
+    document.querySelector("#title")?.value ||
+    document.title ||
+    "";
+  return {
+    node_policy: String(window.nodePolicy || ""),
+    node_policy_name: String(window.nodePolicyName || ""),
+    has_execute_content_load:
+      typeof window._hasExecuteContentLoad === "undefined" ? null : window._hasExecuteContentLoad === true,
+    subject: String(subject || "").slice(0, 300),
+  };
+}
+
+function chooseSeeyonSubmitEntry(entries, pageSignals = {}) {
+  const nodePolicy = String(pageSignals.node_policy || "").toLowerCase();
+  const nodePolicyName = String(pageSignals.node_policy_name || "");
+  if ((nodePolicy === "inform" || nodePolicyName.includes("\u77e5\u4f1a")) && typeof entries.dealSubmitFunc === "function") {
+    return { name: "dealSubmitFunc", fn: entries.dealSubmitFunc, reason: "inform_node_direct_deal_submit" };
+  }
+  if (typeof entries.submitClickFunc === "function") {
+    return { name: "submitClickFunc", fn: entries.submitClickFunc, reason: "default_submit_click" };
+  }
+  if (typeof entries.dealSubmitFunc === "function") {
+    return { name: "dealSubmitFunc", fn: entries.dealSubmitFunc, reason: "fallback_deal_submit" };
+  }
+  if (typeof entries.contentCallbackDealSubmit === "function") {
+    return { name: "$.content.callback.dealSubmit", fn: entries.contentCallbackDealSubmit, reason: "fallback_content_callback" };
+  }
+  return null;
+}
+
 async function executeSeeyonLaunchSaveDraft(payload) {
   if (payload.confirm !== true) {
     throw new Error("confirm=true is required for seeyon_launch_save_draft");
@@ -423,14 +488,15 @@ function runSeeyonContinueSubmit(payload) {
   if (String(pageAffairId) !== expectedAffairId) {
     throw new Error(`affair_id mismatch: page=${pageAffairId || "(empty)"} expected=${expectedAffairId}`);
   }
-  const submitEntry =
-    typeof window.submitClickFunc === "function"
-      ? { name: "submitClickFunc", fn: window.submitClickFunc }
-      : typeof window.dealSubmitFunc === "function"
-        ? { name: "dealSubmitFunc", fn: window.dealSubmitFunc }
-        : window.$ && window.$.content && window.$.content.callback && typeof window.$.content.callback.dealSubmit === "function"
-          ? { name: "$.content.callback.dealSubmit", fn: window.$.content.callback.dealSubmit }
-          : null;
+  const pageSignals = collectSeeyonSubmitPageSignals();
+  const submitEntry = chooseSeeyonSubmitEntry(
+    {
+      submitClickFunc: window.submitClickFunc,
+      dealSubmitFunc: window.dealSubmitFunc,
+      contentCallbackDealSubmit: window.$?.content?.callback?.dealSubmit,
+    },
+    pageSignals,
+  );
   if (!submitEntry) {
     throw new Error("Seeyon submit function submitClickFunc/dealSubmitFunc was not found on the detail page");
   }
@@ -616,11 +682,20 @@ function runSeeyonContinueSubmit(payload) {
         url: location.href,
         title: document.title,
         submit_entry: submitEntry.name,
+        submit_entry_reason: submitEntry.reason,
+        page_signals: pageSignals,
         business_form: businessForm,
         dialogs,
       };
       try {
-        submitEntry.fn.call(window);
+        const returned = submitEntry.fn.call(window);
+        outcome.returned_promise = Boolean(returned && typeof returned.then === "function");
+        if (outcome.returned_promise) {
+          returned.catch((error) => {
+            outcome.ok = false;
+            outcome.error = String(error && error.message ? error.message : error);
+          });
+        }
       } catch (error) {
         outcome.ok = false;
         outcome.error = String(error && error.message ? error.message : error);
@@ -644,6 +719,8 @@ function runSeeyonContinueSubmit(payload) {
       attitude,
       business_form: businessForm,
       submit_entry: submitEntry.name,
+      submit_entry_reason: submitEntry.reason,
+      page_signals: pageSignals,
       dialogs: [],
     };
   } catch (error) {

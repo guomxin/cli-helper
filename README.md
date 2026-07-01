@@ -365,7 +365,7 @@ python -m bscli.cli.main --home .bscli oa write dry-run --affair-id <id> --actio
 python -m bscli.cli.main --home .bscli oa write preflight --affair-id <id> --action ContinueSubmit --opinion "agree"
 python -m bscli.cli.main --home .bscli oa write prepare --affair-id <id> --action ContinueSubmit --opinion "agree" --text-limit 800
 python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --confirm
-python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --business-form-wait-ms 30000 --script-timeout-ms 30000 --confirm
+python -m bscli.cli.main --home .bscli oa write execute --affair-id <id> --action ContinueSubmit --opinion "agree" --business-form-wait-ms 30000 --script-timeout-ms 30000 --after-submit-wait-ms 20000 --confirm
 python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template_id> --field content_coll="Draft note" --settle-ms 0
 python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
 python -m bscli.cli.main --home .bscli oa audit writes list --limit 10
@@ -378,6 +378,10 @@ python -m bscli.cli.main --home .bscli oa write smoke --timeout 60
 `actions` is the local write-action registry. It is the first place to check
 before promoting or adding an action because it centralizes labels, risk,
 action type, promotion status, and verification method.
+For inform/read-notice pages such as weekly-report notifications, use
+`ContinueSubmit` with an explicit `--after-submit-wait-ms` when the page is slow
+to disappear from pending. `Archive` / post-processing archive remains
+dry-run-only because the OA page may require a document archive destination.
 `capabilities` is the read-only inventory command for agents. It reads pending
 items and reports each item's `category`, `affair_id`, current state,
 `supported_write_actions`, and `verification_method`. Workflow submit actions

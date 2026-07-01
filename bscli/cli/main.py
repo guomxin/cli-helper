@@ -550,6 +550,7 @@ def _build_oa_parser(oa_sub) -> None:
             write_cmd.add_argument("--confirm", action="store_true")
             write_cmd.add_argument("--script-timeout-ms", type=int, dest="script_timeout_ms")
             write_cmd.add_argument("--business-form-wait-ms", type=int, dest="business_form_wait_ms")
+            write_cmd.add_argument("--after-submit-wait-ms", type=int, dest="after_submit_wait_ms")
             _add_daemon_options(write_cmd)
         _add_output_options(write_cmd)
 
@@ -1641,6 +1642,8 @@ def handle_oa_write(args: argparse.Namespace, home: Path) -> int:
                 command_args["script_timeout_ms"] = args.script_timeout_ms
             if getattr(args, "business_form_wait_ms", None) is not None:
                 command_args["business_form_wait_ms"] = args.business_form_wait_ms
+            if getattr(args, "after_submit_wait_ms", None) is not None:
+                command_args["after_submit_wait_ms"] = args.after_submit_wait_ms
             response = run_oa_daemon_command(
                 args,
                 "write_execute",

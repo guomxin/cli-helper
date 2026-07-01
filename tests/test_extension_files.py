@@ -88,6 +88,59 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_background_prefers_direct_deal_submit_for_inform_nodes(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const sandbox = {
+  console,
+  URL,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      onActivated: { addListener: () => undefined },
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      get: (tabId, callback) => callback({ id: tabId, status: "complete" }),
+    },
+    scripting: { executeScript: async () => [{ result: {} }] },
+  },
+};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
+
+const entries = {
+  submitClickFunc: () => "submit",
+  dealSubmitFunc: () => "deal",
+  contentCallbackDealSubmit: () => "callback",
+};
+const informEntry = sandbox.chooseSeeyonSubmitEntry(entries, { node_policy: "inform", node_policy_name: "知会" });
+if (informEntry.name !== "dealSubmitFunc" || informEntry.reason !== "inform_node_direct_deal_submit") {
+  throw new Error(`expected inform node to use dealSubmitFunc, got ${JSON.stringify(informEntry)}`);
+}
+const normalEntry = sandbox.chooseSeeyonSubmitEntry(entries, { node_policy: "collaboration" });
+if (normalEntry.name !== "submitClickFunc" || normalEntry.reason !== "default_submit_click") {
+  throw new Error(`expected normal node to use submitClickFunc, got ${JSON.stringify(normalEntry)}`);
+}
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_rendered_snapshot_collects_all_frames(self):
         node = shutil.which("node")
         if node is None:

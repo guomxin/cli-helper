@@ -271,6 +271,7 @@ class ToolManifestTests(unittest.TestCase):
             ["affair_id", "action", "confirm"],
         )
         self.assertEqual(tool["input_schema"]["properties"]["confirm"]["type"], "boolean")
+        self.assertEqual(tool["input_schema"]["properties"]["after_submit_wait_ms"]["type"], "integer")
         self.assertEqual(tool["metadata"]["access"], "write")
         self.assertEqual(tool["metadata"]["risk"], "high")
         self.assertTrue(tool["metadata"]["requires_confirmation"])

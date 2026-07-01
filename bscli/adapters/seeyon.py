@@ -1259,6 +1259,9 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
                 "action": {"type": "string", "required": True},
                 "opinion": {"type": "string"},
                 "source_url": {"type": "string"},
+                "script_timeout_ms": {"type": "integer"},
+                "business_form_wait_ms": {"type": "integer"},
+                "after_submit_wait_ms": {"type": "integer"},
                 "confirm": {
                     "type": "boolean",
                     "required": True,

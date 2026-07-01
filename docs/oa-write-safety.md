@@ -290,3 +290,11 @@ launch drafts are delivered through the Chrome extension bridge and verified by
 executions are delivered through the Chrome extension bridge and verified by
 pending disappearance. Confirmed meeting replies are delivered through
 `meetingAjaxManager.reply` and verified by `meetingView.myReply.feedbackFlag`.
+
+Weekly-report inform/read-notice pages are still executed as `ContinueSubmit`.
+The extension prefers the page's direct `dealSubmitFunc` on `nodePolicy=inform`
+pages and reports the selected submit entry plus any immediate submit outcome.
+Use `after_submit_wait_ms` for slow pages before the daemon performs pending
+disappearance verification. `Archive` / post-processing archive remains
+dry-run-only because the OA page can require a document archive destination
+before it can submit safely.

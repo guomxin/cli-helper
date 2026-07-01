@@ -2719,6 +2719,7 @@ class DaemonState:
                     "confirm": True,
                     "script_timeout_ms": int(args.get("script_timeout_ms") if args.get("script_timeout_ms") is not None else 20000),
                     "business_form_wait_ms": int(args.get("business_form_wait_ms") if args.get("business_form_wait_ms") is not None else 30000),
+                    "after_submit_wait_ms": int(args.get("after_submit_wait_ms") if args.get("after_submit_wait_ms") is not None else 12000),
                 },
                 target_client_id=target_client_id,
             )
