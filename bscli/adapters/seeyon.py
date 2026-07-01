@@ -493,6 +493,54 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="matter_execute",
+            description="Execute a confirmed business-level Seeyon OA matter intent by routing to the governed workflow or meeting write path.",
+            access="write",
+            strategy="human_gate",
+            risk="high",
+            requires_confirmation=True,
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "description": "Pending workflow affair id to execute."},
+                "keyword": {"type": "string", "description": "Keyword used to resolve one pending matter."},
+                "meeting_id": {"type": "string", "description": "Meeting id for meeting reply intents."},
+                "source_url": {"type": "string", "description": "Direct workflow or meeting detail URL."},
+                "proxy_id": {"type": "string"},
+                "intent": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Business intent: approve, archive, join, not_join, or pending.",
+                },
+                "opinion": {"type": "string"},
+                "feedback": {"type": "string", "description": "Meeting reply feedback; falls back to opinion when omitted."},
+                "limit": {"type": "integer", "description": "Maximum pending items to consider when resolving by keyword. Defaults to one."},
+                "text_limit": {"type": "integer"},
+                "verify_wait": {"type": "number", "description": "Seconds to wait before meeting reply readback verification."},
+                "business_form_wait_ms": {"type": "integer"},
+                "script_timeout_ms": {"type": "integer"},
+                "after_submit_wait_ms": {"type": "integer"},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm intent before production execution.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "route": {"type": "string"},
+                    "submitted": {"type": "boolean"},
+                    "verification": {"type": "object"},
+                    "execute_result": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.submitted"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="launch_inspect",
             description="Open a Seeyon OA template launch page and inspect fields, buttons, and write hints without submitting.",
             access="read",

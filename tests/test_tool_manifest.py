@@ -28,6 +28,7 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__history_sections", tools)
         self.assertIn("oa__matter_profile", tools)
         self.assertIn("oa__matter_inspect", tools)
+        self.assertIn("oa__matter_execute", tools)
         self.assertIn("oa__inbox_analyze", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__workflow_opinions", tools)
@@ -177,6 +178,12 @@ class ToolManifestTests(unittest.TestCase):
         self.assertEqual(matter_inspect["metadata"]["access"], "read")
         self.assertFalse(matter_inspect["metadata"]["requires_confirmation"])
         self.assertEqual(matter_inspect["input_schema"]["properties"]["with_launch"]["type"], "boolean")
+
+        matter_execute = tools["oa__matter_execute"]
+        self.assertEqual(matter_execute["metadata"]["access"], "write")
+        self.assertTrue(matter_execute["metadata"]["requires_confirmation"])
+        self.assertIn("confirm", matter_execute["input_schema"]["required"])
+        self.assertEqual(matter_execute["input_schema"]["properties"]["intent"]["type"], "string")
 
         doctor = tools["oa__doctor"]
         self.assertEqual(doctor["input_schema"]["required"], [])

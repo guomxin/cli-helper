@@ -83,6 +83,17 @@ WORKFLOW_READ_COMMANDS = {
     "workflow_timeline",
 }
 
+MEETING_MATTER_INTENTS = {
+    "join": "join",
+    "attend": "join",
+    "accept": "join",
+    "not_join": "not_join",
+    "decline": "not_join",
+    "reject": "not_join",
+    "pending": "pending",
+    "tentative": "pending",
+}
+
 HISTORY_READ_COMMANDS = {
     "history_sections",
     "history_list",
@@ -280,6 +291,11 @@ class DaemonState:
             )
         if system == "oa" and command == "matter_preflight":
             return self._run_oa_matter_preflight_command(
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "matter_execute":
+            return self._run_oa_matter_execute_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -1334,6 +1350,218 @@ class DaemonState:
                 "result": result,
             },
         )
+
+    def _run_oa_matter_execute_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if args.get("confirm") is not True:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa matter execute requires confirm=true",
+                    "result": {
+                        "schema_version": "bscli.oa_matter_execute_result.v1",
+                        "route": "not_dispatched",
+                        "submitted": False,
+                    },
+                },
+            )
+
+        intent = str(args.get("intent") or "").strip().lower().replace("-", "_")
+        if intent in MEETING_MATTER_INTENTS:
+            return self._run_oa_matter_execute_meeting_command(
+                args,
+                attitude=MEETING_MATTER_INTENTS[intent],
+                timeout_seconds=timeout_seconds,
+            )
+        return self._run_oa_matter_execute_workflow_command(args, timeout_seconds=timeout_seconds)
+
+    def _run_oa_matter_execute_workflow_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if not str(args.get("id") or "").strip() and not str(args.get("keyword") or "").strip():
+            return DaemonResponse(
+                400,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "oa matter execute workflow route requires id or keyword",
+                    "result": {
+                        "schema_version": "bscli.oa_matter_execute_result.v1",
+                        "route": "workflow_write_execute",
+                        "submitted": False,
+                    },
+                },
+            )
+
+        preflight_args: dict[str, Any] = {
+            "intent": str(args.get("intent") or ""),
+            "opinion": str(args.get("opinion") or ""),
+        }
+        for key in ("id", "keyword", "limit", "text_limit"):
+            if args.get(key) is not None:
+                preflight_args[key] = args[key]
+        preflight_response = self._run_nested_oa_command("matter_preflight", preflight_args, timeout_seconds)
+        if preflight_response.status != 200 or preflight_response.body.get("ok") is False:
+            return preflight_response
+        preflight = preflight_response.body.get("result") if isinstance(preflight_response.body, dict) else {}
+        if not isinstance(preflight, dict):
+            preflight = {}
+        decision = preflight.get("decision") if isinstance(preflight.get("decision"), dict) else {}
+        binding = preflight.get("binding") if isinstance(preflight.get("binding"), dict) else {}
+        if decision.get("status") != "ready_for_execute" or decision.get("execute_allowed") is not True or binding.get("execute_allowed") is not True:
+            status = str(decision.get("status") or "blocked")
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": f"oa matter execute blocked by preflight: {status}",
+                    "result": preflight,
+                },
+            )
+
+        target = preflight.get("target") if isinstance(preflight.get("target"), dict) else {}
+        affair_id = str(target.get("affair_id") or "").strip()
+        action = str(binding.get("action") or "").strip()
+        if not affair_id or not action:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": "oa matter execute preflight did not return an executable affair/action binding",
+                    "result": preflight,
+                },
+            )
+
+        write_args: dict[str, Any] = {
+            "affair_id": affair_id,
+            "action": action,
+            "opinion": str(args.get("opinion") or ""),
+            "source_url": str(target.get("source_url") or args.get("source_url") or ""),
+            "confirm": True,
+        }
+        for key in ("business_form_wait_ms", "script_timeout_ms", "after_submit_wait_ms"):
+            if args.get(key) is not None:
+                write_args[key] = args[key]
+        execute_response = self._run_nested_oa_command("write_execute", write_args, timeout_seconds)
+        return self._wrap_oa_matter_execute_response(
+            "workflow_write_execute",
+            execute_response,
+            preflight=preflight,
+        )
+
+    def _run_oa_matter_execute_meeting_command(
+        self,
+        args: dict[str, Any],
+        *,
+        attitude: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        meeting_args: dict[str, Any] = {}
+        for key in ("id", "meeting_id", "source_url", "proxy_id"):
+            if args.get(key):
+                meeting_args[key] = args[key]
+        if not any(meeting_args.get(key) for key in ("id", "meeting_id", "source_url")):
+            keyword = str(args.get("keyword") or "").strip()
+            if not keyword:
+                return DaemonResponse(
+                    400,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "oa matter execute meeting route requires id, meeting_id, source_url, or keyword",
+                        "result": {
+                            "schema_version": "bscli.oa_matter_execute_result.v1",
+                            "route": "meeting_reply_execute",
+                            "submitted": False,
+                        },
+                    },
+                )
+            list_args: dict[str, Any] = {"type": "pending", "keyword": keyword}
+            list_args["limit"] = args["limit"] if args.get("limit") is not None else 1
+            list_response = self._run_nested_oa_command("workflow_list", list_args, timeout_seconds)
+            if list_response.status != 200 or list_response.body.get("ok") is False:
+                return list_response
+            list_result = list_response.body.get("result") if isinstance(list_response.body, dict) else {}
+            if not isinstance(list_result, dict):
+                list_result = {}
+            items = self._workflow_items_from_result(list_result)
+            if not items:
+                return DaemonResponse(
+                    404,
+                    {
+                        "ok": False,
+                        "requires_confirmation": True,
+                        "confirmed": True,
+                        "error": "no pending meeting matter matched the execute target",
+                        "result": {
+                            "schema_version": "bscli.oa_matter_execute_result.v1",
+                            "route": "meeting_reply_execute",
+                            "query": list_args,
+                            "submitted": False,
+                        },
+                    },
+                )
+            item = items[0] if isinstance(items[0], dict) else {}
+            if item.get("affair_id"):
+                meeting_args["id"] = item["affair_id"]
+            if item.get("href"):
+                meeting_args["source_url"] = item["href"]
+        meeting_args["attitude"] = attitude
+        meeting_args["feedback"] = str(args.get("feedback") or args.get("opinion") or "")
+        meeting_args["confirm"] = True
+        if args.get("verify_wait") is not None:
+            meeting_args["verify_wait"] = args["verify_wait"]
+        execute_response = self._run_nested_oa_command("meeting_reply_execute", meeting_args, timeout_seconds)
+        return self._wrap_oa_matter_execute_response("meeting_reply_execute", execute_response)
+
+    def _wrap_oa_matter_execute_response(
+        self,
+        route: str,
+        execute_response: DaemonResponse,
+        *,
+        preflight: dict[str, Any] | None = None,
+    ) -> DaemonResponse:
+        body = execute_response.body if isinstance(execute_response.body, dict) else {}
+        nested_result = body.get("result") if isinstance(body.get("result"), dict) else {}
+        ok = execute_response.status == 200 and body.get("ok") is not False
+        result: dict[str, Any] = {
+            "schema_version": "bscli.oa_matter_execute_result.v1",
+            "route": route,
+            "submitted": bool(nested_result.get("submitted")),
+            "execute_result": nested_result,
+        }
+        verification = nested_result.get("verification") if isinstance(nested_result.get("verification"), dict) else None
+        if verification is not None:
+            result["verification"] = verification
+        if preflight is not None:
+            result["preflight"] = preflight
+        wrapped: dict[str, Any] = {
+            "ok": ok,
+            "requires_confirmation": True,
+            "confirmed": True,
+            "result": result,
+        }
+        if body.get("task_id") is not None:
+            wrapped["task_id"] = body["task_id"]
+        if not ok:
+            wrapped["error"] = body.get("error") or f"oa matter execute nested command failed: {route}"
+        return DaemonResponse(execute_response.status, wrapped)
 
     def _run_oa_launch_inspect_command(
         self,
@@ -2438,7 +2666,7 @@ class DaemonState:
                 "executable": ["workflow.submit", "meeting.reply", "workflow.launch.save_draft"],
                 "dry_run_only": ["workflow.archive"],
                 "blocked": ["workflow.delete", "workflow.revoke", "workflow.return", "workflow.upload"],
-                "human_gate_commands": ["write_execute", "pending_submit", "meeting_reply_execute", "launch_save_draft"],
+                "human_gate_commands": ["write_execute", "matter_execute", "pending_submit", "meeting_reply_execute", "launch_save_draft"],
                 "policy": "write actions require dry-run/precheck, explicit confirmation, read-back verification, and sanitized audit",
             },
             "discovered": discovered,
@@ -3750,9 +3978,9 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"template_match", "matter_profile", "matter_matrix", "matter_inspect", "launch_inspect", "launch_dry_run"}:
+        if system == "oa" and command in {"template_match", "matter_profile", "matter_matrix", "matter_inspect", "matter_preflight", "launch_inspect", "launch_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command == "launch_save_draft":
+        if system == "oa" and command in {"launch_save_draft", "matter_execute"}:
             return {"access": "write", "strategy": "human_gate"}
         if system == "oa" and command == "write_discover":
             return {"access": "read", "strategy": "daemon_api"}

@@ -28,6 +28,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("oa__matter_profile", tools)
         self.assertIn("oa__matter_inspect", tools)
         self.assertIn("oa__matter_preflight", tools)
+        self.assertIn("oa__matter_execute", tools)
         self.assertIn("oa__template_match", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__launch_dry_run", tools)
@@ -37,6 +38,7 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(tools["oa__matter_profile"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__matter_inspect"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__matter_preflight"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__matter_execute"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(tools["oa__launch_dry_run"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__launch_save_draft"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(
@@ -956,6 +958,43 @@ class McpServerTests(unittest.TestCase):
             [("oa", "matter_preflight", {"keyword": "周报", "intent": "approve", "opinion": "已阅", "limit": 1})],
         )
         self.assertEqual(result["result"]["structuredContent"]["binding"]["action"], "ContinueSubmit")
+
+    def test_call_oa_matter_execute_requires_confirm_and_calls_daemon(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {
+                "schema_version": "bscli.oa_matter_execute_result.v1",
+                "route": "workflow_write_execute",
+                "submitted": True,
+            }
+
+        server = self._server(runner=runner)
+
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 25,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__matter_execute",
+                    "arguments": {
+                        "keyword": "weekly",
+                        "intent": "approve",
+                        "opinion": "read",
+                        "limit": 1,
+                        "confirm": True,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            calls,
+            [("oa", "matter_execute", {"keyword": "weekly", "intent": "approve", "opinion": "read", "limit": 1, "confirm": True})],
+        )
+        self.assertTrue(result["result"]["structuredContent"]["submitted"])
 
     def _server(self, runner=None, discovered_apis=None):
         registry = CommandRegistry()

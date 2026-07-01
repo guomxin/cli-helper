@@ -2123,6 +2123,7 @@ class DaemonTests(unittest.TestCase):
             self.assertIn({"name": "workflow.inspect", "command": "workflow_inspect", "risk": "low"}, result["read"])
             self.assertIn("workflow.submit", result["write"]["executable"])
             self.assertIn("workflow.archive", result["write"]["dry_run_only"])
+            self.assertIn("matter_execute", result["write"]["human_gate_commands"])
             self.assertEqual(result["discovered"][0]["name"], "template-section")
 
     def test_run_workflow_inspect_resolves_detail_and_summarizes_counts(self):
@@ -4667,6 +4668,237 @@ class DaemonTests(unittest.TestCase):
             self.assertFalse(result["execution_contract"]["will_execute"])
             self.assertNotIn("已阅", json.dumps(result, ensure_ascii=False))
             self.assertEqual(state.bridge.pending_tasks, [])
+
+    def test_run_oa_matter_execute_requires_confirm(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            state._run_nested_oa_command = lambda command, args, timeout_seconds: calls.append((command, args))  # type: ignore[assignment]
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_execute",
+                    "args": {"keyword": "weekly", "intent": "approve", "opinion": "read"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertFalse(response.body["ok"])
+            self.assertTrue(response.body["requires_confirmation"])
+            self.assertEqual(calls, [])
+
+    def test_run_oa_matter_execute_uses_preflight_then_workflow_execute(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                if command == "matter_preflight":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "schema_version": "bscli.oa_matter_intent_preflight.v1",
+                                "scene": "received_pending",
+                                "target": {
+                                    "affair_id": "affair-1",
+                                    "title": "Weekly report",
+                                    "source_url": "http://oa.example.test/detail?affairId=affair-1",
+                                    "category": "collaboration",
+                                },
+                                "intent": {"code": "approve", "opinion_length": 4},
+                                "binding": {
+                                    "action": "ContinueSubmit",
+                                    "action_type": "workflow.submit",
+                                    "execute_allowed": True,
+                                },
+                                "decision": {
+                                    "status": "ready_for_execute",
+                                    "execute_allowed": True,
+                                    "requires_confirmation": True,
+                                },
+                            },
+                        },
+                    )
+                if command == "write_execute":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "submitted": True,
+                                "verification": {"status": "disappeared", "verified": True},
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_execute",
+                    "args": {
+                        "keyword": "weekly",
+                        "intent": "approve",
+                        "opinion": "read",
+                        "limit": 1,
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_execute_result.v1")
+            self.assertEqual(result["route"], "workflow_write_execute")
+            self.assertTrue(result["submitted"])
+            self.assertEqual([call[0] for call in calls], ["matter_preflight", "write_execute"])
+            self.assertEqual(
+                calls[0][1],
+                {"intent": "approve", "opinion": "read", "keyword": "weekly", "limit": 1},
+            )
+            self.assertEqual(calls[1][1]["affair_id"], "affair-1")
+            self.assertEqual(calls[1][1]["action"], "ContinueSubmit")
+            self.assertEqual(calls[1][1]["opinion"], "read")
+            self.assertEqual(calls[1][1]["source_url"], "http://oa.example.test/detail?affairId=affair-1")
+            self.assertTrue(calls[1][1]["confirm"])
+
+    def test_run_oa_matter_execute_stops_when_preflight_is_not_executable(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                if command == "matter_preflight":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "schema_version": "bscli.oa_matter_intent_preflight.v1",
+                                "scene": "received_pending",
+                                "target": {"affair_id": "affair-1", "title": "Archive target"},
+                                "intent": {"code": "archive"},
+                                "binding": {"action": "Archive", "execute_allowed": False},
+                                "decision": {
+                                    "status": "dry_run_only",
+                                    "execute_allowed": False,
+                                    "requires_confirmation": True,
+                                },
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_execute",
+                    "args": {
+                        "id": "affair-1",
+                        "intent": "archive",
+                        "opinion": "file it",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertFalse(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["matter_preflight"])
+            self.assertEqual(response.body["result"]["decision"]["status"], "dry_run_only")
+
+    def test_run_oa_matter_execute_routes_meeting_intent_to_meeting_reply(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                if command == "workflow_list":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "type": "pending",
+                                "items": [
+                                    {
+                                        "title": "Project meeting",
+                                        "affair_id": "meeting-affair-1",
+                                        "href": "http://oa.example.test/meeting.do?meetingId=meeting-1",
+                                    }
+                                ],
+                            },
+                        },
+                    )
+                if command == "meeting_reply_execute":
+                    return DaemonResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "result": {
+                                "submitted": True,
+                                "verification": {"status": "matched", "verified": True},
+                            },
+                        },
+                    )
+                raise AssertionError(command)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_execute",
+                    "args": {
+                        "keyword": "meeting",
+                        "intent": "join",
+                        "feedback": "will attend",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            self.assertEqual(result["schema_version"], "bscli.oa_matter_execute_result.v1")
+            self.assertEqual(result["route"], "meeting_reply_execute")
+            self.assertTrue(result["submitted"])
+            self.assertEqual([call[0] for call in calls], ["workflow_list", "meeting_reply_execute"])
+            self.assertEqual(calls[0][1], {"type": "pending", "keyword": "meeting", "limit": 1})
+            self.assertEqual(
+                calls[1][1],
+                {
+                    "id": "meeting-affair-1",
+                    "source_url": "http://oa.example.test/meeting.do?meetingId=meeting-1",
+                    "attitude": "join",
+                    "feedback": "will attend",
+                    "confirm": True,
+                },
+            )
 
     def test_run_oa_write_dry_run_adds_promotion_evidence_for_archive(self):
         with TemporaryDirectory() as tmp:

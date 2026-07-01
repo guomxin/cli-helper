@@ -45,6 +45,12 @@ without sending the workflow.
   binding, and returns `bscli.oa_matter_intent_preflight.v1`. It does not queue
   browser tasks, send requests, or call write endpoints. Opinion text is not
   echoed; only the opinion length is reported.
+- `oa matter execute ... --confirm` is the confirmed business-intent execution
+  layer. For ordinary received workflows it reruns `matter_preflight` and only
+  dispatches the governed `write_execute` path when the preflight decision is
+  `ready_for_execute`. For meeting intents (`join`, `not_join`, `pending`) it
+  resolves the pending meeting and delegates to `meeting_reply_execute`. It does
+  not promote dry-run-only actions such as `Archive`.
 - `oa launch dry-run ...` is the launch-page save-draft precheck. It opens the
   launch page, validates requested field names/ids/labels against writable
   fields, verifies that a `saveDraft` / "保存待发" control exists, records a
@@ -281,6 +287,7 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__matter_matrix`
 - `oa__matter_inspect`
 - `oa__matter_preflight`
+- `oa__matter_execute`
 - `oa__write_capabilities`
 - `oa__write_discover`
 - `oa__write_draft`
@@ -298,11 +305,12 @@ The safe planning commands are registered in the normal BSCLI command registry:
 `write_dry_run`, `write_preflight`, `write_prepare`, and
 `meeting_reply_dry_run` are exposed as read/low-risk daemon tools because they
 do not mutate OA state. `launch_save_draft`, `write_execute`, `pending_submit`,
-and `meeting_reply_execute` are exposed as write/human-gate tools and require
-`confirm` in their input schema before they can perform a write. Confirmed
-launch drafts are delivered through the Chrome extension bridge and verified by
-`draft_save_scheduled_ack` with `submitted_count=0`. Confirmed `ContinueSubmit`
-executions are delivered through the Chrome extension bridge and verified by
+`matter_execute`, and `meeting_reply_execute` are exposed as write/human-gate
+tools and require `confirm` in their input schema before they can perform a
+write. Confirmed launch drafts are delivered through the Chrome extension
+bridge and verified by `draft_save_scheduled_ack` with `submitted_count=0`.
+Confirmed `ContinueSubmit` executions are delivered through the Chrome
+extension bridge and verified by
 pending disappearance. Confirmed meeting replies are delivered through
 `meetingAjaxManager.reply` and verified by `meetingView.myReply.feedbackFlag`.
 

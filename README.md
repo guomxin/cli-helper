@@ -235,6 +235,8 @@ python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
 python -m bscli.cli.main --home .bscli oa matter preflight --keyword "weekly" --intent approve --opinion "read"
 python -m bscli.cli.main --home .bscli oa matter preflight --id <pending_affair_id> --intent archive --opinion "read"
+python -m bscli.cli.main --home .bscli oa matter execute --keyword "weekly" --intent approve --opinion "read" --confirm
+python -m bscli.cli.main --home .bscli oa matter execute --keyword "meeting" --intent join --feedback "will attend" --confirm
 ```
 
 `oa history` reads historical tabs such as sent, done, and tracked from the OA
@@ -265,6 +267,13 @@ workflow evidence, maps the intent to an internal binding such as
 `bscli.oa_matter_intent_preflight.v1` packet. It does not execute writes,
 enqueue extension tasks, or echo the opinion text; `Archive` remains
 dry-run-only until separately promoted.
+`oa matter execute` is the confirmed business-intent execution entry. For
+ordinary received workflows it reruns `matter_preflight`, only proceeds when
+the decision is `ready_for_execute`, then delegates to the governed
+`write_execute` path. For meeting intents (`join`, `not_join`, `pending`) it
+resolves the pending meeting by id, URL, meeting id, or keyword and delegates to
+`meeting_reply_execute`. It still requires `--confirm`; the low-level action
+code is an implementation detail, not something the agent has to choose.
 
 Pending, sent, and template objects:
 
@@ -458,10 +467,11 @@ The same safe planning capabilities are also registered as agent-callable tools:
 `oa__matter_profile`, `oa__matter_inspect`, `oa__launch_dry_run`,
 `oa__launch_save_draft`, `oa__write_discover`, `oa__write_draft`,
 `oa__write_dry_run`, `oa__write_preflight`, `oa__write_prepare`,
-`oa__write_execute`, and `oa__pending_submit`; executable tools require a
-`confirm` argument in their schema before they can perform a write. Agents can
-also call `oa__matter_profile` first to choose a business matter type, then use
-the recommended atomic command.
+`oa__write_execute`, `oa__matter_execute`, and `oa__pending_submit`;
+executable tools require a `confirm` argument in their schema before they can
+perform a write. Agents can also call `oa__matter_profile` first to choose a
+business matter type, then use `oa__matter_preflight` or confirmed
+`oa__matter_execute` for received matters.
 `oa audit writes list` and `oa audit verifications list` summarize local audit
 rows while keeping opinion text redacted; newest rows are shown first. Use
 `show --index N` to inspect one sanitized audit record and `search` to filter by

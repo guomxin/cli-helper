@@ -1142,6 +1142,112 @@ class CliOaTests(unittest.TestCase):
             {"keyword": "周报", "intent": "approve", "opinion": "已阅", "limit": 1},
         )
 
+    def test_oa_matter_execute_requires_confirm_before_daemon_call(self):
+        server, seen_payloads = self._start_daemon({"ok": True})
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "execute",
+                "--keyword",
+                "weekly",
+                "--intent",
+                "approve",
+                "--opinion",
+                "read",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(seen_payloads, [])
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["requires_confirmation"])
+        self.assertEqual(payload["error"], "oa matter execute requires --confirm")
+
+    def test_oa_matter_execute_with_confirm_calls_daemon_with_business_intent(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_execute_result.v1",
+                    "route": "workflow_write_execute",
+                    "submitted": True,
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "execute",
+                "--keyword",
+                "weekly",
+                "--intent",
+                "approve",
+                "--opinion",
+                "read",
+                "--limit",
+                "1",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(seen_payloads[0]["command"], "matter_execute")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"keyword": "weekly", "intent": "approve", "opinion": "read", "limit": 1, "confirm": True},
+        )
+
+    def test_oa_matter_execute_meeting_intent_calls_daemon(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_execute_result.v1",
+                    "route": "meeting_reply_execute",
+                    "submitted": True,
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "execute",
+                "--keyword",
+                "meeting",
+                "--intent",
+                "join",
+                "--feedback",
+                "will attend",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        self.assertEqual(seen_payloads[0]["command"], "matter_execute")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "keyword": "meeting",
+                "intent": "join",
+                "opinion": "",
+                "feedback": "will attend",
+                "limit": 1,
+                "confirm": True,
+            },
+        )
+
     def test_oa_launch_inspect_calls_daemon_with_template_or_url(self):
         server, seen_payloads = self._start_daemon(
             {

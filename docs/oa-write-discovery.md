@@ -52,6 +52,8 @@ python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
 python -m bscli.cli.main --home .bscli oa matter preflight --keyword <pending_keyword> --intent approve
 python -m bscli.cli.main --home .bscli oa matter preflight --id <pending_affair_id> --intent archive
+python -m bscli.cli.main --home .bscli oa matter execute --keyword <pending_keyword> --intent approve --opinion "read" --confirm
+python -m bscli.cli.main --home .bscli oa matter execute --keyword <meeting_keyword> --intent join --feedback "will attend" --confirm
 ```
 
 `oa template match` compares historical clusters with the launchable template
@@ -67,6 +69,11 @@ passed.
 agent-facing commands at the matter/intent level (`approve`, `archive`) while
 reporting the internal binding (`ContinueSubmit`, `Archive`) for governance and
 debugging. It is read-only and does not promote any action by itself.
+`oa matter execute` is the confirmed counterpart. It keeps the same
+matter/intent surface, then routes ordinary approvals through the governed
+`write_execute` implementation and meeting replies through
+`meeting_reply_execute`. Keyword resolution defaults to one pending item so a
+single business command does not silently become a batch operation.
 
 Layer 3, launch-page inspection and write discovery:
 

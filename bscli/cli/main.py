@@ -253,6 +253,25 @@ def _build_oa_parser(oa_sub) -> None:
     matter_preflight.add_argument("--text-limit", type=int, dest="text_limit")
     _add_daemon_options(matter_preflight)
     _add_output_options(matter_preflight)
+    matter_execute = matter_sub.add_parser("execute")
+    matter_execute.set_defaults(oa_command="matter_execute")
+    matter_execute_target = matter_execute.add_mutually_exclusive_group(required=True)
+    matter_execute_target.add_argument("--id", dest="workflow_id")
+    matter_execute_target.add_argument("--keyword")
+    matter_execute_target.add_argument("--meeting-id", dest="meeting_id")
+    matter_execute_target.add_argument("--source-url", dest="source_url")
+    matter_execute.add_argument("--intent", required=True, choices=["approve", "archive", "join", "not_join", "pending"])
+    matter_execute.add_argument("--opinion", default="")
+    matter_execute.add_argument("--feedback", default="")
+    matter_execute.add_argument("--text-limit", type=int, dest="text_limit")
+    matter_execute.add_argument("--proxy-id", dest="proxy_id")
+    matter_execute.add_argument("--verify-wait", type=float, dest="verify_wait")
+    matter_execute.add_argument("--business-form-wait-ms", type=int, dest="business_form_wait_ms")
+    matter_execute.add_argument("--script-timeout-ms", type=int, dest="script_timeout_ms")
+    matter_execute.add_argument("--after-submit-wait-ms", type=int, dest="after_submit_wait_ms")
+    matter_execute.add_argument("--confirm", action="store_true")
+    _add_daemon_options(matter_execute)
+    _add_output_options(matter_execute)
 
     detail = oa_sub.add_parser("detail")
     detail_sub = detail.add_subparsers(dest="oa_action", required=True)
@@ -1006,6 +1025,20 @@ def handle_oa_matter(args: argparse.Namespace) -> int:
         response = run_oa_daemon_command(args, "matter_inspect", _matter_daemon_args_from_cli(args))
     elif action == "preflight":
         response = run_oa_daemon_command(args, "matter_preflight", _matter_preflight_daemon_args_from_cli(args))
+    elif action == "execute":
+        if not getattr(args, "confirm", False):
+            emit_cli_value(
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa matter execute requires --confirm",
+                    "result": {},
+                },
+                args,
+            )
+            return 0
+        response = run_oa_daemon_command(args, "matter_execute", _matter_execute_daemon_args_from_cli(args))
     else:
         raise ValueError(f"unknown matter action: {action}")
     if not response.get("ok", False):
@@ -1148,6 +1181,44 @@ def _matter_preflight_daemon_args_from_cli(args: argparse.Namespace) -> dict:
         payload["limit"] = args.limit
     if getattr(args, "text_limit", None) is not None:
         payload["text_limit"] = args.text_limit
+    return payload
+
+
+def _matter_execute_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = {
+        "intent": args.intent,
+        "opinion": args.opinion,
+        "confirm": True,
+        "limit": getattr(args, "limit", None) if getattr(args, "limit", None) is not None else 1,
+    }
+    workflow_id = getattr(args, "workflow_id", None)
+    if workflow_id:
+        payload["id"] = workflow_id
+    keyword = getattr(args, "keyword", None)
+    if keyword:
+        payload["keyword"] = keyword
+    meeting_id = getattr(args, "meeting_id", None)
+    if meeting_id:
+        payload["meeting_id"] = meeting_id
+    source_url = getattr(args, "source_url", None)
+    if source_url:
+        payload["source_url"] = source_url
+    feedback = getattr(args, "feedback", "")
+    if feedback:
+        payload["feedback"] = feedback
+    proxy_id = getattr(args, "proxy_id", None)
+    if proxy_id:
+        payload["proxy_id"] = proxy_id
+    for key in (
+        "text_limit",
+        "verify_wait",
+        "business_form_wait_ms",
+        "script_timeout_ms",
+        "after_submit_wait_ms",
+    ):
+        value = getattr(args, key, None)
+        if value is not None:
+            payload[key] = value
     return payload
 
 
@@ -1691,7 +1762,7 @@ def run_oa_daemon_command(
 def _daemon_client_timeout_seconds(timeout_seconds: float, command: str) -> float:
     if command in {"write_prepare"}:
         return max(float(timeout_seconds) * 3 + 5, 10)
-    if command in {"launch_save_draft", "write_execute", "pending_submit"}:
+    if command in {"launch_save_draft", "write_execute", "pending_submit", "matter_execute"}:
         return max(float(timeout_seconds) * 2 + 20, 30)
     return max(float(timeout_seconds) + 5, 10)
 
