@@ -141,6 +141,143 @@ if (normalEntry.name !== "submitClickFunc" || normalEntry.reason !== "default_su
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_continue_submit_injected_function_is_self_contained_for_inform_nodes(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const backgroundSandbox = {
+  console,
+  URL,
+  crypto: { randomUUID: () => "uuid" },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 0,
+  fetch: async () => ({ json: async () => ({ tasks: [] }) }),
+  chrome: {
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
+    runtime: { lastError: null, onInstalled: { addListener: () => undefined } },
+    tabs: {
+      query: async () => [],
+      onActivated: { addListener: () => undefined },
+      onUpdated: { addListener: () => undefined, removeListener: () => undefined },
+      get: (tabId, callback) => callback({ id: tabId, status: "complete" }),
+    },
+    scripting: { executeScript: async () => [{ result: {} }] },
+  },
+};
+vm.createContext(backgroundSandbox);
+vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), backgroundSandbox);
+
+class FakeEvent {
+  constructor(type) {
+    this.type = type;
+  }
+}
+
+class FakeElement {
+  constructor(value = "") {
+    this._value = value;
+    this.events = [];
+    this.attrs = {};
+  }
+  get value() {
+    return this._value;
+  }
+  set value(nextValue) {
+    this._value = String(nextValue || "");
+  }
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  }
+  focus() {
+    this.focused = true;
+  }
+  getAttribute(name) {
+    return this.attrs[name] || "";
+  }
+}
+
+const comment = new FakeElement("");
+const hiddenAttitudeCode = new FakeElement("");
+const hiddenAttitude = new FakeElement("");
+const nodeAttitude = new FakeElement("");
+let dealSubmitCalled = false;
+const pageSandbox = {
+  console,
+  URLSearchParams,
+  location: { href: "http://oa.example.test/detail?affairId=affair-1", search: "?affairId=affair-1" },
+  Event: FakeEvent,
+  setTimeout: (fn) => {
+    fn();
+    return 1;
+  },
+  document: {
+    title: "OA Detail",
+    body: { innerText: "" },
+    querySelector: (selector) => {
+      if (selector === "#affairId") return new FakeElement("affair-1");
+      if (selector === "#subject") return new FakeElement("周报发送流程");
+      if (selector === "#title") return null;
+      if (selector === "#content_deal_comment" || selector === "textarea[name='content_deal_comment']") return comment;
+      if (selector === "textarea#content" || selector === "textarea[name='content']") return null;
+      if (selector === "#hidAttitudeCode") return hiddenAttitudeCode;
+      if (selector === "#hidAttitude") return hiddenAttitude;
+      if (selector === "#nodeattitude") return nodeAttitude;
+      if (selector === "#zwIframe") return null;
+      return null;
+    },
+    querySelectorAll: () => [],
+  },
+  nodePolicy: "inform",
+  nodePolicyName: "\u77e5\u4f1a",
+  affairId: "affair-1",
+  confirm: () => true,
+  alert: () => undefined,
+  dealSubmitFunc: () => {
+    dealSubmitCalled = true;
+  },
+};
+pageSandbox.window = pageSandbox;
+comment.ownerDocument = { defaultView: pageSandbox };
+hiddenAttitudeCode.ownerDocument = { defaultView: pageSandbox };
+hiddenAttitude.ownerDocument = { defaultView: pageSandbox };
+nodeAttitude.ownerDocument = { defaultView: pageSandbox };
+vm.createContext(pageSandbox);
+
+const payload = {
+  affair_id: "affair-1",
+  action: "ContinueSubmit",
+  opinion: "已阅",
+  confirm: true,
+};
+pageSandbox.payload = payload;
+const source = backgroundSandbox.runSeeyonContinueSubmit.toString();
+const result = vm.runInContext(`(${source})(payload)`, pageSandbox);
+if (!dealSubmitCalled) {
+  throw new Error("expected serialized injected function to call dealSubmitFunc");
+}
+if (result.submit_entry !== "dealSubmitFunc" || result.submit_entry_reason !== "inform_node_direct_deal_submit") {
+  throw new Error(`expected inform submit to use dealSubmitFunc, got ${JSON.stringify(result)}`);
+}
+if (comment.value !== "已阅") {
+  throw new Error(`expected opinion to be filled, got ${comment.value}`);
+}
+if (!pageSandbox.__bscliContinueSubmitLast || pageSandbox.__bscliContinueSubmitLast.submit_entry !== "dealSubmitFunc") {
+  throw new Error(`expected scheduled submit outcome, got ${JSON.stringify(pageSandbox.__bscliContinueSubmitLast)}`);
+}
+"""
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_background_rendered_snapshot_collects_all_frames(self):
         node = shutil.which("node")
         if node is None:

@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v10-inform-submit-readback";
+const BACKGROUND_VERSION = "background-v11-self-contained-inform-submit";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -470,6 +470,37 @@ function runSeeyonContinueSubmit(payload) {
   const handlerVersion = "continue-submit-v5-cap4-outer-wait";
   const expectedAffairId = String(payload.affair_id || "");
   const opinion = String(payload.opinion || "");
+  const collectPageSignals = () => {
+    const subject =
+      document.querySelector("#subject")?.value ||
+      document.querySelector("#title")?.value ||
+      document.title ||
+      "";
+    return {
+      node_policy: String(window.nodePolicy || ""),
+      node_policy_name: String(window.nodePolicyName || ""),
+      has_execute_content_load:
+        typeof window._hasExecuteContentLoad === "undefined" ? null : window._hasExecuteContentLoad === true,
+      subject: String(subject || "").slice(0, 300),
+    };
+  };
+  const chooseSubmitEntry = (entries, pageSignals = {}) => {
+    const nodePolicy = String(pageSignals.node_policy || "").toLowerCase();
+    const nodePolicyName = String(pageSignals.node_policy_name || "");
+    if ((nodePolicy === "inform" || nodePolicyName.includes("\u77e5\u4f1a")) && typeof entries.dealSubmitFunc === "function") {
+      return { name: "dealSubmitFunc", fn: entries.dealSubmitFunc, reason: "inform_node_direct_deal_submit" };
+    }
+    if (typeof entries.submitClickFunc === "function") {
+      return { name: "submitClickFunc", fn: entries.submitClickFunc, reason: "default_submit_click" };
+    }
+    if (typeof entries.dealSubmitFunc === "function") {
+      return { name: "dealSubmitFunc", fn: entries.dealSubmitFunc, reason: "fallback_deal_submit" };
+    }
+    if (typeof entries.contentCallbackDealSubmit === "function") {
+      return { name: "$.content.callback.dealSubmit", fn: entries.contentCallbackDealSubmit, reason: "fallback_content_callback" };
+    }
+    return null;
+  };
   if (!expectedAffairId) {
     throw new Error("affair_id is required");
   }
@@ -488,8 +519,8 @@ function runSeeyonContinueSubmit(payload) {
   if (String(pageAffairId) !== expectedAffairId) {
     throw new Error(`affair_id mismatch: page=${pageAffairId || "(empty)"} expected=${expectedAffairId}`);
   }
-  const pageSignals = collectSeeyonSubmitPageSignals();
-  const submitEntry = chooseSeeyonSubmitEntry(
+  const pageSignals = collectPageSignals();
+  const submitEntry = chooseSubmitEntry(
     {
       submitClickFunc: window.submitClickFunc,
       dealSubmitFunc: window.dealSubmitFunc,
