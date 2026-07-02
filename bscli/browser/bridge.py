@@ -7,6 +7,8 @@ import uuid
 from typing import Any
 
 CLIENT_TTL_SECONDS = 120
+RESULT_TTL_SECONDS = 3600
+MAX_COMPLETED_TASKS = 1000
 
 
 @dataclass
@@ -30,7 +32,14 @@ class ExtensionTask:
 
 
 class ExtensionBridge:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        result_ttl_seconds: int = RESULT_TTL_SECONDS,
+        max_completed_tasks: int = MAX_COMPLETED_TASKS,
+    ) -> None:
+        self.result_ttl_seconds = result_ttl_seconds
+        self.max_completed_tasks = max_completed_tasks
         self.clients: dict[str, ExtensionClient] = {}
         self.tasks: dict[str, ExtensionTask] = {}
         self.task_claims: dict[str, dict[str, Any]] = {}
@@ -128,6 +137,7 @@ class ExtensionBridge:
                 "error": error,
                 "finished_at": self._now(),
             }
+            self._prune_completed_tasks_locked()
             self._condition.notify_all()
 
     def submit_event(
@@ -184,6 +194,7 @@ class ExtensionBridge:
     def list_clients(self) -> list[dict[str, Any]]:
         with self._condition:
             self._prune_stale_clients()
+            self._prune_completed_tasks_locked()
             return [
                 asdict(client)
                 for client in sorted(
@@ -199,8 +210,12 @@ class ExtensionBridge:
                 self._condition.wait_for(
                     lambda: task_id in self.results,
                     timeout=timeout_seconds,
-                )
+            )
             return self.results.get(task_id)
+
+    def prune_completed_tasks(self) -> None:
+        with self._condition:
+            self._prune_completed_tasks_locked()
 
     def _now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -214,6 +229,28 @@ class ExtensionBridge:
         ]
         for client_id in stale_ids:
             del self.clients[client_id]
+
+    def _prune_completed_tasks_locked(self) -> None:
+        if not self.results:
+            return
+        cutoff = datetime.now(UTC) - timedelta(seconds=self.result_ttl_seconds)
+        expired_ids = {
+            task_id
+            for task_id, result in self.results.items()
+            if self._parse_time(result.get("finished_at", self._now())) < cutoff
+        }
+        completed_ids = sorted(
+            self.results,
+            key=lambda task_id: self._parse_time(self.results[task_id].get("finished_at", self._now())),
+        )
+        overflow = max(0, len(completed_ids) - self.max_completed_tasks)
+        expired_ids.update(completed_ids[:overflow])
+        for task_id in expired_ids:
+            self.results.pop(task_id, None)
+            self.tasks.pop(task_id, None)
+            self.task_claims.pop(task_id, None)
+            self.task_events.pop(task_id, None)
+            self.pending_tasks = [task for task in self.pending_tasks if task.id != task_id]
 
     def _parse_time(self, value: str) -> datetime:
         parsed = datetime.fromisoformat(value)

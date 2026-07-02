@@ -380,6 +380,39 @@ class CliAndBridgeTests(unittest.TestCase):
 
         self.assertEqual([client["client_id"] for client in clients], ["fresh-tab"])
 
+    def test_extension_bridge_prunes_completed_task_state_by_ttl(self):
+        bridge = ExtensionBridge(result_ttl_seconds=1)
+        bridge.register_client("chrome-1", tab_id=12, url=OA_URL, title="OA")
+        task_id = bridge.enqueue_task(
+            system="oa",
+            kind="dom_snapshot",
+            payload={"selector": "body"},
+        )
+        bridge.poll_tasks("chrome-1")
+        bridge.submit_event(
+            client_id="chrome-1",
+            task_id=task_id,
+            stage="claimed",
+        )
+        bridge.submit_result(
+            client_id="chrome-1",
+            task_id=task_id,
+            ok=True,
+            result={"title": "OA"},
+        )
+        old = (datetime.now(UTC) - timedelta(seconds=30)).isoformat()
+        bridge.tasks[task_id].created_at = old
+        bridge.task_claims[task_id]["claimed_at"] = old
+        bridge.task_events[task_id][0]["created_at"] = old
+        bridge.results[task_id]["finished_at"] = old
+
+        bridge.prune_completed_tasks()
+
+        self.assertNotIn(task_id, bridge.tasks)
+        self.assertNotIn(task_id, bridge.task_claims)
+        self.assertNotIn(task_id, bridge.task_events)
+        self.assertNotIn(task_id, bridge.results)
+
     def test_seeyon_adapter_registers_initial_commands(self):
         profile = build_seeyon_profile()
         registry = CommandRegistry()

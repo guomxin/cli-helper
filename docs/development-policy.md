@@ -1,5 +1,13 @@
 # Development Policy
 
+## Current Architecture Baseline
+
+The active implementation uses Python standard-library components unless a
+specific change justifies adding dependencies: `argparse` for the CLI,
+`http.server` for the local daemon, and Chrome extension polling for browser
+bridge tasks. Treat older FastAPI/Starlette, WebSocket/Native Messaging, Typer,
+uv, or hatch notes as exploratory sketches, not current requirements.
+
 ## Write-Action Gate
 
 OA write actions must not be committed or pushed until both checks pass:

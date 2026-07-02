@@ -28,7 +28,7 @@ from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
 from bscli.core.registry import CommandRegistry
 from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
-from bscli.daemon.app import serve
+from bscli.daemon.app import DAEMON_TOKEN_FILENAME, serve
 from bscli.mcp.server import BscliMcpServer
 
 
@@ -797,8 +797,8 @@ def handle_daemon(args: argparse.Namespace, home: Path) -> int:
     if args.action == "status":
         print_json(
             {
-                "daemon": get_json(f"{args.daemon_url}/health"),
-                "extension_clients": get_json(f"{args.daemon_url}/extension/clients")[
+                "daemon": get_json(f"{args.daemon_url}/health", home=home),
+                "extension_clients": get_json(f"{args.daemon_url}/extension/clients", home=home)[
                     "clients"
                 ],
             }
@@ -813,7 +813,7 @@ def handle_explore(args: argparse.Namespace) -> int:
             "system": args.system,
             "selector": args.selector,
         }
-        result = post_json(f"{args.daemon_url}/explore/dom-snapshot", payload)
+        result = post_json(f"{args.daemon_url}/explore/dom-snapshot", payload, home=Path(args.home))
         print_json(result)
         return 0
     raise ValueError(f"unknown explore action: {args.action}")
@@ -847,6 +847,7 @@ def handle_command(args: argparse.Namespace) -> int:
             f"{args.daemon_url}/commands/run",
             payload,
             timeout=_daemon_client_timeout_seconds(float(args.timeout), args.command),
+            home=Path(args.home),
         )
         print_json(result)
         return 0
@@ -873,6 +874,7 @@ def handle_discovered(args: argparse.Namespace, home: Path) -> int:
                 "args": run_args,
                 "timeout_seconds": args.timeout,
             },
+            home=home,
         )
         print_json(result)
         return 0
@@ -907,6 +909,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
                 system,
                 command,
                 arguments,
+                home=Path(args.home),
             ),
             discovered_apis=discovered,
         )
@@ -1756,6 +1759,7 @@ def run_oa_daemon_command(
             "timeout_seconds": args.timeout,
         },
         timeout=client_timeout,
+        home=Path(args.home),
     )
 
 
@@ -2262,6 +2266,8 @@ def run_command_via_daemon(
     system: str,
     command: str,
     arguments: dict,
+    *,
+    home: Path | None = None,
 ) -> dict:
     response = post_json(
         f"{daemon_url}/commands/run",
@@ -2271,6 +2277,7 @@ def run_command_via_daemon(
             "args": arguments,
             "timeout_seconds": 30,
         },
+        home=home,
     )
     if not response.get("ok"):
         raise RuntimeError(response.get("error") or f"daemon command failed: {system}.{command}")
@@ -2310,12 +2317,20 @@ def handle_adapter(args: argparse.Namespace) -> int:
     raise ValueError(f"unknown adapter action: {args.action}")
 
 
-def post_json(url: str, payload: dict, *, timeout: float = 10) -> dict:
+def post_json(
+    url: str,
+    payload: dict,
+    *,
+    timeout: float = 10,
+    home: Path | None = None,
+) -> dict:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"content-type": "application/json; charset=utf-8"}
+    headers.update(_daemon_token_headers(home))
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"content-type": "application/json; charset=utf-8"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -2332,9 +2347,22 @@ def post_json(url: str, payload: dict, *, timeout: float = 10) -> dict:
             raise RuntimeError(f"HTTP {exc.code} from {url}: {body or exc.reason}") from exc
 
 
-def get_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=10) as response:
+def get_json(url: str, *, home: Path | None = None) -> dict:
+    request = urllib.request.Request(url, headers=_daemon_token_headers(home), method="GET")
+    with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _daemon_token_headers(home: Path | None) -> dict[str, str]:
+    if home is None:
+        home = Path.home() / ".bscli"
+    token_path = Path(home) / DAEMON_TOKEN_FILENAME
+    if not token_path.exists():
+        return {}
+    token = token_path.read_text(encoding="utf-8").strip()
+    if not token:
+        return {}
+    return {"x-bscli-token": token}
 
 
 def print_json(value) -> None:

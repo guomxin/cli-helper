@@ -25,6 +25,10 @@ Start the local daemon:
 python -m bscli.cli.main --home .bscli daemon serve --host 127.0.0.1 --port 8765
 ```
 
+The daemon creates `.bscli/daemon-token` on first start. CLI and MCP calls that
+use the same `--home` read this token automatically when calling protected local
+daemon endpoints such as `/commands/run`.
+
 Load the Chrome extension:
 
 1. Open `chrome://extensions`.
@@ -34,6 +38,10 @@ Load the Chrome extension:
 
 After changing files under `extension/`, click "Reload" for the unpacked
 extension so the background service worker picks up the new task handlers.
+The checked-in extension manifest is scoped to the built-in Seeyon OA origin
+`http://10.10.50.110/*`. Adding a new system profile configures daemon routing,
+but Chrome still needs matching extension host permissions and a reload before
+that new system can be bridged.
 
 Open and log in to the OA system in Chrome:
 
@@ -79,7 +87,8 @@ python -m bscli.cli.main --home .bscli system add crm --name "CRM" --url http://
 ```
 
 Then `explore dom-snapshot crm` will be delivered only to a browser tab opened
-on one of that profile's allowed origins.
+on one of that profile's allowed origins, after the extension has been granted
+matching host permissions for the CRM origin.
 
 List built-in OA commands:
 
@@ -598,6 +607,11 @@ Replay a candidate API in the logged-in page context:
 python -m bscli.cli.main --home .bscli command run oa api_replay --timeout 30 --json "{\"method\":\"POST\",\"url\":\"/seeyon/rest/pending/list\",\"headers\":{\"content-type\":\"application/json\"},\"body\":\"{\\\"page\\\":1}\"}"
 ```
 
+Raw API replay, inspect, and save commands are limited to URLs that resolve to
+the target system profile's `allowed_origins`. Relative paths such as
+`/seeyon/rest/...` resolve against the system `base_url`; absolute URLs outside
+the system origin are rejected before any browser task is queued.
+
 Inspect a candidate API response shape without saving it:
 
 ```bash
@@ -676,6 +690,13 @@ The extension polls the daemon and submits task results back to:
 GET http://127.0.0.1:8765/extension/results/<task-id>
 ```
 
+The current architecture is intentionally small and Python-standard-library
+first: `argparse` for the CLI, `http.server` for the local daemon, and Chrome
+extension polling for browser tasks. Earlier design sketches that mention
+FastAPI/Starlette, WebSocket/Native Messaging, Typer, uv, or hatch are not the
+current implementation contract unless a future design note explicitly revives
+them.
+
 ## Current Scope
 
 Implemented:
@@ -687,7 +708,9 @@ Implemented:
 - SQLite trace store
 - Minimal runtime for `daemon_api`
 - Extension task bridge
+- Extension completed-task TTL cleanup
 - Local daemon endpoints
+- Local daemon Host/Origin guard and token-protected command endpoints
 - Chrome extension DOM snapshot task
 - Chrome extension HTML snapshot task
 - Chrome extension rendered detail snapshot task
@@ -698,6 +721,7 @@ Implemented:
 - Dynamic discovered API runtime
 - Command execution trace records with `run_id`
 - Discovered API origin policy checks and confirmation gate
+- Raw API replay/inspect/save origin checks
 - CLI `command run oa current_page_snapshot`
 - CLI `command run oa detail_read`
 - CLI `command run oa api_inspect`

@@ -819,6 +819,40 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.body["result"]["status"], 200)
             self.assertEqual(response.body["result"]["json"]["data"][0]["title"], "待办")
 
+    def test_run_api_replay_rejects_url_outside_system_origin(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "api_replay",
+                    "args": {"method": "GET", "url": "http://example.test/api"},
+                    "timeout_seconds": 0.01,
+                },
+            )
+
+            self.assertEqual(response.status, 403)
+            self.assertIn("origin", response.body["error"])
+            self.assertEqual(
+                state.handle("GET", "/extension/tasks", query={"client_id": "chrome-1"}).body[
+                    "tasks"
+                ],
+                [],
+            )
+
     def test_run_api_replay_passes_text_limit_to_page_fetch_task(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
@@ -1803,6 +1837,34 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(response.body["result"]["inspection"]["data_shape"], "Data.items[]")
             self.assertEqual(response.body["result"]["inspection"]["item_count"], 1)
+
+    def test_run_api_inspect_rejects_url_outside_system_origin(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "api_inspect",
+                    "args": {"method": "GET", "url": "http://example.test/api"},
+                    "timeout_seconds": 0.01,
+                },
+            )
+
+            self.assertEqual(response.status, 403)
+            self.assertIn("origin", response.body["error"])
 
     def test_run_detail_read_fetches_and_parses_detail_page(self):
         with TemporaryDirectory() as tmp:

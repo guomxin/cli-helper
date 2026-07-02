@@ -8,6 +8,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
+import secrets
 import time
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -70,6 +71,9 @@ COMMAND_TASKS = {
     ("oa", "template_list"): "html_snapshot",
     ("oa", "template_list_api"): "page_fetch",
 }
+
+DAEMON_TOKEN_FILENAME = "daemon-token"
+LOCAL_DAEMON_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 WORKFLOW_READ_COMMANDS = {
     "workflow_brief",
@@ -457,6 +461,9 @@ class DaemonState:
             }
             if args.get("max_text") is not None:
                 payload["max_text"] = int(args["max_text"])
+            policy_response = self._validate_page_fetch_request_policy(system, payload)
+            if policy_response is not None:
+                return policy_response
         else:
             payload = {"selector": args.get("selector", "body")}
         task_id = self.bridge.enqueue_task(
@@ -3886,6 +3893,9 @@ class DaemonState:
         timeout_seconds: float,
     ) -> DaemonResponse:
         payload = self._api_request_from_args(args)
+        policy_response = self._validate_page_fetch_request_policy(system, payload)
+        if policy_response is not None:
+            return policy_response
         task_id = self.bridge.enqueue_task(
             system=system,
             kind="page_fetch",
@@ -3930,6 +3940,31 @@ class DaemonState:
         if args.get("max_text") is not None:
             request["max_text"] = int(args["max_text"])
         return request
+
+    def _validate_page_fetch_request_policy(
+        self,
+        system: str,
+        request: dict[str, Any],
+    ) -> DaemonResponse | None:
+        profile = self._load_system_profile(system)
+        if profile is None:
+            return DaemonResponse(
+                403,
+                {
+                    "ok": False,
+                    "error": f"no system profile is configured for page fetch: {system}",
+                },
+            )
+        allowed, origin, reason = _page_fetch_url_allowed(profile, str(request.get("url") or ""))
+        if not allowed:
+            return DaemonResponse(
+                403,
+                {
+                    "ok": False,
+                    "error": f"page fetch URL origin is not allowed for system {system}: {origin or reason}",
+                },
+            )
+        return None
 
     def _validate_discovered_api_policy(
         self,
@@ -4160,14 +4195,94 @@ def _is_seeyon_main_client(client: dict[str, Any]) -> bool:
     return parsed.path.endswith("/seeyon/main.do") and query.get("method", [""])[0] == "main"
 
 
+def _page_fetch_url_allowed(profile: SystemProfile, raw_url: str) -> tuple[bool, str, str]:
+    if not raw_url.strip():
+        return False, "", "missing url"
+    resolved = urljoin(profile.base_url, raw_url)
+    parsed = urlparse(resolved)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False, resolved, "unsupported URL scheme"
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin in profile.allowed_origins, origin, ""
+
+
+def _load_or_create_daemon_token(home: Path) -> str:
+    home.mkdir(parents=True, exist_ok=True)
+    token_path = home / DAEMON_TOKEN_FILENAME
+    if token_path.exists():
+        token = token_path.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    token = secrets.token_urlsafe(32)
+    token_path.write_text(token, encoding="utf-8")
+    return token
+
+
+def _is_allowed_daemon_host(host_header: str) -> bool:
+    if not host_header:
+        return False
+    parsed = urlparse(f"//{host_header}")
+    host = (parsed.hostname or "").lower()
+    return host in LOCAL_DAEMON_HOSTS
+
+
+def _is_allowed_daemon_origin(origin: str) -> bool:
+    if not origin:
+        return True
+    parsed = urlparse(origin)
+    if parsed.scheme == "chrome-extension":
+        return True
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in LOCAL_DAEMON_HOSTS
+
+
+def _is_token_protected_path(method: str, path: str) -> bool:
+    method = method.upper()
+    if method == "POST" and path in {"/commands/run", "/explore/dom-snapshot"}:
+        return True
+    if method == "GET" and path == "/extension/clients":
+        return True
+    if method == "GET" and path.startswith("/extension/results/"):
+        return True
+    if method == "GET" and path.startswith("/extension/task-events/"):
+        return True
+    if method == "GET" and path.startswith("/extension/task-state/"):
+        return True
+    return False
+
+
+def _validate_daemon_http_request(
+    *,
+    method: str,
+    path: str,
+    headers: Any,
+    token: str,
+) -> DaemonResponse | None:
+    if not _is_allowed_daemon_host(headers.get("host", "")):
+        return DaemonResponse(403, {"ok": False, "error": "daemon request host is not allowed"})
+    if not _is_allowed_daemon_origin(headers.get("origin", "")):
+        return DaemonResponse(403, {"ok": False, "error": "daemon request origin is not allowed"})
+    if _is_token_protected_path(method, path):
+        supplied = headers.get("x-bscli-token", "")
+        if not secrets.compare_digest(supplied, token):
+            return DaemonResponse(401, {"ok": False, "error": "daemon token is required"})
+    return None
+
+
 def serve(home: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
     state = DaemonState(ConfigStore(home))
+    daemon_token = _load_or_create_daemon_token(home)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self._serve()
 
         def do_POST(self) -> None:
+            self._serve()
+
+        def do_OPTIONS(self) -> None:
             self._serve()
 
         def log_message(self, format: str, *args: Any) -> None:
@@ -4179,13 +4294,22 @@ def serve(home: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
                 key: values[-1]
                 for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
             }
-            request_body = self._read_json_body()
-            response = state.handle(
-                self.command,
-                parsed.path,
-                query=query,
-                body=request_body,
+            security_response = _validate_daemon_http_request(
+                method=self.command,
+                path=parsed.path,
+                headers=self.headers,
+                token=daemon_token,
             )
+            if security_response is not None:
+                response = security_response
+            else:
+                request_body = self._read_json_body()
+                response = state.handle(
+                    self.command,
+                    parsed.path,
+                    query=query,
+                    body=request_body,
+                )
             payload = json.dumps(response.body, ensure_ascii=False).encode("utf-8")
             self.send_response(response.status)
             self.send_header("content-type", "application/json; charset=utf-8")
