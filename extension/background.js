@@ -1,6 +1,6 @@
 const DAEMON_URL = "http://127.0.0.1:8765";
 const POLL_INTERVAL_MS = 1500;
-const BACKGROUND_VERSION = "background-v13-launch-page-script";
+const BACKGROUND_VERSION = "background-v14-sync-page-fetch";
 
 async function getClientId() {
   const existing = await chrome.storage.local.get("clientId");
@@ -1372,18 +1372,19 @@ function collectNetworkLogSnapshot() {
   };
 }
 
-async function runPageFetch(payload) {
+function runPageFetch(payload) {
   const method = (payload.method || "GET").toUpperCase();
   const headers = payload.headers || {};
   const maxText = Math.max(0, Math.min(Number(payload.max_text || 20000), 1000000));
-  const response = await fetch(payload.url, {
-    method,
-    headers,
-    body: payload.body == null || method === "GET" || method === "HEAD" ? undefined : payload.body,
-    credentials: "include",
-  });
-  const contentType = response.headers.get("content-type") || "";
-  const text = await response.text();
+  const request = new XMLHttpRequest();
+  request.open(method, payload.url, false);
+  request.withCredentials = true;
+  for (const [name, value] of Object.entries(headers)) {
+    request.setRequestHeader(name, String(value));
+  }
+  request.send(payload.body == null || method === "GET" || method === "HEAD" ? undefined : payload.body);
+  const contentType = request.getResponseHeader("content-type") || "";
+  const text = request.responseText || "";
   let json = null;
   if (contentType.includes("application/json")) {
     try {
@@ -1393,9 +1394,9 @@ async function runPageFetch(payload) {
     }
   }
   return {
-    url: response.url,
-    status: response.status,
-    ok: response.ok,
+    url: request.responseURL || new URL(payload.url, location.href).href,
+    status: request.status,
+    ok: request.status >= 200 && request.status < 300,
     contentType,
     json,
     text: text.slice(0, maxText),

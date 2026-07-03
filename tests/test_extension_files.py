@@ -510,8 +510,15 @@ vm.runInContext(fs.readFileSync("extension/background.js", "utf8"), sandbox);
 
         self.assertIn("page_fetch", background)
         self.assertIn("runPageFetch", background)
-        self.assertIn("credentials: \"include\"", background)
+        self.assertIn("request.withCredentials = true", background)
         self.assertIn("max_text", background)
+
+    def test_background_page_fetch_returns_synchronous_execute_script_result(self):
+        background = Path("extension/background.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("async function runPageFetch", background)
+        self.assertIn("new XMLHttpRequest()", background)
+        self.assertIn("request.open(method, payload.url, false)", background)
 
     def test_background_contains_page_script_runner(self):
         background = Path("extension/background.js").read_text(encoding="utf-8")
