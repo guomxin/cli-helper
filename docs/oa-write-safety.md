@@ -119,6 +119,13 @@ without sending the workflow.
   wrappers around the OA meeting editor page. They open the editor page and
   validate fields such as `title` and `mtTitle`, but they do not fill, save, or
   send a meeting.
+- `oa meeting create execute ... --confirm` is the promoted meeting-launch
+  command. It uses the logged-in Chrome bridge to read `meetingInfo`, checks
+  room availability through `roomListInfo` and `validateRoomApps`, saves the
+  standard body through `content.do?method=saveOrUpdate`, sends through
+  `meetingAjaxManager.send`, and verifies by reading the room schedule. Live
+  validation should also read `meetingView` or the view page and confirm that
+  the title is correct and the body-count error is absent.
 - `oa write endpoints ...` classifies endpoint candidates found during dry-run
   evidence collection. It does not call the candidates and marks each result
   with `safe_to_call=false`.
@@ -126,10 +133,10 @@ without sending the workflow.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Only launch-page `SaveDraft`, collaboration `ContinueSubmit`, and meeting reply
-are executable at this stage. Reject, archive, delete, revoke, return, upload,
-send, and other write actions remain blocked until each has a dedicated mapping
-and tests.
+Only launch-page `SaveDraft`, collaboration `ContinueSubmit`, meeting reply,
+and direct meeting creation are executable at this stage. Reject, archive,
+delete, revoke, return, upload, generic send, and other write actions remain
+blocked until each has a dedicated mapping and tests.
 
 `Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
 may call `oa write dry-run --affair-id <id> --action Archive` to prove the
@@ -283,6 +290,9 @@ Before a new OA write action can become executable, it must have:
 
 Until those conditions are met and reviewed for that action, BSCLI must keep it
 at discovery, draft, and dry-run only.
+Use `docs/oa-write-action-expansion-playbook.md` as the practical checklist for
+moving an action through discovery, implementation, live validation, and
+promotion.
 
 ## Agent Tool Exposure
 
@@ -322,6 +332,10 @@ Confirmed `ContinueSubmit` executions are delivered through the Chrome
 extension bridge and verified by
 pending disappearance. Confirmed meeting replies are delivered through
 `meetingAjaxManager.reply` and verified by `meetingView.myReply.feedbackFlag`.
+Confirmed direct meeting creation is currently exposed through the CLI/daemon
+path rather than an agent-facing MCP tool. It is delivered through
+`meetingAjaxManager.send` after saving the meeting body and is verified by room
+schedule readback plus live `meetingView` or view-page checks during validation.
 
 Weekly-report inform/read-notice pages are still executed as `ContinueSubmit`.
 The extension prefers the page's direct `dealSubmitFunc` on `nodePolicy=inform`

@@ -283,6 +283,10 @@ the decision is `ready_for_execute`, then delegates to the governed
 resolves the pending meeting by id, URL, meeting id, or keyword and delegates to
 `meeting_reply_execute`. It still requires `--confirm`; the low-level action
 code is an implementation detail, not something the agent has to choose.
+When promoting new write actions, follow
+[`docs/oa-write-action-expansion-playbook.md`](docs/oa-write-action-expansion-playbook.md)
+so discovery, confirmation, content-save handling, readback verification, and
+live validation stay consistent.
 
 Pending, sent, and template objects:
 
@@ -511,6 +515,7 @@ workflow:
 ```bash
 python -m bscli.cli.main --home .bscli oa meeting create inspect --settle-ms 3000
 python -m bscli.cli.main --home .bscli oa meeting create dry-run --field title="Planning" --field mtTitle="Project sync" --settle-ms 3000
+python -m bscli.cli.main --home .bscli oa meeting create execute --subject "Planning" --room "3" --start "2026-07-03 16:00" --end "2026-07-03 17:00" --confirm
 python -m bscli.cli.main --home .bscli oa meeting reply dry-run --id <pending_affair_id> --attitude join
 python -m bscli.cli.main --home .bscli oa meeting reply execute --id <pending_affair_id> --attitude join --confirm
 ```
@@ -518,11 +523,20 @@ python -m bscli.cli.main --home .bscli oa meeting reply execute --id <pending_af
 `meeting create inspect` and `meeting create dry-run` are thin, read-only
 wrappers around the fixed OA meeting editor URL. They validate the editor page
 and its writable fields, but they do not fill, save, or send a meeting.
-The execute form requires `--confirm`, posts the reply through the logged-in
-Chrome bridge, then reads `meetingView` again and succeeds only when
-`myReply.feedbackFlag` matches the requested attitude. The agent-facing tool
-names are `oa__meeting_reply_dry_run` and `oa__meeting_reply_execute`; the
-execute tool requires `confirm` in its input schema.
+`meeting create execute` is the promoted meeting-launch path. It requires
+`--confirm`, reads `meetingInfo`, checks the requested room with `roomListInfo`
+and `validateRoomApps`, saves the standard body through
+`/seeyon/content/content.do?method=saveOrUpdate`, then sends the meeting through
+`meetingAjaxManager.send`. Verification reads the room schedule and, for live
+checks, should also read `meetingView` or the view page to ensure the title and
+body render without the Seeyon "body count" error.
+
+Meeting replies use a separate governed command. The execute form requires
+`--confirm`, posts the reply through the logged-in Chrome bridge, then reads
+`meetingView` again and succeeds only when `myReply.feedbackFlag` matches the
+requested attitude. The agent-facing tool names are
+`oa__meeting_reply_dry_run` and `oa__meeting_reply_execute`; the execute tool
+requires `confirm` in its input schema.
 
 Read the structured pending list from the OA home page:
 

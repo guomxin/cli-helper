@@ -94,6 +94,7 @@ python -m bscli.cli.main --home .bscli oa launch dry-run --template-id <template
 python -m bscli.cli.main --home .bscli oa launch save-draft --template-id <template_id> --field content_coll="Draft note" --confirm
 python -m bscli.cli.main --home .bscli oa meeting create inspect --settle-ms 3000
 python -m bscli.cli.main --home .bscli oa meeting create dry-run --field title="Planning" --field mtTitle="Project sync" --settle-ms 3000
+python -m bscli.cli.main --home .bscli oa meeting create execute --subject "Planning" --room "3" --start "2026-07-03 16:00" --end "2026-07-03 17:00" --confirm
 python -m bscli.cli.main --home .bscli oa write discover --source history --kind done --limit 20 --deep-limit 5
 python -m bscli.cli.main --home .bscli oa write discover --source launch --template-id <template_id>
 ```
@@ -140,8 +141,13 @@ First launch-side expansion batch:
   `/seeyon/meeting.do?method=editor&showTab=true`; not a template-center item.
   `oa meeting create inspect` reads meeting fields such as `title`, `mtTitle`,
   `meetingTime`, `conferees`, `leader`, and `tel`. `oa meeting create dry-run`
-  validates fields and the `save_a` / "保存待发" control without filling or
-  clicking anything.
+  validates fields and the `save_a` / save-draft control without filling or
+  clicking anything. `oa meeting create execute` now uses a direct backend path:
+  initialize with `meetingInfo`, check `roomListInfo` and `validateRoomApps`,
+  save the standard body with `content.do?method=saveOrUpdate`, then send with
+  `meetingAjaxManager.send`. The successful live validation case created a
+  3# room meeting in one pass and verified `meetingInfo`, `meetingView`, room
+  schedule description, and absence of the Seeyon body-count error.
 
 The first promoted launch-page execution plan is save draft. `oa launch dry-run`
 validates requested fields and the `saveDraft` / "保存待发" control without

@@ -23,6 +23,24 @@ OA write actions must not be committed or pushed until both checks pass:
 If a live validation fails, stop and fix or document the blocker. Do not commit
 or push partially verified write-action code.
 
+## Live OA Validation Encoding
+
+Windows PowerShell can corrupt non-ASCII OA arguments before Python receives
+them, especially when ad hoc validation scripts embed Chinese text directly in
+a here-string. For live OA write tests, do not rely on raw Chinese literals in
+PowerShell script bodies. Prefer one of these inputs:
+
+- A UTF-8 JSON file or stdin payload that Python reads explicitly as UTF-8.
+- Python-generated Unicode code points, for example building the subject from
+  `chr(...)` values inside the script.
+- Existing CLI arguments only when the shell path has already been verified to
+  preserve UTF-8 for that command.
+
+After a write involving non-ASCII values, verify the exact text through the
+backend readback and, when possible, the rendered view page. A successful
+meeting-create validation must prove that the title is not stored as `?????`
+and that the Seeyon body-count error is absent.
+
 ## Useful Verification Commands
 
 ```bash
