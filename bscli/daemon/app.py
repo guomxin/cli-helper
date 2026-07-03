@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timezone, timedelta
 from difflib import SequenceMatcher
 import hashlib
 import json
@@ -360,6 +360,11 @@ class DaemonState:
         if system == "oa" and command in {"meeting_reply_dry_run", "meeting_reply_execute"}:
             return self._run_oa_meeting_reply_command(
                 command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command == "meeting_create_execute":
+            return self._run_oa_meeting_create_execute_command(
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
             )
@@ -3936,6 +3941,188 @@ class DaemonState:
             "error": "meeting reply did not match requested attitude after submit",
         }
 
+    def _run_oa_meeting_create_execute_command(
+        self,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        plan = _build_oa_meeting_create_plan(args)
+        if args.get("confirm") is not True:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa meeting create execute requires confirm=true",
+                    "result": plan,
+                },
+            )
+
+        subject = str(args.get("subject") or "").strip()
+        room_request = str(args.get("room") or "").strip()
+        start_text = str(args.get("start") or "").strip()
+        end_text = str(args.get("end") or "").strip()
+        if not subject or not room_request or not start_text or not end_text:
+            return _oa_meeting_create_blocked(
+                plan,
+                "subject, room, start, and end are required",
+                status=400,
+                confirmed=True,
+            )
+        try:
+            start_ms = _parse_oa_meeting_datetime_ms(start_text)
+            end_ms = _parse_oa_meeting_datetime_ms(end_text)
+        except ValueError as exc:
+            return _oa_meeting_create_blocked(plan, str(exc), status=400, confirmed=True)
+        if end_ms <= start_ms:
+            return _oa_meeting_create_blocked(plan, "meeting end must be after start", status=400, confirmed=True)
+        plan["time"] = {
+            "start": start_text,
+            "end": end_text,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        }
+
+        meeting_info_response = self._run_oa_meeting_ajax(
+            "meetingInfo",
+            [{"meetingId": "", "templateId": ""}],
+            timeout_seconds,
+        )
+        meeting_info, error = _oa_meeting_ajax_json(meeting_info_response, context="meetingInfo")
+        if error:
+            return _oa_meeting_create_blocked(plan, error, status=meeting_info_response.status, confirmed=True)
+
+        room_list_args = [{"startDatetime": start_ms, "endDatetime": end_ms}]
+        room_list_response = self._run_oa_meeting_ajax("roomListInfo", room_list_args, timeout_seconds)
+        room_list, error = _oa_meeting_ajax_json(room_list_response, context="roomListInfo")
+        if error:
+            return _oa_meeting_create_blocked(plan, error, status=room_list_response.status, confirmed=True)
+
+        room, room_error = _resolve_oa_meeting_room(room_request, room_list)
+        if room_error:
+            return _oa_meeting_create_blocked(plan, room_error, status=409, confirmed=True)
+        room_app = _oa_meeting_room_app(room, start_ms=start_ms, end_ms=end_ms)
+        plan["room"] = {
+            "requested": room_request,
+            "room_id": str(room.get("roomId") or ""),
+            "matched_name": str(room.get("roomName") or ""),
+            "need_app": room.get("needApp"),
+        }
+        conflicts = _overlapping_oa_meeting_room_apps(
+            room_list.get("roomAppsInfo") if isinstance(room_list, dict) else [],
+            room_id=str(room.get("roomId") or ""),
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if conflicts:
+            plan["checks"].append(_oa_write_check("room_available", False, "meeting room is occupied", conflicts=conflicts))
+            return _oa_meeting_create_blocked(plan, "meeting room is occupied for the requested time", status=409, confirmed=True)
+        plan["checks"].append(_oa_write_check("room_available", True, "meeting room has no overlapping booking"))
+
+        validate_response = self._run_oa_meeting_ajax(
+            "validateRoomApps",
+            [{"roomApps": [room_app], "meetingId": "", "periodicityId": ""}],
+            timeout_seconds,
+        )
+        validate_json, error = _oa_meeting_ajax_json(validate_response, context="validateRoomApps")
+        if error:
+            return _oa_meeting_create_blocked(plan, error, status=validate_response.status, confirmed=True)
+        validation_errors = _oa_meeting_room_validation_errors(validate_json)
+        if validation_errors:
+            plan["checks"].append(_oa_write_check("validate_room_apps", False, "; ".join(validation_errors)))
+            return _oa_meeting_create_blocked(plan, "; ".join(validation_errors), status=409, confirmed=True)
+        plan["checks"].append(_oa_write_check("validate_room_apps", True, "OA room validation passed"))
+
+        send_payload, payload_error = _build_oa_meeting_send_payload(
+            meeting_info,
+            subject=subject,
+            room_app=room_app,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            attendees=args.get("attendees"),
+        )
+        if payload_error:
+            return _oa_meeting_create_blocked(plan, payload_error, status=409, confirmed=True)
+        plan["safety"]["will_execute"] = True
+        plan["request"] = {
+            "method": "meetingAjaxManager.send",
+            "payload_preview": {
+                "subject": subject,
+                "roomId": room_app["roomId"],
+                "roomName": room_app["roomName"],
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "attendee_count": len(str(send_payload.get("conferees") or "").split(",")) if send_payload.get("conferees") else 0,
+            },
+        }
+        send_response = self._run_oa_meeting_ajax("send", [send_payload], timeout_seconds)
+        send_json, error = _oa_meeting_ajax_json(send_response, context="send")
+        if error:
+            return DaemonResponse(
+                send_response.status,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": error,
+                    "result": {"submitted": False, "plan": plan, "submit": send_response.body},
+                },
+            )
+        if isinstance(send_json, dict) and send_json.get("success") is False:
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": str(send_json.get("message") or "meeting create send failed"),
+                    "result": {"submitted": False, "plan": plan, "submit": send_json},
+                },
+            )
+
+        verify_response = self._run_oa_meeting_ajax("roomListInfo", room_list_args, timeout_seconds)
+        verify_json, error = _oa_meeting_ajax_json(verify_response, context="roomListInfo verification")
+        verification = (
+            {"status": "error", "error": error}
+            if error
+            else _verify_oa_meeting_create_room_app(
+                verify_json,
+                room_id=room_app["roomId"],
+                start_ms=start_ms,
+                end_ms=end_ms,
+                subject=subject,
+            )
+        )
+        result = {
+            "schema_version": "bscli.oa_meeting_create_result.v1",
+            "submitted": verification.get("status") == "matched",
+            "plan": plan,
+            "submit": send_json,
+            "verification": verification,
+        }
+        if verification.get("status") != "matched":
+            return DaemonResponse(
+                502,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": verification.get("error") or "meeting create verification failed",
+                    "result": result,
+                },
+            )
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": result,
+            },
+        )
+
     def _run_oa_meeting_ajax(
         self,
         manager_method: str,
@@ -3953,7 +4140,7 @@ class DaemonState:
         body = urlencode(
             {
                 "managerMethod": manager_method,
-                "arguments": json.dumps(arguments, ensure_ascii=False),
+                "arguments": json.dumps(arguments, ensure_ascii=True, separators=(",", ":")),
             }
         )
         return self._run_page_fetch(
@@ -6016,6 +6203,322 @@ def _promotion_requirements_from_unpromoted_actions(actions: list[dict[str, Any]
             if requirement not in requirements:
                 requirements.append(requirement)
     return requirements
+
+
+def _build_oa_meeting_create_plan(args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "bscli.oa_meeting_create_plan.v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "subject": str(args.get("subject") or ""),
+        "room": {"requested": str(args.get("room") or "")},
+        "time": {
+            "start": str(args.get("start") or ""),
+            "end": str(args.get("end") or ""),
+        },
+        "checks": [],
+        "blocked_reasons": [],
+        "safety": {
+            "will_execute": False,
+            "requires_confirmation": True,
+            "risk": "medium",
+        },
+        "governance": build_write_governance(
+            "meeting.create",
+            verification_method="room_list_readback",
+        ),
+    }
+
+
+def _oa_meeting_create_blocked(
+    plan: dict[str, Any],
+    error: str,
+    *,
+    status: int,
+    confirmed: bool,
+) -> DaemonResponse:
+    plan.setdefault("blocked_reasons", []).append(error)
+    plan.setdefault("safety", {})["will_execute"] = False
+    return DaemonResponse(
+        status,
+        {
+            "ok": False,
+            "requires_confirmation": True,
+            "confirmed": confirmed,
+            "error": error,
+            "result": plan,
+        },
+    )
+
+
+def _parse_oa_meeting_datetime_ms(value: str) -> int:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("meeting datetime is required")
+    if text.isdigit():
+        return int(text)
+    normalized = text.replace("T", " ")
+    if len(normalized) == 16:
+        fmt = "%Y-%m-%d %H:%M"
+    elif len(normalized) == 19:
+        fmt = "%Y-%m-%d %H:%M:%S"
+    else:
+        raise ValueError(f"unsupported meeting datetime format: {text}")
+    try:
+        parsed = datetime.strptime(normalized, fmt)
+    except ValueError as exc:
+        raise ValueError(f"unsupported meeting datetime format: {text}") from exc
+    return int(parsed.replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+
+
+def _oa_meeting_ajax_json(response: DaemonResponse, *, context: str) -> tuple[Any, str]:
+    if response.status != 200 or response.body.get("ok") is False:
+        return None, str(response.body.get("error") or f"{context} failed")
+    result = response.body.get("result") if isinstance(response.body, dict) else {}
+    data = result.get("json") if isinstance(result, dict) else None
+    if data is None and isinstance(result, (dict, list)):
+        data = result
+    if data is None:
+        return None, f"{context} response was not JSON"
+    if isinstance(data, dict) and data.get("code") and data.get("message"):
+        return data, str(data.get("message") or f"{context} returned error")
+    return data, ""
+
+
+def _resolve_oa_meeting_room(requested: str, room_list: Any) -> tuple[dict[str, Any], str]:
+    rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
+    if not isinstance(rooms, list):
+        rooms = []
+    exact = []
+    numeric = []
+    requested_norm = _normalize_oa_meeting_room_name(requested)
+    requested_number = _oa_meeting_room_number(requested, requested=True)
+    for room in rooms:
+        if not isinstance(room, dict):
+            continue
+        name = str(room.get("roomName") or "")
+        name_norm = _normalize_oa_meeting_room_name(name)
+        if requested_norm and (requested_norm == name_norm or requested_norm in name_norm or name_norm in requested_norm):
+            exact.append(room)
+            continue
+        if requested_number and _oa_meeting_room_number(name, requested=False) == requested_number:
+            numeric.append(room)
+    candidates = exact or numeric
+    if len(candidates) == 1:
+        return candidates[0], ""
+    if not candidates:
+        return {}, f"meeting room not found: {requested}"
+    names = ", ".join(str(item.get("roomName") or "") for item in candidates)
+    return {}, f"meeting room is ambiguous: {requested} -> {names}"
+
+
+def _normalize_oa_meeting_room_name(value: str) -> str:
+    text = re.sub(r"\s+", "", str(value or "").lower())
+    for token in ("会议室", "會議室", "号", "#", "層", "层", "樓", "楼"):
+        text = text.replace(token, "")
+    return text
+
+
+def _oa_meeting_room_number(value: str, *, requested: bool) -> str:
+    text = str(value or "")
+    if requested:
+        match = re.search(r"(\d+)\s*(?:号|#)?\s*会议室", text)
+        if match:
+            return match.group(1)
+    for pattern in (r"层\s*(\d+)\s*(?:#|号)\s*会议室", r"楼\s*(\d+)\s*(?:#|号)\s*会议室", r"(\d+)\s*(?:#|号)\s*会议室"):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    if requested:
+        match = re.search(r"\d+", text)
+        if match:
+            return match.group(0)
+    return ""
+
+
+def _oa_meeting_room_app(room: dict[str, Any], *, start_ms: int, end_ms: int) -> dict[str, Any]:
+    return {
+        "roomId": str(room.get("roomId") or ""),
+        "roomName": str(room.get("roomName") or ""),
+        "pId": str(room.get("roomTypeId") or "-1"),
+        "appBeginDate": int(start_ms),
+        "appEndDate": int(end_ms),
+    }
+
+
+def _overlapping_oa_meeting_room_apps(
+    apps: Any,
+    *,
+    room_id: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(apps, list):
+        return []
+    conflicts = []
+    for app in apps:
+        if not isinstance(app, dict) or str(app.get("roomId") or "") != room_id:
+            continue
+        app_start = _safe_int(app.get("appBeginDate"))
+        app_end = _safe_int(app.get("appEndDate"))
+        if app_start is None or app_end is None:
+            continue
+        if app_start < end_ms and app_end > start_ms:
+            conflicts.append(
+                {
+                    "roomId": room_id,
+                    "roomName": app.get("roomName", ""),
+                    "appBeginDate": app_start,
+                    "appEndDate": app_end,
+                    "description": app.get("description", ""),
+                    "meetingId": app.get("meetingId", ""),
+                }
+            )
+    return conflicts
+
+
+def _oa_meeting_room_validation_errors(validate_json: Any) -> list[str]:
+    if isinstance(validate_json, dict) and validate_json.get("success") is False:
+        return [str(validate_json.get("message") or "validateRoomApps failed")]
+    data = validate_json.get("data") if isinstance(validate_json, dict) else []
+    if not isinstance(data, list):
+        return []
+    errors = []
+    for item in data:
+        if isinstance(item, dict) and item.get("validate"):
+            message = str(item.get("message") or "room validation failed")
+            if message not in errors:
+                errors.append(message)
+    return errors
+
+
+def _build_oa_meeting_send_payload(
+    meeting_info: Any,
+    *,
+    subject: str,
+    room_app: dict[str, Any],
+    start_ms: int,
+    end_ms: int,
+    attendees: Any,
+) -> tuple[dict[str, Any], str]:
+    if not isinstance(meeting_info, dict):
+        return {}, "meetingInfo response was not an object"
+    current_user = meeting_info.get("currentUser") if isinstance(meeting_info.get("currentUser"), dict) else {}
+    self_source = str(meeting_info.get("emceeId") or "")
+    if not self_source and current_user.get("id"):
+        self_source = f"Member|{current_user.get('id')}"
+    attendee_sources = _normalize_oa_meeting_attendees(attendees)
+    if not attendee_sources:
+        attendee_sources = [self_source] if self_source else []
+    if not attendee_sources:
+        return {}, "meeting attendee could not be resolved"
+    meeting_types = meeting_info.get("meetingTypes") if isinstance(meeting_info.get("meetingTypes"), list) else []
+    meeting_type = meeting_types[0] if meeting_types and isinstance(meeting_types[0], dict) else {}
+    meeting_type_id = str(meeting_info.get("meetingTypeId") or meeting_type.get("id") or "")
+    meeting_type_name = str(meeting_type.get("name") or "")
+    return {
+        "meetingId": "",
+        "id_temp": str(meeting_info.get("id_temp") or ""),
+        "isBatch": None,
+        "title": subject,
+        "beginDate": start_ms,
+        "endDate": end_ms,
+        "emceeValue": str(meeting_info.get("emceeId") or self_source),
+        "recorderValue": str(meeting_info.get("recorderId") or self_source),
+        "conferees": ",".join(attendee_sources),
+        "impart": "",
+        "resourcesId": "",
+        "beforeTime": meeting_info.get("beforeTime") if meeting_info.get("beforeTime") is not None else 10,
+        "meetingTypeId": meeting_type_id,
+        "meetingTypeName": meeting_type_name,
+        "meetingType": "1",
+        "isSendTextMessages": 0,
+        "projectId": "",
+        "projectName": "",
+        "qrCodeSign": 0,
+        "isPublic": 0,
+        "mtTitle": subject,
+        "leader": "",
+        "attender": "",
+        "tel": "",
+        "notice": "",
+        "plan": "",
+        "meetPlace": "",
+        "selectedRoomApps": [room_app],
+        "selectedVideoRoom": {},
+        "meetingPassword": "",
+        "videoRoomShow": "",
+        "selectedPeriodicity": None,
+        "content": "",
+        "bodyType": str(meeting_info.get("bodyType") or "10"),
+        "sourceId": "0",
+        "sourceType": "0",
+        "linkConfigId": "",
+    }, ""
+
+
+def _normalize_oa_meeting_attendees(attendees: Any) -> list[str]:
+    if isinstance(attendees, str):
+        raw_values = [attendees]
+    elif isinstance(attendees, list):
+        raw_values = attendees
+    else:
+        raw_values = []
+    values = []
+    for raw in raw_values:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if "|" not in value and re.fullmatch(r"-?\d+", value):
+            value = f"Member|{value}"
+        if value not in values:
+            values.append(value)
+    return values
+
+
+def _verify_oa_meeting_create_room_app(
+    room_list: Any,
+    *,
+    room_id: str,
+    start_ms: int,
+    end_ms: int,
+    subject: str,
+) -> dict[str, Any]:
+    apps = room_list.get("roomAppsInfo") if isinstance(room_list, dict) else []
+    if not isinstance(apps, list):
+        apps = []
+    for app in apps:
+        if not isinstance(app, dict) or str(app.get("roomId") or "") != str(room_id):
+            continue
+        if _safe_int(app.get("appBeginDate")) != start_ms or _safe_int(app.get("appEndDate")) != end_ms:
+            continue
+        description = str(app.get("description") or app.get("title") or "")
+        if description and subject not in description:
+            continue
+        return {
+            "status": "matched",
+            "verified": True,
+            "room_app": {
+                "roomId": app.get("roomId", ""),
+                "roomName": app.get("roomName", ""),
+                "appBeginDate": app.get("appBeginDate", ""),
+                "appEndDate": app.get("appEndDate", ""),
+                "description": description,
+                "meetingId": app.get("meetingId", ""),
+                "status": app.get("status", ""),
+            },
+        }
+    return {
+        "status": "not_found",
+        "verified": False,
+        "error": "created meeting room app was not found in roomListInfo readback",
+    }
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _query_param(url: str, name: str) -> str:

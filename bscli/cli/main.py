@@ -492,6 +492,21 @@ def _build_oa_parser(oa_sub) -> None:
     create_dry_run.add_argument("--settle-ms", type=int, dest="settle_ms")
     _add_daemon_options(create_dry_run)
     _add_output_options(create_dry_run)
+    create_execute = create_sub.add_parser("execute")
+    create_execute.set_defaults(oa_meeting_create_mode="execute")
+    create_execute.add_argument("--subject", required=True)
+    create_execute.add_argument("--room", required=True)
+    create_execute.add_argument("--start", required=True)
+    create_execute.add_argument("--end", required=True)
+    create_execute.add_argument(
+        "--attendee",
+        action="append",
+        default=[],
+        help="Optional attendee id in OA source format; defaults to current user when omitted.",
+    )
+    create_execute.add_argument("--confirm", action="store_true")
+    _add_daemon_options(create_execute)
+    _add_output_options(create_execute)
     reply = meeting_sub.add_parser("reply")
     reply_sub = reply.add_subparsers(dest="oa_meeting_action", required=True)
     for mode in ("dry-run", "execute"):
@@ -1562,6 +1577,35 @@ def handle_oa_meeting_reply(args: argparse.Namespace) -> int:
 
 
 def handle_oa_meeting_create(args: argparse.Namespace) -> int:
+    if args.oa_meeting_create_mode == "execute":
+        if not getattr(args, "confirm", False):
+            emit_cli_value(
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa meeting create execute requires --confirm",
+                    "result": {
+                        "schema_version": "bscli.oa_meeting_create_plan.v1",
+                        "safety": {"will_execute": False, "requires_confirmation": True},
+                    },
+                },
+                args,
+            )
+            return 0
+        command_args: dict[str, object] = {
+            "subject": args.subject,
+            "room": args.room,
+            "start": args.start,
+            "end": args.end,
+            "confirm": True,
+        }
+        if args.attendee:
+            command_args["attendees"] = args.attendee
+        response = run_oa_daemon_command(args, "meeting_create_execute", command_args)
+        emit_cli_value(response, args)
+        return 0
+
     command_args: dict[str, object] = {"url": OA_MEETING_CREATE_URL}
     if getattr(args, "settle_ms", None) is not None:
         command_args["settle_ms"] = args.settle_ms

@@ -4512,6 +4512,155 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(response.status, 409)
             self.assertTrue(response.body["requires_confirmation"])
 
+    def test_run_oa_meeting_create_execute_without_confirm_stays_blocked(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_create_execute",
+                    "args": {
+                        "subject": "智能体测试",
+                        "room": "3号会议室",
+                        "start": "2026-07-03 14:00",
+                        "end": "2026-07-03 16:00",
+                    },
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertFalse(response.body["ok"])
+            self.assertTrue(response.body["requires_confirmation"])
+            self.assertFalse(response.body["confirmed"])
+            self.assertFalse(response.body["result"]["safety"]["will_execute"])
+
+    def test_run_oa_meeting_create_execute_sends_and_verifies_room_booking(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            meeting_info = {
+                "id_temp": "temp-1",
+                "currentUser": {"id": "member-1", "name": "辛国茂"},
+                "emceeId": "Member|member-1",
+                "emceeName": "辛国茂",
+                "recorderId": "Member|member-1",
+                "recorderName": "辛国茂",
+                "beforeTime": 10,
+                "bodyType": "10",
+                "meetingTypes": [{"id": "type-1", "name": "普通会议"}],
+            }
+            room_list_before = {
+                "roomsInfo": [
+                    {
+                        "roomId": "room-3",
+                        "roomName": "4层3#会议室",
+                        "roomTypeId": "-1",
+                        "seatCount": 12,
+                    }
+                ],
+                "roomAppsInfo": [],
+            }
+            room_list_after = {
+                "roomsInfo": room_list_before["roomsInfo"],
+                "roomAppsInfo": [
+                    {
+                        "roomId": "room-3",
+                        "roomName": "4层3#会议室",
+                        "appBeginDate": "1783058400000",
+                        "appEndDate": "1783065600000",
+                        "description": "智能体测试",
+                        "meetingId": "meeting-1",
+                        "perId": "member-1",
+                    }
+                ],
+            }
+            responses = [
+                ("meetingInfo", meeting_info),
+                ("roomListInfo", room_list_before),
+                ("validateRoomApps", {"success": True, "data": [{"validate": False, "message": ""}]}),
+                ("send", {"success": True, "data": {"id": "meeting-1"}}),
+                ("roomListInfo", room_list_after),
+            ]
+
+            def fake_meeting_ajax(method, arguments, timeout_seconds):
+                calls.append((method, arguments))
+                expected_method, payload = responses.pop(0)
+                self.assertEqual(method, expected_method)
+                return DaemonResponse(200, {"ok": True, "result": {"json": payload}, "task_id": f"task-{method}"})
+
+            state._run_oa_meeting_ajax = fake_meeting_ajax
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_create_execute",
+                    "args": {
+                        "subject": "智能体测试",
+                        "room": "3号会议室",
+                        "start": "2026-07-03 14:00",
+                        "end": "2026-07-03 16:00",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.body["ok"])
+            result = response.body["result"]
+            self.assertTrue(result["submitted"])
+            self.assertEqual(result["plan"]["room"]["matched_name"], "4层3#会议室")
+            self.assertEqual(result["verification"]["status"], "matched")
+            self.assertEqual([call[0] for call in calls], ["meetingInfo", "roomListInfo", "validateRoomApps", "send", "roomListInfo"])
+            validate_payload = calls[2][1][0]
+            self.assertEqual(validate_payload["roomApps"][0]["roomId"], "room-3")
+            self.assertEqual(validate_payload["roomApps"][0]["appBeginDate"], 1783058400000)
+            send_payload = calls[3][1][0]
+            self.assertEqual(send_payload["title"], "智能体测试")
+            self.assertEqual(send_payload["mtTitle"], "智能体测试")
+            self.assertEqual(send_payload["conferees"], "Member|member-1")
+            self.assertEqual(send_payload["selectedRoomApps"][0]["roomName"], "4层3#会议室")
+            self.assertEqual(responses, [])
+
+    def test_run_oa_meeting_ajax_escapes_unicode_arguments_for_form_body(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            state.handle(
+                "POST",
+                "/extension/register",
+                body={
+                    "client_id": "chrome-1",
+                    "tab_id": 7,
+                    "url": "http://10.10.50.110/seeyon/main.do?method=main",
+                    "title": "OA",
+                },
+            )
+            captured = {}
+
+            def fake_page_fetch(system, target_client_id, args, timeout_seconds):
+                captured.update(args)
+                return DaemonResponse(200, {"ok": True, "result": {"json": {"success": True}}})
+
+            state._run_page_fetch = fake_page_fetch
+            subject = "\u667a\u80fd\u4f53\u6d4b\u8bd5"
+
+            response = state._run_oa_meeting_ajax("send", [{"title": subject, "mtTitle": subject}], 2)
+
+            self.assertEqual(response.status, 200)
+            body = captured["body"]
+            parsed = parse_qs(body)
+            self.assertEqual(parsed["managerMethod"], ["send"])
+            self.assertNotIn(subject, body)
+            self.assertIn(r"\u667a\u80fd\u4f53\u6d4b\u8bd5", parsed["arguments"][0])
+            self.assertEqual(json.loads(parsed["arguments"][0])[0]["title"], subject)
+
     def test_run_oa_write_dry_run_prechecks_target_action_and_records_report(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))

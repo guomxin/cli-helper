@@ -888,6 +888,74 @@ class CliOaTests(unittest.TestCase):
             },
         )
 
+    def test_oa_meeting_create_execute_requires_confirm_and_calls_daemon(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "requires_confirmation": True,
+                "confirmed": True,
+                "result": {
+                    "schema_version": "bscli.oa_meeting_create_result.v1",
+                    "submitted": True,
+                    "verification": {"status": "matched"},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            blocked = self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "create",
+                "execute",
+                "--subject",
+                "智能体测试",
+                "--room",
+                "3号会议室",
+                "--start",
+                "2026-07-03 14:00",
+                "--end",
+                "2026-07-03 16:00",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "meeting",
+                "create",
+                "execute",
+                "--subject",
+                "智能体测试",
+                "--room",
+                "3号会议室",
+                "--start",
+                "2026-07-03 14:00",
+                "--end",
+                "2026-07-03 16:00",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        blocked_payload = json.loads(blocked.stdout)
+        self.assertFalse(blocked_payload["ok"])
+        self.assertTrue(blocked_payload["requires_confirmation"])
+        self.assertEqual(len(seen_payloads), 1)
+        self.assertEqual(json.loads(result.stdout)["result"]["verification"]["status"], "matched")
+        self.assertEqual(seen_payloads[0]["command"], "meeting_create_execute")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {
+                "subject": "智能体测试",
+                "room": "3号会议室",
+                "start": "2026-07-03 14:00",
+                "end": "2026-07-03 16:00",
+                "confirm": True,
+            },
+        )
+
     def test_oa_write_capabilities_calls_daemon_with_plain_arguments(self):
         server, seen_payloads = self._start_daemon(
             {
