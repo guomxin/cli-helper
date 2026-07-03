@@ -4045,6 +4045,33 @@ class DaemonState:
         )
         if payload_error:
             return _oa_meeting_create_blocked(plan, payload_error, status=409, confirmed=True)
+
+        content_save_response = self._run_oa_meeting_content_save(
+            meeting_info,
+            subject,
+            timeout_seconds,
+        )
+        content_save_json, error = _oa_meeting_content_save_json(content_save_response)
+        if error:
+            return DaemonResponse(
+                content_save_response.status,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": True,
+                    "error": error,
+                    "result": {"submitted": False, "plan": plan, "content_save": content_save_response.body},
+                },
+            )
+        content_all = content_save_json.get("contentAll") if isinstance(content_save_json, dict) else {}
+        if isinstance(content_all, dict):
+            plan["content"] = {
+                "content_id": str(content_all.get("id") or ""),
+                "content_type": str(content_all.get("contentType") or ""),
+                "module_id": str(content_all.get("moduleId") or meeting_info.get("id_temp") or ""),
+            }
+        plan["checks"].append(_oa_write_check("content_saved", True, "meeting main body content was saved before send"))
+
         plan["safety"]["will_execute"] = True
         plan["request"] = {
             "method": "meetingAjaxManager.send",
@@ -4149,6 +4176,36 @@ class DaemonState:
             {
                 "method": "POST",
                 "url": f"{base}/seeyon/ajax.do?method=ajaxAction&managerName=meetingAjaxManager",
+                "headers": {"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                "body": body,
+                "max_text": 120000,
+            },
+            timeout_seconds,
+        )
+
+    def _run_oa_meeting_content_save(
+        self,
+        meeting_info: dict[str, Any],
+        subject: str,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        if not self.bridge.list_clients():
+            return DaemonResponse(409, {"ok": False, "error": "no Chrome extension client connected"})
+        target_client_id = self._select_client_id_for_system("oa")
+        if target_client_id is None:
+            return DaemonResponse(409, {"ok": False, "error": "no browser client is currently registered for system: oa"})
+        body, error = _build_oa_meeting_content_save_body(meeting_info, subject=subject)
+        if error:
+            return DaemonResponse(409, {"ok": False, "error": error})
+        profile = self._load_system_profile("oa") or build_seeyon_profile()
+        parsed = urlparse(profile.base_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        return self._run_page_fetch(
+            "oa",
+            target_client_id,
+            {
+                "method": "POST",
+                "url": f"{base}/seeyon/content/content.do?method=saveOrUpdate&onlyGenerateSn=false&optType=undefined&_affairId=&_openFrom=",
                 "headers": {"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
                 "body": body,
                 "max_text": 120000,
@@ -6281,6 +6338,71 @@ def _oa_meeting_ajax_json(response: DaemonResponse, *, context: str) -> tuple[An
         return None, f"{context} response was not JSON"
     if isinstance(data, dict) and data.get("code") and data.get("message"):
         return data, str(data.get("message") or f"{context} returned error")
+    return data, ""
+
+
+def _build_oa_meeting_content_save_body(
+    meeting_info: Any,
+    *,
+    subject: str,
+    content: str = "",
+) -> tuple[str, str]:
+    if not isinstance(meeting_info, dict):
+        return "", "meetingInfo response was not an object"
+    module_id = str(meeting_info.get("id_temp") or "").strip()
+    if not module_id:
+        return "", "meetingInfo response did not include id_temp for content save"
+    current_user = meeting_info.get("currentUser") if isinstance(meeting_info.get("currentUser"), dict) else {}
+    create_id = str(current_user.get("id") or "").strip()
+    if not create_id:
+        source = str(meeting_info.get("emceeId") or meeting_info.get("recorderId") or "")
+        if "|" in source:
+            create_id = source.split("|", 1)[1].strip()
+    content_type = str(meeting_info.get("bodyType") or "10").strip() or "10"
+    payload = {
+        "_currentDiv": {"_currentDiv": "0"},
+        "secretLevelId": {"secretLevelId": ""},
+        "mainbodyDataDiv_0": {
+            "id": "",
+            "createId": create_id,
+            "createDate": "",
+            "modifyId": "",
+            "modifyDate": "",
+            "moduleType": "6",
+            "moduleId": module_id,
+            "contentType": content_type,
+            "moduleTemplateId": "0",
+            "contentTemplateId": "0",
+            "sort": "0",
+            "title": str(subject or ""),
+            "content": str(content or ""),
+            "rightId": "",
+            "status": "STATUS_RESPONSE_NEW",
+            "viewState": "1",
+            "hasHtmlSignature": "0",
+            "contentDataId": "",
+        },
+    }
+    return urlencode({"_json_params": json.dumps(payload, ensure_ascii=True, separators=(",", ":"))}), ""
+
+
+def _oa_meeting_content_save_json(response: DaemonResponse) -> tuple[dict[str, Any], str]:
+    if response.status != 200 or response.body.get("ok") is False:
+        return {}, str(response.body.get("error") or "meeting content save failed")
+    result = response.body.get("result") if isinstance(response.body, dict) else {}
+    data = result.get("json") if isinstance(result, dict) else None
+    if data is None and isinstance(result, dict):
+        text = str(result.get("text") or "").strip()
+        if text:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                data = None
+    if not isinstance(data, dict):
+        return {}, "meeting content save response was not JSON"
+    success = data.get("success")
+    if success is not True and str(success).lower() != "true":
+        return data, str(data.get("errorMsg") or data.get("message") or "meeting content save failed")
     return data, ""
 
 

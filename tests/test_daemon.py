@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 from bscli.core.config import ConfigStore
 from bscli.core.config import SystemProfile
-from bscli.daemon.app import DaemonResponse, DaemonState
+from bscli.daemon.app import DaemonResponse, DaemonState, _build_oa_meeting_content_save_body
 
 
 class DaemonTests(unittest.TestCase):
@@ -4593,7 +4593,19 @@ class DaemonTests(unittest.TestCase):
                 self.assertEqual(method, expected_method)
                 return DaemonResponse(200, {"ok": True, "result": {"json": payload}, "task_id": f"task-{method}"})
 
+            def fake_meeting_content_save(meeting_info_arg, subject_arg, timeout_seconds):
+                calls.append(("contentSave", [{"id_temp": meeting_info_arg["id_temp"], "subject": subject_arg}]))
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {"json": {"success": "true", "contentAll": {"id": "content-1", "contentType": "10"}}},
+                        "task_id": "task-contentSave",
+                    },
+                )
+
             state._run_oa_meeting_ajax = fake_meeting_ajax
+            state._run_oa_meeting_content_save = fake_meeting_content_save
 
             response = state.handle(
                 "POST",
@@ -4618,16 +4630,101 @@ class DaemonTests(unittest.TestCase):
             self.assertTrue(result["submitted"])
             self.assertEqual(result["plan"]["room"]["matched_name"], "4层3#会议室")
             self.assertEqual(result["verification"]["status"], "matched")
-            self.assertEqual([call[0] for call in calls], ["meetingInfo", "roomListInfo", "validateRoomApps", "send", "roomListInfo"])
+            self.assertEqual([call[0] for call in calls], ["meetingInfo", "roomListInfo", "validateRoomApps", "contentSave", "send", "roomListInfo"])
             validate_payload = calls[2][1][0]
             self.assertEqual(validate_payload["roomApps"][0]["roomId"], "room-3")
             self.assertEqual(validate_payload["roomApps"][0]["appBeginDate"], 1783058400000)
-            send_payload = calls[3][1][0]
+            content_payload = calls[3][1][0]
+            self.assertEqual(content_payload["id_temp"], "temp-1")
+            send_payload = calls[4][1][0]
             self.assertEqual(send_payload["title"], "智能体测试")
             self.assertEqual(send_payload["mtTitle"], "智能体测试")
             self.assertEqual(send_payload["conferees"], "Member|member-1")
             self.assertEqual(send_payload["selectedRoomApps"][0]["roomName"], "4层3#会议室")
             self.assertEqual(responses, [])
+
+    def test_run_oa_meeting_create_execute_blocks_when_content_save_fails(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            meeting_info = {
+                "id_temp": "temp-1",
+                "currentUser": {"id": "member-1"},
+                "emceeId": "Member|member-1",
+                "recorderId": "Member|member-1",
+                "beforeTime": 10,
+                "bodyType": "10",
+                "meetingTypes": [{"id": "type-1", "name": "normal"}],
+            }
+            room_list = {
+                "roomsInfo": [{"roomId": "room-3", "roomName": "4F 3# room", "roomTypeId": "-1"}],
+                "roomAppsInfo": [],
+            }
+            responses = [
+                ("meetingInfo", meeting_info),
+                ("roomListInfo", room_list),
+                ("validateRoomApps", {"success": True, "data": [{"validate": False, "message": ""}]}),
+            ]
+
+            def fake_meeting_ajax(method, arguments, timeout_seconds):
+                calls.append((method, arguments))
+                expected_method, payload = responses.pop(0)
+                self.assertEqual(method, expected_method)
+                return DaemonResponse(200, {"ok": True, "result": {"json": payload}, "task_id": f"task-{method}"})
+
+            def fake_meeting_content_save(meeting_info_arg, subject_arg, timeout_seconds):
+                calls.append(("contentSave", [{"id_temp": meeting_info_arg["id_temp"], "subject": subject_arg}]))
+                return DaemonResponse(502, {"ok": False, "error": "content save failed"})
+
+            state._run_oa_meeting_ajax = fake_meeting_ajax
+            state._run_oa_meeting_content_save = fake_meeting_content_save
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_create_execute",
+                    "args": {
+                        "subject": "Agent Test",
+                        "room": "3",
+                        "start": "2026-07-03 14:00",
+                        "end": "2026-07-03 16:00",
+                        "confirm": True,
+                    },
+                    "timeout_seconds": 2,
+                },
+            )
+
+            self.assertEqual(response.status, 502)
+            self.assertFalse(response.body["ok"])
+            self.assertEqual([call[0] for call in calls], ["meetingInfo", "roomListInfo", "validateRoomApps", "contentSave"])
+            self.assertIn("content save failed", response.body["error"])
+
+    def test_build_oa_meeting_content_save_body_uses_id_temp_module(self):
+        body, error = _build_oa_meeting_content_save_body(
+            {
+                "id_temp": "temp-1",
+                "currentUser": {"id": "member-1"},
+                "bodyType": "10",
+            },
+            subject="Agent Test",
+        )
+
+        self.assertEqual(error, "")
+        params = parse_qs(body)
+        self.assertIn("_json_params", params)
+        payload = json.loads(params["_json_params"][0])
+        self.assertEqual(payload["_currentDiv"], {"_currentDiv": "0"})
+        self.assertEqual(payload["secretLevelId"], {"secretLevelId": ""})
+        mainbody = payload["mainbodyDataDiv_0"]
+        self.assertEqual(mainbody["moduleType"], "6")
+        self.assertEqual(mainbody["moduleId"], "temp-1")
+        self.assertEqual(mainbody["createId"], "member-1")
+        self.assertEqual(mainbody["contentType"], "10")
+        self.assertEqual(mainbody["title"], "Agent Test")
+        self.assertEqual(mainbody["viewState"], "1")
 
     def test_run_oa_meeting_ajax_escapes_unicode_arguments_for_form_body(self):
         with TemporaryDirectory() as tmp:
