@@ -28,6 +28,7 @@ from bscli.adapters.seeyon_home import (
     parse_template_center_response,
     parse_template_list,
 )
+from bscli.adapters.seeyon_matter_catalog import enrich_with_target_matters
 from bscli.adapters.seeyon_matter_intent import build_matter_intent_preflight
 from bscli.adapters.seeyon_write import (
     append_oa_launch_draft_audit,
@@ -284,6 +285,12 @@ class DaemonState:
             )
         if system == "oa" and command in {"matter_profile", "matter_inspect"}:
             return self._run_oa_matter_command(
+                command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in {"matter_launch_dry_run", "matter_launch_save_draft"}:
+            return self._run_oa_matter_launch_command(
                 command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
@@ -1265,6 +1272,83 @@ class DaemonState:
                 "ok": True,
                 "task_id": profile_response.body.get("task_id"),
                 "result": _build_oa_matter_matrix(profile, profile_args),
+            },
+        )
+
+    def _run_oa_matter_launch_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        mode = "dry-run" if command == "matter_launch_dry_run" else "save-draft"
+        if mode == "save-draft" and args.get("confirm") is not True:
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa matter launch-save-draft requires confirm=true",
+                    "result": {
+                        "schema_version": "bscli.oa_matter_launch_plan.v1",
+                        "mode": mode,
+                        "matter": _matter_query(args),
+                        "launch": {},
+                    },
+                },
+            )
+
+        profile_args = _matter_profile_args(args)
+        profile_response = self._run_nested_oa_command("matter_profile", profile_args, timeout_seconds)
+        if profile_response.status != 200 or profile_response.body.get("ok") is False:
+            return profile_response
+        profile = profile_response.body.get("result") if isinstance(profile_response.body, dict) else {}
+        if not isinstance(profile, dict):
+            profile = {}
+        matter = _find_oa_matter(profile.get("matters") or [], args)
+        if matter is None:
+            return DaemonResponse(
+                404,
+                {
+                    "ok": False,
+                    "requires_confirmation": mode == "save-draft",
+                    "error": "matter not found; use oa matter matrix to list launch-capable matter ids and names",
+                    "result": {
+                        "schema_version": "bscli.oa_matter_launch_plan.v1",
+                        "mode": mode,
+                        "query": _matter_query(args),
+                    },
+                },
+            )
+
+        launch_args = _matter_launch_delegate_args(matter, args)
+        if not launch_args.get("template_id") and not launch_args.get("url"):
+            return DaemonResponse(
+                409,
+                {
+                    "ok": False,
+                    "requires_confirmation": mode == "save-draft",
+                    "error": "matter has no launchable template or fixed launch URL",
+                    "result": _build_oa_matter_launch_result(matter, {}, mode=mode),
+                },
+            )
+        nested_command = "launch_dry_run" if mode == "dry-run" else "launch_save_draft"
+        launch_response = self._run_nested_oa_command(nested_command, launch_args, timeout_seconds)
+        if launch_response.status != 200 or launch_response.body.get("ok") is False:
+            return launch_response
+        launch_result = launch_response.body.get("result") if isinstance(launch_response.body, dict) else {}
+        if not isinstance(launch_result, dict):
+            launch_result = {}
+        return DaemonResponse(
+            200,
+            {
+                "ok": True,
+                "task_id": launch_response.body.get("task_id") or profile_response.body.get("task_id"),
+                "requires_confirmation": mode == "save-draft",
+                "confirmed": args.get("confirm") is True if mode == "save-draft" else False,
+                "result": _build_oa_matter_launch_result(matter, launch_result, mode=mode),
             },
         )
 
@@ -4013,9 +4097,9 @@ class DaemonState:
             return {"access": "read", "strategy": "daemon_api"}
         if system == "oa" and command in HISTORY_READ_COMMANDS:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"template_match", "matter_profile", "matter_matrix", "matter_inspect", "matter_preflight", "launch_inspect", "launch_dry_run"}:
+        if system == "oa" and command in {"template_match", "matter_profile", "matter_matrix", "matter_inspect", "matter_preflight", "matter_launch_dry_run", "launch_inspect", "launch_dry_run"}:
             return {"access": "read", "strategy": "daemon_api"}
-        if system == "oa" and command in {"launch_save_draft", "matter_execute"}:
+        if system == "oa" and command in {"launch_save_draft", "matter_execute", "matter_launch_save_draft"}:
             return {"access": "write", "strategy": "human_gate"}
         if system == "oa" and command == "write_discover":
             return {"access": "read", "strategy": "daemon_api"}
@@ -4614,6 +4698,16 @@ def _build_oa_template_match(profile: dict[str, Any], templates: dict[str, Any])
             "cluster_count": profile.get("cluster_count", 0),
         },
         "template_count": len(template_items),
+        "templates": [
+            {
+                "title": str(item.get("title") or ""),
+                "template_id": str(item.get("template_id") or ""),
+                "href": str(item.get("href") or ""),
+                "form_app_id": str(item.get("form_app_id") or ""),
+                "category_name": str(item.get("category_name") or ""),
+            }
+            for item in template_items
+        ],
         "cluster_count": len(matched_clusters),
         "clusters": matched_clusters,
     }
@@ -4641,7 +4735,9 @@ def _build_oa_matter_profile(template_match: dict[str, Any], args: dict[str, Any
         if not isinstance(cluster, dict):
             continue
         matters.append(_matter_from_template_cluster(cluster))
+    matters = enrich_with_target_matters(matters, template_match.get("templates") or [])
     matched_count = sum(1 for matter in matters if matter.get("template"))
+    target_count = sum(1 for matter in matters if matter.get("target_status") == "first_batch")
     return {
         "schema_version": "bscli.oa_matter_profile.v1",
         "source": "template_match",
@@ -4650,6 +4746,7 @@ def _build_oa_matter_profile(template_match: dict[str, Any], args: dict[str, Any
         "source_count": (template_match.get("history_profile") or {}).get("source_count", 0),
         "template_count": template_match.get("template_count", 0),
         "matter_count": len(matters),
+        "target_matter_count": target_count,
         "matched_template_count": matched_count,
         "unmatched_template_count": len(matters) - matched_count,
         "matters": matters,
@@ -4702,9 +4799,14 @@ def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
         "name": matter.get("name", ""),
         "subject": matter.get("subject", ""),
         "category_tag": matter.get("category_tag", ""),
+        "aliases": matter.get("aliases") if isinstance(matter.get("aliases"), list) else [],
+        "target_status": matter.get("target_status", ""),
+        "matter_kind": matter.get("matter_kind", ""),
         "frequency": matter.get("frequency") if isinstance(matter.get("frequency"), dict) else {},
         "template_match_status": matter.get("template_match_status", ""),
         "template": template,
+        "launch_entry": matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {},
+        "recommended_fields": matter.get("recommended_fields") if isinstance(matter.get("recommended_fields"), list) else [],
         "launch_handling": launch,
         "received_handling": received,
         "coverage_status": _matter_coverage_status(launch, received),
@@ -4714,18 +4816,27 @@ def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
 
 def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
     template_id = str(template.get("template_id") or "")
+    launch_entry = matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {}
+    launch_url = str(launch_entry.get("url") or "")
     available = [
         action
         for action in matter.get("available_actions") or []
         if isinstance(action, dict) and action.get("status") == "available"
     ]
-    if not template_id:
+    if not template_id and not launch_url:
         return {
             "status": "template_unmatched",
             "verification": "template_match_required",
             "supported_actions": [],
             "next_commands": ["oa matter profile --kind all --limit 50"],
         }
+    target_args = f"--id {matter.get('matter_id')}"
+    recommended_fields = [
+        str(field or "").strip()
+        for field in matter.get("recommended_fields") or []
+        if str(field or "").strip()
+    ] or ["content_coll"]
+    field_args = " ".join(f'--field {field}="Draft note"' for field in recommended_fields)
     return {
         "status": "draft_ready",
         "verification": "launch_dry_run_required",
@@ -4738,8 +4849,8 @@ def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) ->
             for action in available
         ],
         "next_commands": [
-            f"oa launch dry-run --template-id {template_id} --field content_coll=\"Draft note\"",
-            f"oa launch save-draft --template-id {template_id} --field content_coll=\"Draft note\" --confirm",
+            f"oa matter launch-dry-run {target_args} {field_args}",
+            f"oa matter launch-save-draft {target_args} {field_args} --confirm",
         ],
     }
 
@@ -4863,9 +4974,15 @@ def _find_oa_matter(matters: list[Any], args: dict[str, Any]) -> dict[str, Any] 
             continue
         matter_id = _normal_match_text(str(matter.get("matter_id") or ""))
         name = _normal_match_text(str(matter.get("name") or ""))
+        aliases = [
+            _normal_match_text(str(alias or ""))
+            for alias in matter.get("aliases") or []
+        ]
         if wanted_id and matter_id == wanted_id:
             return matter
         if wanted_name and (name == wanted_name or wanted_name in name or name in wanted_name):
+            return matter
+        if wanted_name and any(alias and (alias == wanted_name or wanted_name in alias or alias in wanted_name) for alias in aliases):
             return matter
     return None
 
@@ -4904,14 +5021,53 @@ def _matter_next_steps(matter: dict[str, Any], launch_inspection: dict[str, Any]
     template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
     template_id = str(template.get("template_id") or "")
     if not template_id:
+        launch_entry = matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {}
+        if launch_entry.get("url"):
+            matter_id = matter.get("matter_id", "")
+            return [
+                f"oa matter launch-dry-run --id {matter_id} --field <field>=<value>",
+                f"oa matter launch-save-draft --id {matter_id} --field <field>=<value> --confirm",
+            ]
         return ["Run oa template match with a broader history kind or keyword to resolve this matter to a template."]
     steps = [
-        f"oa launch dry-run --template-id {template_id} --field <field>=<value>",
-        f"oa launch save-draft --template-id {template_id} --field <field>=<value> --confirm",
+        f"oa matter launch-dry-run --id {matter.get('matter_id')} --field <field>=<value>",
+        f"oa matter launch-save-draft --id {matter.get('matter_id')} --field <field>=<value> --confirm",
     ]
     if not launch_inspection:
         steps.insert(0, f"oa matter inspect --id {matter.get('matter_id')} --with-launch")
     return steps
+
+
+def _matter_launch_delegate_args(matter: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    delegate: dict[str, Any] = {"fields": args.get("fields") or {}}
+    template = matter.get("template") if isinstance(matter.get("template"), dict) else {}
+    template_id = str(template.get("template_id") or "")
+    launch_entry = matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {}
+    if template_id:
+        delegate["template_id"] = template_id
+    elif launch_entry.get("url"):
+        delegate["url"] = str(launch_entry.get("url") or "")
+    for key in ("settle_ms", "keep_tab"):
+        if args.get(key) is not None:
+            delegate[key] = args[key]
+    if args.get("confirm") is True:
+        delegate["confirm"] = True
+    return delegate
+
+
+def _build_oa_matter_launch_result(matter: dict[str, Any], launch_result: dict[str, Any], *, mode: str) -> dict[str, Any]:
+    return {
+        "schema_version": "bscli.oa_matter_launch_plan.v1",
+        "mode": mode,
+        "matter": _matter_matrix_item(matter),
+        "launch": launch_result,
+        "read_effect": {
+            "history_read": True,
+            "template_list_read": True,
+            "launch_page_opened": bool(launch_result),
+            "submitted_count": 0,
+        },
+    }
 
 
 def _rendered_snapshot_html(snapshot: Any) -> str:

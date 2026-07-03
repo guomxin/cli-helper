@@ -35,6 +35,13 @@ without sending the workflow.
   recommend atomic commands such as `launch_dry_run` or `launch_save_draft`.
   They are read-only; `matter inspect` opens a template launch page only when
   `--with-launch` is explicitly supplied.
+- `oa matter launch-dry-run ...` and `oa matter launch-save-draft ... --confirm`
+  are the matter-facing launch wrappers. They resolve a target matter by id,
+  name, or alias, then delegate to the existing launch dry-run/save-draft
+  engine with a template id or fixed launch URL. The first batch covers
+  `【用印】用印申请单`, `【HR】补签申请单`, `【HR】出差申请单`, and `新建会议`.
+  The dry-run command is read-only. The save-draft command keeps the same
+  confirmation gate and `submitted_count=0` guard as `oa launch save-draft`.
 - `oa matter matrix` is the agent-facing capability table for that catalog. It
   summarizes launch draft readiness, received-pending preflight readiness,
   coverage status, and next safe commands. It does not open launch pages, read
@@ -286,6 +293,8 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__matter_profile`
 - `oa__matter_matrix`
 - `oa__matter_inspect`
+- `oa__matter_launch_dry_run`
+- `oa__matter_launch_save_draft`
 - `oa__matter_preflight`
 - `oa__matter_execute`
 - `oa__write_capabilities`

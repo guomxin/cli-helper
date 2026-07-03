@@ -50,6 +50,8 @@ python -m bscli.cli.main --home .bscli oa template match --kind done --limit 50
 python -m bscli.cli.main --home .bscli oa matter profile --kind all --limit 50
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id>
 python -m bscli.cli.main --home .bscli oa matter inspect --id <matter_id> --with-launch
+python -m bscli.cli.main --home .bscli oa matter launch-dry-run --name <matter_name> --field content_coll="Draft note"
+python -m bscli.cli.main --home .bscli oa matter launch-save-draft --id <matter_id> --field content_coll="Draft note" --confirm
 python -m bscli.cli.main --home .bscli oa matter preflight --keyword <pending_keyword> --intent approve
 python -m bscli.cli.main --home .bscli oa matter preflight --id <pending_affair_id> --intent archive
 python -m bscli.cli.main --home .bscli oa matter execute --keyword <pending_keyword> --intent approve --opinion "read" --confirm
@@ -65,6 +67,15 @@ has a stable `matter_id`, historical samples, template match state, and the
 atomic write/read commands that are safe to consider next. `oa matter inspect`
 reads one matter entry; it opens the launch page only when `--with-launch` is
 passed.
+The catalog also carries a first-batch target seed for matters that should be
+promoted even when recent history is sparse: `【用印】用印申请单`,
+`【HR】补签申请单`, `【HR】出差申请单`, and `新建会议`. The first three resolve
+through template-center metadata; `新建会议` resolves through the fixed OA
+meeting editor URL. `oa matter launch-dry-run` and
+`oa matter launch-save-draft` keep agents at the matter layer, then delegate to
+the existing launch dry-run/save-draft engine with either a template id or fixed
+URL. They are wrappers around the existing governed launch workflow, not a new
+write executor.
 `oa matter preflight` is the received-pending business-intent bridge. It keeps
 agent-facing commands at the matter/intent level (`approve`, `archive`) while
 reporting the internal binding (`ContinueSubmit`, `Archive`) for governance and

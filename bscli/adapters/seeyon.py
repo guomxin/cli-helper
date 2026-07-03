@@ -541,6 +541,73 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
     registry.register(
         CommandDefinition(
             system="oa",
+            name="matter_launch_dry_run",
+            description="Resolve a Seeyon OA matter by id or name and validate its launch draft fields without mutating OA.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "description": "Matter id to launch, such as matter-business-trip-request."},
+                "name": {"type": "string", "description": "Matter name or alias, such as 出差申请单."},
+                "fields": {"type": "object", "required": True},
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collections to profile before matter lookup. Defaults to all.",
+                },
+                "settle_ms": {"type": "integer"},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "matter": {"type": "object"},
+                    "launch": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.launch"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="matter_launch_save_draft",
+            description="Resolve a Seeyon OA matter by id or name and execute a confirmed launch-page save-draft.",
+            access="write",
+            strategy="human_gate",
+            risk="medium",
+            requires_confirmation=True,
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "id": {"type": "string", "description": "Matter id to launch, such as matter-meeting-create."},
+                "name": {"type": "string", "description": "Matter name or alias, such as 新建会议."},
+                "fields": {"type": "object", "required": True},
+                "kind": {
+                    "type": "string",
+                    "description": "Historical collections to profile before matter lookup. Defaults to all.",
+                },
+                "settle_ms": {"type": "integer"},
+                "keep_tab": {"type": "boolean"},
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm saving an OA draft.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "matter": {"type": "object"},
+                    "launch": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.launch"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
             name="launch_inspect",
             description="Open a Seeyon OA template launch page and inspect fields, buttons, and write hints without submitting.",
             access="read",

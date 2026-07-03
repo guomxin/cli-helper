@@ -1102,6 +1102,91 @@ class CliOaTests(unittest.TestCase):
         self.assertEqual(seen_payloads[1]["args"], {"id": "seal-request", "kind": "all", "with_launch": True})
         self.assertEqual(seen_payloads[2]["command"], "matter_profile")
 
+    def test_oa_matter_launch_dry_run_calls_daemon_with_matter_name_and_fields(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_launch_plan.v1",
+                    "matter": {"matter_id": "matter-business-trip-request"},
+                    "launch": {"schema_version": "bscli.oa_launch_draft_plan.v1"},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "launch-dry-run",
+                "--name",
+                "出差申请单",
+                "--field",
+                "content_coll=出差草稿",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["result"]["schema_version"], "bscli.oa_matter_launch_plan.v1")
+        self.assertEqual(seen_payloads[0]["command"], "matter_launch_dry_run")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"kind": "all", "name": "出差申请单", "fields": {"content_coll": "出差草稿"}},
+        )
+
+    def test_oa_matter_launch_save_draft_requires_confirm_and_calls_daemon(self):
+        server, seen_payloads = self._start_daemon(
+            {
+                "ok": True,
+                "result": {
+                    "schema_version": "bscli.oa_matter_launch_plan.v1",
+                    "matter": {"matter_id": "matter-meeting-create"},
+                    "launch": {"schema_version": "bscli.oa_launch_draft_plan.v1"},
+                },
+            }
+        )
+
+        with TemporaryDirectory() as tmp:
+            blocked = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "launch-save-draft",
+                "--id",
+                "matter-meeting-create",
+                "--field",
+                "title=例会",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+            result = self._run_cli(
+                tmp,
+                "oa",
+                "matter",
+                "launch-save-draft",
+                "--id",
+                "matter-meeting-create",
+                "--field",
+                "title=例会",
+                "--confirm",
+                "--daemon-url",
+                f"http://127.0.0.1:{server.server_port}",
+            )
+
+        blocked_payload = json.loads(blocked.stdout)
+        payload = json.loads(result.stdout)
+        self.assertFalse(blocked_payload["ok"])
+        self.assertTrue(blocked_payload["requires_confirmation"])
+        self.assertEqual(payload["result"]["matter"]["matter_id"], "matter-meeting-create")
+        self.assertEqual(len(seen_payloads), 1)
+        self.assertEqual(seen_payloads[0]["command"], "matter_launch_save_draft")
+        self.assertEqual(
+            seen_payloads[0]["args"],
+            {"kind": "all", "id": "matter-meeting-create", "fields": {"title": "例会"}, "confirm": True},
+        )
+
     def test_oa_matter_preflight_calls_daemon_with_business_intent(self):
         server, seen_payloads = self._start_daemon(
             {

@@ -29,6 +29,8 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("oa__matter_inspect", tools)
         self.assertIn("oa__matter_preflight", tools)
         self.assertIn("oa__matter_execute", tools)
+        self.assertIn("oa__matter_launch_dry_run", tools)
+        self.assertIn("oa__matter_launch_save_draft", tools)
         self.assertIn("oa__template_match", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__launch_dry_run", tools)
@@ -39,6 +41,8 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(tools["oa__matter_inspect"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__matter_preflight"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__matter_execute"]["annotations"]["readOnlyHint"], False)
+        self.assertEqual(tools["oa__matter_launch_dry_run"]["annotations"]["readOnlyHint"], True)
+        self.assertEqual(tools["oa__matter_launch_save_draft"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(tools["oa__launch_dry_run"]["annotations"]["readOnlyHint"], True)
         self.assertEqual(tools["oa__launch_save_draft"]["annotations"]["readOnlyHint"], False)
         self.assertEqual(

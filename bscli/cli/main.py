@@ -272,6 +272,34 @@ def _build_oa_parser(oa_sub) -> None:
     matter_execute.add_argument("--confirm", action="store_true")
     _add_daemon_options(matter_execute)
     _add_output_options(matter_execute)
+    for action, command in (
+        ("launch-dry-run", "matter_launch_dry_run"),
+        ("launch-save-draft", "matter_launch_save_draft"),
+    ):
+        matter_launch = matter_sub.add_parser(action)
+        matter_launch.set_defaults(oa_command=command, oa_matter_action=action)
+        matter_launch_target = matter_launch.add_mutually_exclusive_group(required=True)
+        matter_launch_target.add_argument("--id", dest="matter_id")
+        matter_launch_target.add_argument("--name", dest="matter_name")
+        matter_launch.add_argument(
+            "--field",
+            action="append",
+            default=[],
+            help="Field assignment in name=value form; may be repeated.",
+        )
+        matter_launch.add_argument("--fields-json", default="{}", help="JSON object of field name/id/label to value.")
+        matter_launch.add_argument(
+            "--kind",
+            choices=["sent", "done", "tracked", "all"],
+            default="all",
+            help="Historical collections to profile before matter lookup; defaults to all.",
+        )
+        matter_launch.add_argument("--settle-ms", type=int, dest="settle_ms")
+        if action == "launch-save-draft":
+            matter_launch.add_argument("--confirm", action="store_true")
+            matter_launch.add_argument("--keep-tab", action="store_true", dest="keep_tab")
+        _add_daemon_options(matter_launch)
+        _add_output_options(matter_launch)
 
     detail = oa_sub.add_parser("detail")
     detail_sub = detail.add_subparsers(dest="oa_action", required=True)
@@ -1028,6 +1056,22 @@ def handle_oa_matter(args: argparse.Namespace) -> int:
         response = run_oa_daemon_command(args, "matter_inspect", _matter_daemon_args_from_cli(args))
     elif action == "preflight":
         response = run_oa_daemon_command(args, "matter_preflight", _matter_preflight_daemon_args_from_cli(args))
+    elif action == "launch-dry-run":
+        response = run_oa_daemon_command(args, "matter_launch_dry_run", _matter_launch_daemon_args_from_cli(args))
+    elif action == "launch-save-draft":
+        if not getattr(args, "confirm", False):
+            emit_cli_value(
+                {
+                    "ok": False,
+                    "requires_confirmation": True,
+                    "confirmed": False,
+                    "error": "oa matter launch-save-draft requires --confirm",
+                    "result": {},
+                },
+                args,
+            )
+            return 0
+        response = run_oa_daemon_command(args, "matter_launch_save_draft", _matter_launch_daemon_args_from_cli(args))
     elif action == "execute":
         if not getattr(args, "confirm", False):
             emit_cli_value(
@@ -1222,6 +1266,17 @@ def _matter_execute_daemon_args_from_cli(args: argparse.Namespace) -> dict:
         value = getattr(args, key, None)
         if value is not None:
             payload[key] = value
+    return payload
+
+
+def _matter_launch_daemon_args_from_cli(args: argparse.Namespace) -> dict:
+    payload = _matter_daemon_args_from_cli(args)
+    payload.pop("with_launch", None)
+    payload["fields"] = _launch_fields_from_cli(args)
+    if getattr(args, "confirm", False):
+        payload["confirm"] = True
+    if getattr(args, "keep_tab", False):
+        payload["keep_tab"] = True
     return payload
 
 
@@ -1766,7 +1821,7 @@ def run_oa_daemon_command(
 def _daemon_client_timeout_seconds(timeout_seconds: float, command: str) -> float:
     if command in {"write_prepare"}:
         return max(float(timeout_seconds) * 3 + 5, 10)
-    if command in {"launch_save_draft", "write_execute", "pending_submit", "matter_execute"}:
+    if command in {"launch_save_draft", "matter_launch_save_draft", "write_execute", "pending_submit", "matter_execute"}:
         return max(float(timeout_seconds) * 2 + 20, 30)
     return max(float(timeout_seconds) + 5, 10)
 

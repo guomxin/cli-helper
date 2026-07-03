@@ -179,6 +179,17 @@ class ToolManifestTests(unittest.TestCase):
         self.assertFalse(matter_inspect["metadata"]["requires_confirmation"])
         self.assertEqual(matter_inspect["input_schema"]["properties"]["with_launch"]["type"], "boolean")
 
+        matter_launch_dry_run = tools["oa__matter_launch_dry_run"]
+        self.assertEqual(matter_launch_dry_run["metadata"]["access"], "read")
+        self.assertEqual(matter_launch_dry_run["metadata"]["risk"], "low")
+        self.assertEqual(matter_launch_dry_run["input_schema"]["properties"]["fields"]["type"], "object")
+
+        matter_launch_save_draft = tools["oa__matter_launch_save_draft"]
+        self.assertEqual(matter_launch_save_draft["metadata"]["access"], "write")
+        self.assertEqual(matter_launch_save_draft["metadata"]["risk"], "medium")
+        self.assertTrue(matter_launch_save_draft["metadata"]["requires_confirmation"])
+        self.assertEqual(matter_launch_save_draft["input_schema"]["required"], ["fields", "confirm"])
+
         matter_execute = tools["oa__matter_execute"]
         self.assertEqual(matter_execute["metadata"]["access"], "write")
         self.assertTrue(matter_execute["metadata"]["requires_confirmation"])

@@ -3521,6 +3521,66 @@ class DaemonTests(unittest.TestCase):
             self.assertRegex(result["matters"][1]["matter_id"], r"^matter-[a-f0-9]{10}$")
             self.assertEqual(result["matters"][1]["available_actions"][0]["status"], "blocked")
 
+    def test_run_matter_profile_adds_first_batch_target_matters_from_templates(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            def fake_nested(command, args, timeout_seconds):
+                self.assertEqual(command, "template_match")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_template_match.v1",
+                            "history_profile": {"kind": "all", "source_count": 0, "cluster_count": 0},
+                            "template_count": 4,
+                            "templates": [
+                                {
+                                    "title": "【用印】用印申请单",
+                                    "template_id": "tpl-seal",
+                                    "href": "http://oa.example.test/new?templateId=tpl-seal",
+                                },
+                                {
+                                    "title": "【HR】补签申请单",
+                                    "template_id": "tpl-missed-punch",
+                                    "href": "http://oa.example.test/new?templateId=tpl-missed-punch",
+                                },
+                                {
+                                    "title": "【HR】出差申请单",
+                                    "template_id": "tpl-business-trip",
+                                    "href": "http://oa.example.test/new?templateId=tpl-business-trip",
+                                },
+                            ],
+                            "clusters": [],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_profile",
+                    "args": {"kind": "all", "limit": 20},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            result = response.body["result"]
+            matters = {matter["matter_id"]: matter for matter in result["matters"]}
+            self.assertIn("matter-seal-request", matters)
+            self.assertIn("matter-missed-punch-request", matters)
+            self.assertIn("matter-business-trip-request", matters)
+            self.assertIn("matter-meeting-create", matters)
+            self.assertEqual(matters["matter-missed-punch-request"]["template"]["template_id"], "tpl-missed-punch")
+            self.assertEqual(matters["matter-business-trip-request"]["target_status"], "first_batch")
+            self.assertEqual(matters["matter-meeting-create"]["launch_entry"]["type"], "fixed_url")
+            self.assertEqual(result["target_matter_count"], 4)
+
     def test_run_matter_matrix_summarizes_launch_and_received_capabilities(self):
         with TemporaryDirectory() as tmp:
             state = DaemonState(ConfigStore(Path(tmp)))
@@ -3592,9 +3652,55 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["count"], 2)
             self.assertEqual(result["items"][0]["matter_id"], "travel-reimburse")
             self.assertEqual(result["items"][0]["launch_handling"]["status"], "draft_ready")
-            self.assertIn("oa launch dry-run --template-id tpl-travel", result["items"][0]["launch_handling"]["next_commands"][0])
+            self.assertIn("oa matter launch-dry-run --id travel-reimburse", result["items"][0]["launch_handling"]["next_commands"][0])
             self.assertEqual(result["items"][0]["received_handling"]["status"], "pending_item_required")
             self.assertEqual(result["items"][1]["launch_handling"]["status"], "template_unmatched")
+
+    def test_run_matter_matrix_uses_recommended_fields_in_launch_next_commands(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            def fake_nested(command, args, timeout_seconds):
+                self.assertEqual(command, "matter_profile")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "matter-meeting-create",
+                                    "name": "新建会议",
+                                    "recommended_fields": ["title", "mtTitle"],
+                                    "launch_entry": {
+                                        "type": "fixed_url",
+                                        "url": "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true",
+                                    },
+                                    "available_actions": [{"command": "launch_dry_run", "status": "available"}],
+                                }
+                            ],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_matrix",
+                    "args": {"kind": "all"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            commands = response.body["result"]["items"][0]["launch_handling"]["next_commands"]
+            self.assertIn("--field title=\"Draft note\"", commands[0])
+            self.assertIn("--field mtTitle=\"Draft note\"", commands[0])
+            self.assertNotIn("content_coll", commands[0])
 
     def test_run_matter_inspect_resolves_matter_and_optionally_reads_launch_fields(self):
         with TemporaryDirectory() as tmp:
@@ -3662,7 +3768,127 @@ class DaemonTests(unittest.TestCase):
             self.assertEqual(result["schema_version"], "bscli.oa_matter_inspection.v1")
             self.assertEqual(result["matter"]["matter_id"], "seal-request")
             self.assertEqual(result["launch_inspection"]["fields"][0]["name"], "content_coll")
-            self.assertIn("oa launch dry-run --template-id tpl-seal", result["next_steps"][0])
+            self.assertIn("oa matter launch-dry-run --id seal-request", result["next_steps"][0])
+
+    def test_run_matter_launch_dry_run_resolves_template_matter_to_launch_dry_run(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "matter-business-trip-request",
+                                    "name": "【HR】出差申请单",
+                                    "template": {"template_id": "tpl-business-trip"},
+                                    "available_actions": [{"command": "launch_dry_run", "status": "available"}],
+                                }
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_draft_plan.v1",
+                            "target": {"template_id": "tpl-business-trip"},
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_launch_dry_run",
+                    "args": {"name": "出差申请单", "fields": {"content_coll": "draft"}},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["matter_profile", "launch_dry_run"])
+            self.assertEqual(calls[1][1]["template_id"], "tpl-business-trip")
+            self.assertEqual(calls[1][1]["fields"], {"content_coll": "draft"})
+            self.assertEqual(response.body["result"]["matter"]["matter_id"], "matter-business-trip-request")
+
+    def test_run_matter_launch_save_draft_resolves_meeting_to_fixed_launch_url(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+            responses = [
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "matter-meeting-create",
+                                    "name": "新建会议",
+                                    "launch_entry": {
+                                        "type": "fixed_url",
+                                        "url": "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true",
+                                    },
+                                    "available_actions": [{"command": "launch_save_draft", "status": "available"}],
+                                }
+                            ],
+                        },
+                    },
+                ),
+                DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_launch_draft_plan.v1",
+                            "target": {"url": "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true"},
+                        },
+                    },
+                ),
+            ]
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return responses.pop(0)
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_launch_save_draft",
+                    "args": {"id": "matter-meeting-create", "fields": {"title": "例会"}, "confirm": True},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual([call[0] for call in calls], ["matter_profile", "launch_save_draft"])
+            self.assertEqual(
+                calls[1][1]["url"],
+                "http://10.10.50.110/seeyon/meeting.do?method=editor&showTab=true",
+            )
+            self.assertTrue(calls[1][1]["confirm"])
+            self.assertEqual(response.body["result"]["matter"]["matter_id"], "matter-meeting-create")
 
     def test_run_launch_inspect_resolves_template_and_reads_rendered_page_without_submit(self):
         with TemporaryDirectory() as tmp:
