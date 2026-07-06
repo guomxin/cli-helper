@@ -28,7 +28,7 @@ from bscli.adapters.seeyon_home import (
     parse_template_center_response,
     parse_template_list,
 )
-from bscli.adapters.seeyon_matter_catalog import enrich_with_target_matters
+from bscli.adapters.seeyon_matter_catalog import MEETING_CREATE_URL, enrich_with_target_matters
 from bscli.adapters.seeyon_matter_intent import build_matter_intent_preflight
 from bscli.adapters.seeyon_write import (
     append_oa_launch_draft_audit,
@@ -359,6 +359,12 @@ class DaemonState:
             )
         if system == "oa" and command in {"meeting_reply_dry_run", "meeting_reply_execute"}:
             return self._run_oa_meeting_reply_command(
+                command,
+                body.get("args") or {},
+                timeout_seconds=float(body.get("timeout_seconds", 30)),
+            )
+        if system == "oa" and command in {"meeting_create_inspect", "meeting_create_dry_run"}:
+            return self._run_oa_meeting_create_probe_command(
                 command,
                 body.get("args") or {},
                 timeout_seconds=float(body.get("timeout_seconds", 30)),
@@ -2759,10 +2765,17 @@ class DaemonState:
         return {
             "read": read,
             "write": {
-                "executable": ["workflow.submit", "meeting.reply", "workflow.launch.save_draft"],
+                "executable": ["workflow.submit", "meeting.reply", "meeting.create", "workflow.launch.save_draft"],
                 "dry_run_only": ["workflow.archive"],
                 "blocked": ["workflow.delete", "workflow.revoke", "workflow.return", "workflow.upload"],
-                "human_gate_commands": ["write_execute", "matter_execute", "pending_submit", "meeting_reply_execute", "launch_save_draft"],
+                "human_gate_commands": [
+                    "write_execute",
+                    "matter_execute",
+                    "pending_submit",
+                    "meeting_reply_execute",
+                    "meeting_create_execute",
+                    "launch_save_draft",
+                ],
                 "policy": "write actions require dry-run/precheck, explicit confirmation, read-back verification, and sanitized audit",
             },
             "discovered": discovered,
@@ -3941,6 +3954,21 @@ class DaemonState:
             "error": "meeting reply did not match requested attitude after submit",
         }
 
+    def _run_oa_meeting_create_probe_command(
+        self,
+        command: str,
+        args: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> DaemonResponse:
+        delegate_args: dict[str, Any] = {"url": MEETING_CREATE_URL}
+        if args.get("settle_ms") is not None:
+            delegate_args["settle_ms"] = args.get("settle_ms")
+        if command == "meeting_create_dry_run":
+            delegate_args["fields"] = args.get("fields") if isinstance(args.get("fields"), dict) else {}
+            return self._run_nested_oa_command("launch_dry_run", delegate_args, timeout_seconds)
+        return self._run_nested_oa_command("launch_inspect", delegate_args, timeout_seconds)
+
     def _run_oa_meeting_create_execute_command(
         self,
         args: dict[str, Any],
@@ -5006,7 +5034,13 @@ def _build_oa_matter_profile(template_match: dict[str, Any], args: dict[str, Any
 def _build_oa_matter_matrix(profile: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     matters = [matter for matter in profile.get("matters") or [] if isinstance(matter, dict)]
     items = [_matter_matrix_item(matter) for matter in matters]
-    launch_ready = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "draft_ready")
+    launch_ready = sum(
+        1
+        for item in items
+        if item.get("launch_handling", {}).get("status") in {"draft_ready", "direct_create_ready"}
+    )
+    direct_create_ready = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "direct_create_ready")
+    received_sample_ready = sum(1 for item in items if item.get("received_handling", {}).get("status") == "workflow_sample_ready")
     template_unmatched = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "template_unmatched")
     return {
         "schema_version": "bscli.oa_matter_matrix.v1",
@@ -5019,9 +5053,11 @@ def _build_oa_matter_matrix(profile: dict[str, Any], args: dict[str, Any]) -> di
         "count": len(items),
         "coverage": {
             "launch_draft_ready": launch_ready,
+            "special_module_direct_create_ready": direct_create_ready,
             "template_unmatched": template_unmatched,
             "received_preflight_ready": len(items),
-            "write_execution_newly_enabled": 0,
+            "received_workflow_sample_ready": received_sample_ready,
+            "write_execution_newly_enabled": direct_create_ready + received_sample_ready,
         },
         "items": items,
         "read_effect": {
@@ -5051,6 +5087,7 @@ def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
         "template": template,
         "launch_entry": matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {},
         "recommended_fields": matter.get("recommended_fields") if isinstance(matter.get("recommended_fields"), list) else [],
+        "received_workflow_profile": matter.get("received_workflow_profile") if isinstance(matter.get("received_workflow_profile"), dict) else {},
         "launch_handling": launch,
         "received_handling": received,
         "coverage_status": _matter_coverage_status(launch, received),
@@ -5059,6 +5096,40 @@ def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
 
 
 def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) -> dict[str, Any]:
+    if _is_meeting_create_matter(matter):
+        return {
+            "status": "direct_create_ready",
+            "verification": "room_schedule_and_meeting_view",
+            "supported_actions": [
+                {
+                    "name": "meeting.create.inspect",
+                    "command": "meeting_create_inspect",
+                    "requires_confirmation": False,
+                    "access": "read",
+                    "risk": "low",
+                },
+                {
+                    "name": "meeting.create.dry_run",
+                    "command": "meeting_create_dry_run",
+                    "requires_confirmation": False,
+                    "access": "read",
+                    "risk": "low",
+                },
+                {
+                    "name": "meeting.create.execute",
+                    "command": "meeting_create_execute",
+                    "requires_confirmation": True,
+                    "access": "write",
+                    "risk": "high",
+                    "verification_method": "room_schedule_and_meeting_view",
+                },
+            ],
+            "next_commands": [
+                "oa meeting create inspect --settle-ms 3000",
+                'oa meeting create dry-run --field title="Planning" --field mtTitle="Project sync" --settle-ms 3000',
+                "oa meeting create execute --subject <subject> --room <room> --start <yyyy-mm-dd HH:MM> --end <yyyy-mm-dd HH:MM> --confirm",
+            ],
+        }
     template_id = str(template.get("template_id") or "")
     launch_entry = matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {}
     launch_url = str(launch_entry.get("url") or "")
@@ -5101,6 +5172,63 @@ def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) ->
 
 def _matter_received_handling(matter: dict[str, Any]) -> dict[str, Any]:
     keyword = str(matter.get("name") or matter.get("subject") or matter.get("matter_id") or "")
+    if _is_meeting_create_matter(matter):
+        return {
+            "status": "meeting_reply_supported_when_pending",
+            "verification": "meeting_view_feedback_flag",
+            "supported_intents": [
+                {
+                    "intent": "join",
+                    "binding": "meetingAjaxManager.reply",
+                    "execution": "governed_when_pending_meeting_is_available",
+                },
+                {
+                    "intent": "not_join",
+                    "binding": "meetingAjaxManager.reply",
+                    "execution": "governed_when_pending_meeting_is_available",
+                },
+                {
+                    "intent": "pending",
+                    "binding": "meetingAjaxManager.reply",
+                    "execution": "governed_when_pending_meeting_is_available",
+                },
+            ],
+            "next_commands": [
+                'oa matter execute --keyword "会议" --intent join --feedback <feedback> --confirm',
+                'oa meeting reply dry-run --id <pending_affair_id> --attitude join',
+            ],
+        }
+    profile = matter.get("received_workflow_profile") if isinstance(matter.get("received_workflow_profile"), dict) else {}
+    if profile:
+        default_opinion = str(profile.get("default_opinion") or "read")
+        return {
+            "status": "workflow_sample_ready",
+            "verification": profile.get("verification_method") or "pending_disappearance",
+            "workflow_profile": {
+                "profile_id": profile.get("profile_id", ""),
+                "profile_status": profile.get("profile_status", ""),
+                "default_opinion": default_opinion,
+                "required_prefill": profile.get("required_prefill") if isinstance(profile.get("required_prefill"), list) else [],
+                "validated_sample_count": len(profile.get("validated_samples") or []),
+            },
+            "supported_intents": [
+                {
+                    "intent": "approve",
+                    "binding": profile.get("binding") or "ContinueSubmit",
+                    "execution": "governed_when_pending_action_is_available",
+                    "default_opinion": default_opinion,
+                },
+                {
+                    "intent": "archive",
+                    "binding": "Archive",
+                    "execution": "dry_run_only",
+                },
+            ],
+            "next_commands": [
+                f'oa matter preflight --keyword "{keyword}" --intent approve --opinion "{default_opinion}"',
+                f'oa matter execute --keyword "{keyword}" --intent approve --opinion "{default_opinion}" --confirm',
+            ],
+        }
     return {
         "status": "pending_item_required",
         "verification": "matter_preflight_required",
@@ -5124,11 +5252,19 @@ def _matter_received_handling(matter: dict[str, Any]) -> dict[str, Any]:
 
 
 def _matter_coverage_status(launch: dict[str, Any], received: dict[str, Any]) -> str:
+    if launch.get("status") == "direct_create_ready":
+        return "special_module_direct_create_ready"
+    if launch.get("status") == "draft_ready" and received.get("status") == "workflow_sample_ready":
+        return "launch_ready_received_workflow_sample_ready"
     if launch.get("status") == "draft_ready" and received.get("status") == "pending_item_required":
         return "launch_ready_received_preflight_ready"
     if launch.get("status") == "template_unmatched":
         return "needs_template_match"
     return "partial"
+
+
+def _is_meeting_create_matter(matter: dict[str, Any]) -> bool:
+    return str(matter.get("matter_id") or "") == "matter-meeting-create" or str(matter.get("matter_kind") or "") == "meeting"
 
 
 def _matter_from_template_cluster(cluster: dict[str, Any]) -> dict[str, Any]:

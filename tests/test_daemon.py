@@ -2184,8 +2184,10 @@ class DaemonTests(unittest.TestCase):
             result = response.body["result"]
             self.assertIn({"name": "workflow.inspect", "command": "workflow_inspect", "risk": "low"}, result["read"])
             self.assertIn("workflow.submit", result["write"]["executable"])
+            self.assertIn("meeting.create", result["write"]["executable"])
             self.assertIn("workflow.archive", result["write"]["dry_run_only"])
             self.assertIn("matter_execute", result["write"]["human_gate_commands"])
+            self.assertIn("meeting_create_execute", result["write"]["human_gate_commands"])
             self.assertEqual(result["discovered"][0]["name"], "template-section")
 
     def test_run_workflow_inspect_resolves_detail_and_summarizes_counts(self):
@@ -3577,6 +3579,10 @@ class DaemonTests(unittest.TestCase):
             self.assertIn("matter-business-trip-request", matters)
             self.assertIn("matter-meeting-create", matters)
             self.assertEqual(matters["matter-missed-punch-request"]["template"]["template_id"], "tpl-missed-punch")
+            self.assertEqual(
+                matters["matter-missed-punch-request"]["received_workflow_profile"]["profile_id"],
+                "workflow.missed_punch.approval.v1",
+            )
             self.assertEqual(matters["matter-business-trip-request"]["target_status"], "first_batch")
             self.assertEqual(matters["matter-meeting-create"]["launch_entry"]["type"], "fixed_url")
             self.assertEqual(result["target_matter_count"], 4)
@@ -3698,9 +3704,72 @@ class DaemonTests(unittest.TestCase):
             )
 
             commands = response.body["result"]["items"][0]["launch_handling"]["next_commands"]
-            self.assertIn("--field title=\"Draft note\"", commands[0])
-            self.assertIn("--field mtTitle=\"Draft note\"", commands[0])
-            self.assertNotIn("content_coll", commands[0])
+            item = response.body["result"]["items"][0]
+            self.assertEqual(item["launch_handling"]["status"], "direct_create_ready")
+            self.assertEqual(item["launch_handling"]["supported_actions"][2]["command"], "meeting_create_execute")
+            self.assertIn("oa meeting create execute", commands[2])
+            self.assertEqual(item["coverage_status"], "special_module_direct_create_ready")
+
+    def test_run_matter_matrix_marks_missed_punch_received_workflow_sample_ready(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            def fake_nested(command, args, timeout_seconds):
+                self.assertEqual(command, "matter_profile")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "matter-missed-punch-request",
+                                    "name": "【HR】补签申请单",
+                                    "template": {"template_id": "tpl-missed-punch"},
+                                    "available_actions": [
+                                        {
+                                            "name": "launch.save_draft",
+                                            "command": "launch_save_draft",
+                                            "status": "available",
+                                            "requires_confirmation": True,
+                                        }
+                                    ],
+                                    "recommended_fields": ["content_coll"],
+                                    "received_workflow_profile": {
+                                        "profile_id": "workflow.missed_punch.approval.v1",
+                                        "profile_status": "live_validated",
+                                        "default_opinion": "同意",
+                                        "binding": "ContinueSubmit",
+                                        "verification_method": "pending_disappearance",
+                                        "required_prefill": [],
+                                        "validated_samples": [{"validated_at": "2026-07-06"}],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_matrix",
+                    "args": {"kind": "all"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            item = response.body["result"]["items"][0]
+            self.assertEqual(item["received_handling"]["status"], "workflow_sample_ready")
+            self.assertEqual(item["received_handling"]["workflow_profile"]["default_opinion"], "同意")
+            self.assertIn("oa matter execute", item["received_handling"]["next_commands"][1])
+            self.assertEqual(item["coverage_status"], "launch_ready_received_workflow_sample_ready")
+            self.assertEqual(response.body["result"]["coverage"]["received_workflow_sample_ready"], 1)
 
     def test_run_matter_inspect_resolves_matter_and_optionally_reads_launch_fields(self):
         with TemporaryDirectory() as tmp:
@@ -4511,6 +4580,33 @@ class DaemonTests(unittest.TestCase):
 
             self.assertEqual(response.status, 409)
             self.assertTrue(response.body["requires_confirmation"])
+
+    def test_run_oa_meeting_create_dry_run_delegates_to_launch_dry_run(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+            calls = []
+
+            def fake_nested(command, args, timeout_seconds):
+                calls.append((command, args, timeout_seconds))
+                return DaemonResponse(200, {"ok": True, "result": {"safety": {"will_execute": False}}})
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "meeting_create_dry_run",
+                    "args": {"fields": {"title": "Planning"}, "settle_ms": 3000},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(calls[0][0], "launch_dry_run")
+            self.assertEqual(calls[0][1]["fields"], {"title": "Planning"})
+            self.assertIn("meeting.do?method=editor", calls[0][1]["url"])
 
     def test_run_oa_meeting_create_execute_without_confirm_stays_blocked(self):
         with TemporaryDirectory() as tmp:

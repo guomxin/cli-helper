@@ -1492,3 +1492,93 @@ def register_seeyon_commands(registry: CommandRegistry) -> None:
             verify={"type": "json_path", "path": "$.verification.status"},
         )
     )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="meeting_create_inspect",
+            description="Inspect the Seeyon OA meeting creation page without filling, saving, or sending a meeting.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "settle_ms": {"type": "integer", "description": "Optional page settle wait before inspection."},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "target": {"type": "object"},
+                    "fields": {"type": "array"},
+                    "actions": {"type": "array"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.target.url"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="meeting_create_dry_run",
+            description="Validate Seeyon OA meeting creation fields without filling, saving, or sending a meeting.",
+            access="read",
+            strategy="daemon_api",
+            risk="low",
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "fields": {
+                    "type": "object",
+                    "description": "Meeting field values keyed by field name, id, or label.",
+                },
+                "settle_ms": {"type": "integer", "description": "Optional page settle wait before validation."},
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "mode": {"type": "string"},
+                    "fields": {"type": "array"},
+                    "safety": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.safety.will_execute"},
+        )
+    )
+    registry.register(
+        CommandDefinition(
+            system="oa",
+            name="meeting_create_execute",
+            description="Create a confirmed Seeyon OA meeting through the promoted backend path and verify the room booking.",
+            access="write",
+            strategy="human_gate",
+            risk="high",
+            requires_confirmation=True,
+            api={"path": "/commands/run", "method": "POST"},
+            args_schema={
+                "subject": {"type": "string", "required": True},
+                "room": {"type": "string", "required": True},
+                "start": {"type": "string", "required": True, "description": "Meeting start time, for example 2026-07-06 14:00."},
+                "end": {"type": "string", "required": True, "description": "Meeting end time, for example 2026-07-06 16:00."},
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional attendee ids in OA source format; defaults to current user when omitted.",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "required": True,
+                    "description": "Must be true to confirm intent before production execution.",
+                },
+            },
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "schema_version": {"type": "string"},
+                    "submitted": {"type": "boolean"},
+                    "verification": {"type": "object"},
+                    "plan": {"type": "object"},
+                },
+            },
+            verify={"type": "json_path", "path": "$.verification.status"},
+        )
+    )

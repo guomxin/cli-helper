@@ -19,6 +19,7 @@ class MatterTargetSpec:
     launch_url: str = ""
     launch_type: str = "template"
     recommended_fields: tuple[str, ...] = ()
+    received_profile: dict[str, Any] | None = None
 
 
 FIRST_BATCH_TARGETS: tuple[MatterTargetSpec, ...] = (
@@ -39,6 +40,27 @@ FIRST_BATCH_TARGETS: tuple[MatterTargetSpec, ...] = (
         aliases=("\u8865\u7b7e", "\u8865\u7b7e\u7533\u8bf7", "\u8865\u7b7e\u7533\u8bf7\u5355"),
         template_title="\u3010HR\u3011\u8865\u7b7e\u7533\u8bf7\u5355",
         recommended_fields=("content_coll",),
+        received_profile={
+            "profile_id": "workflow.missed_punch.approval.v1",
+            "profile_status": "live_validated",
+            "business_intent": "approve",
+            "user_facing_action": "approve_missed_punch_request",
+            "default_opinion": "\u540c\u610f",
+            "execution_route": "matter_execute",
+            "binding": "ContinueSubmit",
+            "verification_method": "pending_disappearance",
+            "required_prefill": [],
+            "validated_samples": [
+                {
+                    "validated_at": "2026-07-06",
+                    "title_pattern": "\u3010HR\u3011\u8865\u7b7e\u7533\u8bf7\u5355-*",
+                    "node_policy": "approve",
+                    "business_form_detected": False,
+                    "required_business_prefill": [],
+                    "verification": "pending_disappearance",
+                }
+            ],
+        },
     ),
     MatterTargetSpec(
         matter_id="matter-business-trip-request",
@@ -105,6 +127,7 @@ def _seed_matter(spec: MatterTargetSpec, templates: list[Any]) -> dict[str, Any]
         "template_candidates": candidates,
         "launch_entry": launch_entry,
         "recommended_fields": list(spec.recommended_fields),
+        "received_workflow_profile": spec.received_profile or {},
         "sample_items": [],
         "available_actions": available_actions,
     }
@@ -187,6 +210,8 @@ def _merge_target_seed(existing: dict[str, Any], seed: dict[str, Any]) -> None:
         existing["template_match_status"] = seed.get("template_match_status", "matched")
     if seed.get("launch_entry"):
         existing["launch_entry"] = seed["launch_entry"]
+    if seed.get("received_workflow_profile"):
+        existing["received_workflow_profile"] = seed["received_workflow_profile"]
     if not existing.get("matter_kind"):
         existing["matter_kind"] = seed.get("matter_kind", "")
     if not any(isinstance(action, dict) and action.get("status") == "available" for action in existing.get("available_actions") or []):

@@ -758,6 +758,72 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(calls, [("oa", "meeting_reply_dry_run", {"id": "affair-1", "attitude": "join", "feedback": ""})])
         self.assertTrue(result["result"]["structuredContent"]["precheck"]["passed"])
 
+    def test_call_oa_meeting_create_execute_requires_confirm_and_calls_daemon(self):
+        calls = []
+
+        def runner(system, command, arguments):
+            calls.append((system, command, arguments))
+            return {
+                "schema_version": "bscli.oa_meeting_create_result.v1",
+                "submitted": True,
+                "verification": {"status": "matched"},
+            }
+
+        server = self._server(runner=runner)
+
+        blocked = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 185,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__meeting_create_execute",
+                    "arguments": {
+                        "subject": "Planning",
+                        "room": "3",
+                        "start": "2026-07-06 14:00",
+                        "end": "2026-07-06 16:00",
+                    },
+                },
+            }
+        )
+        result = server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 186,
+                "method": "tools/call",
+                "params": {
+                    "name": "oa__meeting_create_execute",
+                    "arguments": {
+                        "subject": "Planning",
+                        "room": "3",
+                        "start": "2026-07-06 14:00",
+                        "end": "2026-07-06 16:00",
+                        "confirm": True,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(blocked["error"]["code"], -32602)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "oa",
+                    "meeting_create_execute",
+                    {
+                        "subject": "Planning",
+                        "room": "3",
+                        "start": "2026-07-06 14:00",
+                        "end": "2026-07-06 16:00",
+                        "confirm": True,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(result["result"]["structuredContent"]["verification"]["status"], "matched")
+
     def test_call_oa_write_endpoint_candidates_maps_to_daemon_command(self):
         calls = []
 

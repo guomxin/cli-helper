@@ -265,6 +265,15 @@ actions such as `launch_save_draft`.
 matrix. Each matter row summarizes launch handling, received-pending handling,
 coverage status, next safe commands, and verification requirements without
 opening launch pages or executing writes.
+Special modules can surface promoted module-specific commands in the same
+matrix. `matter-meeting-create` now reports `direct_create_ready` with
+`meeting_create_inspect`, `meeting_create_dry_run`, and
+`meeting_create_execute` instead of pretending meeting launch is a normal
+collaboration-template save-draft path.
+Workflow-specific samples can also refine received-pending handling. The first
+sample is `matter-missed-punch-request`, which keeps the user-facing intent at
+`approve`, maps it to governed `ContinueSubmit`, uses the default opinion
+`同意`, and verifies success by pending-list disappearance.
 `oa matter inspect` reads one matter entry by id or name. By default it does not
 open the template launch page; add `--with-launch` when you explicitly want the
 matched template's fields and save-draft controls inspected.
@@ -537,6 +546,10 @@ Meeting replies use a separate governed command. The execute form requires
 requested attitude. The agent-facing tool names are
 `oa__meeting_reply_dry_run` and `oa__meeting_reply_execute`; the execute tool
 requires `confirm` in its input schema.
+Direct meeting creation is also registered as agent-facing tools:
+`oa__meeting_create_inspect`, `oa__meeting_create_dry_run`, and
+`oa__meeting_create_execute`. The execute tool requires `confirm` and follows
+the same promoted backend path as the CLI command.
 
 Read the structured pending list from the OA home page:
 

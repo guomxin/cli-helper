@@ -210,7 +210,7 @@ class ExtensionBridge:
                 self._condition.wait_for(
                     lambda: task_id in self.results,
                     timeout=timeout_seconds,
-            )
+                )
             return self.results.get(task_id)
 
     def prune_completed_tasks(self) -> None:

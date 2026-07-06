@@ -29,6 +29,7 @@ class ToolManifestTests(unittest.TestCase):
         self.assertIn("oa__matter_profile", tools)
         self.assertIn("oa__matter_inspect", tools)
         self.assertIn("oa__matter_execute", tools)
+        self.assertIn("oa__meeting_create_execute", tools)
         self.assertIn("oa__inbox_analyze", tools)
         self.assertIn("oa__launch_inspect", tools)
         self.assertIn("oa__workflow_opinions", tools)
@@ -78,6 +79,12 @@ class ToolManifestTests(unittest.TestCase):
         )
         self.assertEqual(workflow_opinions["metadata"]["command"], "workflow_opinions")
         self.assertEqual(workflow_opinions["metadata"]["access"], "read")
+        meeting_create = tools["oa__meeting_create_execute"]
+        self.assertEqual(meeting_create["metadata"]["command"], "meeting_create_execute")
+        self.assertEqual(meeting_create["metadata"]["access"], "write")
+        self.assertTrue(meeting_create["metadata"]["requires_confirmation"])
+        self.assertIn("confirm", meeting_create["input_schema"]["required"])
+        self.assertIn("subject", meeting_create["input_schema"]["required"])
 
         workflow_inspect = tools["oa__workflow_inspect"]
         self.assertEqual(

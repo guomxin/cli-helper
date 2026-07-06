@@ -41,6 +41,27 @@ backend readback and, when possible, the rendered view page. A successful
 meeting-create validation must prove that the title is not stored as `?????`
 and that the Seeyon body-count error is absent.
 
+## Windows Daemon Startup
+
+When starting the local daemon from Windows PowerShell, first check whether the
+process environment contains both `Path` and `PATH`. Some PowerShell launch
+paths raise a duplicate-key error when `Start-Process` copies that environment.
+The safe local workaround is to normalize only the current PowerShell process
+environment, then start the daemon hidden:
+
+```powershell
+$pathValue = [Environment]::GetEnvironmentVariable('Path','Process')
+if (-not $pathValue) { $pathValue = [Environment]::GetEnvironmentVariable('PATH','Process') }
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $pathValue, 'Process')
+Start-Process -FilePath 'C:\Users\xingm\AppData\Local\Python\bin\python.exe' -ArgumentList @('-m','bscli.cli.main','--home','.bscli','daemon','serve','--host','127.0.0.1','--port','8765') -WorkingDirectory 'D:\Codes\CLIExp' -WindowStyle Hidden
+```
+
+In Codex's sandbox, child background processes may be cleaned up when the
+command exits. If the daemon must remain available for real Chrome-bridge
+validation, start it with the same command outside the sandbox after approval,
+then verify with `python -m bscli.cli.main --home .bscli daemon status`.
+
 ## Useful Verification Commands
 
 ```bash

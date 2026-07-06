@@ -46,6 +46,9 @@ without sending the workflow.
   summarizes launch draft readiness, received-pending preflight readiness,
   coverage status, and next safe commands. It does not open launch pages, read
   pending details, dispatch browser write tasks, or authorize execution.
+  Special modules can report promoted module-specific commands: meeting launch
+  now appears as `direct_create_ready` with `meeting_create_execute` rather than
+  as a generic collaboration-template launch.
 - `oa matter preflight ...` is the business-intent preflight layer for received
   pending items. It resolves one pending item by id or keyword, reads workflow
   evidence, maps an intent such as `approve` or `archive` to an internal action
@@ -126,6 +129,13 @@ without sending the workflow.
   `meetingAjaxManager.send`, and verifies by reading the room schedule. Live
   validation should also read `meetingView` or the view page and confirm that
   the title is correct and the body-count error is absent.
+- `matter-missed-punch-request` is the first formal received-workflow sample.
+  Its business intent is `approve`, its current execution binding is the
+  governed `ContinueSubmit` path, its default opinion is `同意`, and its live
+  validation rule is pending-list disappearance. The workflow profile records
+  that no extra business-form prefill was required in the validated sample; if a
+  future sample exposes required fields, the profile must be updated before
+  execution is widened.
 - `oa write endpoints ...` classifies endpoint candidates found during dry-run
   evidence collection. It does not call the candidates and marks each result
   with `safe_to_call=false`.
@@ -318,6 +328,9 @@ The safe planning commands are registered in the normal BSCLI command registry:
 - `oa__pending_submit`
 - `oa__meeting_reply_dry_run`
 - `oa__meeting_reply_execute`
+- `oa__meeting_create_inspect`
+- `oa__meeting_create_dry_run`
+- `oa__meeting_create_execute`
 
 `matter_profile`, `matter_matrix`, `matter_inspect`, `matter_preflight`,
 `launch_dry_run`, `write_capabilities`, `write_discover`, `write_draft`,
@@ -332,8 +345,8 @@ Confirmed `ContinueSubmit` executions are delivered through the Chrome
 extension bridge and verified by
 pending disappearance. Confirmed meeting replies are delivered through
 `meetingAjaxManager.reply` and verified by `meetingView.myReply.feedbackFlag`.
-Confirmed direct meeting creation is currently exposed through the CLI/daemon
-path rather than an agent-facing MCP tool. It is delivered through
+Confirmed direct meeting creation is exposed through both the CLI/daemon path
+and the agent-facing `oa__meeting_create_execute` tool. It is delivered through
 `meetingAjaxManager.send` after saving the meeting body and is verified by room
 schedule readback plus live `meetingView` or view-page checks during validation.
 

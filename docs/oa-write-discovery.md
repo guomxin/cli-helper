@@ -85,6 +85,12 @@ matter/intent surface, then routes ordinary approvals through the governed
 `write_execute` implementation and meeting replies through
 `meeting_reply_execute`. Keyword resolution defaults to one pending item so a
 single business command does not silently become a batch operation.
+`matter-missed-punch-request` is now the first formal received-workflow sample:
+the user-facing intent is `approve`, the internal binding remains
+`ContinueSubmit`, the default opinion is `同意`, and success is verified by the
+pending item disappearing. The validated sample did not require extra business
+form prefill; future samples must update the profile if the iframe exposes
+required fields.
 
 Layer 3, launch-page inspection and write discovery:
 
@@ -147,7 +153,10 @@ First launch-side expansion batch:
   save the standard body with `content.do?method=saveOrUpdate`, then send with
   `meetingAjaxManager.send`. The successful live validation case created a
   3# room meeting in one pass and verified `meetingInfo`, `meetingView`, room
-  schedule description, and absence of the Seeyon body-count error.
+  schedule description, and absence of the Seeyon body-count error. The matter
+  matrix now reports this as a special `direct_create_ready` module capability,
+  and the registry exposes `meeting_create_inspect`, `meeting_create_dry_run`,
+  and `meeting_create_execute` for agent use.
 
 The first promoted launch-page execution plan is save draft. `oa launch dry-run`
 validates requested fields and the `saveDraft` / "保存待发" control without
