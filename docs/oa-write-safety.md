@@ -136,6 +136,11 @@ without sending the workflow.
   that no extra business-form prefill was required in the validated sample; if a
   future sample exposes required fields, the profile must be updated before
   execution is widened.
+- `matter-business-trip-request` is the first formal launch-side workflow
+  sample. It is allowed to inspect the launch page, run a non-mutating
+  dry-run, and save a draft only after `--confirm`. It is not allowed to submit
+  or send the business trip workflow until a separate promoted submit mapping
+  and live validation plan exist.
 - `oa write endpoints ...` classifies endpoint candidates found during dry-run
   evidence collection. It does not call the candidates and marks each result
   with `safe_to_call=false`.

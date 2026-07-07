@@ -92,6 +92,15 @@ pending item disappearing. The validated sample did not require extra business
 form prefill; future samples must update the profile if the iframe exposes
 required fields.
 
+`matter-business-trip-request` is now the first formal launch-side workflow
+sample. Its launch profile records the business intent as starting a business
+trip request, binds execution to the governed `matter_launch_save_draft` route,
+uses `content_coll` as the required/default low-risk draft field, and verifies
+the promoted write by the launch draft acknowledgement. This sample is limited
+to inspect, dry-run, and save-draft; it does not submit the business trip
+workflow. Weekly report sending remains a received-side/system-generated
+sample because the user cannot normally start that workflow from templates.
+
 Layer 3, launch-page inspection and write discovery:
 
 ```powershell
@@ -139,6 +148,16 @@ First launch-side expansion batch:
 - `【用印】用印申请单`: template id `-6511139737225050501`; outer launch
   shell supports `content_coll` dry-run. Business form field extraction still
   needs frame/dynamic-form verification.
+- `【HR】出差申请单`: template id `2668910351205287097`; registered as the
+  first launch-side matter sample. The matrix reports
+  `workflow_launch_sample_ready` and recommends this sequence:
+
+  ```powershell
+  python -m bscli.cli.main --home .bscli oa matter inspect --id matter-business-trip-request --with-launch
+  python -m bscli.cli.main --home .bscli oa matter launch-dry-run --id matter-business-trip-request --field content_coll="Draft note"
+  python -m bscli.cli.main --home .bscli oa matter launch-save-draft --id matter-business-trip-request --field content_coll="Draft note" --confirm
+  ```
+
 - `【报销】差旅费审批报销单`: template id `-2046021869351779722`; outer launch
   shell matches the same collaboration save-draft pattern. Frame-aware rendered
   snapshots now expose the CAP4 business form text, and `business_form` reports

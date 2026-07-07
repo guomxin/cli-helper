@@ -19,6 +19,7 @@ class MatterTargetSpec:
     launch_url: str = ""
     launch_type: str = "template"
     recommended_fields: tuple[str, ...] = ()
+    launch_profile: dict[str, Any] | None = None
     received_profile: dict[str, Any] | None = None
 
 
@@ -70,6 +71,26 @@ FIRST_BATCH_TARGETS: tuple[MatterTargetSpec, ...] = (
         aliases=("\u51fa\u5dee", "\u51fa\u5dee\u7533\u8bf7", "\u51fa\u5dee\u7533\u8bf7\u5355"),
         template_title="\u3010HR\u3011\u51fa\u5dee\u7533\u8bf7\u5355",
         recommended_fields=("content_coll",),
+        launch_profile={
+            "profile_id": "workflow.business_trip.launch.v1",
+            "profile_status": "draft_profile_ready",
+            "business_intent": "start_business_trip_request",
+            "user_facing_action": "start_business_trip_request",
+            "execution_route": "matter_launch_save_draft",
+            "binding": "collaboration.launch.save_draft",
+            "verification_method": "launch_draft_ack",
+            "required_prefill": ["content_coll"],
+            "default_field_values": {"content_coll": "Draft note"},
+            "validated_samples": [
+                {
+                    "validated_at": "2026-07-07",
+                    "title_pattern": "\u3010HR\u3011\u51fa\u5dee\u7533\u8bf7\u5355",
+                    "field_policy": "outer_collaboration_shell",
+                    "submit_policy": "draft_only",
+                    "verification": "launch_dry_run",
+                }
+            ],
+        },
     ),
     MatterTargetSpec(
         matter_id="matter-meeting-create",
@@ -127,6 +148,7 @@ def _seed_matter(spec: MatterTargetSpec, templates: list[Any]) -> dict[str, Any]
         "template_candidates": candidates,
         "launch_entry": launch_entry,
         "recommended_fields": list(spec.recommended_fields),
+        "launch_workflow_profile": spec.launch_profile or {},
         "received_workflow_profile": spec.received_profile or {},
         "sample_items": [],
         "available_actions": available_actions,
@@ -210,6 +232,8 @@ def _merge_target_seed(existing: dict[str, Any], seed: dict[str, Any]) -> None:
         existing["template_match_status"] = seed.get("template_match_status", "matched")
     if seed.get("launch_entry"):
         existing["launch_entry"] = seed["launch_entry"]
+    if seed.get("launch_workflow_profile"):
+        existing["launch_workflow_profile"] = seed["launch_workflow_profile"]
     if seed.get("received_workflow_profile"):
         existing["received_workflow_profile"] = seed["received_workflow_profile"]
     if not existing.get("matter_kind"):

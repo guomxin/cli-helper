@@ -2187,6 +2187,7 @@ class DaemonTests(unittest.TestCase):
             self.assertIn("meeting.create", result["write"]["executable"])
             self.assertIn("workflow.archive", result["write"]["dry_run_only"])
             self.assertIn("matter_execute", result["write"]["human_gate_commands"])
+            self.assertIn("matter_launch_save_draft", result["write"]["human_gate_commands"])
             self.assertIn("meeting_create_execute", result["write"]["human_gate_commands"])
             self.assertEqual(result["discovered"][0]["name"], "template-section")
 
@@ -3584,6 +3585,14 @@ class DaemonTests(unittest.TestCase):
                 "workflow.missed_punch.approval.v1",
             )
             self.assertEqual(matters["matter-business-trip-request"]["target_status"], "first_batch")
+            self.assertEqual(
+                matters["matter-business-trip-request"]["launch_workflow_profile"]["profile_id"],
+                "workflow.business_trip.launch.v1",
+            )
+            self.assertEqual(
+                matters["matter-business-trip-request"]["launch_workflow_profile"]["default_field_values"],
+                {"content_coll": "Draft note"},
+            )
             self.assertEqual(matters["matter-meeting-create"]["launch_entry"]["type"], "fixed_url")
             self.assertEqual(result["target_matter_count"], 4)
 
@@ -3770,6 +3779,82 @@ class DaemonTests(unittest.TestCase):
             self.assertIn("oa matter execute", item["received_handling"]["next_commands"][1])
             self.assertEqual(item["coverage_status"], "launch_ready_received_workflow_sample_ready")
             self.assertEqual(response.body["result"]["coverage"]["received_workflow_sample_ready"], 1)
+
+    def test_run_matter_matrix_marks_business_trip_launch_workflow_sample_ready(self):
+        with TemporaryDirectory() as tmp:
+            state = DaemonState(ConfigStore(Path(tmp)))
+
+            def fake_nested(command, args, timeout_seconds):
+                self.assertEqual(command, "matter_profile")
+                return DaemonResponse(
+                    200,
+                    {
+                        "ok": True,
+                        "result": {
+                            "schema_version": "bscli.oa_matter_profile.v1",
+                            "matters": [
+                                {
+                                    "matter_id": "matter-business-trip-request",
+                                    "name": "Business Trip Request",
+                                    "template": {"template_id": "tpl-business-trip"},
+                                    "available_actions": [
+                                        {
+                                            "name": "launch.dry_run",
+                                            "command": "launch_dry_run",
+                                            "status": "available",
+                                            "requires_confirmation": False,
+                                        },
+                                        {
+                                            "name": "launch.save_draft",
+                                            "command": "launch_save_draft",
+                                            "status": "available",
+                                            "requires_confirmation": True,
+                                        },
+                                    ],
+                                    "recommended_fields": ["content_coll"],
+                                    "launch_workflow_profile": {
+                                        "profile_id": "workflow.business_trip.launch.v1",
+                                        "profile_status": "draft_profile_ready",
+                                        "default_field_values": {"content_coll": "Draft note"},
+                                        "verification_method": "launch_draft_ack",
+                                        "required_prefill": ["content_coll"],
+                                        "validated_samples": [{"validated_at": "2026-07-07"}],
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                )
+
+            state._run_nested_oa_command = fake_nested
+
+            response = state.handle(
+                "POST",
+                "/commands/run",
+                body={
+                    "system": "oa",
+                    "command": "matter_matrix",
+                    "args": {"kind": "all"},
+                    "timeout_seconds": 1,
+                },
+            )
+
+            item = response.body["result"]["items"][0]
+            self.assertEqual(item["launch_handling"]["status"], "workflow_launch_sample_ready")
+            self.assertEqual(
+                item["launch_handling"]["workflow_profile"]["profile_id"],
+                "workflow.business_trip.launch.v1",
+            )
+            self.assertEqual(
+                item["launch_handling"]["workflow_profile"]["default_field_values"],
+                {"content_coll": "Draft note"},
+            )
+            self.assertIn(
+                '--field content_coll="Draft note"',
+                item["launch_handling"]["next_commands"][1],
+            )
+            self.assertEqual(item["coverage_status"], "launch_workflow_sample_ready_received_preflight_ready")
+            self.assertEqual(response.body["result"]["coverage"]["launch_workflow_sample_ready"], 1)
 
     def test_run_matter_inspect_resolves_matter_and_optionally_reads_launch_fields(self):
         with TemporaryDirectory() as tmp:

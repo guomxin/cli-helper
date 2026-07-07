@@ -274,6 +274,21 @@ Workflow-specific samples can also refine received-pending handling. The first
 sample is `matter-missed-punch-request`, which keeps the user-facing intent at
 `approve`, maps it to governed `ContinueSubmit`, uses the default opinion
 `同意`, and verifies success by pending-list disappearance.
+Workflow-specific launch samples refine the start/draft side. The first
+launch-side sample is `matter-business-trip-request`, which keeps agents at
+the matter layer and uses `content_coll` as the default low-risk draft field:
+inspect, dry-run, then the confirmed draft-only path.
+
+```powershell
+python -m bscli.cli.main --home .bscli oa matter inspect --id matter-business-trip-request --with-launch
+python -m bscli.cli.main --home .bscli oa matter launch-dry-run --id matter-business-trip-request --field content_coll="Draft note"
+python -m bscli.cli.main --home .bscli oa matter launch-save-draft --id matter-business-trip-request --field content_coll="Draft note" --confirm
+```
+
+This is not a submitted business trip workflow; it is the promoted draft-level
+sample for a human-launchable form.
+System-generated flows such as weekly report sending remain received-side
+handling samples rather than launch samples.
 `oa matter inspect` reads one matter entry by id or name. By default it does not
 open the template launch page; add `--with-launch` when you explicitly want the
 matched template's fields and save-draft controls inspected.

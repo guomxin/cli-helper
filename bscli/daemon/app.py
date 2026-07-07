@@ -2775,6 +2775,7 @@ class DaemonState:
                     "meeting_reply_execute",
                     "meeting_create_execute",
                     "launch_save_draft",
+                    "matter_launch_save_draft",
                 ],
                 "policy": "write actions require dry-run/precheck, explicit confirmation, read-back verification, and sanitized audit",
             },
@@ -5037,9 +5038,13 @@ def _build_oa_matter_matrix(profile: dict[str, Any], args: dict[str, Any]) -> di
     launch_ready = sum(
         1
         for item in items
-        if item.get("launch_handling", {}).get("status") in {"draft_ready", "direct_create_ready"}
+        if item.get("launch_handling", {}).get("status")
+        in {"draft_ready", "direct_create_ready", "workflow_launch_sample_ready"}
     )
     direct_create_ready = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "direct_create_ready")
+    launch_sample_ready = sum(
+        1 for item in items if item.get("launch_handling", {}).get("status") == "workflow_launch_sample_ready"
+    )
     received_sample_ready = sum(1 for item in items if item.get("received_handling", {}).get("status") == "workflow_sample_ready")
     template_unmatched = sum(1 for item in items if item.get("launch_handling", {}).get("status") == "template_unmatched")
     return {
@@ -5054,10 +5059,11 @@ def _build_oa_matter_matrix(profile: dict[str, Any], args: dict[str, Any]) -> di
         "coverage": {
             "launch_draft_ready": launch_ready,
             "special_module_direct_create_ready": direct_create_ready,
+            "launch_workflow_sample_ready": launch_sample_ready,
             "template_unmatched": template_unmatched,
             "received_preflight_ready": len(items),
             "received_workflow_sample_ready": received_sample_ready,
-            "write_execution_newly_enabled": direct_create_ready + received_sample_ready,
+            "write_execution_newly_enabled": direct_create_ready + launch_sample_ready + received_sample_ready,
         },
         "items": items,
         "read_effect": {
@@ -5087,6 +5093,7 @@ def _matter_matrix_item(matter: dict[str, Any]) -> dict[str, Any]:
         "template": template,
         "launch_entry": matter.get("launch_entry") if isinstance(matter.get("launch_entry"), dict) else {},
         "recommended_fields": matter.get("recommended_fields") if isinstance(matter.get("recommended_fields"), list) else [],
+        "launch_workflow_profile": matter.get("launch_workflow_profile") if isinstance(matter.get("launch_workflow_profile"), dict) else {},
         "received_workflow_profile": matter.get("received_workflow_profile") if isinstance(matter.get("received_workflow_profile"), dict) else {},
         "launch_handling": launch,
         "received_handling": received,
@@ -5146,12 +5153,47 @@ def _matter_launch_handling(matter: dict[str, Any], template: dict[str, Any]) ->
             "next_commands": ["oa matter profile --kind all --limit 50"],
         }
     target_args = f"--id {matter.get('matter_id')}"
+    launch_profile = matter.get("launch_workflow_profile") if isinstance(matter.get("launch_workflow_profile"), dict) else {}
     recommended_fields = [
         str(field or "").strip()
         for field in matter.get("recommended_fields") or []
         if str(field or "").strip()
     ] or ["content_coll"]
-    field_args = " ".join(f'--field {field}="Draft note"' for field in recommended_fields)
+    default_field_values = (
+        launch_profile.get("default_field_values") if isinstance(launch_profile.get("default_field_values"), dict) else {}
+    )
+    field_args = _matter_launch_field_args(recommended_fields, default_field_values)
+    if launch_profile:
+        return {
+            "status": "workflow_launch_sample_ready",
+            "verification": launch_profile.get("verification_method") or "launch_draft_ack",
+            "workflow_profile": {
+                "profile_id": launch_profile.get("profile_id", ""),
+                "profile_status": launch_profile.get("profile_status", ""),
+                "execution_route": launch_profile.get("execution_route", ""),
+                "binding": launch_profile.get("binding", ""),
+                "default_field_values": default_field_values,
+                "required_prefill": launch_profile.get("required_prefill")
+                if isinstance(launch_profile.get("required_prefill"), list)
+                else [],
+                "validated_sample_count": len(launch_profile.get("validated_samples") or []),
+            },
+            "supported_actions": [
+                {
+                    "name": action.get("name", ""),
+                    "command": action.get("command", ""),
+                    "requires_confirmation": bool(action.get("requires_confirmation")),
+                    "access": action.get("access", ""),
+                    "risk": action.get("risk", ""),
+                }
+                for action in available
+            ],
+            "next_commands": [
+                f"oa matter inspect {target_args} --with-launch",
+                f"oa matter launch-dry-run {target_args} {field_args}",
+                f"oa matter launch-save-draft {target_args} {field_args} --confirm",
+            ],
+        }
     return {
         "status": "draft_ready",
         "verification": "launch_dry_run_required",
@@ -5254,6 +5296,10 @@ def _matter_received_handling(matter: dict[str, Any]) -> dict[str, Any]:
 def _matter_coverage_status(launch: dict[str, Any], received: dict[str, Any]) -> str:
     if launch.get("status") == "direct_create_ready":
         return "special_module_direct_create_ready"
+    if launch.get("status") == "workflow_launch_sample_ready" and received.get("status") == "workflow_sample_ready":
+        return "launch_workflow_sample_ready_received_workflow_sample_ready"
+    if launch.get("status") == "workflow_launch_sample_ready":
+        return "launch_workflow_sample_ready_received_preflight_ready"
     if launch.get("status") == "draft_ready" and received.get("status") == "workflow_sample_ready":
         return "launch_ready_received_workflow_sample_ready"
     if launch.get("status") == "draft_ready" and received.get("status") == "pending_item_required":
@@ -5265,6 +5311,18 @@ def _matter_coverage_status(launch: dict[str, Any], received: dict[str, Any]) ->
 
 def _is_meeting_create_matter(matter: dict[str, Any]) -> bool:
     return str(matter.get("matter_id") or "") == "matter-meeting-create" or str(matter.get("matter_kind") or "") == "meeting"
+
+
+def _matter_launch_field_args(recommended_fields: list[str], default_field_values: dict[str, Any]) -> str:
+    parts = []
+    for field in recommended_fields:
+        value = default_field_values.get(field, "Draft note")
+        parts.append(f'--field {field}="{_matter_cli_arg_value(value)}"')
+    return " ".join(parts)
+
+
+def _matter_cli_arg_value(value: Any) -> str:
+    return str(value or "").replace('"', '\\"')
 
 
 def _matter_from_template_cluster(cluster: dict[str, Any]) -> dict[str, Any]:
