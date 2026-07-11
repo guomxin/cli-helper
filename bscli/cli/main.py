@@ -28,14 +28,18 @@ from bscli.adapters.seeyon_write import (
     list_write_action_specs,
     sanitize_oa_write_plan_for_audit,
 )
+from bscli.auth.card import TrustedAuthApplication
+from bscli.auth.server import serve_auth_cards, validate_auth_server_config
+from bscli.broker.credential import CredentialBroker
 from bscli.browser.central import CentralBrowserWorker
+from bscli.core.auth_challenges import AuthChallengeStore, ChallengeNotFound
 from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.registry import CommandRegistry
-from bscli.core.session_secrets import SessionSecretError, SessionStateStore
-from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
+from bscli.core.session_secrets import SessionStateStore
+from bscli.core.sessions import SessionRegistry
 from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
 from bscli.daemon.app import DAEMON_TOKEN_FILENAME, serve
@@ -67,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_capability(args, Path(args.home))
     if args.area == "session":
         return handle_central_session(args, Path(args.home))
+    if args.area == "auth":
+        return handle_auth(args, Path(args.home))
     if args.area == "operation":
         return handle_operation(args, Path(args.home))
     if args.area == "adapter":
@@ -191,8 +197,21 @@ def build_parser() -> argparse.ArgumentParser:
     session_login.add_argument("--user-subject", required=True)
     session_login.add_argument("--expected-principal", required=True)
     session_login.add_argument("--base-url")
-    session_login.add_argument("--timeout", type=float, default=120)
-    session_login.add_argument("--headless", action="store_true")
+    session_login.add_argument("--card-base-url", default="http://127.0.0.1:8780")
+    session_login.add_argument("--challenge-ttl", type=int, default=300)
+
+    auth = subparsers.add_parser("auth")
+    auth_sub = auth.add_subparsers(dest="action", required=True)
+    auth_status = auth_sub.add_parser("status")
+    auth_status.add_argument("challenge_id")
+    auth_serve = auth_sub.add_parser("serve")
+    auth_serve.add_argument("--host", default="127.0.0.1")
+    auth_serve.add_argument("--port", type=int, default=8780)
+    auth_serve.add_argument("--public-base-url")
+    auth_serve.add_argument("--tls-cert")
+    auth_serve.add_argument("--tls-key")
+    auth_serve.add_argument("--base-url")
+    auth_serve.add_argument("--login-timeout", type=float, default=45)
 
     operation = subparsers.add_parser("operation")
     operation_sub = operation.add_subparsers(dest="action", required=True)
@@ -322,56 +341,106 @@ def handle_central_session(args: argparse.Namespace, home: Path) -> int:
         system_id=args.system,
         expected_principal_ref=args.expected_principal,
     )
-    session = sessions.mark_awaiting_login(session["session_id"])
     adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
-    session_states = SessionStateStore(_central_session_secret_root(home))
+    contract = adapter.authentication_contract()
+    challenge = AuthChallengeStore(_central_db_path(home)).create(
+        user_subject=session["user_subject"],
+        system_id=session["system_id"],
+        system_name=contract["system_name"],
+        session_id=session["session_id"],
+        expected_principal_ref=session["expected_principal_ref"],
+        origin=contract["origin"],
+        page_fingerprint=contract["page_fingerprint"],
+        nonce=None,
+        fields=contract["fields"],
+        card_base_url=args.card_base_url,
+        ttl_seconds=args.challenge_ttl,
+    )
+    print_json(
+        {
+            "protocolVersion": "0.1",
+            "status": "requires_user_action",
+            "sessionId": session["session_id"],
+            "challenge": _challenge_response(challenge),
+            "nextAction": {
+                "type": "open_authentication_card",
+                "challengeId": challenge["challenge_id"],
+                "cardUrl": challenge["card_url"],
+            },
+        }
+    )
+    return 0
+
+
+def handle_auth(args: argparse.Namespace, home: Path) -> int:
+    challenge_store = AuthChallengeStore(_central_db_path(home))
+    if args.action == "status":
+        try:
+            challenge = challenge_store.get(args.challenge_id)
+        except ChallengeNotFound as exc:
+            print_json(_central_cli_error("CHALLENGE_NOT_FOUND", str(exc)))
+            return 2
+        print_json(
+            {
+                "protocolVersion": "0.1",
+                "status": challenge["state"],
+                "challenge": _challenge_response(challenge),
+            }
+        )
+        return 0
+    if args.action != "serve":
+        raise ValueError(f"unknown auth action: {args.action}")
+
     try:
-        with CentralBrowserWorker(
+        config = validate_auth_server_config(
+            host=args.host,
+            port=args.port,
+            public_base_url=args.public_base_url,
+            tls_cert=args.tls_cert,
+            tls_key=args.tls_key,
+        )
+    except ValueError as exc:
+        print_json(_central_cli_error("AUTH_SERVER_CONFIG_INVALID", str(exc)))
+        return 2
+
+    base_url = _central_base_url(home, args.base_url)
+    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
+    session_states = SessionStateStore(_central_session_secret_root(home))
+
+    def adapter_factory(_challenge: dict):
+        return SeeyonCentralAdapter(base_url=base_url)
+
+    def worker_factory(session: dict, adapter: SeeyonCentralAdapter):
+        return CentralBrowserWorker(
             profile_path=session["profile_path"],
             allowed_origins={adapter.origin},
-            headless=args.headless,
-        ) as worker:
-            login_result = adapter.wait_for_login(worker, timeout_seconds=args.timeout)
-            session = sessions.activate(
-                session["session_id"],
-                observed_principal_ref=login_result["observed_principal_ref"],
-            )
-            session_states.save(session["session_id"], worker.capture_session_state())
-    except SeeyonLoginRequired as exc:
-        session = sessions.mark_expired(session["session_id"], str(exc))
-        session_states.delete(session["session_id"])
-        response = _session_response(session)
-        response["error"] = {"code": "LOGIN_TIMEOUT", "message": str(exc)}
-        print_json(response)
-        return 1
-    except SessionSecretError as exc:
-        session = sessions.mark_expired(session["session_id"], "Encrypted session state is unavailable.")
-        response = _session_response(session)
-        response["error"] = {"code": "SESSION_STATE_UNAVAILABLE", "message": str(exc)}
-        print_json(response)
-        return 1
-    except SessionPrincipalMismatch as exc:
-        session = sessions.get(session["session_id"])
-        response = _session_response(session)
-        response["error"] = {"code": "PRINCIPAL_MISMATCH", "message": str(exc)}
-        print_json(response)
-        return 1
-    except Exception as exc:
-        response = _session_response(sessions.get(session["session_id"]))
-        response["error"] = {
-            "code": "CENTRAL_BROWSER_FAILED",
-            "message": str(exc) or exc.__class__.__name__,
-        }
-        print_json(response)
-        return 1
+            headless=True,
+        )
 
-    response = _session_response(session)
-    response["validation"] = {
-        "capability": "oa.template.list",
-        "templateCount": login_result["templates"]["count"],
-        "transport": login_result["templates"]["transport"],
-    }
-    print_json(response)
+    broker = CredentialBroker(
+        challenge_store=challenge_store,
+        session_registry=sessions,
+        session_state_store=session_states,
+        adapter_factory=adapter_factory,
+        worker_factory=worker_factory,
+        login_timeout_seconds=args.login_timeout,
+    )
+    application = TrustedAuthApplication(challenge_store=challenge_store, broker=broker)
+    print_json(
+        {
+            "protocolVersion": "0.1",
+            "status": "serving",
+            "service": "trusted_authentication_card",
+            "listen": {"host": config.host, "port": config.port},
+            "publicBaseUrl": config.public_base_url,
+            "tls": config.tls_cert is not None,
+        }
+    )
+    sys.stdout.flush()
+    try:
+        serve_auth_cards(config=config, application=application)
+    except KeyboardInterrupt:
+        return 0
     return 0
 
 
@@ -460,6 +529,24 @@ def _operation_response(operation: dict) -> dict:
         "createdAt": operation["created_at"],
         "updatedAt": operation["updated_at"],
         "finishedAt": operation.get("finished_at"),
+    }
+
+
+def _challenge_response(challenge: dict) -> dict:
+    return {
+        "challengeId": challenge["challenge_id"],
+        "type": challenge["challenge_type"],
+        "state": challenge["state"],
+        "systemId": challenge["system_id"],
+        "systemName": challenge["system_name"],
+        "userSubject": challenge["user_subject"],
+        "sessionId": challenge["session_id"],
+        "expectedPrincipalRef": challenge.get("expected_principal_ref"),
+        "origin": challenge["origin"],
+        "cardUrl": challenge["card_url"],
+        "expiresAt": challenge["expires_at"],
+        "error": challenge.get("error"),
+        "result": challenge.get("result"),
     }
 
 

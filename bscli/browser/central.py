@@ -143,7 +143,7 @@ class CentralBrowserWorker:
 
     def capture_session_state(self) -> dict:
         self._require_started()
-        cookies = self._context.cookies(sorted(self.allowed_origins))
+        cookies = self._context.cookies()
         if any(not self._cookie_is_allowed(cookie) for cookie in cookies):
             raise ValueError("central browser produced a disallowed cookie")
         return {"cookies": cookies}
@@ -158,6 +158,10 @@ class CentralBrowserWorker:
                 raise ValueError("central browser session state contains a disallowed cookie")
         if cookies:
             self._context.add_cookies(cookies)
+
+    def clear_session_state(self) -> None:
+        self._require_started()
+        self._context.clear_cookies()
 
     def _require_started(self) -> None:
         if self._context is None:

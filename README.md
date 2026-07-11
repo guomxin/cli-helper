@@ -13,6 +13,7 @@ the first central AgentBridge vertical slice:
 - Seeyon OA example profile for `http://10.10.50.110/seeyon/main.do?method=main`
 - Versioned business capability registry and operation ledger
 - Per-user central Playwright profiles and session registry
+- One-time trusted authentication cards and a memory-only Credential Broker
 - Extension-independent `oa.template.list` capability
 
 ## Central AgentBridge Slice
@@ -32,14 +33,32 @@ python -m bscli.cli.main --home .bscli capability list
 python -m bscli.cli.main --home .bscli capability describe oa.template.list
 ```
 
-Create or refresh a per-user central OA session in a dedicated Playwright
-profile. This headed login is a development validation entry point; it does not
-accept passwords on the CLI and will be replaced by the trusted authentication
-card and Credential Broker path:
+Start the trusted authentication-card service. Loopback HTTP is supported only
+for the local PoC:
 
 ```bash
-python -m bscli.cli.main --home .bscli session login --system oa --user-subject <trusted-user-subject> --expected-principal <oa-display-name>
+python -m bscli.cli.main --home .bscli auth serve --host 127.0.0.1 --port 8780 --public-base-url http://127.0.0.1:8780
 ```
+
+In another terminal, create a one-time `AuthChallenge` for the per-user central
+OA session:
+
+```bash
+python -m bscli.cli.main --home .bscli session login --system oa --user-subject <trusted-user-subject> --expected-principal <oa-display-name> --card-base-url http://127.0.0.1:8780
+python -m bscli.cli.main --home .bscli auth status <challenge-id>
+```
+
+Open the returned `nextAction.cardUrl` in a trusted system browser. Credentials
+are submitted directly to the Credential Broker and are never CLI arguments or
+model-visible fields. The Broker fills the registered Seeyon login form, lets
+the page run its native login handler, verifies the observed OA principal, and
+stores only the resulting cookies. A challenge is short-lived, CSRF-bound, and
+can be consumed only once.
+
+Non-loopback deployments require a certificate, key, and HTTPS public URL via
+`auth serve --tls-cert ... --tls-key ... --public-base-url https://...`. The
+current PoC has not yet validated reverse-proxy identity, a real mobile client,
+or a second OA user.
 
 Invoke the read capability and inspect its durable operation record:
 
@@ -55,6 +74,15 @@ On Windows, process-level OA session cookies are stored only as a DPAPI-encrypte
 blob under `.bscli/session-secrets`; the SQLite ledger and CLI output never
 contain cookie values. Other operating systems must provide an equivalent
 Vault/KMS-backed protector before this session path can run.
+
+The 2026-07-11 live Seeyon validation authenticated the expected principal
+`辛国茂` through the card, then stopped the authentication service. Two fresh
+CLI processes independently restored the encrypted session and each read 118
+templates with `transport=central_http_session` and
+`browser_bridge_used=false`. This proves the single-user central path only;
+cross-user isolation still requires a second real account and separate Worker
+security principals.
+
 The legacy path below remains available as a migration oracle while capabilities
 are moved one by one.
 

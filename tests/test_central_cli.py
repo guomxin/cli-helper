@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from bscli.cli.main import main
+from bscli.core.sessions import SessionRegistry
 
 
 class CentralCliTests(unittest.TestCase):
@@ -70,6 +71,63 @@ class CentralCliTests(unittest.TestCase):
             operation = json.loads(operation_stdout.getvalue())["operation"]
             self.assertEqual(operation_exit, 0)
             self.assertEqual(operation["status"], "requires_user_action")
+
+    def test_session_login_creates_authentication_card_challenge_without_browser(self):
+        with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
+            exit_code = main(
+                [
+                    "--home",
+                    tmp,
+                    "session",
+                    "login",
+                    "--system",
+                    "oa",
+                    "--user-subject",
+                    "user-a",
+                    "--expected-principal",
+                    "Alice",
+                    "--card-base-url",
+                    "http://127.0.0.1:8780",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "requires_user_action")
+        self.assertEqual(payload["challenge"]["type"], "legacy_form_login")
+        self.assertEqual(payload["challenge"]["state"], "pending")
+        self.assertEqual(payload["challenge"]["systemName"], "致远 OA")
+        self.assertTrue(payload["challenge"]["cardUrl"].startswith("http://127.0.0.1:8780/auth/"))
+        self.assertNotIn("password", json.dumps(payload).lower())
+
+    def test_session_login_does_not_destroy_an_active_session_before_card_submission(self):
+        with TemporaryDirectory() as tmp:
+            sessions = SessionRegistry(Path(tmp) / "agentbridge.db", Path(tmp) / "profiles")
+            session = sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            sessions.activate(session["session_id"], observed_principal_ref="Alice")
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "session",
+                        "login",
+                        "--system",
+                        "oa",
+                        "--user-subject",
+                        "user-a",
+                        "--expected-principal",
+                        "Alice",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(sessions.get(session["session_id"])["state"], "active")
 
 
 if __name__ == "__main__":

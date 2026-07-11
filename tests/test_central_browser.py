@@ -37,7 +37,7 @@ class CentralBrowserTests(unittest.TestCase):
                     "name": "JSESSIONID",
                     "value": "secret",
                     "domain": "oa.example.test",
-                    "path": "/",
+                    "path": "/seeyon",
                 }
             ]
             worker = CentralBrowserWorker(
@@ -52,6 +52,7 @@ class CentralBrowserTests(unittest.TestCase):
                 worker.restore_session_state(state)
 
             self.assertEqual(controller.context.added_cookies[0][0]["name"], "JSESSIONID")
+            self.assertEqual(controller.context.cookie_requests, [None])
 
     def test_worker_rejects_request_outside_allowed_origin(self):
         with TemporaryDirectory() as tmp:
@@ -130,6 +131,52 @@ class CentralBrowserTests(unittest.TestCase):
         with self.assertRaises(SeeyonLoginRequired):
             adapter.list_templates(worker)
 
+    def test_seeyon_authentication_contract_has_fixed_registered_secret_fields(self):
+        adapter = SeeyonCentralAdapter(
+            base_url="http://oa.example.test/seeyon/main.do?method=main"
+        )
+
+        contract = adapter.authentication_contract()
+
+        self.assertEqual(contract["system_id"], "oa")
+        self.assertEqual(contract["origin"], "http://oa.example.test")
+        self.assertEqual([field["name"] for field in contract["fields"]], ["username", "password"])
+        self.assertTrue(contract["page_fingerprint"].startswith("seeyon-form-login-v1:"))
+
+    def test_seeyon_adapter_authenticates_through_real_page_contract(self):
+        worker = FakeLoginWorker()
+        adapter = SeeyonCentralAdapter(
+            base_url="http://oa.example.test/seeyon/main.do?method=main"
+        )
+
+        result = adapter.authenticate(
+            worker,
+            {"username": "alice.login", "password": "secret"},
+            timeout_seconds=2,
+        )
+
+        self.assertTrue(worker.cleared)
+        self.assertEqual(worker.page.login_frame.username.value, "alice.login")
+        self.assertEqual(worker.page.login_frame.password.value, "secret")
+        self.assertTrue(worker.page.login_frame.submit.clicked)
+        self.assertEqual(result["observed_principal_ref"], "Alice")
+        self.assertEqual(result["templates"]["count"], 1)
+
+    def test_seeyon_adapter_waits_for_login_iframe_to_render(self):
+        worker = FakeLoginWorker(page=DelayedFakeLoginPage(hidden_reads=2))
+        adapter = SeeyonCentralAdapter(
+            base_url="http://oa.example.test/seeyon/main.do?method=main"
+        )
+
+        result = adapter.authenticate(
+            worker,
+            {"username": "alice.login", "password": "secret"},
+            timeout_seconds=2,
+        )
+
+        self.assertGreaterEqual(worker.page.frame_reads, 3)
+        self.assertEqual(result["observed_principal_ref"], "Alice")
+
 
 class FakeWorker:
     def __init__(self, response):
@@ -137,6 +184,115 @@ class FakeWorker:
 
     def request(self, method, url, **_kwargs):
         return {**self.response, "method": method, "requested_url": url}
+
+
+class FakeLoginWorker:
+    def __init__(self, *, page=None):
+        self.page = page or FakeLoginPage()
+        self.cleared = False
+
+    def clear_session_state(self):
+        self.cleared = True
+
+    def goto(self, url, **_kwargs):
+        self.page.url = url
+
+    def request(self, method, url, **_kwargs):
+        if not self.page.login_frame.submit.clicked:
+            return {
+                "status": 401,
+                "url": url,
+                "content_type": "application/json",
+                "json": {"code": 401},
+                "text": "",
+            }
+        return {
+            "status": 200,
+            "url": url,
+            "content_type": "application/json",
+            "json": {
+                "code": 0,
+                "data": {
+                    "templates": [
+                        {"id": "tpl-1", "subject": "Template", "categoryName": "General"}
+                    ]
+                },
+            },
+            "text": "",
+        }
+
+    @property
+    def page_title(self):
+        return "致远A8-V5协同管理软件, Alice,您好!" if self.page.login_frame.submit.clicked else "OA login"
+
+    @property
+    def page_url(self):
+        return self.page.url
+
+
+class FakeLoginPage:
+    def __init__(self):
+        self.url = "http://oa.example.test/login"
+        self.login_frame = FakeLoginFrame()
+        self.frames = [self.login_frame]
+
+
+class DelayedFakeLoginPage:
+    def __init__(self, *, hidden_reads):
+        self.url = "http://oa.example.test/login"
+        self.login_frame = FakeLoginFrame()
+        self.hidden_reads = hidden_reads
+        self.frame_reads = 0
+
+    @property
+    def frames(self):
+        self.frame_reads += 1
+        if self.frame_reads <= self.hidden_reads:
+            return []
+        return [self.login_frame]
+
+    def locator(self, _selector):
+        return FakeLoginLocator(visible=False)
+
+
+class FakeLoginFrame:
+    def __init__(self):
+        self.username = FakeLoginLocator()
+        self.password = FakeLoginLocator()
+        self.submit = FakeLoginLocator()
+
+    def locator(self, selector):
+        mapping = {
+            '#login_username': self.username,
+            '#login_password1': self.password,
+            '#login_button': self.submit,
+        }
+        return mapping.get(selector, FakeLoginLocator(visible=False))
+
+
+class FakeLoginLocator:
+    def __init__(self, *, visible=True):
+        self.visible = visible
+        self.value = None
+        self.clicked = False
+
+    def count(self):
+        return 1 if self.visible else 0
+
+    def nth(self, _index):
+        return self
+
+    def is_visible(self):
+        return self.visible
+
+    def fill(self, value):
+        self.value = value
+
+    def click(self):
+        self.clicked = True
+
+    def press(self, _key):
+        self.clicked = True
 
 
 class FakeResponse:
@@ -180,6 +336,8 @@ class FakeBrowserContext:
         self.closed = False
         self.cookie_jar = []
         self.added_cookies = []
+        self.cookies_cleared = False
+        self.cookie_requests = []
 
     def new_page(self):
         page = FakePage()
@@ -189,12 +347,17 @@ class FakeBrowserContext:
     def close(self):
         self.closed = True
 
-    def cookies(self, _urls=None):
+    def cookies(self, urls=None):
+        self.cookie_requests.append(urls)
         return [dict(cookie) for cookie in self.cookie_jar]
 
     def add_cookies(self, cookies):
         self.added_cookies.append(cookies)
         self.cookie_jar.extend(dict(cookie) for cookie in cookies)
+
+    def clear_cookies(self):
+        self.cookie_jar = []
+        self.cookies_cleared = True
 
 
 class FakeChromium:
