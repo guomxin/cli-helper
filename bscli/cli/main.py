@@ -11,7 +11,12 @@ from urllib.error import HTTPError
 import urllib.request
 from urllib.parse import urlparse
 
-from bscli.adapters.seeyon import build_seeyon_profile, register_seeyon_commands
+from bscli.adapters.seeyon import SEEYON_OA_URL, build_seeyon_profile, register_seeyon_commands
+from bscli.adapters.seeyon_central import (
+    SeeyonCentralAdapter,
+    SeeyonLoginRequired,
+    build_central_capability_registry,
+)
 from bscli.adapters.seeyon_home import (
     parse_navigation_inventory,
     parse_pending_list,
@@ -23,9 +28,14 @@ from bscli.adapters.seeyon_write import (
     list_write_action_specs,
     sanitize_oa_write_plan_for_audit,
 )
+from bscli.browser.central import CentralBrowserWorker
+from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
+from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.registry import CommandRegistry
+from bscli.core.session_secrets import SessionSecretError, SessionStateStore
+from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
 from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
 from bscli.daemon.app import DAEMON_TOKEN_FILENAME, serve
@@ -53,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
         return handle_command(args)
     if args.area == "discovered":
         return handle_discovered(args, Path(args.home))
+    if args.area == "capability":
+        return handle_capability(args, Path(args.home))
+    if args.area == "session":
+        return handle_central_session(args, Path(args.home))
+    if args.area == "operation":
+        return handle_operation(args, Path(args.home))
     if args.area == "adapter":
         return handle_adapter(args)
     if args.area == "tool":
@@ -151,6 +167,41 @@ def build_parser() -> argparse.ArgumentParser:
     oa_sub = oa.add_subparsers(dest="oa_area", required=True)
     _build_oa_parser(oa_sub)
 
+    capability = subparsers.add_parser("capability")
+    capability_sub = capability.add_subparsers(dest="action", required=True)
+    capability_list = capability_sub.add_parser("list")
+    capability_list.add_argument("--system")
+    capability_describe = capability_sub.add_parser("describe")
+    capability_describe.add_argument("name")
+    capability_invoke = capability_sub.add_parser("invoke")
+    capability_invoke.add_argument("name")
+    capability_invoke.add_argument("--user-subject", required=True)
+    capability_invoke.add_argument("--json", default="{}")
+    capability_invoke.add_argument("--idempotency-key")
+    capability_invoke.add_argument("--request-id")
+    capability_invoke.add_argument("--base-url")
+
+    session = subparsers.add_parser("session")
+    session_sub = session.add_subparsers(dest="action", required=True)
+    session_status = session_sub.add_parser("status")
+    session_status.add_argument("--system", required=True)
+    session_status.add_argument("--user-subject", required=True)
+    session_login = session_sub.add_parser("login")
+    session_login.add_argument("--system", required=True)
+    session_login.add_argument("--user-subject", required=True)
+    session_login.add_argument("--expected-principal", required=True)
+    session_login.add_argument("--base-url")
+    session_login.add_argument("--timeout", type=float, default=120)
+    session_login.add_argument("--headless", action="store_true")
+
+    operation = subparsers.add_parser("operation")
+    operation_sub = operation.add_subparsers(dest="action", required=True)
+    operation_get = operation_sub.add_parser("get")
+    operation_get.add_argument("operation_id")
+    operation_list = operation_sub.add_parser("list")
+    operation_list.add_argument("--user-subject")
+    operation_list.add_argument("--limit", type=int, default=100)
+
     adapter = subparsers.add_parser("adapter")
     adapter_sub = adapter.add_subparsers(dest="action", required=True)
     parse_home = adapter_sub.add_parser("parse-seeyon-home")
@@ -159,6 +210,265 @@ def build_parser() -> argparse.ArgumentParser:
     parse_home.add_argument("--base-url", default="http://10.10.50.110/seeyon/main.do?method=main")
 
     return parser
+
+
+def handle_capability(args: argparse.Namespace, home: Path) -> int:
+    registry = build_central_capability_registry()
+    if args.action == "list":
+        print_json(
+            {
+                "protocolVersion": "0.1",
+                "capabilities": [
+                    spec.to_dict()
+                    for spec in registry.list(system=getattr(args, "system", None))
+                ],
+            }
+        )
+        return 0
+    if args.action == "describe":
+        try:
+            capability = registry.describe(args.name)
+        except KeyError as exc:
+            print_json(_central_cli_error("CAPABILITY_NOT_FOUND", str(exc)))
+            return 2
+        print_json({"protocolVersion": "0.1", "capability": capability})
+        return 0
+    if args.action != "invoke":
+        raise ValueError(f"unknown capability action: {args.action}")
+
+    try:
+        arguments = json.loads(args.json)
+    except json.JSONDecodeError as exc:
+        print_json(_central_cli_error("INVALID_INPUT", f"--json is not valid JSON: {exc}"))
+        return 2
+    if not isinstance(arguments, dict):
+        print_json(_central_cli_error("INVALID_INPUT", "--json must decode to an object"))
+        return 2
+
+    operation_store = OperationStore(_central_db_path(home))
+    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
+    session_states = SessionStateStore(_central_session_secret_root(home))
+    engine = CapabilityEngine(registry=registry, operation_store=operation_store)
+    if args.name == "oa.template.list":
+        adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
+
+        def list_templates(_context, _arguments):
+            session = sessions.find(user_subject=args.user_subject, system_id="oa")
+            if session is None or session["state"] != "active":
+                raise _login_required_action(args.user_subject, session)
+            state = session_states.load(session["session_id"])
+            if state is None:
+                sessions.mark_expired(session["session_id"], "Encrypted session state is missing.")
+                raise _login_required_action(args.user_subject, session)
+            try:
+                with CentralBrowserWorker(
+                    profile_path=session["profile_path"],
+                    allowed_origins={adapter.origin},
+                    headless=True,
+                ) as worker:
+                    worker.restore_session_state(state)
+                    result = adapter.list_templates(worker)
+                    session_states.save(session["session_id"], worker.capture_session_state())
+                    return result
+            except SeeyonLoginRequired as exc:
+                sessions.mark_expired(session["session_id"], str(exc))
+                session_states.delete(session["session_id"])
+                raise _login_required_action(args.user_subject, session) from exc
+
+        engine.register_handler(args.name, list_templates)
+
+    try:
+        response = engine.invoke(
+            user_subject=args.user_subject,
+            capability_name=args.name,
+            arguments=arguments,
+            idempotency_key=args.idempotency_key,
+            request_id=args.request_id,
+        )
+    except KeyError as exc:
+        print_json(_central_cli_error("CAPABILITY_NOT_FOUND", str(exc)))
+        return 2
+    except (OperationConflictError, ValueError) as exc:
+        print_json(_central_cli_error("INVALID_REQUEST", str(exc)))
+        return 2
+    print_json(response)
+    return 0 if response["status"] in {"succeeded", "requires_user_action"} else 1
+
+
+def handle_central_session(args: argparse.Namespace, home: Path) -> int:
+    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
+    if args.action == "status":
+        session = sessions.find(user_subject=args.user_subject, system_id=args.system)
+        if session is None:
+            print_json(
+                {
+                    "protocolVersion": "0.1",
+                    "status": "not_found",
+                    "systemId": args.system,
+                    "userSubject": args.user_subject,
+                }
+            )
+        else:
+            print_json(_session_response(session))
+        return 0
+    if args.action != "login":
+        raise ValueError(f"unknown session action: {args.action}")
+    if args.system != "oa":
+        print_json(_central_cli_error("SYSTEM_NOT_SUPPORTED", f"central login is not implemented for {args.system}"))
+        return 2
+
+    session = sessions.get_or_create(
+        user_subject=args.user_subject,
+        system_id=args.system,
+        expected_principal_ref=args.expected_principal,
+    )
+    session = sessions.mark_awaiting_login(session["session_id"])
+    adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
+    session_states = SessionStateStore(_central_session_secret_root(home))
+    try:
+        with CentralBrowserWorker(
+            profile_path=session["profile_path"],
+            allowed_origins={adapter.origin},
+            headless=args.headless,
+        ) as worker:
+            login_result = adapter.wait_for_login(worker, timeout_seconds=args.timeout)
+            session = sessions.activate(
+                session["session_id"],
+                observed_principal_ref=login_result["observed_principal_ref"],
+            )
+            session_states.save(session["session_id"], worker.capture_session_state())
+    except SeeyonLoginRequired as exc:
+        session = sessions.mark_expired(session["session_id"], str(exc))
+        session_states.delete(session["session_id"])
+        response = _session_response(session)
+        response["error"] = {"code": "LOGIN_TIMEOUT", "message": str(exc)}
+        print_json(response)
+        return 1
+    except SessionSecretError as exc:
+        session = sessions.mark_expired(session["session_id"], "Encrypted session state is unavailable.")
+        response = _session_response(session)
+        response["error"] = {"code": "SESSION_STATE_UNAVAILABLE", "message": str(exc)}
+        print_json(response)
+        return 1
+    except SessionPrincipalMismatch as exc:
+        session = sessions.get(session["session_id"])
+        response = _session_response(session)
+        response["error"] = {"code": "PRINCIPAL_MISMATCH", "message": str(exc)}
+        print_json(response)
+        return 1
+    except Exception as exc:
+        response = _session_response(sessions.get(session["session_id"]))
+        response["error"] = {
+            "code": "CENTRAL_BROWSER_FAILED",
+            "message": str(exc) or exc.__class__.__name__,
+        }
+        print_json(response)
+        return 1
+
+    response = _session_response(session)
+    response["validation"] = {
+        "capability": "oa.template.list",
+        "templateCount": login_result["templates"]["count"],
+        "transport": login_result["templates"]["transport"],
+    }
+    print_json(response)
+    return 0
+
+
+def handle_operation(args: argparse.Namespace, home: Path) -> int:
+    store = OperationStore(_central_db_path(home))
+    if args.action == "get":
+        try:
+            operation = store.get(args.operation_id)
+        except KeyError as exc:
+            print_json(_central_cli_error("OPERATION_NOT_FOUND", str(exc)))
+            return 2
+        print_json({"protocolVersion": "0.1", "operation": _operation_response(operation)})
+        return 0
+    if args.action == "list":
+        operations = store.list(user_subject=args.user_subject, limit=args.limit)
+        print_json(
+            {
+                "protocolVersion": "0.1",
+                "count": len(operations),
+                "operations": [_operation_response(operation) for operation in operations],
+            }
+        )
+        return 0
+    raise ValueError(f"unknown operation action: {args.action}")
+
+
+def _login_required_action(user_subject: str, session: dict | None) -> RequiresUserAction:
+    return RequiresUserAction(
+        "LOGIN_REQUIRED",
+        "The central OA session is not active.",
+        next_action={
+            "type": "session_login",
+            "system": "oa",
+            "userSubject": user_subject,
+            "sessionState": session["state"] if session else "not_found",
+        },
+    )
+
+
+def _central_db_path(home: Path) -> Path:
+    return home / "agentbridge.db"
+
+
+def _central_profile_root(home: Path) -> Path:
+    return home / "profiles"
+
+
+def _central_session_secret_root(home: Path) -> Path:
+    return home / "session-secrets"
+
+
+def _central_base_url(home: Path, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    try:
+        return ConfigStore(home).load_system("oa").base_url
+    except KeyError:
+        return SEEYON_OA_URL
+
+
+def _session_response(session: dict) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "status": session["state"],
+        "sessionId": session["session_id"],
+        "systemId": session["system_id"],
+        "userSubject": session["user_subject"],
+        "expectedPrincipalRef": session.get("expected_principal_ref"),
+        "downstreamPrincipalRef": session.get("downstream_principal_ref"),
+        "lastVerifiedAt": session.get("last_verified_at"),
+        "lastError": session.get("last_error"),
+    }
+
+
+def _operation_response(operation: dict) -> dict:
+    return {
+        "operationId": operation["operation_id"],
+        "requestId": operation["request_id"],
+        "userSubject": operation["user_subject"],
+        "capability": operation["capability_name"],
+        "capabilityVersion": operation["capability_version"],
+        "status": operation["status"],
+        "result": operation.get("result"),
+        "error": operation.get("error"),
+        "nextAction": operation.get("next_action"),
+        "createdAt": operation["created_at"],
+        "updatedAt": operation["updated_at"],
+        "finishedAt": operation.get("finished_at"),
+    }
+
+
+def _central_cli_error(code: str, message: str) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "status": "failed",
+        "error": {"code": code, "message": message},
+    }
 
 
 def _build_oa_parser(oa_sub) -> None:

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cli-helper"
+version = "0.1.0"
+description = "Agent-oriented command capabilities for legacy B/S systems"
+requires-python = ">=3.12"
+dependencies = [
+  "playwright==1.60.0",
+]
+
+[project.scripts]
+bscli = "bscli.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["bscli*"]

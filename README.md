@@ -2,7 +2,8 @@
 
 BSCLI is a Python-first adapter platform for turning existing B/S system capabilities into CLI commands and agent-callable tools.
 
-This repository currently contains the first runnable skeleton:
+This repository currently contains the original browser-bridge prototype and
+the first central AgentBridge vertical slice:
 
 - Python CLI
 - Python local daemon
@@ -10,6 +11,52 @@ This repository currently contains the first runnable skeleton:
 - Command registry
 - Trace store
 - Seeyon OA example profile for `http://10.10.50.110/seeyon/main.do?method=main`
+- Versioned business capability registry and operation ledger
+- Per-user central Playwright profiles and session registry
+- Extension-independent `oa.template.list` capability
+
+## Central AgentBridge Slice
+
+The new central path does not use the client Chrome extension or the localhost
+daemon. Install the pinned Python dependency and Chromium runtime first:
+
+```bash
+python -m pip install -e .
+python -m playwright install chromium
+```
+
+Discover central business capabilities:
+
+```bash
+python -m bscli.cli.main --home .bscli capability list
+python -m bscli.cli.main --home .bscli capability describe oa.template.list
+```
+
+Create or refresh a per-user central OA session in a dedicated Playwright
+profile. This headed login is a development validation entry point; it does not
+accept passwords on the CLI and will be replaced by the trusted authentication
+card and Credential Broker path:
+
+```bash
+python -m bscli.cli.main --home .bscli session login --system oa --user-subject <trusted-user-subject> --expected-principal <oa-display-name>
+```
+
+Invoke the read capability and inspect its durable operation record:
+
+```bash
+python -m bscli.cli.main --home .bscli capability invoke oa.template.list --user-subject <trusted-user-subject> --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli operation list --user-subject <trusted-user-subject>
+python -m bscli.cli.main --home .bscli operation get <operation-id>
+```
+
+An inactive or expired session returns `requires_user_action` with
+`error.code=LOGIN_REQUIRED`; it never silently falls back to the extension.
+On Windows, process-level OA session cookies are stored only as a DPAPI-encrypted
+blob under `.bscli/session-secrets`; the SQLite ledger and CLI output never
+contain cookie values. Other operating systems must provide an equivalent
+Vault/KMS-backed protector before this session path can run.
+The legacy path below remains available as a migration oracle while capabilities
+are moved one by one.
 
 ## Quick Start
 
@@ -732,17 +779,25 @@ The extension polls the daemon and submits task results back to:
 GET http://127.0.0.1:8765/extension/results/<task-id>
 ```
 
-The current architecture is intentionally small and Python-standard-library
-first: `argparse` for the CLI, `http.server` for the local daemon, and Chrome
-extension polling for browser tasks. Earlier design sketches that mention
-FastAPI/Starlette, WebSocket/Native Messaging, Typer, uv, or hatch are not the
-current implementation contract unless a future design note explicitly revives
-them.
+The legacy bridge remains Python-standard-library first: `argparse` for the
+CLI, `http.server` for the local daemon, and Chrome extension polling for
+browser tasks. The central AgentBridge slice adds pinned Playwright for managed
+browser sessions; it does not introduce FastAPI/Starlette, WebSocket/Native
+Messaging, Typer, uv, or hatch.
 
 ## Current Scope
 
 Implemented:
 
+- Versioned central `CapabilitySpec` registry and JSON CLI discovery
+- Durable central operation ledger with idempotency conflict detection
+- Per-user central session registry and principal mismatch quarantine
+- DPAPI-encrypted central browser session-state store on Windows
+- Central Playwright persistent profiles, origin allowlist, and profile lease
+- Extension-independent central `oa.template.list` read capability
+- CLI `capability list/describe/invoke`
+- CLI `session status/login`
+- CLI `operation get/list`
 - System profile storage
 - Seeyon OA profile initialization
 - Command registry

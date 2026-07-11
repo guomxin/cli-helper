@@ -72,6 +72,9 @@ organization namespace + userSubject
 
 ### 2.7 Worker 租约的真实执行边界
 
+- 当前 PoC 只实现单机、单进程层面的 Profile 租约，能够拒绝同一 Profile 的并发启动；这不是跨主机 fencing，也不能自动证明强制终止后的 Chromium 子进程已经消失；
+- 当前 Windows PoC 使用 DPAPI 加密保存进程级浏览器 Session Cookie；Linux/容器和跨主机部署必须改接 Vault/KMS 或等价信封加密，并完成密钥轮换、撤销、备份恢复和内存清理，不能降级为明文 `storage_state.json`；
+- 生产 Worker 应使用容器、受限 OS 身份或 Windows Job Object/Linux cgroup 等进程组机制，保证 Worker 退出时浏览器子进程随之终止，并由监督器识别和隔离残留 Profile；
 - 遗留网页不理解 fencing token；过期 Worker 仍可能完成已经开始的点击；
 - 生产写流量需经过单一会话代理或可撤销网络出口；
 - 租约失效时切断 Worker 到目标系统的出站访问；

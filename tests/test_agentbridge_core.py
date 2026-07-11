@@ -1,0 +1,257 @@
+import unittest
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from bscli.core.capability import CapabilityRegistry, CapabilitySpec
+from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
+from bscli.core.operations import OperationConflictError, OperationStore
+from bscli.core.session_secrets import SessionStateStore
+from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
+
+
+class AgentBridgeCoreTests(unittest.TestCase):
+    def test_capability_registry_exposes_versioned_business_capability(self):
+        registry = CapabilityRegistry()
+        spec = CapabilitySpec(
+            name="oa.template.list",
+            version="0.1.0",
+            description="List templates available to the current OA user.",
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            output_schema={"type": "object"},
+            effect="read",
+            adapter="seeyon-central",
+            workflow="template-list-v1",
+        )
+
+        registry.register(spec)
+
+        self.assertEqual(registry.get("oa.template.list"), spec)
+        self.assertEqual(registry.list()[0].system, "oa")
+        self.assertEqual(registry.describe("oa.template.list")["effect"], "read")
+
+    def test_operation_store_reuses_idempotency_key_and_rejects_changed_input(self):
+        with TemporaryDirectory() as tmp:
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            first, reused = store.create(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                capability_version="0.1.0",
+                input_summary={"keyword": "HR"},
+                idempotency_key="same-request",
+            )
+            second, second_reused = store.create(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                capability_version="0.1.0",
+                input_summary={"keyword": "HR"},
+                idempotency_key="same-request",
+            )
+
+            self.assertFalse(reused)
+            self.assertTrue(second_reused)
+            self.assertEqual(second["operation_id"], first["operation_id"])
+
+            with self.assertRaises(OperationConflictError):
+                store.create(
+                    user_subject="user-a",
+                    capability_name="oa.template.list",
+                    capability_version="0.1.0",
+                    input_summary={"keyword": "Finance"},
+                    idempotency_key="same-request",
+                )
+
+            blank_one, blank_one_reused = store.create(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                capability_version="0.1.0",
+                input_summary={},
+                idempotency_key="   ",
+            )
+            blank_two, blank_two_reused = store.create(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                capability_version="0.1.0",
+                input_summary={},
+                idempotency_key="   ",
+            )
+            self.assertFalse(blank_one_reused)
+            self.assertFalse(blank_two_reused)
+            self.assertNotEqual(blank_one["operation_id"], blank_two["operation_id"])
+
+    def test_capability_engine_persists_success_and_reuses_result(self):
+        with TemporaryDirectory() as tmp:
+            registry = CapabilityRegistry()
+            registry.register(_template_capability())
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            calls = []
+
+            def handler(_context, arguments):
+                calls.append(arguments)
+                return {"count": 1, "items": [{"title": "HR"}]}
+
+            engine = CapabilityEngine(registry=registry, operation_store=store)
+            engine.register_handler("oa.template.list", handler)
+
+            first = engine.invoke(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                arguments={},
+                idempotency_key="list-once",
+            )
+            second = engine.invoke(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                arguments={},
+                idempotency_key="list-once",
+            )
+
+            self.assertEqual(first["status"], "succeeded")
+            self.assertEqual(second["operationId"], first["operationId"])
+            self.assertTrue(second["reused"])
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(store.get(first["operationId"])["status"], "succeeded")
+
+    def test_capability_engine_records_requires_user_action(self):
+        with TemporaryDirectory() as tmp:
+            registry = CapabilityRegistry()
+            registry.register(_template_capability())
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            engine = CapabilityEngine(registry=registry, operation_store=store)
+
+            def handler(_context, _arguments):
+                raise RequiresUserAction(
+                    "LOGIN_REQUIRED",
+                    "The OA session is not active.",
+                    next_action={"type": "session_login", "system": "oa"},
+                )
+
+            engine.register_handler("oa.template.list", handler)
+            response = engine.invoke(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                arguments={},
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "LOGIN_REQUIRED")
+            self.assertEqual(response["nextAction"]["type"], "session_login")
+
+    def test_session_registry_isolates_profiles_and_checks_principal(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            user_a = registry.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            user_b = registry.get_or_create(
+                user_subject="user-b",
+                system_id="oa",
+                expected_principal_ref="Bob",
+            )
+
+            self.assertNotEqual(user_a["profile_path"], user_b["profile_path"])
+            self.assertTrue(Path(user_a["profile_path"]).is_dir())
+            active = registry.activate(user_a["session_id"], observed_principal_ref="Alice")
+            self.assertEqual(active["state"], "active")
+
+            with self.assertRaises(SessionPrincipalMismatch):
+                registry.activate(user_b["session_id"], observed_principal_ref="Mallory")
+            self.assertEqual(registry.get(user_b["session_id"])["state"], "quarantined")
+
+    def test_session_registry_rejects_binding_changes_and_unverified_activation(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = registry.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+
+            with self.assertRaises(SessionPrincipalMismatch):
+                registry.get_or_create(
+                    user_subject="user-a",
+                    system_id="oa",
+                    expected_principal_ref="Bob",
+                )
+            self.assertEqual(registry.get(session["session_id"])["state"], "quarantined")
+
+            unverified = registry.get_or_create(
+                user_subject="user-b",
+                system_id="oa",
+                expected_principal_ref="Bob",
+            )
+            with self.assertRaises(SessionPrincipalMismatch):
+                registry.activate(unverified["session_id"], observed_principal_ref=None)
+            self.assertEqual(registry.get(unverified["session_id"])["state"], "quarantined")
+
+    def test_session_state_store_encrypts_cookie_state_at_rest(self):
+        with TemporaryDirectory() as tmp:
+            store = SessionStateStore(Path(tmp), protector=ReversingProtector())
+            state = {
+                "cookies": [
+                    {
+                        "name": "JSESSIONID",
+                        "value": "top-secret-cookie",
+                        "domain": "oa.example.test",
+                        "path": "/",
+                    }
+                ]
+            }
+
+            store.save("session-a", state)
+
+            ciphertext = store.path_for("session-a").read_bytes()
+            self.assertNotIn(b"top-secret-cookie", ciphertext)
+            self.assertEqual(store.load("session-a"), state)
+
+    @unittest.skipUnless(os.name == "nt", "Windows DPAPI validation")
+    def test_default_session_state_store_round_trips_with_windows_dpapi(self):
+        with TemporaryDirectory() as tmp:
+            store = SessionStateStore(Path(tmp))
+            state = {
+                "cookies": [
+                    {
+                        "name": "JSESSIONID",
+                        "value": "dpapi-secret-cookie",
+                        "domain": "oa.example.test",
+                        "path": "/",
+                    }
+                ]
+            }
+
+            store.save("session-dpapi", state)
+
+            self.assertNotIn(b"dpapi-secret-cookie", store.path_for("session-dpapi").read_bytes())
+            self.assertEqual(store.load("session-dpapi"), state)
+
+
+def _template_capability() -> CapabilitySpec:
+    return CapabilitySpec(
+        name="oa.template.list",
+        version="0.1.0",
+        description="List templates available to the current OA user.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        output_schema={"type": "object"},
+        effect="read",
+        adapter="seeyon-central",
+        workflow="template-list-v1",
+    )
+
+
+class ReversingProtector:
+    def protect(self, plaintext: bytes, *, context: bytes) -> bytes:
+        return b"protected:" + context + b":" + plaintext[::-1]
+
+    def unprotect(self, ciphertext: bytes, *, context: bytes) -> bytes:
+        prefix = b"protected:" + context + b":"
+        if not ciphertext.startswith(prefix):
+            raise ValueError("invalid context")
+        return ciphertext[len(prefix) :][::-1]
+
+
+if __name__ == "__main__":
+    unittest.main()

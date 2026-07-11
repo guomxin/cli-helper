@@ -1,8 +1,28 @@
 # AgentBridge 轻量 PoC 验证方案
 
-> 状态：执行草案 v0.3
+> 状态：执行草案 v0.5
 > 更新日期：2026-07-11
 > 目标：用中心端零客户端连接器架构接入 2 个不同类型的 B/S 遗留系统；时间允许时再增加第 3 个系统，快速判断面向智能体非侵入适配是否值得继续投入。
+
+## 0. 执行进度（2026-07-11）
+
+Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
+
+| 项目 | 状态 | 证据 |
+|---|---|---|
+| 能力目录与 Schema | 已完成首版 | `oa.template.list@0.1.0` 可通过 CLI 列出和描述 |
+| SQLite 操作账本 | 已完成首版 | 先落账再执行；同幂等键复用操作，不同输入返回冲突 |
+| 中央会话注册表 | 已完成首版 | `userSubject + systemId` 绑定独立 Profile；支持 `new/awaiting_login/active/expired/quarantined` |
+| 中央 Browser Worker | 已完成首版 | Playwright 持久 Profile、origin 白名单、同 Profile 单租约、正常关闭回收 |
+| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie |
+| OA 模板列表 | 已完成真实验证 | 复用浏览器上下文 HTTP 会话；不调用扩展或 localhost Daemon |
+| 未登录真实诊断 | 已验证 | 模板接口真实返回 `401 application/json`，会话保持未激活并返回 `LOGIN_REQUIRED` |
+| 已登录真实读取 | 已验证 | 关闭登录浏览器后，新 headless CLI 进程恢复加密会话并读取 118 个模板；`central_http_session`、`browser_bridge_used=false` |
+| 操作幂等复用 | 已验证 | 重复使用同一幂等键返回同一 `operationId` 和保存结果，`reused=true` |
+| 可信认证卡片/凭据代理 | 未开始 | 下一纵切；当前 headed 登录仅是开发验证入口，不是手机端生产方案 |
+| 多用户安全主体、远程 MCP、写动作 | 未开始 | 按后续里程碑实施 |
+
+首个纵切提交门槛已经满足。下一验收门槛是可信认证卡片让秘密绕过模型，以及两个不同用户在独立 Worker 安全主体中完成同一 R0 能力。
 
 ## 1. PoC 要回答的问题
 

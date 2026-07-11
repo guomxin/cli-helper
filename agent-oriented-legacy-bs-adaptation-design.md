@@ -1,10 +1,23 @@
 # 面向智能体的 B/S 遗留系统非侵入式适配设计方案
 
-> 文档状态：Draft v0.5
+> 文档状态：Draft v0.6
 > 更新日期：2026-07-11
 > 适用范围：只面向智能体的系统适配；必须支持不同用户以各自在遗留系统中的身份并发使用，并支持通过手机端智能体安全使用；不建设面向人的新业务操作界面，不要求对外提供通用业务 API
 
 > **文档定位：目标架构与后续参考，不是首期实现清单。** 快速可行性验证按 [PoC 验证方案](./poc-validation-plan.md) 实施；暂缓事项统一记录在 [后续增强事项](./deferred-considerations.md)。
+
+## 0. 当前实现基线（2026-07-11）
+
+已完成第一个中心端纵切，但尚未达到本设计的完整阶段 1：
+
+- 新增版本化 `CapabilitySpec`/目录、统一 `CapabilityEngine`、SQLite `OperationStore` 和按用户隔离的 `SessionRegistry`；
+- 新增中心 `CentralBrowserWorker`，使用 Playwright 持久化 Profile、目标 origin 白名单和单 Profile 进程租约；
+- 新增中心 `SessionStateStore`；OA 的进程级 Session Cookie 使用 Windows DPAPI 加密落盘，Cookie 不进入 CLI、SQLite 账本、普通日志或模型上下文，新 Worker 启动后在内存中恢复；非 Windows 部署必须接入等价 Vault/KMS 保护器后才能启用；
+- 新增不依赖客户端扩展的 `oa.template.list`，浏览器只负责建立登录态，模板列表通过同一 BrowserContext 的 HTTP 请求通道读取并复用现有结构化解析器；
+- 新增 `capability list/describe/invoke`、`session status/login`、`operation get/list` CLI，未登录时返回持久化的 `requires_user_action/LOGIN_REQUIRED`；
+- 旧 Chrome 扩展、localhost Daemon 和原有 OA 命令保持不变，只作为迁移期能力和回归对照，中心能力不会静默回退到旧桥接路径。
+
+当前尚未完成可信认证卡片、Credential Broker、远程 MCP、两个 Worker OS 安全主体的多用户隔离、中心写动作迁移和扩展退役。首个真实 OA 纵切已经通过：中央窗口登录并核验下游身份“辛国茂”后，可见浏览器关闭；一个全新的 headless CLI 进程从 DPAPI 密文恢复会话，读取 118 个模板，返回 `transport=central_http_session`、`browser_bridge_used=false` 和持久化 `operationId`；用同一幂等键重试返回同一操作且 `reused=true`。这只证明单用户 R0 纵切，不等于多用户与生产安全验收完成。
 
 ## 1. 摘要
 
