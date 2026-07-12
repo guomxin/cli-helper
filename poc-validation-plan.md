@@ -10,14 +10,15 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
-| 能力目录与 Schema | 已完成首版 | `oa.template.list@0.1.0` 可通过 CLI 列出和描述 |
+| 能力目录与 Schema | 已完成首版 | 已注册模板、待办、已办、跟踪、详情和意见 6 个 `oa.*@0.1.0` 中心只读能力，可通过 CLI 列出和描述 |
 | SQLite 操作账本 | 已完成首版 | 先落账再执行；同幂等键复用操作，不同输入返回冲突 |
 | 中央会话注册表 | 已完成首版 | `userSubject + systemId` 绑定独立 Profile；支持 `new/awaiting_login/active/expired/quarantined` |
 | 中央 Browser Worker | 已完成首版 | Playwright 持久 Profile、origin 白名单、同 Profile 单租约、正常关闭回收 |
-| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie |
-| OA 模板列表 | 已完成真实验证 | 复用浏览器上下文 HTTP 会话；不调用扩展或 localhost Daemon |
+| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie；不同 Windows 用户解密会失败关闭，Broker 与 Worker 必须使用同一服务安全主体 |
+| OA 模板与事项列表 | 已完成真实验证 | 模板直接复用浏览器上下文 HTTP 会话；事项列表从首页动态发现当前用户栏目参数后调用后台接口；不调用扩展或 localhost Daemon |
+| OA 详情与意见 | 已完成真实验证 | 详情在同一中心会话中渲染并合并同源 iframe；真实样本提取 8 个业务字段和 1 条结构化意见，公开结果不含内部 URL、HTML、Cookie、动作端点和写提示 |
 | 未登录真实诊断 | 已验证 | 模板接口真实返回 `401 application/json`，会话保持未激活并返回 `LOGIN_REQUIRED` |
-| 已登录真实读取 | 已验证 | 关闭登录浏览器后，新 headless CLI 进程恢复加密会话并读取 118 个模板；`central_http_session`、`browser_bridge_used=false` |
+| 已登录真实读取 | 已验证 | 新 headless CLI 进程恢复加密会话并读取 118 个模板、3 条待办、9 条已办、9 条跟踪以及一个详情/意见样本；全部 `browser_bridge_used=false` |
 | 操作幂等复用 | 已验证 | 重复使用同一幂等键返回同一 `operationId` 和保存结果，`reused=true` |
 | 可信认证卡片/凭据代理 | 已完成单用户真实验证 | 一次性挑战、固定字段、CSRF、TTL、来源校验、内存凭据、真实 iframe 登录、原生提交和下游身份核验均已验证 |
 | 卡片后跨进程会话恢复 | 已验证 | 停止认证服务后，两个新 CLI 进程各自恢复 `/seeyon` Session Cookie 并读取 118 个模板；均未调用扩展 |

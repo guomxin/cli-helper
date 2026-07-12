@@ -14,7 +14,8 @@ the first central AgentBridge vertical slice:
 - Versioned business capability registry and operation ledger
 - Per-user central Playwright profiles and session registry
 - One-time trusted authentication cards and a memory-only Credential Broker
-- Extension-independent `oa.template.list` capability
+- Extension-independent central OA read package for templates, workflow lists,
+  rendered details, and opinions
 
 ## Central AgentBridge Slice
 
@@ -31,6 +32,7 @@ Discover central business capabilities:
 ```bash
 python -m bscli.cli.main --home .bscli capability list
 python -m bscli.cli.main --home .bscli capability describe oa.template.list
+python -m bscli.cli.main --home .bscli capability describe oa.workflow.detail.get
 ```
 
 Start the trusted authentication-card service. Loopback HTTP is supported only
@@ -64,24 +66,39 @@ Invoke the read capability and inspect its durable operation record:
 
 ```bash
 python -m bscli.cli.main --home .bscli capability invoke oa.template.list --user-subject <trusted-user-subject> --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli capability invoke oa.workflow.pending.list --user-subject <trusted-user-subject> --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli capability invoke oa.workflow.done.list --user-subject <trusted-user-subject> --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli capability invoke oa.workflow.tracked.list --user-subject <trusted-user-subject> --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli capability invoke oa.workflow.detail.get --user-subject <trusted-user-subject> --json '{"collection":"done","affair_id":"<opaque-id>"}' --idempotency-key <request-key>
+python -m bscli.cli.main --home .bscli capability invoke oa.workflow.opinions.list --user-subject <trusted-user-subject> --json '{"collection":"done","affair_id":"<opaque-id>"}' --idempotency-key <request-key>
 python -m bscli.cli.main --home .bscli operation list --user-subject <trusted-user-subject>
 python -m bscli.cli.main --home .bscli operation get <operation-id>
 ```
+
+Workflow lists discover the current user's rendered section contract and then
+read the section through the central HTTP session. Detail and opinion reads
+resolve only opaque IDs returned by those lists, render the page in the same
+central browser session, and merge same-origin iframe content. Public results
+exclude internal OA URLs, raw HTML, cookies, action endpoints, and write hints.
 
 An inactive or expired session returns `requires_user_action` with
 `error.code=LOGIN_REQUIRED`; it never silently falls back to the extension.
 On Windows, process-level OA session cookies are stored only as a DPAPI-encrypted
 blob under `.bscli/session-secrets`; the SQLite ledger and CLI output never
-contain cookie values. Other operating systems must provide an equivalent
-Vault/KMS-backed protector before this session path can run.
+contain cookie values. The Credential Broker and capability Worker must run as
+the same Windows security principal because user-scoped DPAPI ciphertext cannot
+be decrypted by another account. Other operating systems must provide an
+equivalent Vault/KMS-backed protector before this session path can run.
 
 The 2026-07-11 live Seeyon validation authenticated the expected principal
-`辛国茂` through the card, then stopped the authentication service. Two fresh
-CLI processes independently restored the encrypted session and each read 118
-templates with `transport=central_http_session` and
-`browser_bridge_used=false`. This proves the single-user central path only;
-cross-user isolation still requires a second real account and separate Worker
-security principals.
+`辛国茂` through the card. Fresh CLI processes restored the encrypted session
+and read 118 templates. The expanded package then read 3 pending, 9 done, and
+9 tracked workflows through the section API, and rendered one done workflow
+with 8 business fields and 1 structured opinion. Every result reported
+`browser_bridge_used=false`; list reads used `central_http_session`, while
+detail and opinion reads used `central_browser_session`. This proves the
+single-user central path only; cross-user isolation still requires a second
+real account and separate Worker security principals.
 
 The legacy path below remains available as a migration oracle while capabilities
 are moved one by one.

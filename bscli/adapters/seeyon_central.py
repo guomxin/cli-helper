@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+from html import unescape
 import json
 import re
 import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bscli.adapters.seeyon import SEEYON_OA_URL
-from bscli.adapters.seeyon_home import TEMPLATE_CENTER_API_URL, parse_template_center_response
+from bscli.adapters.seeyon_home import (
+    TEMPLATE_CENTER_API_URL,
+    extract_history_sections,
+    parse_navigation_inventory,
+    parse_oa_detail,
+    parse_pending_projection,
+    parse_sent_projection,
+    parse_template_center_response,
+)
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 
 
@@ -24,6 +33,10 @@ class SeeyonLoginContractMismatch(RuntimeError):
 
 
 class SeeyonUnsupportedAuthMethod(RuntimeError):
+    pass
+
+
+class SeeyonReadContractMismatch(RuntimeError):
     pass
 
 
@@ -88,6 +101,45 @@ _UNSUPPORTED_AUTH_SELECTORS = (
     'input[placeholder*="验证码"]',
 )
 
+_WORKFLOW_LIST_CAPABILITIES = {
+    "oa.workflow.pending.list": "pending",
+    "oa.workflow.done.list": "done",
+    "oa.workflow.tracked.list": "tracked",
+}
+
+_WORKFLOW_COLLECTIONS = frozenset(_WORKFLOW_LIST_CAPABILITIES.values())
+
+_WORKFLOW_LIST_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keyword": {"type": "string"},
+        "limit": {"type": "integer"},
+    },
+    "additionalProperties": False,
+}
+
+_WORKFLOW_DETAIL_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "collection": {"type": "string"},
+        "affair_id": {"type": "string"},
+        "text_limit": {"type": "integer"},
+    },
+    "required": ["collection", "affair_id"],
+    "additionalProperties": False,
+}
+
+_WORKFLOW_OPINIONS_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "collection": {"type": "string"},
+        "affair_id": {"type": "string"},
+        "limit": {"type": "integer"},
+    },
+    "required": ["collection", "affair_id"],
+    "additionalProperties": False,
+}
+
 
 def build_central_capability_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
@@ -101,6 +153,43 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="read",
             adapter="seeyon-central",
             workflow="template-list-v1",
+        )
+    )
+    for capability_name, collection in _WORKFLOW_LIST_CAPABILITIES.items():
+        registry.register(
+            CapabilitySpec(
+                name=capability_name,
+                version="0.1.0",
+                description=f"List {collection} workflows for the current OA user.",
+                input_schema=_WORKFLOW_LIST_INPUT_SCHEMA,
+                output_schema={"type": "object"},
+                effect="read",
+                adapter="seeyon-central",
+                workflow="workflow-list-v1",
+            )
+        )
+    registry.register(
+        CapabilitySpec(
+            name="oa.workflow.detail.get",
+            version="0.1.0",
+            description="Get a rendered OA workflow detail by opaque affair ID.",
+            input_schema=_WORKFLOW_DETAIL_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="read",
+            adapter="seeyon-central",
+            workflow="workflow-detail-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name="oa.workflow.opinions.list",
+            version="0.1.0",
+            description="List the rendered opinions for an OA workflow.",
+            input_schema=_WORKFLOW_OPINIONS_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="read",
+            adapter="seeyon-central",
+            workflow="workflow-opinions-v1",
         )
     )
     return registry
@@ -207,7 +296,11 @@ class SeeyonCentralAdapter:
         status = int(response.get("status") or 0)
         final_url = str(response.get("url") or "")
         payload = response.get("json")
-        if status in {401, 403} or _looks_like_login_url(final_url) or not isinstance(payload, dict):
+        if (
+            status in {301, 302, 303, 307, 308, 401, 403}
+            or _looks_like_login_url(final_url)
+            or not isinstance(payload, dict)
+        ):
             raise SeeyonLoginRequired("The central OA session is not logged in or has expired.")
         result = parse_template_center_response(payload, base_url=self.base_url)
         return {
@@ -215,6 +308,217 @@ class SeeyonCentralAdapter:
             "transport": "central_http_session",
             "browser_bridge_used": False,
         }
+
+    def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:
+        if capability_name == "oa.template.list":
+            if arguments:
+                raise ValueError("oa.template.list does not accept arguments")
+            return self.list_templates(worker)
+        collection = _WORKFLOW_LIST_CAPABILITIES.get(capability_name)
+        if collection:
+            return self.list_workflows(worker, collection=collection, arguments=arguments)
+        if capability_name == "oa.workflow.detail.get":
+            return self.get_workflow_detail(worker, arguments=arguments)
+        if capability_name == "oa.workflow.opinions.list":
+            return self.list_workflow_opinions(worker, arguments=arguments)
+        raise KeyError(f"unsupported Seeyon central capability: {capability_name}")
+
+    def list_workflows(self, worker, *, collection: str, arguments: dict | None = None) -> dict:
+        collection = _validated_collection(collection)
+        arguments = arguments or {}
+        keyword = _validated_optional_string(arguments.get("keyword"), "keyword", maximum=200)
+        limit = _validated_integer(arguments.get("limit"), "limit", default=50, minimum=1, maximum=100)
+        parsed = self._fetch_workflow_collection(worker, collection)
+        public_items = [_public_workflow_item(item, collection) for item in parsed.get("items") or []]
+        public_items = [item for item in public_items if item.get("title")]
+        source_count = len(public_items)
+        if keyword:
+            needle = keyword.casefold()
+            public_items = [
+                item
+                for item in public_items
+                if needle in " ".join(str(value) for value in item.values()).casefold()
+            ]
+        matched_count = len(public_items)
+        public_items = public_items[:limit]
+        return {
+            "schema_version": "bscli.oa_workflow_list.v1",
+            "collection": collection,
+            "source": "section_api",
+            "source_count": source_count,
+            "matched_count": matched_count,
+            "count": len(public_items),
+            "total": parsed.get("total"),
+            "page": parsed.get("page"),
+            "items": public_items,
+            "transport": "central_http_session",
+            "browser_bridge_used": False,
+        }
+
+    def get_workflow_detail(self, worker, *, arguments: dict) -> dict:
+        collection = _validated_collection(arguments.get("collection"))
+        affair_id = _validated_identifier(arguments.get("affair_id"), "affair_id")
+        text_limit = _validated_integer(
+            arguments.get("text_limit"),
+            "text_limit",
+            default=6000,
+            minimum=0,
+            maximum=20000,
+        )
+        source_item, parsed_detail = self._render_workflow_detail(
+            worker,
+            collection=collection,
+            affair_id=affair_id,
+        )
+        opinions = _public_opinions(parsed_detail.get("workflow"))
+        attachments = [
+            {"name": _public_text(item.get("name"))}
+            for item in parsed_detail.get("attachments") or []
+            if isinstance(item, dict) and item.get("name")
+        ]
+        fields = [
+            {
+                "name": _public_text(item.get("name")),
+                "value": _public_text(item.get("value")),
+            }
+            for item in parsed_detail.get("fields") or []
+            if isinstance(item, dict) and item.get("name")
+        ]
+        return {
+            "schema_version": "bscli.oa_workflow_detail.v1",
+            "collection": collection,
+            "source_item": _public_workflow_item(source_item, collection),
+            "detail": {
+                "title": _public_text(source_item.get("title") or parsed_detail.get("title")),
+                "text": str(parsed_detail.get("text") or "")[:text_limit],
+                "fields": fields,
+                "field_count": len(fields),
+                "attachments": attachments,
+                "attachment_count": len(attachments),
+                "opinions": opinions,
+                "opinion_count": len(opinions),
+            },
+            "transport": "central_browser_session",
+            "browser_bridge_used": False,
+        }
+
+    def list_workflow_opinions(self, worker, *, arguments: dict) -> dict:
+        collection = _validated_collection(arguments.get("collection"))
+        affair_id = _validated_identifier(arguments.get("affair_id"), "affair_id")
+        limit = _validated_integer(arguments.get("limit"), "limit", default=100, minimum=1, maximum=100)
+        source_item, parsed_detail = self._render_workflow_detail(
+            worker,
+            collection=collection,
+            affair_id=affair_id,
+        )
+        opinions = _public_opinions(parsed_detail.get("workflow"))[:limit]
+        return {
+            "schema_version": "bscli.oa_workflow_opinions.v1",
+            "collection": collection,
+            "source_item": _public_workflow_item(source_item, collection),
+            "count": len(opinions),
+            "items": opinions,
+            "transport": "central_browser_session",
+            "browser_bridge_used": False,
+        }
+
+    def _fetch_workflow_collection(self, worker, collection: str) -> dict:
+        self.list_templates(worker)
+        section_url = self._discover_section_url(worker, collection)
+        response = worker.request("GET", section_url)
+        status = int(response.get("status") or 0)
+        final_url = str(response.get("url") or "")
+        payload = response.get("json")
+        if status in {301, 302, 303, 307, 308, 401, 403} or _looks_like_login_url(final_url):
+            raise SeeyonLoginRequired("The central OA session expired while reading workflows.")
+        if status < 200 or status >= 300:
+            raise SeeyonReadContractMismatch(f"The OA workflow section returned HTTP {status}.")
+        if not isinstance(payload, dict):
+            raise SeeyonReadContractMismatch("The OA workflow section did not return JSON.")
+        if not isinstance(payload.get("Data"), dict):
+            raise SeeyonReadContractMismatch("The OA workflow section JSON is missing Data.")
+        parser = parse_pending_projection if collection == "pending" else parse_sent_projection
+        parsed = parser(payload, base_url=final_url or self.base_url)
+        if parsed.get("error"):
+            raise SeeyonReadContractMismatch(str(parsed["error"]))
+        return parsed
+
+    def _discover_section_url(
+        self,
+        worker,
+        collection: str,
+        *,
+        timeout_seconds: float = 10,
+    ) -> str:
+        worker.goto(self.base_url)
+        deadline = time.monotonic() + max(timeout_seconds, 0.1)
+        while time.monotonic() < deadline:
+            if _looks_like_login_url(worker.page_url):
+                raise SeeyonLoginRequired("The central OA session expired while opening the home page.")
+            resource_urls = worker.resource_urls()
+            if collection == "pending":
+                section_url = _find_section_resource_url(resource_urls, "pendingSection")
+                if section_url:
+                    return _section_url_with_arguments(
+                        section_url,
+                        {"sectionBeanId": "pendingSection"},
+                    )
+            else:
+                section_url = _find_section_resource_url(resource_urls, "sentSection")
+                if section_url:
+                    inventory = parse_navigation_inventory(worker.page.content(), base_url=self.base_url)
+                    history = extract_history_sections(inventory)
+                    history_item = next(
+                        (
+                            item
+                            for item in history.get("items") or []
+                            if item.get("kind") == collection
+                        ),
+                        None,
+                    )
+                    if history_item:
+                        return _section_url_with_arguments(
+                            section_url,
+                            {
+                                "sectionBeanId": "sentSection",
+                                "entityId": history_item.get("section_id"),
+                                "panelId": history_item.get("tab_id"),
+                            },
+                        )
+            time.sleep(0.25)
+        raise SeeyonReadContractMismatch(
+            f"The OA home page did not expose the {collection} section contract in time."
+        )
+
+    def _render_workflow_detail(self, worker, *, collection: str, affair_id: str) -> tuple[dict, dict]:
+        parsed = self._fetch_workflow_collection(worker, collection)
+        source_item = next(
+            (
+                item
+                for item in parsed.get("items") or []
+                if str(item.get("affair_id") or "") == affair_id
+            ),
+            None,
+        )
+        if source_item is None:
+            raise SeeyonReadContractMismatch(
+                f"Workflow affair_id was not found in the current {collection} collection."
+            )
+        detail_url = str(source_item.get("href") or "")
+        if not detail_url:
+            raise SeeyonReadContractMismatch("The selected workflow does not expose a detail page.")
+        snapshot = worker.rendered_snapshot(detail_url, settle_ms=1800, include_frames=True)
+        final_url = str(snapshot.get("url") or detail_url)
+        if _looks_like_login_url(final_url):
+            raise SeeyonLoginRequired("The central OA session expired while rendering workflow detail.")
+        html_parts = [str(snapshot.get("html") or "")]
+        html_parts.extend(
+            str(frame.get("html") or "")
+            for frame in snapshot.get("frames") or []
+            if isinstance(frame, dict)
+        )
+        parsed_detail = parse_oa_detail("\n".join(html_parts), base_url=final_url)
+        return source_item, parsed_detail
 
     def open_login(self, worker) -> None:
         worker.goto(self.base_url)
@@ -244,6 +548,122 @@ class SeeyonCentralAdapter:
         raise SeeyonLoginRequired(
             str(last_error) if last_error else "Timed out waiting for the central OA login."
         )
+
+
+def _find_section_resource_url(resource_urls: list[str], section_bean_id: str) -> str:
+    for url in resource_urls:
+        parsed = urlparse(str(url or ""))
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        if query.get("managerName", [""])[0] != "sectionManager":
+            continue
+        if query.get("managerMethod", [""])[0] != "doProjection":
+            continue
+        arguments = _section_arguments(url)
+        if arguments.get("sectionBeanId") == section_bean_id:
+            return url
+    return ""
+
+
+def _section_arguments(url: str) -> dict:
+    query = parse_qs(urlparse(str(url or "")).query, keep_blank_values=True)
+    raw_arguments = query.get("arguments", ["{}"])[0] or "{}"
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        return {}
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def _section_url_with_arguments(url: str, updates: dict) -> str:
+    parsed = urlparse(str(url or ""))
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    arguments = _section_arguments(url)
+    for key, value in updates.items():
+        if value not in (None, ""):
+            arguments[key] = str(value)
+    query["arguments"] = [json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+
+
+def _validated_collection(value) -> str:
+    if not isinstance(value, str) or value not in _WORKFLOW_COLLECTIONS:
+        choices = ", ".join(sorted(_WORKFLOW_COLLECTIONS))
+        raise ValueError(f"collection must be one of: {choices}")
+    return value
+
+
+def _validated_identifier(value, name: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError(f"{name} must be a non-empty string of at most 256 characters")
+    if any(ord(character) < 32 for character in value):
+        raise ValueError(f"{name} must not contain control characters")
+    return value
+
+
+def _validated_optional_string(value, name: str, *, maximum: int) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    if len(value) > maximum:
+        raise ValueError(f"{name} must be at most {maximum} characters")
+    return value.strip()
+
+
+def _validated_integer(value, name: str, *, default: int, minimum: int, maximum: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _public_workflow_item(item: dict, collection: str) -> dict:
+    public = {
+        "affair_id": str(item.get("affair_id") or ""),
+        "title": _public_text(item.get("title")),
+    }
+    if collection == "pending":
+        public.update(
+            {
+                "sender": _public_text(item.get("sender")),
+                "date": _public_text(item.get("date")),
+                "category": _public_text(item.get("category")),
+                "read": bool(item.get("read")),
+            }
+        )
+    else:
+        public.update(
+            {
+                "status": _public_text(item.get("status")),
+                "date": _public_text(item.get("date")),
+                "category": _public_text(item.get("category")),
+            }
+        )
+    return public
+
+
+def _public_opinions(value) -> list[dict]:
+    opinions = []
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        public = {
+            key: _public_text(item.get(key))
+            for key in ("text", "handler", "opinion", "time")
+            if item.get(key) not in (None, "")
+        }
+        if public:
+            opinions.append(public)
+    return opinions
+
+
+def _public_text(value) -> str:
+    text = re.sub(r"&nbsp;?", " ", str(value or ""), flags=re.IGNORECASE)
+    text = unescape(text).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _looks_like_login_url(url: str) -> bool:

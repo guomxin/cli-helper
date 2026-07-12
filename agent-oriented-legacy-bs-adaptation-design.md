@@ -15,11 +15,11 @@
 - 新增中心 `SessionStateStore`；OA 的进程级 Session Cookie 使用 Windows DPAPI 加密落盘，Cookie 不进入 CLI、SQLite 账本、普通日志或模型上下文，新 Worker 启动后在内存中恢复；非 Windows 部署必须接入等价 Vault/KMS 保护器后才能启用；
 - 新增 SQLite `AuthChallengeStore`、可信认证卡片 HTTP/TLS 服务和 `CredentialBroker`；挑战绑定用户、系统、会话、预期下游身份、Origin、页面契约指纹、nonce、TTL 和一次性状态，CSRF Token 只存哈希，账号密码仅在 Broker 调用期间驻留内存；
 - 新增 Seeyon 表单登录 Adapter；中心 Worker 动态等待登录 iframe，填写已登记的 `login_username/login_password1`，调用页面原生 `loginButtonOnClickHandler()`，登录后通过模板接口与页面标题核验实际身份；验证码等未登记认证方式按稳定错误码安全停止；
-- 新增不依赖客户端扩展的 `oa.template.list`，浏览器只负责建立登录态，模板列表通过同一 BrowserContext 的 HTTP 请求通道读取并复用现有结构化解析器；
+- 新增不依赖客户端扩展的中心只读能力包：`oa.template.list`、`oa.workflow.pending.list`、`oa.workflow.done.list`、`oa.workflow.tracked.list`、`oa.workflow.detail.get`、`oa.workflow.opinions.list`。模板和事项列表优先复用同一 BrowserContext 的 HTTP 会话；待办/已办/跟踪列表从当前用户首页动态发现栏目契约后调用后台接口，详情和意见则在同一中心浏览器中渲染并合并同源 iframe；对智能体只返回业务字段和不透明 `affair_id`，不暴露内部 URL、原始 HTML、Cookie、动作端点或写提示；
 - 新增 `capability list/describe/invoke`、`session status/login`、`auth serve/status`、`operation get/list` CLI，未登录时返回持久化的 `requires_user_action/LOGIN_REQUIRED`；模型协议面不提供密码提交命令；
 - 旧 Chrome 扩展、localhost Daemon 和原有 OA 命令保持不变，只作为迁移期能力和回归对照，中心能力不会静默回退到旧桥接路径。
 
-可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；认证服务停止后，两个全新的 headless CLI 进程分别从 DPAPI 密文恢复会话，均读取 118 个模板，返回 `transport=central_http_session`、`browser_bridge_used=false` 和独立持久化 `operationId`。卡片还完成了桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
+可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；全新的 headless CLI 进程可从 DPAPI 密文恢复会话并读取 118 个模板。扩展后的中心只读包又真实读取了 3 条待办、9 条已办和 9 条跟踪事项，并从一条已办事项的中心渲染页及同源 iframe 中提取 8 个业务字段和 1 条结构化意见；所有结果均为 `browser_bridge_used=false`，列表使用 `central_http_session`，详情和意见使用 `central_browser_session`，并生成独立持久化 `operationId`。登录过期会明确返回 `LOGIN_REQUIRED`，不会把登录页误报为业务空数据。Windows DPAPI 的一次开发环境验证还证明：Broker 与能力 Worker 必须运行在同一 Windows 安全主体下；跨用户解密会失败关闭，生产部署应固定服务身份或改用 Vault/KMS。卡片已完成桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
 
 当前尚未完成远程 MCP、两个 Worker OS 安全主体的多用户隔离、中心写动作迁移和扩展退役。由于暂时没有第二个真实 OA 用户，本轮只验证了代码级 `userSubject + systemId` 绑定、身份一致性检查和单用户 Profile，不把它表述为多用户隔离验收。非回环部署虽然已强制 TLS 配置约束，但反向代理身份认证、生产证书、限流、设备绑定和移动端可信宿主仍待后续验证。
 

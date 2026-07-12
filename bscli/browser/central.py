@@ -101,10 +101,10 @@ class CentralBrowserWorker:
             content_type = str((response_headers or {}).get("content-type") or "")
             text = response.text()
             payload = None
-            if "json" in content_type.lower():
+            if "json" in content_type.lower() or text.lstrip().startswith(("{", "[")):
                 try:
-                    payload = response.json()
-                except Exception:
+                    payload = json.loads(text)
+                except (TypeError, json.JSONDecodeError):
                     payload = None
             return {
                 "status": response.status,
@@ -125,6 +125,63 @@ class CentralBrowserWorker:
         page.goto(url, wait_until="domcontentloaded", timeout=max(timeout_seconds, 0.1) * 1000)
         self._validate_url(page.url)
         return page
+
+    def resource_urls(self) -> list[str]:
+        self._require_started()
+        values = self.page.evaluate(
+            "() => performance.getEntriesByType('resource').map((entry) => entry.name)"
+        )
+        if not isinstance(values, list):
+            return []
+        urls = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, str) or value in seen:
+                continue
+            try:
+                self._validate_url(value)
+            except ValueError:
+                continue
+            seen.add(value)
+            urls.append(value)
+        return urls
+
+    def rendered_snapshot(
+        self,
+        url: str,
+        *,
+        settle_ms: int = 1500,
+        include_frames: bool = True,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        page = self.goto(url, timeout_seconds=timeout_seconds)
+        if settle_ms > 0:
+            page.wait_for_timeout(settle_ms)
+        snapshot = {
+            "url": page.url,
+            "title": page.title(),
+            "html": page.content(),
+            "frames": [],
+        }
+        if not include_frames:
+            return snapshot
+        main_frame = getattr(page, "main_frame", None)
+        for frame in list(getattr(page, "frames", []) or []):
+            if frame is main_frame:
+                continue
+            frame_url = str(getattr(frame, "url", "") or "")
+            if frame_url and frame_url != "about:blank":
+                try:
+                    self._validate_url(frame_url)
+                except ValueError:
+                    continue
+            try:
+                frame_html = frame.content()
+            except Exception:
+                continue
+            if frame_html:
+                snapshot["frames"].append({"url": frame_url, "html": frame_html})
+        return snapshot
 
     @property
     def page(self):

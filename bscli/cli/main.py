@@ -268,17 +268,24 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
     sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
     session_states = SessionStateStore(_central_session_secret_root(home))
     engine = CapabilityEngine(registry=registry, operation_store=operation_store)
-    if args.name == "oa.template.list":
+    try:
+        capability_spec = registry.get(args.name)
+    except KeyError:
+        capability_spec = None
+    if capability_spec is not None and capability_spec.adapter == "seeyon-central":
         adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
 
-        def list_templates(_context, _arguments):
+        def invoke_central(_context, _arguments):
             session = sessions.find(user_subject=args.user_subject, system_id="oa")
             if session is None or session["state"] != "active":
                 raise _login_required_action(args.user_subject, session)
             state = session_states.load(session["session_id"])
             if state is None:
-                sessions.mark_expired(session["session_id"], "Encrypted session state is missing.")
-                raise _login_required_action(args.user_subject, session)
+                expired_session = sessions.mark_expired(
+                    session["session_id"],
+                    "Encrypted session state is missing.",
+                )
+                raise _login_required_action(args.user_subject, expired_session)
             try:
                 with CentralBrowserWorker(
                     profile_path=session["profile_path"],
@@ -286,15 +293,15 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
                     headless=True,
                 ) as worker:
                     worker.restore_session_state(state)
-                    result = adapter.list_templates(worker)
+                    result = adapter.invoke_capability(args.name, worker, _arguments)
                     session_states.save(session["session_id"], worker.capture_session_state())
                     return result
             except SeeyonLoginRequired as exc:
-                sessions.mark_expired(session["session_id"], str(exc))
+                expired_session = sessions.mark_expired(session["session_id"], str(exc))
                 session_states.delete(session["session_id"])
-                raise _login_required_action(args.user_subject, session) from exc
+                raise _login_required_action(args.user_subject, expired_session) from exc
 
-        engine.register_handler(args.name, list_templates)
+        engine.register_handler(args.name, invoke_central)
 
     try:
         response = engine.invoke(

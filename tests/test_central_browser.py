@@ -29,6 +29,22 @@ class CentralBrowserTests(unittest.TestCase):
             self.assertEqual(controller.context.request.calls[0]["max_redirects"], 0)
             self.assertTrue(controller.stopped)
 
+    def test_worker_parses_json_body_when_server_uses_text_content_type(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            controller.context.request.response = FakePlainTextJsonResponse()
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with worker:
+                response = worker.request("GET", "http://oa.example.test/rest/templates")
+
+            self.assertEqual(response["content_type"], "text/plain; charset=utf-8")
+            self.assertEqual(response["json"], {"Data": {"rows": []}})
+
     def test_worker_captures_and_restores_allowed_session_cookies(self):
         with TemporaryDirectory() as tmp:
             controller = FakePlaywrightController()
@@ -65,6 +81,53 @@ class CentralBrowserTests(unittest.TestCase):
             with worker:
                 with self.assertRaisesRegex(ValueError, "origin is not allowed"):
                     worker.request("GET", "https://other.example.test/data")
+
+    def test_worker_returns_only_unique_allowed_resource_urls(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            controller.context.pages[0].resources = [
+                "http://oa.example.test/seeyon/section?a=1",
+                "https://other.example.test/tracker",
+                "http://oa.example.test/seeyon/section?a=1",
+            ]
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with worker:
+                urls = worker.resource_urls()
+
+            self.assertEqual(urls, ["http://oa.example.test/seeyon/section?a=1"])
+
+    def test_worker_rendered_snapshot_includes_only_same_origin_frames(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            page = controller.context.pages[0]
+            page.html = "<html><body>top</body></html>"
+            page.frames = [
+                page,
+                FakeFrame("http://oa.example.test/seeyon/cap4", "<div>business form</div>"),
+                FakeFrame("about:blank", "<div>inherited frame</div>"),
+                FakeFrame("https://other.example.test/embed", "<div>external</div>"),
+            ]
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with worker:
+                snapshot = worker.rendered_snapshot(
+                    "http://oa.example.test/seeyon/detail",
+                    settle_ms=25,
+                )
+
+            self.assertEqual(snapshot["html"], "<html><body>top</body></html>")
+            self.assertEqual(len(snapshot["frames"]), 2)
+            self.assertEqual(page.waits, [25])
+            self.assertNotIn("external", str(snapshot))
 
     def test_worker_prevents_concurrent_use_of_the_same_profile(self):
         with TemporaryDirectory() as tmp:
@@ -310,23 +373,57 @@ class FakeResponse:
         return {"code": 0, "data": {"templates": []}}
 
 
+class FakePlainTextJsonResponse(FakeResponse):
+    @property
+    def headers(self):
+        return {"content-type": "text/plain; charset=utf-8"}
+
+    def text(self):
+        return '{"Data": {"rows": []}}'
+
+
 class FakeRequestContext:
     def __init__(self):
         self.calls = []
+        self.response = FakeResponse()
 
     def fetch(self, url, **kwargs):
         self.calls.append({"url": url, **kwargs})
-        return FakeResponse()
+        return self.response
 
 
 class FakePage:
-    url = "about:blank"
+    def __init__(self):
+        self.url = "about:blank"
+        self.resources = []
+        self.html = "<html><body>OA</body></html>"
+        self.main_frame = self
+        self.frames = [self]
+        self.waits = []
 
     def goto(self, url, **_kwargs):
         self.url = url
 
     def title(self):
         return "OA"
+
+    def content(self):
+        return self.html
+
+    def evaluate(self, _script):
+        return list(self.resources)
+
+    def wait_for_timeout(self, milliseconds):
+        self.waits.append(milliseconds)
+
+
+class FakeFrame:
+    def __init__(self, url, html):
+        self.url = url
+        self.html = html
+
+    def content(self):
+        return self.html
 
 
 class FakeBrowserContext:
