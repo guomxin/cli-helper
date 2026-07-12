@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Agent-oriented command capabilities for legacy B/S systems"
 requires-python = ">=3.12"
 dependencies = [
+  "mcp==1.23.2",
   "playwright==1.60.0",
 ]
 

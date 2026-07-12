@@ -100,6 +100,51 @@ detail and opinion reads used `central_browser_session`. This proves the
 single-user central path only; cross-user isolation still requires a second
 real account and separate Worker security principals.
 
+## Central Streamable HTTP MCP
+
+The central MCP path uses the same `CentralCapabilityService`, operation ledger,
+session registry, encrypted cookie state, and Seeyon adapter as the CLI. The MCP
+tools do not accept `userSubject`; caller identity comes only from a server-side
+Bearer identity-token binding.
+
+From a trusted administrator terminal, bind and issue a short-lived client token:
+
+```bash
+python -m bscli.cli.main --home .bscli mcp token issue --user-subject <trusted-user-subject> --expected-principal <oa-display-name> --label <client-name> --ttl-hours 24
+python -m bscli.cli.main --home .bscli mcp token list --user-subject <trusted-user-subject>
+python -m bscli.cli.main --home .bscli mcp token revoke <token-id>
+```
+
+The bearer secret is displayed only by `token issue`. It is stored server-side
+only as a SHA-256 digest and must go directly into the trusted MCP client
+configuration, never into a model prompt, tool argument, chat, or ordinary log.
+
+Start the Streamable HTTP MCP endpoint and authentication-card service in one
+process so Windows DPAPI always uses the same security principal:
+
+```bash
+python -m bscli.cli.main --home .bscli mcp central-serve --host 127.0.0.1 --port 8790 --auth-host 127.0.0.1 --auth-port 8780
+```
+
+Connect the MCP client to `http://127.0.0.1:8790/mcp` with
+`Authorization: Bearer <issued-token>`. The server exposes the six central OA
+read capabilities plus session status/login and caller-scoped operation ledger
+tools. `oa_session_login` returns a trusted card URL; credentials still bypass
+MCP and the model.
+
+Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
+Non-loopback MCP and authentication-card listeners both require HTTPS and
+explicit certificates/public URLs. Production remote access still requires a
+real OAuth/OIDC authorization server, token rotation and revocation policy,
+reverse-proxy trust validation, rate limiting, and a second-user isolation test.
+
+The 2026-07-12 real MCP validation used the official Python MCP client to call
+`oa_session_login`, opened the returned trusted card, authenticated the expected
+OA principal, and then called `oa_workflow_pending_list`. It read 3 pending
+items with `transport=central_http_session` and `browserBridgeUsed=false`, wrote
+operation `a9965f5e-fb08-4561-8fdc-809e11b39c4e`, automatically revoked the
+one-time identity token, and closed both loopback listeners.
+
 The legacy path below remains available as a migration oracle while capabilities
 are moved one by one.
 

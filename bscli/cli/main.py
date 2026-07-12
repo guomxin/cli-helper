@@ -12,11 +12,7 @@ import urllib.request
 from urllib.parse import urlparse
 
 from bscli.adapters.seeyon import SEEYON_OA_URL, build_seeyon_profile, register_seeyon_commands
-from bscli.adapters.seeyon_central import (
-    SeeyonCentralAdapter,
-    SeeyonLoginRequired,
-    build_central_capability_registry,
-)
+from bscli.adapters.seeyon_central import SeeyonCentralAdapter
 from bscli.adapters.seeyon_home import (
     parse_navigation_inventory,
     parse_pending_list,
@@ -33,16 +29,26 @@ from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
 from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeNotFound
-from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
+from bscli.core.central_service import (
+    CentralCapabilityService,
+    challenge_response as _challenge_response,
+    operation_response as _operation_response,
+    session_response as _session_response,
+)
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
+from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.registry import CommandRegistry
 from bscli.core.session_secrets import SessionStateStore
-from bscli.core.sessions import SessionRegistry
+from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
 from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
 from bscli.daemon.app import DAEMON_TOKEN_FILENAME, serve
+from bscli.mcp.central import (
+    serve_central_mcp,
+    validate_central_mcp_server_config,
+)
 from bscli.mcp.server import BscliMcpServer
 
 
@@ -168,6 +174,31 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_serve = mcp_sub.add_parser("serve")
     mcp_serve.add_argument("--daemon-url", default="http://127.0.0.1:8765")
     mcp_serve.add_argument("--once", action="store_true", help="Handle one JSON-RPC line then exit")
+    mcp_central_serve = mcp_sub.add_parser("central-serve")
+    mcp_central_serve.add_argument("--host", default="127.0.0.1")
+    mcp_central_serve.add_argument("--port", type=int, default=8790)
+    mcp_central_serve.add_argument("--public-base-url")
+    mcp_central_serve.add_argument("--tls-cert")
+    mcp_central_serve.add_argument("--tls-key")
+    mcp_central_serve.add_argument("--auth-host", default="127.0.0.1")
+    mcp_central_serve.add_argument("--auth-port", type=int, default=8780)
+    mcp_central_serve.add_argument("--auth-public-base-url")
+    mcp_central_serve.add_argument("--auth-tls-cert")
+    mcp_central_serve.add_argument("--auth-tls-key")
+    mcp_central_serve.add_argument("--base-url")
+    mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
+    mcp_token = mcp_sub.add_parser("token")
+    mcp_token_sub = mcp_token.add_subparsers(dest="token_action", required=True)
+    mcp_token_issue = mcp_token_sub.add_parser("issue")
+    mcp_token_issue.add_argument("--user-subject", required=True)
+    mcp_token_issue.add_argument("--expected-principal", required=True)
+    mcp_token_issue.add_argument("--label")
+    mcp_token_issue.add_argument("--ttl-hours", type=int, default=24)
+    mcp_token_list = mcp_token_sub.add_parser("list")
+    mcp_token_list.add_argument("--user-subject")
+    mcp_token_list.add_argument("--limit", type=int, default=100)
+    mcp_token_revoke = mcp_token_sub.add_parser("revoke")
+    mcp_token_revoke.add_argument("token_id")
 
     oa = subparsers.add_parser("oa")
     oa_sub = oa.add_subparsers(dest="oa_area", required=True)
@@ -232,25 +263,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def handle_capability(args: argparse.Namespace, home: Path) -> int:
-    registry = build_central_capability_registry()
+    service = CentralCapabilityService(
+        home=home,
+        base_url=_central_base_url(home, getattr(args, "base_url", None)),
+    )
     if args.action == "list":
-        print_json(
-            {
-                "protocolVersion": "0.1",
-                "capabilities": [
-                    spec.to_dict()
-                    for spec in registry.list(system=getattr(args, "system", None))
-                ],
-            }
-        )
+        print_json(service.list_capabilities(system=getattr(args, "system", None)))
         return 0
     if args.action == "describe":
         try:
-            capability = registry.describe(args.name)
+            response = service.describe_capability(args.name)
         except KeyError as exc:
             print_json(_central_cli_error("CAPABILITY_NOT_FOUND", str(exc)))
             return 2
-        print_json({"protocolVersion": "0.1", "capability": capability})
+        print_json(response)
         return 0
     if args.action != "invoke":
         raise ValueError(f"unknown capability action: {args.action}")
@@ -264,47 +290,8 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
         print_json(_central_cli_error("INVALID_INPUT", "--json must decode to an object"))
         return 2
 
-    operation_store = OperationStore(_central_db_path(home))
-    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
-    session_states = SessionStateStore(_central_session_secret_root(home))
-    engine = CapabilityEngine(registry=registry, operation_store=operation_store)
     try:
-        capability_spec = registry.get(args.name)
-    except KeyError:
-        capability_spec = None
-    if capability_spec is not None and capability_spec.adapter == "seeyon-central":
-        adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
-
-        def invoke_central(_context, _arguments):
-            session = sessions.find(user_subject=args.user_subject, system_id="oa")
-            if session is None or session["state"] != "active":
-                raise _login_required_action(args.user_subject, session)
-            state = session_states.load(session["session_id"])
-            if state is None:
-                expired_session = sessions.mark_expired(
-                    session["session_id"],
-                    "Encrypted session state is missing.",
-                )
-                raise _login_required_action(args.user_subject, expired_session)
-            try:
-                with CentralBrowserWorker(
-                    profile_path=session["profile_path"],
-                    allowed_origins={adapter.origin},
-                    headless=True,
-                ) as worker:
-                    worker.restore_session_state(state)
-                    result = adapter.invoke_capability(args.name, worker, _arguments)
-                    session_states.save(session["session_id"], worker.capture_session_state())
-                    return result
-            except SeeyonLoginRequired as exc:
-                expired_session = sessions.mark_expired(session["session_id"], str(exc))
-                session_states.delete(session["session_id"])
-                raise _login_required_action(args.user_subject, expired_session) from exc
-
-        engine.register_handler(args.name, invoke_central)
-
-    try:
-        response = engine.invoke(
+        response = service.invoke(
             user_subject=args.user_subject,
             capability_name=args.name,
             arguments=arguments,
@@ -322,20 +309,12 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
 
 
 def handle_central_session(args: argparse.Namespace, home: Path) -> int:
-    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
+    service = CentralCapabilityService(
+        home=home,
+        base_url=_central_base_url(home, getattr(args, "base_url", None)),
+    )
     if args.action == "status":
-        session = sessions.find(user_subject=args.user_subject, system_id=args.system)
-        if session is None:
-            print_json(
-                {
-                    "protocolVersion": "0.1",
-                    "status": "not_found",
-                    "systemId": args.system,
-                    "userSubject": args.user_subject,
-                }
-            )
-        else:
-            print_json(_session_response(session))
+        print_json(service.session_status(user_subject=args.user_subject, system_id=args.system))
         return 0
     if args.action != "login":
         raise ValueError(f"unknown session action: {args.action}")
@@ -343,39 +322,13 @@ def handle_central_session(args: argparse.Namespace, home: Path) -> int:
         print_json(_central_cli_error("SYSTEM_NOT_SUPPORTED", f"central login is not implemented for {args.system}"))
         return 2
 
-    session = sessions.get_or_create(
+    response = service.start_login(
         user_subject=args.user_subject,
-        system_id=args.system,
         expected_principal_ref=args.expected_principal,
-    )
-    adapter = SeeyonCentralAdapter(base_url=_central_base_url(home, args.base_url))
-    contract = adapter.authentication_contract()
-    challenge = AuthChallengeStore(_central_db_path(home)).create(
-        user_subject=session["user_subject"],
-        system_id=session["system_id"],
-        system_name=contract["system_name"],
-        session_id=session["session_id"],
-        expected_principal_ref=session["expected_principal_ref"],
-        origin=contract["origin"],
-        page_fingerprint=contract["page_fingerprint"],
-        nonce=None,
-        fields=contract["fields"],
         card_base_url=args.card_base_url,
         ttl_seconds=args.challenge_ttl,
     )
-    print_json(
-        {
-            "protocolVersion": "0.1",
-            "status": "requires_user_action",
-            "sessionId": session["session_id"],
-            "challenge": _challenge_response(challenge),
-            "nextAction": {
-                "type": "open_authentication_card",
-                "challengeId": challenge["challenge_id"],
-                "cardUrl": challenge["card_url"],
-            },
-        }
-    )
+    print_json(response)
     return 0
 
 
@@ -474,19 +427,6 @@ def handle_operation(args: argparse.Namespace, home: Path) -> int:
     raise ValueError(f"unknown operation action: {args.action}")
 
 
-def _login_required_action(user_subject: str, session: dict | None) -> RequiresUserAction:
-    return RequiresUserAction(
-        "LOGIN_REQUIRED",
-        "The central OA session is not active.",
-        next_action={
-            "type": "session_login",
-            "system": "oa",
-            "userSubject": user_subject,
-            "sessionState": session["state"] if session else "not_found",
-        },
-    )
-
-
 def _central_db_path(home: Path) -> Path:
     return home / "agentbridge.db"
 
@@ -506,55 +446,6 @@ def _central_base_url(home: Path, explicit: str | None) -> str:
         return ConfigStore(home).load_system("oa").base_url
     except KeyError:
         return SEEYON_OA_URL
-
-
-def _session_response(session: dict) -> dict:
-    return {
-        "protocolVersion": "0.1",
-        "status": session["state"],
-        "sessionId": session["session_id"],
-        "systemId": session["system_id"],
-        "userSubject": session["user_subject"],
-        "expectedPrincipalRef": session.get("expected_principal_ref"),
-        "downstreamPrincipalRef": session.get("downstream_principal_ref"),
-        "lastVerifiedAt": session.get("last_verified_at"),
-        "lastError": session.get("last_error"),
-    }
-
-
-def _operation_response(operation: dict) -> dict:
-    return {
-        "operationId": operation["operation_id"],
-        "requestId": operation["request_id"],
-        "userSubject": operation["user_subject"],
-        "capability": operation["capability_name"],
-        "capabilityVersion": operation["capability_version"],
-        "status": operation["status"],
-        "result": operation.get("result"),
-        "error": operation.get("error"),
-        "nextAction": operation.get("next_action"),
-        "createdAt": operation["created_at"],
-        "updatedAt": operation["updated_at"],
-        "finishedAt": operation.get("finished_at"),
-    }
-
-
-def _challenge_response(challenge: dict) -> dict:
-    return {
-        "challengeId": challenge["challenge_id"],
-        "type": challenge["challenge_type"],
-        "state": challenge["state"],
-        "systemId": challenge["system_id"],
-        "systemName": challenge["system_name"],
-        "userSubject": challenge["user_subject"],
-        "sessionId": challenge["session_id"],
-        "expectedPrincipalRef": challenge.get("expected_principal_ref"),
-        "origin": challenge["origin"],
-        "cardUrl": challenge["card_url"],
-        "expiresAt": challenge["expires_at"],
-        "error": challenge.get("error"),
-        "result": challenge.get("result"),
-    }
 
 
 def _central_cli_error(code: str, message: str) -> dict:
@@ -1341,6 +1232,124 @@ def handle_tool(args: argparse.Namespace) -> int:
 
 
 def handle_mcp(args: argparse.Namespace) -> int:
+    home = Path(args.home)
+    if args.action == "token":
+        store = McpIdentityTokenStore(_central_db_path(home))
+        if args.token_action == "issue":
+            if args.ttl_hours < 1 or args.ttl_hours > 24 * 90:
+                print_json(_central_cli_error("INVALID_INPUT", "--ttl-hours must be between 1 and 2160"))
+                return 2
+            try:
+                sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
+                sessions.get_or_create(
+                    user_subject=args.user_subject,
+                    system_id="oa",
+                    expected_principal_ref=args.expected_principal,
+                )
+                token = store.issue(
+                    user_subject=args.user_subject,
+                    expected_principal_ref=args.expected_principal,
+                    label=args.label,
+                    scopes=["oa:read"],
+                    ttl_seconds=args.ttl_hours * 3600,
+                )
+            except (ValueError, SessionPrincipalMismatch) as exc:
+                print_json(_central_cli_error("IDENTITY_BINDING_INVALID", str(exc)))
+                return 2
+            secret = token.pop("token")
+            print_json(
+                {
+                    "protocolVersion": "0.1",
+                    "status": "issued",
+                    "identityToken": _mcp_identity_response(token),
+                    "bearerToken": secret,
+                    "warning": "The bearer token is shown once. Store it only in the trusted MCP client configuration.",
+                }
+            )
+            return 0
+        if args.token_action == "list":
+            try:
+                tokens = store.list(user_subject=args.user_subject, limit=args.limit)
+            except ValueError as exc:
+                print_json(_central_cli_error("INVALID_INPUT", str(exc)))
+                return 2
+            print_json(
+                {
+                    "protocolVersion": "0.1",
+                    "count": len(tokens),
+                    "identityTokens": [_mcp_identity_response(token) for token in tokens],
+                }
+            )
+            return 0
+        if args.token_action == "revoke":
+            try:
+                token = store.revoke(args.token_id)
+            except KeyError as exc:
+                print_json(_central_cli_error("TOKEN_NOT_FOUND", str(exc)))
+                return 2
+            print_json(
+                {
+                    "protocolVersion": "0.1",
+                    "status": "revoked",
+                    "identityToken": _mcp_identity_response(token),
+                }
+            )
+            return 0
+        raise ValueError(f"unknown MCP token action: {args.token_action}")
+
+    if args.action == "central-serve":
+        try:
+            if args.login_timeout < 1 or args.login_timeout > 300:
+                raise ValueError("--login-timeout must be between 1 and 300 seconds")
+            mcp_config = validate_central_mcp_server_config(
+                host=args.host,
+                port=args.port,
+                public_base_url=args.public_base_url,
+                tls_cert=args.tls_cert,
+                tls_key=args.tls_key,
+            )
+            auth_config = validate_auth_server_config(
+                host=args.auth_host,
+                port=args.auth_port,
+                public_base_url=args.auth_public_base_url,
+                tls_cert=args.auth_tls_cert,
+                tls_key=args.auth_tls_key,
+            )
+            if mcp_config.port == auth_config.port:
+                raise ValueError("central MCP and authentication card services must use different ports")
+        except ValueError as exc:
+            print_json(_central_cli_error("CENTRAL_MCP_CONFIG_INVALID", str(exc)))
+            return 2
+        service = CentralCapabilityService(
+            home=home,
+            base_url=_central_base_url(home, args.base_url),
+        )
+        identity_store = McpIdentityTokenStore(_central_db_path(home))
+        print_json(
+            {
+                "protocolVersion": "0.1",
+                "status": "serving",
+                "service": "agentbridge_oa_mcp",
+                "mcpUrl": mcp_config.mcp_url,
+                "authCardBaseUrl": auth_config.public_base_url,
+                "transport": "streamable_http",
+                "stateless": True,
+                "authentication": "bearer_identity_token",
+            }
+        )
+        sys.stdout.flush()
+        try:
+            serve_central_mcp(
+                service=service,
+                identity_store=identity_store,
+                mcp_config=mcp_config,
+                auth_config=auth_config,
+                login_timeout_seconds=args.login_timeout,
+            )
+        except KeyboardInterrupt:
+            return 0
+        return 0
+
     if args.action == "serve":
         registry = CommandRegistry()
         register_seeyon_commands(registry)
@@ -1370,6 +1379,21 @@ def handle_mcp(args: argparse.Namespace) -> int:
         server.serve_stdio()
         return 0
     raise ValueError(f"unknown mcp action: {args.action}")
+
+
+def _mcp_identity_response(token: dict) -> dict:
+    return {
+        "tokenId": token["token_id"],
+        "userSubject": token["user_subject"],
+        "expectedPrincipalRef": token["expected_principal_ref"],
+        "label": token.get("label"),
+        "scopes": token["scopes"],
+        "state": token["state"],
+        "createdAt": token["created_at"],
+        "expiresAt": token["expires_at"],
+        "lastUsedAt": token.get("last_used_at"),
+        "revokedAt": token.get("revoked_at"),
+    }
 
 
 def handle_oa(args: argparse.Namespace, home: Path) -> int:

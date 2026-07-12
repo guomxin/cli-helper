@@ -6,7 +6,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
-from bscli.adapters.seeyon_central import SeeyonLoginRequired
 from bscli.cli.main import main
 from bscli.core.sessions import SessionRegistry
 
@@ -81,31 +80,21 @@ class CentralCliTests(unittest.TestCase):
 
     def test_workflow_capability_uses_generic_central_session_handler(self):
         with TemporaryDirectory() as tmp:
-            sessions = MagicMock()
-            sessions.find.return_value = {
-                "session_id": "session-1",
-                "state": "active",
-                "profile_path": str(Path(tmp) / "profiles" / "session-1"),
-            }
-            session_states = MagicMock()
-            session_states.load.return_value = {"cookies": []}
-            worker = MagicMock()
-            worker.capture_session_state.return_value = {"cookies": [{"name": "sid"}]}
-            worker_context = MagicMock()
-            worker_context.__enter__.return_value = worker
-            adapter = MagicMock()
-            adapter.origin = "http://oa.example.test"
-            adapter.invoke_capability.return_value = {
-                "collection": "pending",
-                "count": 0,
-                "items": [],
+            service = MagicMock()
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "request-1",
+                "operationId": "operation-1",
+                "status": "succeeded",
+                "result": {"collection": "pending", "count": 0, "items": []},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
             }
 
             with (
-                patch("bscli.cli.main.SessionRegistry", return_value=sessions),
-                patch("bscli.cli.main.SessionStateStore", return_value=session_states),
-                patch("bscli.cli.main.CentralBrowserWorker", return_value=worker_context),
-                patch("bscli.cli.main.SeeyonCentralAdapter", return_value=adapter),
+                patch("bscli.cli.main.CentralCapabilityService", return_value=service),
                 redirect_stdout(io.StringIO()) as stdout,
             ):
                 exit_code = main(
@@ -127,42 +116,36 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "succeeded")
-        adapter.invoke_capability.assert_called_once_with(
-            "oa.workflow.pending.list",
-            worker,
-            {"limit": 5},
-        )
-        worker.restore_session_state.assert_called_once_with({"cookies": []})
-        session_states.save.assert_called_once_with(
-            "session-1",
-            {"cookies": [{"name": "sid"}]},
+        service.invoke.assert_called_once_with(
+            user_subject="user-a",
+            capability_name="oa.workflow.pending.list",
+            arguments={"limit": 5},
+            idempotency_key="pending-generic-handler",
+            request_id=None,
         )
 
     def test_expired_workflow_session_returns_login_action_and_deletes_secret(self):
         with TemporaryDirectory() as tmp:
-            sessions = MagicMock()
-            sessions.find.return_value = {
-                "session_id": "session-1",
-                "state": "active",
-                "profile_path": str(Path(tmp) / "profiles" / "session-1"),
+            service = MagicMock()
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "request-1",
+                "operationId": "operation-1",
+                "status": "requires_user_action",
+                "result": None,
+                "error": {"code": "LOGIN_REQUIRED", "message": "not active"},
+                "evidenceRefs": [],
+                "nextAction": {
+                    "type": "session_login",
+                    "system": "oa",
+                    "userSubject": "user-a",
+                    "sessionState": "expired",
+                },
+                "reused": False,
             }
-            sessions.mark_expired.return_value = {
-                **sessions.find.return_value,
-                "state": "expired",
-            }
-            session_states = MagicMock()
-            session_states.load.return_value = {"cookies": []}
-            worker_context = MagicMock()
-            worker_context.__enter__.return_value = MagicMock()
-            adapter = MagicMock()
-            adapter.origin = "http://oa.example.test"
-            adapter.invoke_capability.side_effect = SeeyonLoginRequired("expired")
 
             with (
-                patch("bscli.cli.main.SessionRegistry", return_value=sessions),
-                patch("bscli.cli.main.SessionStateStore", return_value=session_states),
-                patch("bscli.cli.main.CentralBrowserWorker", return_value=worker_context),
-                patch("bscli.cli.main.SeeyonCentralAdapter", return_value=adapter),
+                patch("bscli.cli.main.CentralCapabilityService", return_value=service),
                 redirect_stdout(io.StringIO()) as stdout,
             ):
                 exit_code = main(
@@ -184,8 +167,6 @@ class CentralCliTests(unittest.TestCase):
         self.assertEqual(payload["status"], "requires_user_action")
         self.assertEqual(payload["error"]["code"], "LOGIN_REQUIRED")
         self.assertEqual(payload["nextAction"]["sessionState"], "expired")
-        sessions.mark_expired.assert_called_once_with("session-1", "expired")
-        session_states.delete.assert_called_once_with("session-1")
 
     def test_session_login_creates_authentication_card_challenge_without_browser(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
