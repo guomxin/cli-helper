@@ -1,6 +1,6 @@
 # AgentBridge 轻量 PoC 验证方案
 
-> 状态：执行草案 v0.6
+> 状态：执行草案 v0.7
 > 更新日期：2026-07-13
 > 目标：用中心端零客户端连接器架构接入 2 个不同类型的 B/S 遗留系统；时间允许时再增加第 3 个系统，快速判断面向智能体非侵入适配是否值得继续投入。
 
@@ -10,7 +10,7 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
-| 能力目录与 Schema | 已完成首版 | 已注册 6 个中心只读能力和 2 个 `oa.business_trip.*@0.1.0` 草稿写能力，可通过 CLI 列出和描述 |
+| 能力目录与 Schema | 已完成首版 | 已注册 6 个中心只读能力、`oa.business_trip.prepare@0.2.0` 和 `oa.business_trip.save_draft@0.1.0`，可通过 CLI 列出和描述；prepare 只公开不透明字段提交 ID |
 | 中心能力服务 | 已完成首版 | CLI 与 MCP 共用 `CentralCapabilityService`、会话锁、错误语义、幂等键和操作账本，不复制 OA 编排 |
 | SQLite 操作账本 | 已完成首版 | 先落账再执行；同幂等键复用操作，不同输入返回冲突 |
 | 中央会话注册表 | 已完成首版 | `userSubject + systemId` 绑定独立 Profile；支持 `new/awaiting_login/active/expired/quarantined` |
@@ -28,7 +28,8 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
 | MCP 调用身份 | 已完成 PoC 绑定 | 预签发短期 Bearer 令牌仅保存摘要并绑定 `userSubject + expectedPrincipalRef + scope + TTL`；工具不接受用户身份参数；无令牌和吊销令牌均返回 401 |
 | MCP 与认证卡同进程 | 已完成真实验证 | 一个中心运行时同时托管 MCP 与可信认证卡，Broker/Worker 使用同一 OS 安全主体和每用户会话锁；真实验证完成后一次性令牌自动吊销、两个监听端口关闭；初始化失败也会关闭认证服务 |
 | 可信写授权 | 已完成代码与自动化测试 | 写计划以哈希冻结并绑定用户、系统、OA 会话、能力版本和准备操作；独立可信操作卡片使用 CSRF、TTL 和一次性批准，授权只在适配器提交边界消费；旧计划会被新计划废止 |
-| 出差申请草稿 W1 | 已完成单用户真实验证 | `prepare` 校验模板和 CAP4 字段但不填写；可信卡批准后授权只消费一次；真实 `save_draft` 返回待发草稿和稳定 ID，服务端重载后 7 个业务字段一致，`browser_bridge_used=false`、`workflow_submitted=false`、`submitted_count=0`；原生确认字段回归和隐藏附言前置拒绝已补测试 |
+| 可信业务字段卡 | 已完成单用户真实验证 | 通用 `FieldSubmissionStore`、`/input/<id>` 卡片、字段 Schema 校验、CSRF、TTL、一次性消费和跨用户/会话/能力绑定已通过自动化测试；真实出差字段卡收集 7 个字段，CLI/MCP 参数和模型回执仅出现不透明 ID，桌面与 390×844 视口无横向溢出 |
+| 出差申请草稿 W1 | 已完成新双卡单用户真实验证 | 第一次 `prepare` 生成字段卡，第二次只携带 `input_submission_id` 校验真实模板并生成独立授权卡；授权后 `save_draft` 只保存待发，服务器重载确认 7 个字段一致，返回稳定草稿 ID、`browser_bridge_used=false`、`workflow_submitted=false`、`submitted_count=0`；同幂等键重放返回 `reused=true` 和原草稿 ID，未创建第二份草稿 |
 | 多用户安全主体 | 待真实验证 | 当前无第二个 OA 用户；代码级绑定与单用户身份核验已完成，OS/容器级双用户不可读性尚未证明 |
 | 生产远程 MCP | 未开始 | 预签发 Bearer 只用于 PoC；OAuth/OIDC、生产证书、反向代理信任、限流、真实手机网络和第二用户仍待验证 |
 | 更多中心写动作 | 未开始 | 当前只开放出差申请保存草稿；发送、提交和其他流程按后续里程碑逐个提升 |
@@ -108,8 +109,9 @@ PoC 不以生产高可用、远程移动接入或完整企业治理为目标。
   → 遗留系统
 
 手机或桌面浏览器
-  → 一次性可信认证卡片
-  → 中心凭据代理（秘密绕过模型）
+  → 一次性可信认证卡片 → 中心凭据代理（登录秘密绕过模型）
+  → 一次性可信字段卡片 → FieldSubmission（业务字段绕过模型）
+  → 一次性可信授权卡片 → 冻结计划授权（决定绕过模型）
 ```
 
 首期采用一台位于目标系统可达网络区域的中心主机，不建设 Daemon 集群。能力内核、SQLite 账本、凭据代理、HTTP Session、浏览器 Worker 和 Profile 全部在该主机运行；最终用户设备不安装 Chrome 扩展、本地 Daemon 或连接器。现有 BSCLI Chrome 扩展只可用于迁移期接口发现和结果对照，不作为 PoC 验收路径。
@@ -217,12 +219,13 @@ verify(context, result)
 
 ### 4.7 最小写入确认协议
 
-PoC 中所有 W1/W2 写入统一采用：
+PoC 中需要用户提供业务字段的 W1/W2 写入统一采用：
 
 ```text
-prepare → trusted authorize → commit → verify
+trusted collect → prepare → trusted authorize → commit → verify
 ```
 
+- `collect` 生成绑定用户、OA 会话、能力版本和字段 Schema 哈希的一次性字段卡；模型只获得不透明 `input_submission_id`；
 - `prepare` 生成结构化计划、目标对象、参数摘要、`operationId` 和不可变 `planHash`，不得产生业务副作用；
 - 可信确认组件向用户显示计划，并在受 OS ACL 保护的中心 SQLite 账本中写入短期、一次性授权记录；授权绑定 `planHash + userSubject + capability/version + target + TTL`；
 - 模型不能在业务输入 JSON 中自报“用户已确认”，也不能直接调用 `commit`；
@@ -279,6 +282,7 @@ PoC 通过条件：
 - 每个只读流程重复执行至少 20 次，成功率达到 90% 以上；W1 在同一受控测试对象或可清理草稿上完成重复请求、回读和清理验证，不批量制造业务对象；失败均能定位到明确步骤，且没有错误业务副作用；
 - 断开或卸载客户端 Chrome 扩展后，PoC 验收能力不受影响；
 - 至少一个用户通过可信认证卡片建立中心会话，秘密未进入模型、CLI/MCP参数、Trace、截图或普通日志，且登录后账号核验正确；
+- 至少一个写流程通过可信字段卡收集业务输入，字段值未进入模型、CLI/MCP 参数或普通操作回执，并且字段提交与执行授权严格分离；
 - 一个 W1 写流程通过可信人工确认、提交、回读验证和重复请求测试；
 - 写操作重复副作用数为 0，结果不确定时能够进入 `unknown`；
 - 模型无法获得账号密码、Cookie、Token、任意 Shell/HTTP/JavaScript 或底层页面选择器；

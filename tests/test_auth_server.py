@@ -6,12 +6,14 @@ import unittest
 
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
+from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.server import (
     _request_origin_allowed,
     create_auth_http_server,
     validate_auth_server_config,
 )
 from bscli.core.auth_challenges import AuthChallengeStore
+from bscli.core.field_submissions import FieldSubmissionStore
 from bscli.core.write_authorizations import WriteAuthorizationStore
 
 
@@ -252,6 +254,84 @@ class AuthServerConfigTests(unittest.TestCase):
                 self.assertEqual(response.status, 403)
                 self.assertEqual(
                     authorization_store.get(authorization["authorization_id"])["state"],
+                    "pending",
+                )
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_http_server_serves_field_input_on_separate_route(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "agentbridge.db"
+            challenge_store = AuthChallengeStore(db_path)
+            submission_store = FieldSubmissionStore(db_path)
+            submission = submission_store.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.business_trip.prepare",
+                capability_version="0.2.0",
+                create_operation_id="prepare-1",
+                form_schema={
+                    "schema_version": "test.fields.v1",
+                    "title": "填写出差申请",
+                    "fields": [
+                        {
+                            "name": "reason",
+                            "label": "事由",
+                            "control": "text",
+                            "required": True,
+                        }
+                    ],
+                },
+                card_base_url="http://127.0.0.1:0",
+            )
+            config = validate_auth_server_config(
+                host="127.0.0.1",
+                port=0,
+                public_base_url="http://127.0.0.1:0",
+                tls_cert=None,
+                tls_key=None,
+            )
+            server = create_auth_http_server(
+                config=config,
+                application=TrustedAuthApplication(
+                    challenge_store=challenge_store,
+                    broker=RejectingBroker(),
+                ),
+                field_application=TrustedFieldApplication(
+                    submission_store=submission_store,
+                ),
+            )
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_address[1]
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request("GET", f"/input/{submission['submission_id']}")
+                response = connection.getresponse()
+                html = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn("填写出差申请", html)
+                connection.close()
+
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "POST",
+                    f"/input/{submission['submission_id']}",
+                    body="csrf_token=x&reason=Test",
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": "https://evil.example.test",
+                    },
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 403)
+                self.assertEqual(
+                    submission_store.get(submission["submission_id"])["state"],
                     "pending",
                 )
                 connection.close()

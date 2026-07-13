@@ -13,7 +13,8 @@ the first central AgentBridge vertical slice:
 - Seeyon OA example profile for `http://10.10.50.110/seeyon/main.do?method=main`
 - Versioned business capability registry and operation ledger
 - Per-user central Playwright profiles and session registry
-- One-time trusted authentication cards and a memory-only Credential Broker
+- One-time trusted authentication, business-field, and write-authorization cards
+  plus a memory-only Credential Broker
 - Extension-independent central OA package with six read capabilities plus a
   governed business-trip draft write
 
@@ -35,8 +36,9 @@ python -m bscli.cli.main --home .bscli capability describe oa.template.list
 python -m bscli.cli.main --home .bscli capability describe oa.workflow.detail.get
 ```
 
-Start the trusted authentication-card service. Loopback HTTP is supported only
-for the local PoC:
+Start the trusted-card service. The same listener serves login cards, business
+field cards, and write-authorization cards. Loopback HTTP is supported only for
+the local PoC:
 
 ```bash
 python -m bscli.cli.main --home .bscli auth serve --host 127.0.0.1 --port 8780 --public-base-url http://127.0.0.1:8780
@@ -83,16 +85,27 @@ exclude internal OA URLs, raw HTML, cookies, action endpoints, and write hints.
 
 The first central write vertical slice is deliberately narrower than the legacy
 bridge commands. It prepares and saves an `【HR】出差申请单` draft, but never
-sends or submits the workflow:
+sends or submits the workflow. Start without business fields:
 
 ```bash
-python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <trusted-user-subject> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '{"start_time":"2026-07-14 09:00","end_time":"2026-07-14 18:00","travel_mode":"火车","origin":"济南","destination":"青岛","reason":"客户交流","has_direct_supervisor":false}'
+python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <trusted-user-subject> --card-base-url http://127.0.0.1:8780 --idempotency-key <input-key> --json '{}'
 ```
 
-`prepare` validates the live template and CAP4 form contract without filling or
-clicking anything. It freezes the exact plan and returns a separate trusted
-`nextAction.cardUrl`. After the user approves that card, invoke the returned
-save capability with the opaque one-time authorization:
+The response opens a trusted `/input/<opaque-id>` card. The user enters dates,
+travel mode, origin, destination, reason, supervisor choice, and optional
+day/hour totals directly into that card. Those values never become CLI or MCP
+arguments. After the card reports success, continue with its opaque ID:
+
+```bash
+python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <trusted-user-subject> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '{"input_submission_id":"<input-submission-id>"}'
+```
+
+The second `prepare` validates the live template and CAP4 form contract without
+filling or clicking anything, freezes the exact plan, consumes the field
+submission once, and returns a separate `/authorize/<opaque-id>` card. The
+agent-facing response contains only an opaque ID and a non-sensitive field
+count, while the user sees the complete frozen plan. After the user approves
+that card, invoke the returned save capability:
 
 ```bash
 python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.save_draft --user-subject <trusted-user-subject> --idempotency-key <save-key> --json '{"authorization_id":"<authorization-id>"}'
@@ -103,9 +116,8 @@ plan hash, and TTL, and is consumed exactly once at the commit boundary. A
 successful result must reload the server-backed wait-send draft, read the fields
 back, and report `workflow_submitted=false` and `submitted_count=0`. A failure
 after the save click is recorded as `unknown` and is not retried automatically.
-Optional outer fields such as `note` are accepted only when the live template
-renders them as editable. A hidden `content_coll` is rejected during `prepare`
-instead of producing an authorization that cannot be executed.
+The current trusted field schema deliberately omits the hidden `content_coll`
+note control, so it cannot produce a plan that the live template cannot execute.
 
 An inactive or expired session returns `requires_user_action` with
 `error.code=LOGIN_REQUIRED`; it never silently falls back to the extension.
@@ -126,15 +138,17 @@ detail and opinion reads used `central_browser_session`. This proves the
 single-user central path only; cross-user isolation still requires a second
 real account and separate Worker security principals.
 
-The 2026-07-13 W1 validation prepared a frozen business-trip plan, obtained
-approval through the separate trusted action card, consumed that authorization
-once at the save boundary, and created a wait-send draft for the expected OA
-principal. The server-backed draft reload returned stable summary and affair
-identifiers and matched all seven requested business fields. The result reported
-`browser_bridge_used=false`, `workflow_submitted=false`, and
-`submitted_count=0`. During validation, a browser-native form-serialization bug
-in the action card was fixed and a hidden optional-note field was moved into
-prepare-time validation.
+The 2026-07-13 W1 validation now covers the complete three-card trust split. A
+trusted authentication card restored the expected OA principal, a separate
+field card collected seven business fields without exposing them as CLI/MCP
+arguments, and a trusted action card approved the frozen plan. The one-time
+field submission and authorization were consumed at their respective
+boundaries. OA created a wait-send draft with stable summary and affair IDs;
+server reload matched all seven fields and reported `browser_bridge_used=false`,
+`workflow_submitted=false`, and `submitted_count=0`. Replaying the identical
+save request returned the same operation and draft IDs with `reused=true`, so no
+second draft was created. Desktop and 390×844 field-card checks also caught and
+fixed a hidden radio-control overflow before the live run.
 
 ## Central Streamable HTTP MCP
 
@@ -165,12 +179,13 @@ python -m bscli.cli.main --home .bscli mcp central-serve --host 127.0.0.1 --port
 
 Connect the MCP client to `http://127.0.0.1:8790/mcp` with
 `Authorization: Bearer <issued-token>`. The server exposes the six central OA
-read capabilities, `oa_business_trip_prepare`,
+read capabilities, the two-stage `oa_business_trip_prepare`,
 `oa_business_trip_save_draft`, session status/login, and caller-scoped
 operation-ledger tools. Write tools require `oa:write:draft`; read-only tokens
 cannot call them. `oa_session_login` returns a trusted card URL, and write
-prepare returns a separate action-card URL. Credentials and approval decisions
-both bypass MCP and the model.
+prepare first returns a field-card URL and then a separate action-card URL.
+Credentials, business-field values, and approval decisions all bypass MCP and
+the model; MCP carries only the two opaque card identifiers.
 
 Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
 Non-loopback MCP and authentication-card listeners both require HTTPS and

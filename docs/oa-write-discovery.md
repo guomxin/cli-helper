@@ -159,16 +159,17 @@ First launch-side expansion batch:
   choice. The promoted central sequence is:
 
   ```powershell
-  python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <user> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '<business-input-json>'
-  # User approves the returned trusted action card.
+  python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <user> --card-base-url http://127.0.0.1:8780 --idempotency-key <input-key> --json '{}'
+  # User fills the returned trusted field card; the agent receives no business values.
+  python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <user> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '{"input_submission_id":"<input-submission-id>"}'
+  # User approves the separately returned trusted action card.
   python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.save_draft --user-subject <user> --idempotency-key <save-key> --json '{"authorization_id":"<authorization-id>"}'
   ```
 
   This path uses the managed central browser session and reports
   `browser_bridge_used=false`. It allows only save draft; send/submit is not a
   registered capability. The live template keeps the outer `content_coll`
-  note control hidden; central `prepare` therefore rejects a requested `note`
-  instead of authorizing an input that cannot be applied. The legacy
+  note control hidden, so the trusted field schema does not expose it. The legacy
   `oa matter launch-*` sequence remains a migration oracle, not the target
   production protocol.
 

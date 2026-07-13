@@ -164,16 +164,16 @@ def build_central_capability_registry() -> CapabilityRegistry:
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_PREPARE_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
-                "Prepare a governed OA business-trip draft and create a trusted "
-                "one-time confirmation card."
+                "Collect business-trip fields through a trusted card, validate the live "
+                "OA form, and create a separate one-time confirmation card."
             ),
             input_schema=BUSINESS_TRIP_PREPARE_INPUT_SCHEMA,
             output_schema={"type": "object"},
             effect="reversible_write",
             adapter="seeyon-central",
-            workflow="business-trip-draft-prepare-v1",
+            workflow="business-trip-draft-prepare-v2",
         )
     )
     registry.register(

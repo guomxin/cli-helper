@@ -20,27 +20,102 @@ BUSINESS_TRIP_TRAVEL_MODES = ("大巴", "火车", "飞机", "轮渡", "自驾车
 BUSINESS_TRIP_PREPARE_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "start_time": {"type": "string"},
-        "end_time": {"type": "string"},
-        "travel_mode": {"type": "string"},
-        "origin": {"type": "string"},
-        "destination": {"type": "string"},
-        "reason": {"type": "string"},
-        "has_direct_supervisor": {"type": "boolean"},
-        "trip_days": {"type": "number"},
-        "trip_hours": {"type": "number"},
-        "note": {"type": "string"},
+        "input_submission_id": {"type": "string"},
     },
-    "required": [
-        "start_time",
-        "end_time",
-        "travel_mode",
-        "origin",
-        "destination",
-        "reason",
-        "has_direct_supervisor",
-    ],
     "additionalProperties": False,
+}
+
+BUSINESS_TRIP_FIELD_CARD_SCHEMA = {
+    "schema_version": "agentbridge.oa_business_trip_fields.v1",
+    "title": "填写出差申请",
+    "system": "致远 OA",
+    "effect": "生成一份待确认的出差申请草稿计划",
+    "submit_label": "提交字段",
+    "notice": "字段提交后还需单独授权；最终只保存为待发草稿，不会发送或进入审批流程。",
+    "fields": [
+        {
+            "name": "start_time",
+            "label": "出差开始时间",
+            "control": "datetime-local",
+            "required": True,
+        },
+        {
+            "name": "end_time",
+            "label": "出差结束时间",
+            "control": "datetime-local",
+            "required": True,
+        },
+        {
+            "name": "travel_mode",
+            "label": "出差工具",
+            "control": "select",
+            "required": True,
+            "options": [
+                {"value": value, "label": value}
+                for value in BUSINESS_TRIP_TRAVEL_MODES
+            ],
+        },
+        {
+            "name": "origin",
+            "label": "出差始发地",
+            "control": "text",
+            "required": True,
+            "max_length": 255,
+            "autocomplete": "off",
+        },
+        {
+            "name": "destination",
+            "label": "出差目的地",
+            "control": "text",
+            "required": True,
+            "max_length": 255,
+            "autocomplete": "off",
+        },
+        {
+            "name": "reason",
+            "label": "出差事由",
+            "control": "textarea",
+            "required": True,
+            "max_length": 4000,
+            "rows": 4,
+        },
+        {
+            "name": "has_direct_supervisor",
+            "label": "是否有直接上级",
+            "control": "segmented",
+            "value_type": "boolean",
+            "required": True,
+            "options": [
+                {"value": "true", "label": "是"},
+                {"value": "false", "label": "否"},
+            ],
+        },
+        {
+            "name": "trip_days",
+            "label": "出差天数（选填）",
+            "control": "number",
+            "minimum": 0,
+            "maximum": 366,
+            "step": 0.5,
+        },
+        {
+            "name": "trip_hours",
+            "label": "出差小时数（选填）",
+            "control": "number",
+            "minimum": 0,
+            "maximum": 8784,
+            "step": 0.5,
+        },
+    ],
+    "constraints": [
+        {
+            "kind": "datetime_after",
+            "earlier": "start_time",
+            "later": "end_time",
+            "maximum_minutes": 527040,
+            "message": "结束时间必须晚于开始时间，且出差时长不能超过 366 天。",
+        }
+    ],
 }
 
 BUSINESS_TRIP_SAVE_INPUT_SCHEMA = {

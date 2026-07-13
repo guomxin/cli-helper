@@ -30,6 +30,11 @@ class CentralCliTests(unittest.TestCase):
             capabilities["oa.business_trip.save_draft"]["effect"],
             "reversible_write",
         )
+        prepare_schema = capabilities["oa.business_trip.prepare"]["input_schema"]
+        self.assertEqual(
+            set(prepare_schema["properties"]),
+            {"input_submission_id"},
+        )
 
     def test_session_status_returns_not_found_without_opening_browser(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:

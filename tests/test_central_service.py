@@ -157,16 +157,34 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             with patch(
                 "bscli.core.central_service.prepare_business_trip_draft",
                 return_value=prepared_payload,
-            ):
+            ) as prepare_draft:
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.prepare",
+                    arguments={},
+                    idempotency_key="business-trip-fields-1",
+                )
+                self.assertEqual(started["status"], "requires_user_action")
+                self.assertEqual(started["error"]["code"], "FIELD_INPUT_REQUIRED")
+                submission_id = started["nextAction"]["inputSubmissionId"]
+                _submit_business_trip_fields(service, submission_id)
                 prepared = service.invoke(
                     user_subject="user-a",
                     capability_name="oa.business_trip.prepare",
-                    arguments=_business_trip_arguments(),
+                    arguments={"input_submission_id": submission_id},
                     idempotency_key="business-trip-prepare-1",
                 )
 
             self.assertEqual(prepared["status"], "requires_user_action")
             self.assertEqual(prepared["error"]["code"], "WRITE_AUTHORIZATION_REQUIRED")
+            prepare_draft.assert_called_once()
+            self.assertEqual(
+                prepare_draft.call_args.args[2]["reason"],
+                "Test",
+            )
+            self.assertNotIn("Test", str(prepared["nextAction"]))
+            field_submission = service.field_submissions.get(submission_id)
+            self.assertEqual(field_submission["state"], "consumed")
             authorization_id = prepared["nextAction"]["authorizationId"]
             authorization = service.write_authorizations.get(authorization_id)
             self.assertEqual(authorization["state"], "pending")
@@ -227,10 +245,17 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "bscli.core.central_service.prepare_business_trip_draft",
                 return_value=prepared_payload,
             ):
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.prepare",
+                    arguments={},
+                )
+                submission_id = started["nextAction"]["inputSubmissionId"]
+                _submit_business_trip_fields(service, submission_id)
                 prepared = service.invoke(
                     user_subject="user-a",
                     capability_name="oa.business_trip.prepare",
-                    arguments=_business_trip_arguments(),
+                    arguments={"input_submission_id": submission_id},
                 )
             authorization_id = prepared["nextAction"]["authorizationId"]
 
@@ -271,6 +296,42 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(
                 service.operations.get(unknown["operationId"])["status"],
                 "unknown",
+            )
+
+    def test_business_trip_field_submission_cannot_cross_users(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.business_trip.prepare",
+                arguments={},
+            )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            _submit_business_trip_fields(service, submission_id)
+            session = service.sessions.get_or_create(
+                user_subject="user-b",
+                system_id="oa",
+                expected_principal_ref="Bob",
+            )
+            session = service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Bob",
+            )
+            service.session_states.save(session["session_id"], {"cookies": []})
+
+            response = service.invoke(
+                user_subject="user-b",
+                capability_name="oa.business_trip.prepare",
+                arguments={"input_submission_id": submission_id},
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "FIELD_INPUT_UNAVAILABLE")
+            self.assertEqual(
+                service.field_submissions.get(submission_id)["state"],
+                "submitted",
             )
 
     @staticmethod
@@ -323,6 +384,16 @@ def _business_trip_arguments():
         "reason": "Test",
         "has_direct_supervisor": False,
     }
+
+
+def _submit_business_trip_fields(service, submission_id):
+    csrf = service.field_submissions.issue_csrf(submission_id)
+    service.field_submissions.submit(
+        submission_id,
+        csrf_token=csrf,
+        csrf_cookie=csrf,
+        values=_business_trip_arguments(),
+    )
 
 
 if __name__ == "__main__":

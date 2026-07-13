@@ -38,6 +38,12 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         effects = {spec.name: spec.effect for spec in registry.list(system="oa")}
         self.assertEqual(effects["oa.business_trip.prepare"], "reversible_write")
         self.assertEqual(effects["oa.business_trip.save_draft"], "reversible_write")
+        prepare = registry.get("oa.business_trip.prepare")
+        self.assertEqual(prepare.version, "0.2.0")
+        self.assertEqual(
+            set(prepare.input_schema["properties"]),
+            {"input_submission_id"},
+        )
         self.assertTrue(
             all(
                 effect == "read"

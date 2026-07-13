@@ -9,25 +9,30 @@ authorization, deterministic execution, and server-backed readback.
 ## Safety Boundary
 
 - `oa.business_trip.prepare` and `oa.business_trip.save_draft` are the first
-  central governed write pair. `prepare` validates the exact live template and
-  CAP4 field contract without filling or clicking. It freezes the exact input,
-  creates a one-time authorization bound to the current user and OA session,
-  and returns a trusted action-card URL. `save_draft` accepts only that opaque
-  authorization, consumes it at the final click boundary, clicks only
-  `saveDraft_a`, and refuses `sendId_a`.
+  central governed write pair. The initial `prepare {}` creates a trusted field
+  card; dates, locations, reason, travel mode, supervisor choice, and optional
+  duration go directly from the user to a short-lived `FieldSubmission` and do
+  not enter CLI/MCP arguments. A second `prepare` with only the opaque
+  `input_submission_id` validates the exact live template and CAP4 contract
+  without filling or clicking, consumes the field submission once, freezes the
+  exact plan, and returns a separate trusted action-card URL. `save_draft`
+  accepts only that opaque authorization, consumes it at the final click
+  boundary, clicks only `saveDraft_a`, and refuses `sendId_a`.
 - Central business-trip success requires a server-backed wait-send redirect,
   stable `summary_id` and `affair_id`, and exact field readback after reload.
   The result must report `workflow_submitted=false` and `submitted_count=0`.
   Once the click boundary is crossed, unverifiable outcomes are persisted as
   `unknown` and must be reconciled instead of retried.
-- Optional outer fields are part of the frozen plan only when the live launch
-  page exposes an editable control. The current CAP4 business-trip template
-  keeps `content_coll` hidden, so a requested `note` is rejected during
-  `prepare`; it is never silently dropped or force-written.
-- The 2026-07-13 live validation consumed one trusted authorization, saved a
-  wait-send draft, reloaded it from OA, matched all seven requested business
-  fields, and returned `workflow_submitted=false` and `submitted_count=0`.
-  The Chrome extension and localhost daemon were not used.
+- The current business-trip field-card schema omits `content_coll` because the
+  live CAP4 template keeps that outer field hidden. It therefore cannot be
+  requested through the public capability, silently dropped, or force-written.
+- The 2026-07-13 live validation used separate authentication, field-input, and
+  action cards. It consumed one field submission and one trusted authorization,
+  saved a wait-send draft, reloaded it from OA, matched all seven requested
+  business fields, and returned `workflow_submitted=false`,
+  `submitted_count=0`, and `browser_bridge_used=false`. Replaying the same save
+  request returned `reused=true` with the original draft IDs. The Chrome
+  extension and localhost daemon were not used.
 
 - `oa detail actions --url <url>` reads a rendered detail page and extracts
   candidate write actions from page scripts.
@@ -182,15 +187,19 @@ method, and a user-confirmed production test.
 
 ## Governance Lifecycle
 
-Central promoted writes use this lifecycle:
+Central promoted writes that need user-supplied business fields use this
+lifecycle:
 
-1. `prepare` resolves live state, validates the workflow-specific contract, and
-   freezes the exact business plan.
-2. A separate trusted action card displays that frozen summary and records a
+1. `collect` creates a short-lived, one-time field card bound to the user,
+   session, capability, version, schema hash, and operation. The model receives
+   only its opaque identifier.
+2. `prepare` consumes submitted fields, resolves live state, validates the
+   workflow-specific contract, and freezes the exact business plan.
+3. A separate trusted action card displays that frozen summary and records a
    short-lived, one-time approval outside the model tool surface.
-3. `commit` revalidates the session and contract, consumes approval at the last
+4. `commit` revalidates the session and contract, consumes approval at the last
    reversible boundary, and performs one deterministic write.
-4. `verify` reloads authoritative target state. A crossed boundary without
+5. `verify` reloads authoritative target state. A crossed boundary without
    proof becomes `unknown`, never an automatic retry.
 
 Legacy promoted writes use the following migration-era lifecycle:

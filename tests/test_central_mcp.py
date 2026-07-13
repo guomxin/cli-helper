@@ -66,6 +66,10 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(save["annotations"]["destructiveHint"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
+        prepare_schema = prepare["inputSchema"]["properties"]
+        self.assertIn("input_submission_id", prepare_schema)
+        self.assertNotIn("reason", prepare_schema)
+        self.assertNotIn("start_time", prepare_schema)
 
     def test_business_trip_prepare_requires_write_scope_and_uses_server_identity(self):
         with self._server() as (service, store, read_token, client):
@@ -86,16 +90,7 @@ class CentralMcpTests(unittest.TestCase):
                 "nextAction": {"cardUrl": "http://127.0.0.1:8780/authorize/card"},
                 "reused": False,
             }
-            arguments = {
-                "start_time": "2026-07-13 09:00",
-                "end_time": "2026-07-13 18:00",
-                "travel_mode": "火车",
-                "origin": "济南",
-                "destination": "青岛",
-                "reason": "Test",
-                "has_direct_supervisor": False,
-                "idempotency_key": "mcp-business-trip-prepare",
-            }
+            arguments = {"idempotency_key": "mcp-business-trip-prepare"}
             denied = self._request(
                 client,
                 "tools/call",
@@ -119,7 +114,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["user_subject"], "user-a")
         self.assertEqual(call["capability_name"], "oa.business_trip.prepare")
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
-        self.assertNotIn("idempotency_key", call["arguments"])
+        self.assertEqual(call["arguments"], {})
 
     def test_authenticated_tool_uses_server_bound_identity_and_shared_service(self):
         with self._server() as (service, _store, token, client):

@@ -26,6 +26,7 @@ from bscli.adapters.seeyon_write import (
 )
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
+from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
 from bscli.browser.central import CentralBrowserWorker
@@ -38,6 +39,7 @@ from bscli.core.central_service import (
 )
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.discovered import DiscoveredApi, DiscoveredApiStore
+from bscli.core.field_submissions import FieldSubmissionStore
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.registry import CommandRegistry
@@ -398,11 +400,15 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
     action_application = TrustedActionApplication(
         authorization_store=WriteAuthorizationStore(_central_db_path(home))
     )
+    field_application = TrustedFieldApplication(
+        submission_store=FieldSubmissionStore(_central_db_path(home))
+    )
     print_json(
         {
             "protocolVersion": "0.1",
             "status": "serving",
             "service": "trusted_authentication_card",
+            "cardTypes": ["authentication", "business_input", "write_authorization"],
             "listen": {"host": config.host, "port": config.port},
             "publicBaseUrl": config.public_base_url,
             "tls": config.tls_cert is not None,
@@ -414,6 +420,7 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
             config=config,
             application=application,
             action_application=action_application,
+            field_application=field_application,
         )
     except KeyboardInterrupt:
         return 0

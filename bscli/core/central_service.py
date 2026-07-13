@@ -11,6 +11,7 @@ from bscli.adapters.seeyon_central import (
     build_central_capability_registry,
 )
 from bscli.adapters.seeyon_business_trip import (
+    BUSINESS_TRIP_FIELD_CARD_SCHEMA,
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_SAVE_CAPABILITY,
     BusinessTripContractMismatch,
@@ -28,6 +29,13 @@ from bscli.core.capability_runtime import (
     RequiresUserAction,
 )
 from bscli.core.operations import OperationStore
+from bscli.core.field_submissions import (
+    FieldSubmissionAccessDenied,
+    FieldSubmissionIntegrityError,
+    FieldSubmissionNotFound,
+    FieldSubmissionStateError,
+    FieldSubmissionStore,
+)
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionRegistry
 from bscli.core.write_authorizations import (
@@ -58,6 +66,7 @@ class CentralCapabilityService:
         self.sessions = SessionRegistry(self.db_path, self.home / "profiles")
         self.session_states = SessionStateStore(self.home / "session-secrets")
         self.challenges = AuthChallengeStore(self.db_path)
+        self.field_submissions = FieldSubmissionStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
@@ -220,6 +229,16 @@ class CentralCapabilityService:
                     "Encrypted session state is missing.",
                 )
                 raise login_required_action(user_subject, expired_session)
+            business_trip_submission = None
+            effective_arguments = arguments
+            if capability_name == BUSINESS_TRIP_PREPARE_CAPABILITY:
+                business_trip_submission, effective_arguments = (
+                    self._resolve_business_trip_field_input(
+                        context=context,
+                        session=session,
+                        arguments=arguments,
+                    )
+                )
             try:
                 with self.worker_factory(session, self.adapter) as worker:
                     worker.restore_session_state(state)
@@ -228,7 +247,8 @@ class CentralCapabilityService:
                             context=context,
                             session=session,
                             worker=worker,
-                            arguments=arguments,
+                            arguments=effective_arguments,
+                            field_submission=business_trip_submission,
                         )
                     elif capability_name == BUSINESS_TRIP_SAVE_CAPABILITY:
                         result = self._save_business_trip(
@@ -260,6 +280,7 @@ class CentralCapabilityService:
         session: dict,
         worker: CentralBrowserWorker,
         arguments: dict,
+        field_submission: dict,
     ) -> dict:
         prepared = prepare_business_trip_draft(self.adapter, worker, arguments)
         plan = {
@@ -291,6 +312,22 @@ class CentralCapabilityService:
             card_base_url=self.trusted_card_base_url,
             ttl_seconds=900,
         )
+        try:
+            self.field_submissions.consume(
+                field_submission["submission_id"],
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                session_id=session["session_id"],
+                capability_name=context.spec.name,
+                capability_version=context.spec.version,
+                consume_operation_id=context.operation_id,
+            )
+        except (
+            FieldSubmissionAccessDenied,
+            FieldSubmissionIntegrityError,
+            FieldSubmissionStateError,
+        ) as exc:
+            raise ValueError(str(exc)) from exc
         raise RequiresUserAction(
             "WRITE_AUTHORIZATION_REQUIRED",
             "The business-trip draft plan requires confirmation in the trusted action card.",
@@ -300,11 +337,86 @@ class CentralCapabilityService:
                 "cardUrl": authorization["card_url"],
                 "planHash": authorization["plan_hash"],
                 "expiresAt": authorization["expires_at"],
-                "summary": summary,
+                "display": {
+                    "title": summary.get("title"),
+                    "effect": summary.get("effect"),
+                    "fieldCount": len(summary.get("fields") or []),
+                },
                 "then": {
                     "capability": BUSINESS_TRIP_SAVE_CAPABILITY,
                     "arguments": {"authorization_id": authorization["authorization_id"]},
                 },
+            },
+        )
+
+    def _resolve_business_trip_field_input(
+        self,
+        *,
+        context: CapabilityContext,
+        session: dict,
+        arguments: dict,
+    ) -> tuple[dict, dict]:
+        submission_id = str(arguments.get("input_submission_id") or "").strip()
+        if not submission_id:
+            submission = self.field_submissions.create(
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                session_id=session["session_id"],
+                capability_name=context.spec.name,
+                capability_version=context.spec.version,
+                create_operation_id=context.operation_id,
+                form_schema=BUSINESS_TRIP_FIELD_CARD_SCHEMA,
+                card_base_url=self.trusted_card_base_url,
+                ttl_seconds=900,
+            )
+            raise self._field_input_required(submission)
+        try:
+            submission = self.field_submissions.get(submission_id, include_values=True)
+        except (FieldSubmissionNotFound, FieldSubmissionIntegrityError) as exc:
+            raise self._field_input_unavailable("not_found") from exc
+        bindings_match = all(
+            (
+                submission["user_subject"] == session["user_subject"],
+                submission["system_id"] == session["system_id"],
+                submission["session_id"] == session["session_id"],
+                submission["capability_name"] == context.spec.name,
+                submission["capability_version"] == context.spec.version,
+            )
+        )
+        if not bindings_match:
+            raise self._field_input_unavailable("binding_mismatch")
+        if submission["state"] == "pending":
+            raise self._field_input_required(submission)
+        if submission["state"] != "submitted" or not isinstance(submission.get("values"), dict):
+            raise self._field_input_unavailable(submission["state"])
+        return submission, submission["values"]
+
+    @staticmethod
+    def _field_input_required(submission: dict) -> RequiresUserAction:
+        return RequiresUserAction(
+            "FIELD_INPUT_REQUIRED",
+            "Business-trip fields must be entered in the trusted field card.",
+            next_action={
+                "type": "open_field_input_card",
+                "inputSubmissionId": submission["submission_id"],
+                "cardUrl": submission["card_url"],
+                "expiresAt": submission["expires_at"],
+                "then": {
+                    "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
+                    "arguments": {"input_submission_id": submission["submission_id"]},
+                },
+            },
+        )
+
+    @staticmethod
+    def _field_input_unavailable(state: str) -> RequiresUserAction:
+        return RequiresUserAction(
+            "FIELD_INPUT_UNAVAILABLE",
+            f"The trusted field submission is unavailable: {state}.",
+            next_action={
+                "type": "prepare_again",
+                "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
+                "arguments": {},
             },
         )
 

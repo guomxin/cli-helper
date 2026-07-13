@@ -24,6 +24,7 @@ from bscli.adapters.seeyon_business_trip import (
 )
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
+from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
 from bscli.core.central_service import CentralCapabilityService
@@ -278,8 +279,8 @@ def create_central_mcp_server(
         name="oa_business_trip_prepare",
         title="Prepare OA Business Trip Draft",
         description=(
-            "Validate a business-trip request against the current OA form and create a "
-            "trusted confirmation card. This step does not fill or save the form."
+            "Start trusted business-trip field entry, or continue with its opaque submission "
+            "ID to validate the live OA form and create a separate confirmation card."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -291,33 +292,15 @@ def create_central_mcp_server(
     )
     async def oa_business_trip_prepare(
         ctx: Context,
-        start_time: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")],
-        end_time: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")],
-        travel_mode: Literal["大巴", "火车", "飞机", "轮渡", "自驾车"],
-        origin: Annotated[str, Field(min_length=1, max_length=255)],
-        destination: Annotated[str, Field(min_length=1, max_length=255)],
-        reason: Annotated[str, Field(min_length=1, max_length=4000)],
-        has_direct_supervisor: bool,
-        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
-        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
-        note: Annotated[str | None, Field(max_length=2000)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
-            "start_time": start_time,
-            "end_time": end_time,
-            "travel_mode": travel_mode,
-            "origin": origin,
-            "destination": destination,
-            "reason": reason,
-            "has_direct_supervisor": has_direct_supervisor,
-        }
-        if trip_days is not None:
-            arguments["trip_days"] = trip_days
-        if trip_hours is not None:
-            arguments["trip_hours"] = trip_hours
-        if note is not None:
-            arguments["note"] = note
+        arguments: dict[str, Any] = {}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
         return await invoke(
             ctx,
             BUSINESS_TRIP_PREPARE_CAPABILITY,
@@ -456,10 +439,14 @@ def serve_central_mcp(
     action_application = TrustedActionApplication(
         authorization_store=service.write_authorizations,
     )
+    field_application = TrustedFieldApplication(
+        submission_store=service.field_submissions,
+    )
     auth_server = create_auth_http_server(
         config=auth_config,
         application=auth_application,
         action_application=action_application,
+        field_application=field_application,
     )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,

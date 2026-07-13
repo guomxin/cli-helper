@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import MAX_AUTH_BODY_BYTES, AuthCardResponse, TrustedAuthApplication
+from bscli.auth.field_card import TrustedFieldApplication
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ def create_auth_http_server(
     config: AuthServerConfig,
     application: TrustedAuthApplication,
     action_application: TrustedActionApplication | None = None,
+    field_application: TrustedFieldApplication | None = None,
 ) -> ThreadingHTTPServer:
     expected_scheme = urlparse(config.public_base_url).scheme.lower()
     allowed_hosts = {_hostname(config.public_base_url)}
@@ -187,6 +189,9 @@ def create_auth_http_server(
             authorization_id = _authorization_id_from_path(self.path)
             if authorization_id is not None and action_application is not None:
                 return action_application, authorization_id
+            submission_id = _field_submission_id_from_path(self.path)
+            if submission_id is not None and field_application is not None:
+                return field_application, submission_id
             return None, None
 
         def _send(self, response: AuthCardResponse) -> None:
@@ -213,11 +218,13 @@ def serve_auth_cards(
     config: AuthServerConfig,
     application: TrustedAuthApplication,
     action_application: TrustedActionApplication | None = None,
+    field_application: TrustedFieldApplication | None = None,
 ) -> None:
     server = create_auth_http_server(
         config=config,
         application=application,
         action_application=action_application,
+        field_application=field_application,
     )
     try:
         server.serve_forever(poll_interval=0.25)
@@ -232,6 +239,11 @@ def _challenge_id_from_path(path: str) -> str | None:
 
 def _authorization_id_from_path(path: str) -> str | None:
     match = re.fullmatch(r"/authorize/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
+    return match.group(1) if match else None
+
+
+def _field_submission_id_from_path(path: str) -> str | None:
+    match = re.fullmatch(r"/input/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
     return match.group(1) if match else None
 
 
