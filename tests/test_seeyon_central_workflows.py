@@ -17,7 +17,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.adapter = SeeyonCentralAdapter(base_url=BASE_URL)
         self.worker = FakeWorkflowWorker()
 
-    def test_registry_exposes_complete_central_read_package(self):
+    def test_registry_exposes_reads_and_governed_business_trip_draft(self):
         registry = build_central_capability_registry()
 
         names = [spec.name for spec in registry.list(system="oa")]
@@ -25,6 +25,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(
             names,
             [
+                "oa.business_trip.prepare",
+                "oa.business_trip.save_draft",
                 "oa.template.list",
                 "oa.workflow.detail.get",
                 "oa.workflow.done.list",
@@ -33,7 +35,16 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.workflow.tracked.list",
             ],
         )
-        self.assertTrue(all(spec.effect == "read" for spec in registry.list(system="oa")))
+        effects = {spec.name: spec.effect for spec in registry.list(system="oa")}
+        self.assertEqual(effects["oa.business_trip.prepare"], "reversible_write")
+        self.assertEqual(effects["oa.business_trip.save_draft"], "reversible_write")
+        self.assertTrue(
+            all(
+                effect == "read"
+                for name, effect in effects.items()
+                if not name.startswith("oa.business_trip.")
+            )
+        )
 
     def test_pending_list_filters_and_removes_internal_transport_fields(self):
         result = self.adapter.invoke_capability(

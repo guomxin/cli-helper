@@ -24,6 +24,7 @@ from bscli.adapters.seeyon_write import (
     list_write_action_specs,
     sanitize_oa_write_plan_for_audit,
 )
+from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
@@ -42,6 +43,7 @@ from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.registry import CommandRegistry
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
+from bscli.core.write_authorizations import WriteAuthorizationStore
 from bscli.core.tool_manifest import export_tool_manifest
 from bscli.core.trace import TraceStore
 from bscli.daemon.app import DAEMON_TOKEN_FILENAME, serve
@@ -194,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_token_issue.add_argument("--expected-principal", required=True)
     mcp_token_issue.add_argument("--label")
     mcp_token_issue.add_argument("--ttl-hours", type=int, default=24)
+    mcp_token_issue.add_argument(
+        "--scope",
+        action="append",
+        choices=["oa:read", "oa:write:draft"],
+    )
     mcp_token_list = mcp_token_sub.add_parser("list")
     mcp_token_list.add_argument("--user-subject")
     mcp_token_list.add_argument("--limit", type=int, default=100)
@@ -217,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     capability_invoke.add_argument("--idempotency-key")
     capability_invoke.add_argument("--request-id")
     capability_invoke.add_argument("--base-url")
+    capability_invoke.add_argument("--card-base-url", default="http://127.0.0.1:8780")
 
     session = subparsers.add_parser("session")
     session_sub = session.add_subparsers(dest="action", required=True)
@@ -266,6 +274,7 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
     service = CentralCapabilityService(
         home=home,
         base_url=_central_base_url(home, getattr(args, "base_url", None)),
+        trusted_card_base_url=getattr(args, "card_base_url", "http://127.0.0.1:8780"),
     )
     if args.action == "list":
         print_json(service.list_capabilities(system=getattr(args, "system", None)))
@@ -386,6 +395,9 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         login_timeout_seconds=args.login_timeout,
     )
     application = TrustedAuthApplication(challenge_store=challenge_store, broker=broker)
+    action_application = TrustedActionApplication(
+        authorization_store=WriteAuthorizationStore(_central_db_path(home))
+    )
     print_json(
         {
             "protocolVersion": "0.1",
@@ -398,7 +410,11 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
     )
     sys.stdout.flush()
     try:
-        serve_auth_cards(config=config, application=application)
+        serve_auth_cards(
+            config=config,
+            application=application,
+            action_application=action_application,
+        )
     except KeyboardInterrupt:
         return 0
     return 0
@@ -1250,7 +1266,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
                     user_subject=args.user_subject,
                     expected_principal_ref=args.expected_principal,
                     label=args.label,
-                    scopes=["oa:read"],
+                    scopes=sorted({"oa:read", *(args.scope or [])}),
                     ttl_seconds=args.ttl_hours * 3600,
                 )
             except (ValueError, SessionPrincipalMismatch) as exc:
@@ -1323,6 +1339,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
         service = CentralCapabilityService(
             home=home,
             base_url=_central_base_url(home, args.base_url),
+            trusted_card_base_url=auth_config.public_base_url,
         )
         identity_store = McpIdentityTokenStore(_central_db_path(home))
         print_json(

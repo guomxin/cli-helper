@@ -78,13 +78,17 @@ class OperationStore:
         capability_name: str,
         capability_version: str,
         input_summary: dict,
+        input_identity: dict | None = None,
         idempotency_key: str | None = None,
         request_id: str | None = None,
     ) -> tuple[dict, bool]:
         if not user_subject:
             raise ValueError("user_subject is required")
-        canonical_input = _canonical_json(input_summary)
-        input_hash = hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
+        canonical_summary = _canonical_json(input_summary)
+        canonical_identity = _canonical_json(
+            input_identity if input_identity is not None else input_summary
+        )
+        input_hash = hashlib.sha256(canonical_identity.encode("utf-8")).hexdigest()
         stripped_key = idempotency_key.strip() if idempotency_key else ""
         normalized_key = stripped_key or None
 
@@ -116,7 +120,7 @@ class OperationStore:
                         user_subject,
                         capability_name,
                         capability_version,
-                        canonical_input,
+                        canonical_summary,
                         input_hash,
                         normalized_key,
                         now,

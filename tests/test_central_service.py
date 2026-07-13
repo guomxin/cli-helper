@@ -4,8 +4,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
 from bscli.adapters.seeyon_central import SeeyonLoginRequired
 from bscli.core.central_service import CentralCapabilityService
 
@@ -135,6 +136,143 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         self.assertEqual(maximum_active, 1)
         self.assertTrue(all(response["status"] == "succeeded" for response in responses))
 
+    def test_business_trip_prepare_requires_trusted_card_then_consumes_it_once(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            self._activate(service)
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "save_business_trip_request_draft",
+                    "target": {"template_id": "template-1"},
+                    "form_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"reason": "Test"},
+                },
+                "summary": {
+                    "title": "保存出差申请草稿",
+                    "system": "致远 OA",
+                    "fields": [{"label": "事由", "value": "Test"}],
+                },
+            }
+            with patch(
+                "bscli.core.central_service.prepare_business_trip_draft",
+                return_value=prepared_payload,
+            ):
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.prepare",
+                    arguments=_business_trip_arguments(),
+                    idempotency_key="business-trip-prepare-1",
+                )
+
+            self.assertEqual(prepared["status"], "requires_user_action")
+            self.assertEqual(prepared["error"]["code"], "WRITE_AUTHORIZATION_REQUIRED")
+            authorization_id = prepared["nextAction"]["authorizationId"]
+            authorization = service.write_authorizations.get(authorization_id)
+            self.assertEqual(authorization["state"], "pending")
+            self.assertEqual(
+                prepared["nextAction"]["then"]["capability"],
+                "oa.business_trip.save_draft",
+            )
+
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def save(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {
+                    "draft_saved": True,
+                    "workflow_submitted": False,
+                    "submitted_count": 0,
+                    "verification": {"confirmed": True},
+                }
+
+            with patch(
+                "bscli.core.central_service.save_business_trip_draft",
+                side_effect=save,
+            ):
+                committed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.save_draft",
+                    arguments={"authorization_id": authorization_id},
+                    idempotency_key="business-trip-save-1",
+                )
+
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertTrue(committed["result"]["draft_saved"])
+            consumed = service.write_authorizations.get(authorization_id)
+            self.assertEqual(consumed["state"], "consumed")
+            self.assertEqual(consumed["commit_operation_id"], committed["operationId"])
+
+    def test_business_trip_commit_before_approval_has_no_effect_and_unknown_is_durable(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            self._activate(service)
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "save_business_trip_request_draft",
+                    "target": {"template_id": "template-1"},
+                    "form_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"reason": "Test"},
+                },
+                "summary": {"title": "Draft", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_business_trip_draft",
+                return_value=prepared_payload,
+            ):
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.prepare",
+                    arguments=_business_trip_arguments(),
+                )
+            authorization_id = prepared["nextAction"]["authorizationId"]
+
+            with patch("bscli.core.central_service.save_business_trip_draft") as save:
+                blocked = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.save_draft",
+                    arguments={"authorization_id": authorization_id},
+                )
+            self.assertEqual(blocked["status"], "requires_user_action")
+            save.assert_not_called()
+
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def uncertain(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                raise BusinessTripOutcomeUnknown("readback failed")
+
+            with patch(
+                "bscli.core.central_service.save_business_trip_draft",
+                side_effect=uncertain,
+            ):
+                unknown = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.save_draft",
+                    arguments={"authorization_id": authorization_id},
+                    idempotency_key="business-trip-unknown-1",
+                )
+
+            self.assertEqual(unknown["status"], "unknown")
+            self.assertEqual(unknown["error"]["code"], "RESULT_UNKNOWN")
+            self.assertEqual(
+                service.operations.get(unknown["operationId"])["status"],
+                "unknown",
+            )
+
     @staticmethod
     def _service(tmp, worker):
         return CentralCapabilityService(
@@ -173,6 +311,18 @@ class FakeWorker:
 
     def capture_session_state(self):
         return {"cookies": []}
+
+
+def _business_trip_arguments():
+    return {
+        "start_time": "2026-07-13 09:00",
+        "end_time": "2026-07-13 18:00",
+        "travel_mode": "火车",
+        "origin": "济南",
+        "destination": "青岛",
+        "reason": "Test",
+        "has_direct_supervisor": False,
+    }
 
 
 if __name__ == "__main__":

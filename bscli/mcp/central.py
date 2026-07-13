@@ -18,6 +18,11 @@ from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 import uvicorn
 
+from bscli.adapters.seeyon_business_trip import (
+    BUSINESS_TRIP_PREPARE_CAPABILITY,
+    BUSINESS_TRIP_SAVE_CAPABILITY,
+)
+from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
@@ -105,8 +110,9 @@ def create_central_mcp_server(
     mcp = FastMCP(
         name="agentbridge_oa_mcp",
         instructions=(
-            "Central, read-only Seeyon OA capabilities. Caller identity comes from the "
-            "authenticated Bearer token; never request or accept a user subject as tool input."
+            "Central Seeyon OA business capabilities. Caller identity comes from the "
+            "authenticated Bearer token; never request or accept a user subject as tool input. "
+            "Business-trip draft writes require a separate trusted action-card approval."
         ),
         token_verifier=verifier,
         auth=AuthSettings(
@@ -137,8 +143,12 @@ def create_central_mcp_server(
         capability_name: str,
         arguments: dict,
         idempotency_key: str | None,
+        required_scopes: set[str] | None = None,
     ) -> dict[str, Any]:
-        identity = _request_identity(identity_store)
+        identity = _request_identity(
+            identity_store,
+            required_scopes=required_scopes or {"oa:read"},
+        )
         return await asyncio.to_thread(
             service.invoke,
             user_subject=identity["user_subject"],
@@ -265,6 +275,86 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="oa_business_trip_prepare",
+        title="Prepare OA Business Trip Draft",
+        description=(
+            "Validate a business-trip request against the current OA form and create a "
+            "trusted confirmation card. This step does not fill or save the form."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_business_trip_prepare(
+        ctx: Context,
+        start_time: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")],
+        end_time: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")],
+        travel_mode: Literal["大巴", "火车", "飞机", "轮渡", "自驾车"],
+        origin: Annotated[str, Field(min_length=1, max_length=255)],
+        destination: Annotated[str, Field(min_length=1, max_length=255)],
+        reason: Annotated[str, Field(min_length=1, max_length=4000)],
+        has_direct_supervisor: bool,
+        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
+        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
+        note: Annotated[str | None, Field(max_length=2000)] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "travel_mode": travel_mode,
+            "origin": origin,
+            "destination": destination,
+            "reason": reason,
+            "has_direct_supervisor": has_direct_supervisor,
+        }
+        if trip_days is not None:
+            arguments["trip_days"] = trip_days
+        if trip_hours is not None:
+            arguments["trip_hours"] = trip_hours
+        if note is not None:
+            arguments["note"] = note
+        return await invoke(
+            ctx,
+            BUSINESS_TRIP_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
+        name="oa_business_trip_save_draft",
+        title="Save Authorized OA Business Trip Draft",
+        description=(
+            "Consume one approved trusted authorization, save the frozen plan as a "
+            "wait-send OA draft, and verify it by server reload. It never submits the workflow."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_business_trip_save_draft(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            BUSINESS_TRIP_SAVE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
         name="oa_session_status",
         title="Get OA Session Status",
         description="Get the authenticated caller's central OA session state.",
@@ -363,7 +453,14 @@ def serve_central_mcp(
         challenge_store=service.challenges,
         broker=broker,
     )
-    auth_server = create_auth_http_server(config=auth_config, application=auth_application)
+    action_application = TrustedActionApplication(
+        authorization_store=service.write_authorizations,
+    )
+    auth_server = create_auth_http_server(
+        config=auth_config,
+        application=auth_application,
+        action_application=action_application,
+    )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,
         kwargs={"poll_interval": 0.25},
@@ -392,11 +489,18 @@ def serve_central_mcp(
         auth_thread.join(timeout=5)
 
 
-def _request_identity(store: McpIdentityTokenStore) -> dict:
+def _request_identity(
+    store: McpIdentityTokenStore,
+    *,
+    required_scopes: set[str] | None = None,
+) -> dict:
     access_token = get_access_token()
     if access_token is None:
         raise PermissionError("MCP request is not authenticated")
-    return store.resolve_client(access_token.client_id, required_scopes={"oa:read"})
+    return store.resolve_client(
+        access_token.client_id,
+        required_scopes=required_scopes or {"oa:read"},
+    )
 
 
 def _is_loopback_host(host: str) -> bool:

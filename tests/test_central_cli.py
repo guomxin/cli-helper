@@ -11,18 +11,24 @@ from bscli.core.sessions import SessionRegistry
 
 
 class CentralCliTests(unittest.TestCase):
-    def test_capability_list_exposes_complete_central_read_package(self):
+    def test_capability_list_exposes_reads_and_governed_business_trip_draft(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
             exit_code = main(["--home", tmp, "capability", "list"])
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 6)
-        self.assertEqual(payload["capabilities"][0]["name"], "oa.template.list")
-        self.assertIn(
-            "oa.workflow.pending.list",
-            [item["name"] for item in payload["capabilities"]],
+        self.assertEqual(len(payload["capabilities"]), 8)
+        capabilities = {item["name"]: item for item in payload["capabilities"]}
+        self.assertIn("oa.template.list", capabilities)
+        self.assertIn("oa.workflow.pending.list", capabilities)
+        self.assertEqual(
+            capabilities["oa.business_trip.prepare"]["effect"],
+            "reversible_write",
+        )
+        self.assertEqual(
+            capabilities["oa.business_trip.save_draft"]["effect"],
+            "reversible_write",
         )
 
     def test_session_status_returns_not_found_without_opening_browser(self):

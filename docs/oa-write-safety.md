@@ -1,13 +1,33 @@
 # OA Write Safety Model
 
-This document describes the BSCLI/OA write-operation layer. The current
-implementation can discover candidate actions, create write plans, record audit
-entries, and execute the Seeyon `ContinueSubmit` action through the user's
-logged-in Chrome session after explicit confirmation. It can also execute a
-confirmed launch-page `SaveDraft` action that creates or updates an OA draft
-without sending the workflow.
+This document describes both the legacy Chrome-bridge write layer and the new
+central AgentBridge write path. The legacy path remains useful for discovery
+and regression comparison. New production candidates should be promoted into
+workflow-specific central capabilities with frozen plans, trusted action-card
+authorization, deterministic execution, and server-backed readback.
 
 ## Safety Boundary
+
+- `oa.business_trip.prepare` and `oa.business_trip.save_draft` are the first
+  central governed write pair. `prepare` validates the exact live template and
+  CAP4 field contract without filling or clicking. It freezes the exact input,
+  creates a one-time authorization bound to the current user and OA session,
+  and returns a trusted action-card URL. `save_draft` accepts only that opaque
+  authorization, consumes it at the final click boundary, clicks only
+  `saveDraft_a`, and refuses `sendId_a`.
+- Central business-trip success requires a server-backed wait-send redirect,
+  stable `summary_id` and `affair_id`, and exact field readback after reload.
+  The result must report `workflow_submitted=false` and `submitted_count=0`.
+  Once the click boundary is crossed, unverifiable outcomes are persisted as
+  `unknown` and must be reconciled instead of retried.
+- Optional outer fields are part of the frozen plan only when the live launch
+  page exposes an editable control. The current CAP4 business-trip template
+  keeps `content_coll` hidden, so a requested `note` is rejected during
+  `prepare`; it is never silently dropped or force-written.
+- The 2026-07-13 live validation consumed one trusted authorization, saved a
+  wait-send draft, reloaded it from OA, matched all seven requested business
+  fields, and returned `workflow_submitted=false` and `submitted_count=0`.
+  The Chrome extension and localhost daemon were not used.
 
 - `oa detail actions --url <url>` reads a rendered detail page and extracts
   candidate write actions from page scripts.
@@ -148,10 +168,11 @@ without sending the workflow.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Only launch-page `SaveDraft`, collaboration `ContinueSubmit`, meeting reply,
-and direct meeting creation are executable at this stage. Reject, archive,
-delete, revoke, return, upload, generic send, and other write actions remain
-blocked until each has a dedicated mapping and tests.
+Central business-trip `save_draft`, legacy launch-page `SaveDraft`,
+collaboration `ContinueSubmit`, meeting reply, and direct meeting creation are
+the executable actions at this stage. Central business-trip send/submit,
+reject, archive, delete, revoke, return, upload, generic send, and other write
+actions remain blocked until each has a dedicated mapping and tests.
 
 `Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
 may call `oa write dry-run --affair-id <id> --action Archive` to prove the
@@ -161,7 +182,18 @@ method, and a user-confirmed production test.
 
 ## Governance Lifecycle
 
-Promoted write actions share the same lifecycle:
+Central promoted writes use this lifecycle:
+
+1. `prepare` resolves live state, validates the workflow-specific contract, and
+   freezes the exact business plan.
+2. A separate trusted action card displays that frozen summary and records a
+   short-lived, one-time approval outside the model tool surface.
+3. `commit` revalidates the session and contract, consumes approval at the last
+   reversible boundary, and performs one deterministic write.
+4. `verify` reloads authoritative target state. A crossed boundary without
+   proof becomes `unknown`, never an automatic retry.
+
+Legacy promoted writes use the following migration-era lifecycle:
 
 1. Resolve the target from a stable business id or source URL.
 2. Run a dry-run precheck that reads OA state but does not mutate it.

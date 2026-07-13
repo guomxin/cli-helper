@@ -10,13 +10,32 @@ from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
     build_central_capability_registry,
 )
+from bscli.adapters.seeyon_business_trip import (
+    BUSINESS_TRIP_PREPARE_CAPABILITY,
+    BUSINESS_TRIP_SAVE_CAPABILITY,
+    BusinessTripContractMismatch,
+    BusinessTripOutcomeUnknown,
+    prepare_business_trip_draft,
+    save_business_trip_draft,
+)
 from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
-from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
+from bscli.core.capability_runtime import (
+    CapabilityContext,
+    CapabilityEngine,
+    OutcomeUnknown,
+    RequiresUserAction,
+)
 from bscli.core.operations import OperationStore
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionRegistry
+from bscli.core.write_authorizations import (
+    WriteAuthorizationAccessDenied,
+    WriteAuthorizationNotFound,
+    WriteAuthorizationStateError,
+    WriteAuthorizationStore,
+)
 
 
 WorkerFactory = Callable[[dict, SeeyonCentralAdapter], CentralBrowserWorker]
@@ -30,6 +49,7 @@ class CentralCapabilityService:
         base_url: str,
         registry: CapabilityRegistry | None = None,
         worker_factory: WorkerFactory | None = None,
+        trusted_card_base_url: str = "http://127.0.0.1:8780",
     ) -> None:
         self.home = Path(home)
         self.db_path = self.home / "agentbridge.db"
@@ -38,8 +58,10 @@ class CentralCapabilityService:
         self.sessions = SessionRegistry(self.db_path, self.home / "profiles")
         self.session_states = SessionStateStore(self.home / "session-secrets")
         self.challenges = AuthChallengeStore(self.db_path)
+        self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
+        self.trusted_card_base_url = trusted_card_base_url
         self._locks_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
 
@@ -69,7 +91,8 @@ class CentralCapabilityService:
         if spec.adapter == "seeyon-central":
             engine.register_handler(
                 capability_name,
-                lambda _context, inputs: self._invoke_seeyon(
+                lambda context, inputs: self._invoke_seeyon(
+                    context=context,
                     user_subject=user_subject,
                     capability_name=capability_name,
                     arguments=inputs,
@@ -177,6 +200,7 @@ class CentralCapabilityService:
     def _invoke_seeyon(
         self,
         *,
+        context: CapabilityContext,
         user_subject: str,
         capability_name: str,
         arguments: dict,
@@ -199,11 +223,26 @@ class CentralCapabilityService:
             try:
                 with self.worker_factory(session, self.adapter) as worker:
                     worker.restore_session_state(state)
-                    result = self.adapter.invoke_capability(
-                        capability_name,
-                        worker,
-                        arguments,
-                    )
+                    if capability_name == BUSINESS_TRIP_PREPARE_CAPABILITY:
+                        result = self._prepare_business_trip(
+                            context=context,
+                            session=session,
+                            worker=worker,
+                            arguments=arguments,
+                        )
+                    elif capability_name == BUSINESS_TRIP_SAVE_CAPABILITY:
+                        result = self._save_business_trip(
+                            context=context,
+                            session=session,
+                            worker=worker,
+                            arguments=arguments,
+                        )
+                    else:
+                        result = self.adapter.invoke_capability(
+                            capability_name,
+                            worker,
+                            arguments,
+                        )
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
@@ -213,6 +252,144 @@ class CentralCapabilityService:
                 expired_session = self.sessions.mark_expired(session["session_id"], str(exc))
                 self.session_states.delete(session["session_id"])
                 raise login_required_action(user_subject, expired_session) from exc
+
+    def _prepare_business_trip(
+        self,
+        *,
+        context: CapabilityContext,
+        session: dict,
+        worker: CentralBrowserWorker,
+        arguments: dict,
+    ) -> dict:
+        prepared = prepare_business_trip_draft(self.adapter, worker, arguments)
+        plan = {
+            **prepared["plan"],
+            "user_subject": session["user_subject"],
+            "session_binding": {
+                "session_id": session["session_id"],
+                "expected_principal_ref": session.get("expected_principal_ref"),
+                "downstream_principal_ref": session.get("downstream_principal_ref"),
+                "last_verified_at": session.get("last_verified_at"),
+            },
+        }
+        summary = {
+            **prepared["summary"],
+            "principal": session.get("downstream_principal_ref")
+            or session.get("expected_principal_ref")
+            or session["user_subject"],
+        }
+        commit_spec = self.registry.get(BUSINESS_TRIP_SAVE_CAPABILITY)
+        authorization = self.write_authorizations.create(
+            user_subject=session["user_subject"],
+            system_id=session["system_id"],
+            session_id=session["session_id"],
+            capability_name=commit_spec.name,
+            capability_version=commit_spec.version,
+            prepare_operation_id=context.operation_id,
+            plan=plan,
+            summary=summary,
+            card_base_url=self.trusted_card_base_url,
+            ttl_seconds=900,
+        )
+        raise RequiresUserAction(
+            "WRITE_AUTHORIZATION_REQUIRED",
+            "The business-trip draft plan requires confirmation in the trusted action card.",
+            next_action={
+                "type": "open_write_authorization_card",
+                "authorizationId": authorization["authorization_id"],
+                "cardUrl": authorization["card_url"],
+                "planHash": authorization["plan_hash"],
+                "expiresAt": authorization["expires_at"],
+                "summary": summary,
+                "then": {
+                    "capability": BUSINESS_TRIP_SAVE_CAPABILITY,
+                    "arguments": {"authorization_id": authorization["authorization_id"]},
+                },
+            },
+        )
+
+    def _save_business_trip(
+        self,
+        *,
+        context: CapabilityContext,
+        session: dict,
+        worker: CentralBrowserWorker,
+        arguments: dict,
+    ) -> dict:
+        authorization_id = str(arguments.get("authorization_id") or "").strip()
+        if not authorization_id:
+            raise ValueError("authorization_id is required")
+        try:
+            authorization = self.write_authorizations.get(
+                authorization_id,
+                include_plan=True,
+            )
+        except WriteAuthorizationNotFound as exc:
+            raise KeyError("write authorization not found") from exc
+        if authorization["user_subject"] != session["user_subject"]:
+            raise KeyError("write authorization not found")
+        if authorization["state"] == "pending":
+            raise RequiresUserAction(
+                "WRITE_AUTHORIZATION_REQUIRED",
+                "The trusted action card has not been approved.",
+                next_action={
+                    "type": "open_write_authorization_card",
+                    "authorizationId": authorization_id,
+                    "cardUrl": authorization["card_url"],
+                    "planHash": authorization["plan_hash"],
+                    "expiresAt": authorization["expires_at"],
+                },
+            )
+        if authorization["state"] != "approved":
+            raise RequiresUserAction(
+                "WRITE_AUTHORIZATION_UNAVAILABLE",
+                f"The write authorization is {authorization['state']}.",
+                next_action={
+                    "type": "prepare_again",
+                    "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
+                },
+            )
+        plan = authorization["plan"]
+        if not self._business_trip_session_binding_matches(plan, session):
+            raise ValueError("the OA session changed after the business-trip plan was authorized")
+
+        def enter_commit_boundary() -> None:
+            self.write_authorizations.consume(
+                authorization_id,
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                session_id=session["session_id"],
+                capability_name=context.spec.name,
+                capability_version=context.spec.version,
+                commit_operation_id=context.operation_id,
+            )
+
+        try:
+            return save_business_trip_draft(
+                self.adapter,
+                worker,
+                plan,
+                enter_commit_boundary=enter_commit_boundary,
+            )
+        except BusinessTripOutcomeUnknown as exc:
+            raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
+        except BusinessTripContractMismatch as exc:
+            raise ValueError(str(exc)) from exc
+        except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:
+            raise ValueError(str(exc)) from exc
+
+    @staticmethod
+    def _business_trip_session_binding_matches(plan: dict, session: dict) -> bool:
+        binding = plan.get("session_binding") if isinstance(plan.get("session_binding"), dict) else {}
+        return all(
+            (
+                plan.get("user_subject") == session["user_subject"],
+                binding.get("session_id") == session["session_id"],
+                binding.get("expected_principal_ref") == session.get("expected_principal_ref"),
+                binding.get("downstream_principal_ref") == session.get("downstream_principal_ref"),
+                binding.get("last_verified_at") == session.get("last_verified_at"),
+            )
+        )
 
     @contextmanager
     def _session_lock(self, session_id: str) -> Iterator[None]:

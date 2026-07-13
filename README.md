@@ -14,8 +14,8 @@ the first central AgentBridge vertical slice:
 - Versioned business capability registry and operation ledger
 - Per-user central Playwright profiles and session registry
 - One-time trusted authentication cards and a memory-only Credential Broker
-- Extension-independent central OA read package for templates, workflow lists,
-  rendered details, and opinions
+- Extension-independent central OA package with six read capabilities plus a
+  governed business-trip draft write
 
 ## Central AgentBridge Slice
 
@@ -81,6 +81,32 @@ resolve only opaque IDs returned by those lists, render the page in the same
 central browser session, and merge same-origin iframe content. Public results
 exclude internal OA URLs, raw HTML, cookies, action endpoints, and write hints.
 
+The first central write vertical slice is deliberately narrower than the legacy
+bridge commands. It prepares and saves an `【HR】出差申请单` draft, but never
+sends or submits the workflow:
+
+```bash
+python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <trusted-user-subject> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '{"start_time":"2026-07-14 09:00","end_time":"2026-07-14 18:00","travel_mode":"火车","origin":"济南","destination":"青岛","reason":"客户交流","has_direct_supervisor":false}'
+```
+
+`prepare` validates the live template and CAP4 form contract without filling or
+clicking anything. It freezes the exact plan and returns a separate trusted
+`nextAction.cardUrl`. After the user approves that card, invoke the returned
+save capability with the opaque one-time authorization:
+
+```bash
+python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.save_draft --user-subject <trusted-user-subject> --idempotency-key <save-key> --json '{"authorization_id":"<authorization-id>"}'
+```
+
+The authorization is bound to the user, OA session, capability version, frozen
+plan hash, and TTL, and is consumed exactly once at the commit boundary. A
+successful result must reload the server-backed wait-send draft, read the fields
+back, and report `workflow_submitted=false` and `submitted_count=0`. A failure
+after the save click is recorded as `unknown` and is not retried automatically.
+Optional outer fields such as `note` are accepted only when the live template
+renders them as editable. A hidden `content_coll` is rejected during `prepare`
+instead of producing an authorization that cannot be executed.
+
 An inactive or expired session returns `requires_user_action` with
 `error.code=LOGIN_REQUIRED`; it never silently falls back to the extension.
 On Windows, process-level OA session cookies are stored only as a DPAPI-encrypted
@@ -100,6 +126,16 @@ detail and opinion reads used `central_browser_session`. This proves the
 single-user central path only; cross-user isolation still requires a second
 real account and separate Worker security principals.
 
+The 2026-07-13 W1 validation prepared a frozen business-trip plan, obtained
+approval through the separate trusted action card, consumed that authorization
+once at the save boundary, and created a wait-send draft for the expected OA
+principal. The server-backed draft reload returned stable summary and affair
+identifiers and matched all seven requested business fields. The result reported
+`browser_bridge_used=false`, `workflow_submitted=false`, and
+`submitted_count=0`. During validation, a browser-native form-serialization bug
+in the action card was fixed and a hidden optional-note field was moved into
+prepare-time validation.
+
 ## Central Streamable HTTP MCP
 
 The central MCP path uses the same `CentralCapabilityService`, operation ledger,
@@ -111,6 +147,7 @@ From a trusted administrator terminal, bind and issue a short-lived client token
 
 ```bash
 python -m bscli.cli.main --home .bscli mcp token issue --user-subject <trusted-user-subject> --expected-principal <oa-display-name> --label <client-name> --ttl-hours 24
+python -m bscli.cli.main --home .bscli mcp token issue --user-subject <trusted-user-subject> --expected-principal <oa-display-name> --label <draft-client-name> --scope oa:write:draft --ttl-hours 24
 python -m bscli.cli.main --home .bscli mcp token list --user-subject <trusted-user-subject>
 python -m bscli.cli.main --home .bscli mcp token revoke <token-id>
 ```
@@ -128,9 +165,12 @@ python -m bscli.cli.main --home .bscli mcp central-serve --host 127.0.0.1 --port
 
 Connect the MCP client to `http://127.0.0.1:8790/mcp` with
 `Authorization: Bearer <issued-token>`. The server exposes the six central OA
-read capabilities plus session status/login and caller-scoped operation ledger
-tools. `oa_session_login` returns a trusted card URL; credentials still bypass
-MCP and the model.
+read capabilities, `oa_business_trip_prepare`,
+`oa_business_trip_save_draft`, session status/login, and caller-scoped
+operation-ledger tools. Write tools require `oa:write:draft`; read-only tokens
+cannot call them. `oa_session_login` returns a trusted card URL, and write
+prepare returns a separate action-card URL. Credentials and approval decisions
+both bypass MCP and the model.
 
 Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
 Non-loopback MCP and authentication-card listeners both require HTTPS and
@@ -884,7 +924,12 @@ Implemented:
 - Per-user central session registry and principal mismatch quarantine
 - DPAPI-encrypted central browser session-state store on Windows
 - Central Playwright persistent profiles, origin allowlist, and profile lease
-- Extension-independent central `oa.template.list` read capability
+- Six extension-independent central OA read capabilities for templates,
+  workflow lists, rendered details, and opinions
+- Central `oa.business_trip.prepare` and `oa.business_trip.save_draft`
+- One-time write authorization store and trusted action-card confirmation
+- Wait-send reload and exact field readback for business-trip drafts
+- MCP `oa:write:draft` scope enforcement
 - CLI `capability list/describe/invoke`
 - CLI `session status/login`
 - CLI `operation get/list`
@@ -960,7 +1005,8 @@ Implemented:
 Not implemented yet:
 
 - UI workflow recording
-- Seeyon OA write actions beyond confirmed `ContinueSubmit`
+- Central workflow writes beyond the business-trip save-draft sample
+- Central business-trip send/submit
 
 ## Tests
 

@@ -70,6 +70,23 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             self.assertEqual(records[0]["token_id"], first["token_id"])
             self.assertNotIn("token", records[0])
 
+    def test_draft_write_scope_is_explicit_and_does_not_replace_read_scope(self):
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            issued = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:draft"],
+            )
+
+            verified = store.verify(
+                issued["token"],
+                required_scopes={"oa:write:draft"},
+            )
+
+            self.assertEqual(verified["scopes"], ["oa:read", "oa:write:draft"])
+            self.assertIsNotNone(store.verify(issued["token"], required_scopes={"oa:read"}))
+
     def test_unsupported_scope_and_unsafe_subject_are_rejected(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

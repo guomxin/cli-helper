@@ -11,7 +11,7 @@ from typing import Callable, Iterator
 from uuid import uuid4
 
 
-_ALLOWED_SCOPES = frozenset({"oa:read"})
+_ALLOWED_SCOPES = frozenset({"oa:read", "oa:write:draft"})
 
 
 class McpIdentityTokenStore:

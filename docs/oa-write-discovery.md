@@ -2,8 +2,10 @@
 
 Date: 2026-06-24
 
-Scope: read-only exploration through the Chrome extension bridge. No OA submit,
-approve, reject, archive, revoke, delete, upload, or send endpoint was invoked.
+Scope: read-only discovery through the legacy Chrome extension bridge plus
+promotion into workflow-specific central adapters. No OA submit, approve,
+reject, archive, revoke, delete, upload, or send endpoint was invoked during
+discovery.
 
 ## Current Discovery Sources
 
@@ -149,14 +151,26 @@ First launch-side expansion batch:
   shell supports `content_coll` dry-run. Business form field extraction still
   needs frame/dynamic-form verification.
 - `【HR】出差申请单`: template id `2668910351205287097`; registered as the
-  first launch-side matter sample. The matrix reports
-  `workflow_launch_sample_ready` and recommends this sequence:
+  first launch-side matter sample. Central exploration additionally confirmed
+  CAP4 form app id `4948077657800057670` and the following stable business
+  contract: `field0006` start time, `field0007` end time, `field0027` travel
+  mode, `field0023` origin, `field0026` destination, `field0029` days,
+  `field0022` hours, `field0009` reason, and `field0010` direct-supervisor
+  choice. The promoted central sequence is:
 
   ```powershell
-  python -m bscli.cli.main --home .bscli oa matter inspect --id matter-business-trip-request --with-launch
-  python -m bscli.cli.main --home .bscli oa matter launch-dry-run --id matter-business-trip-request --field content_coll="Draft note"
-  python -m bscli.cli.main --home .bscli oa matter launch-save-draft --id matter-business-trip-request --field content_coll="Draft note" --confirm
+  python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.prepare --user-subject <user> --card-base-url http://127.0.0.1:8780 --idempotency-key <prepare-key> --json '<business-input-json>'
+  # User approves the returned trusted action card.
+  python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.save_draft --user-subject <user> --idempotency-key <save-key> --json '{"authorization_id":"<authorization-id>"}'
   ```
+
+  This path uses the managed central browser session and reports
+  `browser_bridge_used=false`. It allows only save draft; send/submit is not a
+  registered capability. The live template keeps the outer `content_coll`
+  note control hidden; central `prepare` therefore rejects a requested `note`
+  instead of authorizing an input that cannot be applied. The legacy
+  `oa matter launch-*` sequence remains a migration oracle, not the target
+  production protocol.
 
 - `【报销】差旅费审批报销单`: template id `-2046021869351779722`; outer launch
   shell matches the same collaboration save-draft pattern. Frame-aware rendered
@@ -229,8 +243,11 @@ This endpoint candidate was not replayed or called. It is marked high risk,
 
 ## Endpoint Status
 
-No production write endpoint has been promoted. The safe plan builder therefore
-uses:
+No generic endpoint discovered from rendered HTML is promoted merely because it
+looks write-like. The business-trip central adapter separately promotes the
+known `collaboration.do?method=saveDraft` behavior behind a fixed contract,
+one-time authorization, and wait-send readback. The legacy safe plan builder
+therefore uses:
 
 - `request.status=not_built` for `draft`
 - `request.status=not_sent` for `dry-run`

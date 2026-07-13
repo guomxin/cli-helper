@@ -43,7 +43,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("Bearer", response.headers.get("www-authenticate", ""))
 
-    def test_tool_catalog_is_read_only_and_never_accepts_user_subject(self):
+    def test_tool_catalog_separates_reads_and_governed_writes_without_user_subject(self):
         with self._server() as (_service, _store, token, client):
             response = self._request(client, "tools/list", request_id=1, token=token)
 
@@ -55,10 +55,71 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_workflow_detail_get", names)
         self.assertIn("oa_session_login", names)
         self.assertIn("agentbridge_operation_list", names)
+        self.assertIn("oa_business_trip_prepare", names)
+        self.assertIn("oa_business_trip_save_draft", names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
+        prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
+        save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
+        self.assertFalse(prepare["annotations"]["readOnlyHint"])
+        self.assertFalse(save["annotations"]["readOnlyHint"])
+        self.assertFalse(save["annotations"]["destructiveHint"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
+
+    def test_business_trip_prepare_requires_write_scope_and_uses_server_identity(self):
+        with self._server() as (service, store, read_token, client):
+            write_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:draft"],
+                ttl_seconds=3600,
+            )
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "mcp-write",
+                "operationId": "prepare-1",
+                "status": "requires_user_action",
+                "result": None,
+                "error": {"code": "WRITE_AUTHORIZATION_REQUIRED", "message": "confirm"},
+                "evidenceRefs": [],
+                "nextAction": {"cardUrl": "http://127.0.0.1:8780/authorize/card"},
+                "reused": False,
+            }
+            arguments = {
+                "start_time": "2026-07-13 09:00",
+                "end_time": "2026-07-13 18:00",
+                "travel_mode": "火车",
+                "origin": "济南",
+                "destination": "青岛",
+                "reason": "Test",
+                "has_direct_supervisor": False,
+                "idempotency_key": "mcp-business-trip-prepare",
+            }
+            denied = self._request(
+                client,
+                "tools/call",
+                request_id=7,
+                token=read_token,
+                params={"name": "oa_business_trip_prepare", "arguments": arguments},
+            )
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=8,
+                token=write_identity["token"],
+                params={"name": "oa_business_trip_prepare", "arguments": arguments},
+            )
+
+        self.assertEqual(denied.status_code, 200)
+        self.assertTrue(denied.json()["result"]["isError"])
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["result"]["isError"])
+        call = service.invoke.call_args.kwargs
+        self.assertEqual(call["user_subject"], "user-a")
+        self.assertEqual(call["capability_name"], "oa.business_trip.prepare")
+        self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
+        self.assertNotIn("idempotency_key", call["arguments"])
 
     def test_authenticated_tool_uses_server_bound_identity_and_shared_service(self):
         with self._server() as (service, _store, token, client):

@@ -28,6 +28,8 @@ class CentralMcpCliTests(unittest.TestCase):
                         "desktop",
                         "--ttl-hours",
                         "12",
+                        "--scope",
+                        "oa:write:draft",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -43,6 +45,10 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(list_exit, 0)
         self.assertTrue(issued["bearerToken"].startswith("abmcp_"))
         self.assertEqual(issued["identityToken"]["expectedPrincipalRef"], "Alice")
+        self.assertEqual(
+            issued["identityToken"]["scopes"],
+            ["oa:read", "oa:write:draft"],
+        )
         self.assertEqual(listed["count"], 1)
         self.assertNotIn("bearerToken", listed)
         self.assertNotIn(issued["bearerToken"], json.dumps(listed))

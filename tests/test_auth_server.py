@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 import unittest
 
+from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.server import (
     _request_origin_allowed,
@@ -11,6 +12,7 @@ from bscli.auth.server import (
     validate_auth_server_config,
 )
 from bscli.core.auth_challenges import AuthChallengeStore
+from bscli.core.write_authorizations import WriteAuthorizationStore
 
 
 class AuthServerConfigTests(unittest.TestCase):
@@ -178,6 +180,80 @@ class AuthServerConfigTests(unittest.TestCase):
                 response = connection.getresponse()
                 response.read()
                 self.assertEqual(response.status, 403)
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_http_server_serves_write_authorization_on_separate_route(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "agentbridge.db"
+            challenge_store = AuthChallengeStore(db_path)
+            authorization_store = WriteAuthorizationStore(db_path)
+            authorization = authorization_store.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.business_trip.save_draft",
+                capability_version="0.1.0",
+                prepare_operation_id="prepare-1",
+                plan={"exact_input": {"reason": "Test"}},
+                summary={
+                    "title": "保存出差申请草稿",
+                    "fields": [{"label": "事由", "value": "Test"}],
+                },
+                card_base_url="http://127.0.0.1:0",
+            )
+            config = validate_auth_server_config(
+                host="127.0.0.1",
+                port=0,
+                public_base_url="http://127.0.0.1:0",
+                tls_cert=None,
+                tls_key=None,
+            )
+            server = create_auth_http_server(
+                config=config,
+                application=TrustedAuthApplication(
+                    challenge_store=challenge_store,
+                    broker=RejectingBroker(),
+                ),
+                action_application=TrustedActionApplication(
+                    authorization_store=authorization_store,
+                ),
+            )
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_address[1]
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "GET",
+                    f"/authorize/{authorization['authorization_id']}",
+                )
+                response = connection.getresponse()
+                html = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn("保存出差申请草稿", html)
+                connection.close()
+
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request(
+                    "POST",
+                    f"/authorize/{authorization['authorization_id']}",
+                    body="csrf_token=x&decision=approve",
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": "https://evil.example.test",
+                    },
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 403)
+                self.assertEqual(
+                    authorization_store.get(authorization["authorization_id"])["state"],
+                    "pending",
+                )
                 connection.close()
             finally:
                 server.shutdown()

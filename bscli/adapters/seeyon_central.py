@@ -8,6 +8,12 @@ import time
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bscli.adapters.seeyon import SEEYON_OA_URL
+from bscli.adapters.seeyon_business_trip import (
+    BUSINESS_TRIP_PREPARE_CAPABILITY,
+    BUSINESS_TRIP_PREPARE_INPUT_SCHEMA,
+    BUSINESS_TRIP_SAVE_CAPABILITY,
+    BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
+)
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
     extract_history_sections,
@@ -153,6 +159,36 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="read",
             adapter="seeyon-central",
             workflow="template-list-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=BUSINESS_TRIP_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Prepare a governed OA business-trip draft and create a trusted "
+                "one-time confirmation card."
+            ),
+            input_schema=BUSINESS_TRIP_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="business-trip-draft-prepare-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=BUSINESS_TRIP_SAVE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume a trusted authorization once, save the frozen business-trip "
+                "plan as an OA wait-send draft, and verify it by server readback."
+            ),
+            input_schema=BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="business-trip-draft-save-v1",
         )
     )
     for capability_name, collection in _WORKFLOW_LIST_CAPABILITIES.items():

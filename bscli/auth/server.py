@@ -9,6 +9,7 @@ import re
 import ssl
 from urllib.parse import urlparse
 
+from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import MAX_AUTH_BODY_BYTES, AuthCardResponse, TrustedAuthApplication
 
 
@@ -69,6 +70,7 @@ def create_auth_http_server(
     *,
     config: AuthServerConfig,
     application: TrustedAuthApplication,
+    action_application: TrustedActionApplication | None = None,
 ) -> ThreadingHTTPServer:
     expected_scheme = urlparse(config.public_base_url).scheme.lower()
     allowed_hosts = {_hostname(config.public_base_url)}
@@ -96,18 +98,18 @@ def create_auth_http_server(
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
-            challenge_id = _challenge_id_from_path(self.path)
-            if challenge_id is None:
+            card_application, card_id = self._card_target()
+            if card_application is None or card_id is None:
                 self._send(application._message_response(
                     status=404,
                     title="页面不存在",
-                    message="请从智能体打开认证卡片。",
+                    message="请从智能体打开可信卡片。",
                     tone="error",
                 ))
                 return
             self._send(
-                application.get_card(
-                    challenge_id,
+                card_application.get_card(
+                    card_id,
                     secure_cookie=config.secure_cookie,
                 )
             )
@@ -121,12 +123,12 @@ def create_auth_http_server(
                     tone="error",
                 ))
                 return
-            challenge_id = _challenge_id_from_path(self.path)
-            if challenge_id is None:
+            card_application, card_id = self._card_target()
+            if card_application is None or card_id is None:
                 self._send(application._message_response(
                     status=404,
                     title="页面不存在",
-                    message="请从智能体打开认证卡片。",
+                    message="请从智能体打开可信卡片。",
                     tone="error",
                 ))
                 return
@@ -136,8 +138,8 @@ def create_auth_http_server(
                 content_length = -1
             if content_length < 0 or content_length > MAX_AUTH_BODY_BYTES:
                 self.close_connection = True
-                self._send(application.submit_card(
-                    challenge_id,
+                self._send(card_application.submit_card(
+                    card_id,
                     body=b"x" * (MAX_AUTH_BODY_BYTES + 1),
                     content_type=self.headers.get("Content-Type") or "",
                     csrf_cookie="",
@@ -146,8 +148,8 @@ def create_auth_http_server(
             body = self.rfile.read(content_length)
             csrf_cookie = _csrf_cookie(self.headers.get("Cookie") or "")
             try:
-                response = application.submit_card(
-                    challenge_id,
+                response = card_application.submit_card(
+                    card_id,
                     body=body,
                     content_type=self.headers.get("Content-Type") or "",
                     csrf_cookie=csrf_cookie,
@@ -178,6 +180,15 @@ def create_auth_http_server(
                 allowed_hosts=allowed_hosts,
             )
 
+        def _card_target(self):
+            challenge_id = _challenge_id_from_path(self.path)
+            if challenge_id is not None:
+                return application, challenge_id
+            authorization_id = _authorization_id_from_path(self.path)
+            if authorization_id is not None and action_application is not None:
+                return action_application, authorization_id
+            return None, None
+
         def _send(self, response: AuthCardResponse) -> None:
             self.send_response(response.status)
             for name, value in response.headers.items():
@@ -197,8 +208,17 @@ def create_auth_http_server(
     return server
 
 
-def serve_auth_cards(*, config: AuthServerConfig, application: TrustedAuthApplication) -> None:
-    server = create_auth_http_server(config=config, application=application)
+def serve_auth_cards(
+    *,
+    config: AuthServerConfig,
+    application: TrustedAuthApplication,
+    action_application: TrustedActionApplication | None = None,
+) -> None:
+    server = create_auth_http_server(
+        config=config,
+        application=application,
+        action_application=action_application,
+    )
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
@@ -207,6 +227,11 @@ def serve_auth_cards(*, config: AuthServerConfig, application: TrustedAuthApplic
 
 def _challenge_id_from_path(path: str) -> str | None:
     match = re.fullmatch(r"/auth/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
+    return match.group(1) if match else None
+
+
+def _authorization_id_from_path(path: str) -> str | None:
+    match = re.fullmatch(r"/authorize/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
     return match.group(1) if match else None
 
 

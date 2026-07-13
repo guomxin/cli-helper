@@ -79,6 +79,31 @@ class AgentBridgeCoreTests(unittest.TestCase):
             self.assertFalse(blank_two_reused)
             self.assertNotEqual(blank_one["operation_id"], blank_two["operation_id"])
 
+    def test_operation_store_hashes_exact_write_input_but_persists_only_summary(self):
+        with TemporaryDirectory() as tmp:
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            summary = {"reason": {"redacted": True, "length": 12}}
+            created, _ = store.create(
+                user_subject="user-a",
+                capability_name="oa.business_trip.prepare",
+                capability_version="0.1.0",
+                input_summary=summary,
+                input_identity={"reason": "private text"},
+                idempotency_key="write-redaction",
+            )
+
+            self.assertEqual(created["input_summary"], summary)
+            self.assertNotIn("private text", (Path(tmp) / "agentbridge.db").read_bytes().decode("utf-8", errors="ignore"))
+            with self.assertRaises(OperationConflictError):
+                store.create(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.prepare",
+                    capability_version="0.1.0",
+                    input_summary=summary,
+                    input_identity={"reason": "changed text"},
+                    idempotency_key="write-redaction",
+                )
+
     def test_capability_engine_persists_success_and_reuses_result(self):
         with TemporaryDirectory() as tmp:
             registry = CapabilityRegistry()

@@ -24,6 +24,13 @@ class RequiresUserAction(RuntimeError):
         self.next_action = next_action
 
 
+class OutcomeUnknown(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 CapabilityHandler = Callable[[CapabilityContext, dict], Any]
 
 
@@ -53,7 +60,8 @@ class CapabilityEngine:
             user_subject=user_subject,
             capability_name=spec.name,
             capability_version=spec.version,
-            input_summary=arguments,
+            input_summary=_operation_input_summary(arguments, effect=spec.effect),
+            input_identity=arguments,
             idempotency_key=idempotency_key,
             request_id=effective_request_id,
         )
@@ -84,6 +92,12 @@ class CapabilityEngine:
                 code=exc.code,
                 message=exc.message,
                 next_action=exc.next_action,
+            )
+        except OutcomeUnknown as exc:
+            operation = self.operation_store.mark_unknown(
+                operation["operation_id"],
+                code=exc.code,
+                message=exc.message,
             )
         except Exception as exc:
             operation = self.operation_store.mark_failed(
@@ -149,3 +163,25 @@ def _matches_json_type(value: Any, expected: str) -> bool:
     if expected in {"integer", "number"} and isinstance(value, bool):
         return False
     return isinstance(value, expected_type)
+
+
+def _operation_input_summary(arguments: dict, *, effect: str) -> dict:
+    if effect == "read":
+        return arguments
+    summary = {}
+    for name, value in arguments.items():
+        if isinstance(value, str):
+            summary[name] = {
+                "redacted": True,
+                "present": bool(value),
+                "length": len(value),
+            }
+        elif isinstance(value, (bool, int, float)) or value is None:
+            summary[name] = value
+        elif isinstance(value, list):
+            summary[name] = {"redacted": True, "item_count": len(value)}
+        elif isinstance(value, dict):
+            summary[name] = {"redacted": True, "field_count": len(value)}
+        else:
+            summary[name] = {"redacted": True, "type": type(value).__name__}
+    return summary

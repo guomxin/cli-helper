@@ -1,12 +1,12 @@
 # 面向智能体的 B/S 遗留系统非侵入式适配设计方案
 
-> 文档状态：Draft v0.7
-> 更新日期：2026-07-11
+> 文档状态：Draft v0.8
+> 更新日期：2026-07-13
 > 适用范围：只面向智能体的系统适配；必须支持不同用户以各自在遗留系统中的身份并发使用，并支持通过手机端智能体安全使用；不建设面向人的新业务操作界面，不要求对外提供通用业务 API
 
 > **文档定位：目标架构与后续参考，不是首期实现清单。** 快速可行性验证按 [PoC 验证方案](./poc-validation-plan.md) 实施；暂缓事项统一记录在 [后续增强事项](./deferred-considerations.md)。
 
-## 0. 当前实现基线（2026-07-11）
+## 0. 当前实现基线（2026-07-13）
 
 已完成第一个中心端纵切，但尚未达到本设计的完整阶段 1：
 
@@ -17,14 +17,16 @@
 - 新增 Seeyon 表单登录 Adapter；中心 Worker 动态等待登录 iframe，填写已登记的 `login_username/login_password1`，调用页面原生 `loginButtonOnClickHandler()`，登录后通过模板接口与页面标题核验实际身份；验证码等未登记认证方式按稳定错误码安全停止；
 - 新增不依赖客户端扩展的中心只读能力包：`oa.template.list`、`oa.workflow.pending.list`、`oa.workflow.done.list`、`oa.workflow.tracked.list`、`oa.workflow.detail.get`、`oa.workflow.opinions.list`。模板和事项列表优先复用同一 BrowserContext 的 HTTP 会话；待办/已办/跟踪列表从当前用户首页动态发现栏目契约后调用后台接口，详情和意见则在同一中心浏览器中渲染并合并同源 iframe；对智能体只返回业务字段和不透明 `affair_id`，不暴露内部 URL、原始 HTML、Cookie、动作端点或写提示；
 - 新增 `CentralCapabilityService`，CLI 与远程协议共用能力目录、会话恢复、单用户串行租约、Seeyon Adapter、错误语义、幂等键和 SQLite 操作账本，避免协议入口各自复制业务编排；
-- 新增基于官方 Python MCP SDK 的无状态 Streamable HTTP 中心服务，发布 6 个 OA 只读工具、会话状态/认证卡工具和调用者范围内的操作账本工具；工具参数不接受 `userSubject`，调用身份来自服务端令牌绑定；
+- 新增中心写授权账本与独立可信操作卡片；授权绑定 `userSubject + systemId + sessionId + capability/version + prepareOperationId + planHash + TTL`，计划不可变、同目标新计划会废止旧授权，批准后只能在适配器提交边界消费一次；
+- 新增 `oa.business_trip.prepare` 和 `oa.business_trip.save_draft`。前者只解析并校验 `【HR】出差申请单` 的模板、CAP4 表单和字段契约，后者仅点击“保存待发”，禁止发送控件，并通过待发页面重载、稳定业务 ID 和逐字段回读确认结果；越过点击边界但无法确认时进入 `unknown`，不得自动重试；
+- 新增基于官方 Python MCP SDK 的无状态 Streamable HTTP 中心服务，发布 6 个 OA 只读工具、2 个受治理的出差草稿工具、会话状态/认证卡工具和调用者范围内的操作账本工具；工具参数不接受 `userSubject`，调用身份来自服务端令牌绑定；写工具还强制要求 `oa:write:draft` scope；
 - 新增短期 MCP 身份令牌存储，服务端只保存令牌摘要、用户绑定、预期 OA 身份、scope、有效期和吊销状态；MCP 服务与可信认证卡服务在同一中心进程运行，并共享同一受限 OS 安全主体和每用户浏览器租约；
 - 新增 `capability list/describe/invoke`、`session status/login`、`auth serve/status`、`operation get/list` CLI，未登录时返回持久化的 `requires_user_action/LOGIN_REQUIRED`；模型协议面不提供密码提交命令；
 - 旧 Chrome 扩展、localhost Daemon 和原有 OA 命令保持不变，只作为迁移期能力和回归对照，中心能力不会静默回退到旧桥接路径。
 
 可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；全新的 headless CLI 进程可从 DPAPI 密文恢复会话并读取 118 个模板。扩展后的中心只读包又真实读取了 3 条待办、9 条已办和 9 条跟踪事项，并从一条已办事项的中心渲染页及同源 iframe 中提取 8 个业务字段和 1 条结构化意见；所有结果均为 `browser_bridge_used=false`，列表使用 `central_http_session`，详情和意见使用 `central_browser_session`，并生成独立持久化 `operationId`。登录过期会明确返回 `LOGIN_REQUIRED`，不会把登录页误报为业务空数据。Windows DPAPI 的一次开发环境验证还证明：Broker 与能力 Worker 必须运行在同一 Windows 安全主体下；跨用户解密会失败关闭，生产部署应固定服务身份或改用 Vault/KMS。卡片已完成桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
 
-最小远程 MCP 已通过独立服务进程与官方 MCP 客户端烟测：Bearer 鉴权后可发现中心工具并读取令牌绑定用户的会话状态；无令牌、吊销令牌和跨用户操作读取会失败关闭，CLI 与 MCP 使用同一幂等键时返回同一 `operationId`。随后又完成单用户真实 OA 闭环：官方 MCP 客户端调用 `oa_session_login` 生成可信认证卡，用户完成真实登录后，客户端调用 `oa_workflow_pending_list` 读取 3 条待办，返回 `central_http_session`、`browserBridgeUsed=false` 和持久化操作记录；一次性身份令牌随后自动吊销，MCP 与认证卡监听端口均关闭。这仍不是生产远程接入验收：预签发 Bearer 令牌只用于 PoC 引导，真实 OAuth/OIDC、两个 Worker OS 安全主体的多用户隔离、生产证书与反向代理信任、限流、设备绑定、真实手机网络、中心写动作迁移和扩展退役尚未完成。由于暂时没有第二个真实 OA 用户，本轮不把代码级绑定和合成身份测试表述为多用户隔离验收。
+最小远程 MCP 已通过独立服务进程与官方 MCP 客户端烟测：Bearer 鉴权后可发现中心工具并读取令牌绑定用户的会话状态；无令牌、吊销令牌和跨用户操作读取会失败关闭，CLI 与 MCP 使用同一幂等键时返回同一 `operationId`。随后又完成单用户真实 OA 闭环：官方 MCP 客户端调用 `oa_session_login` 生成可信认证卡，用户完成真实登录后，客户端调用 `oa_workflow_pending_list` 读取 3 条待办，返回 `central_http_session`、`browserBridgeUsed=false` 和持久化操作记录；一次性身份令牌随后自动吊销，MCP 与认证卡监听端口均关闭。首个中心 W1 草稿能力也已完成单用户真实 OA 验证：计划冻结后由独立可信操作卡批准，授权在保存边界消费一次，OA 返回待发草稿和稳定业务 ID，服务端重载后 7 个业务字段全部匹配，结果明确为 `workflow_submitted=false`、`submitted_count=0` 和 `browser_bridge_used=false`。验证中发现的按钮过早禁用导致原生表单缺少确认字段、隐藏附言无法填写两个问题均已前移为自动化回归和 prepare-time 拒绝。这仍不是生产远程接入验收：预签发 Bearer 令牌只用于 PoC 引导，真实 OAuth/OIDC、两个 Worker OS 安全主体的多用户隔离、生产证书与反向代理信任、限流、设备绑定、真实手机网络、更多中心写动作和扩展退役尚未完成。由于暂时没有第二个真实 OA 用户，本轮不把代码级绑定和合成身份测试表述为多用户隔离验收。
 
 ## 1. 摘要
 
