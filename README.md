@@ -24,6 +24,12 @@ capability-migration inventory.
 - A Chromium runtime supported by Playwright
 - Network access from the central worker to the target legacy system
 
+The selected intranet deployment target is Linux, but the current default
+session-state protector is Windows DPAPI. Linux deployment is intentionally
+blocked until the AEAD key-file/systemd-credential protector described in the
+[current deployment plan](docs/current-deployment-plan.md) is implemented and
+validated; plaintext Cookie persistence is not an accepted fallback.
+
 ~~~bash
 python -m pip install -e .
 python -m playwright install chromium
@@ -263,6 +269,7 @@ items.
 
 ## Design Documents
 
+- [Current Linux intranet PoC deployment plan](docs/current-deployment-plan.md)
 - [Target architecture](agent-oriented-legacy-bs-adaptation-design.md)
 - [PoC validation plan](poc-validation-plan.md)
 - [Deferred production considerations](deferred-considerations.md)
