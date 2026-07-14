@@ -187,7 +187,7 @@ LOGIN_REQUIRED
 
 生产通道必须使用 TLS。为先验证“用户电脑运行 OpenClaw、另一台内网机器运行
 AgentBridge”的部署拓扑，允许通过显式 `--allow-insecure-private-http` 开关使用
-固定私网 IP 的 HTTP；该模式必须由主机防火墙限制测试客户端，且不能作为生产验收项。
+固定私网 IP 的 HTTP；该模式必须限定在受控公司内网且不得做公网映射。主机防火墙或上游 ACL 属于推荐加固项，但不作为首次 PoC 前置条件；该模式不能作为生产验收项。
 
 - `AuthChallenge` 绑定 `challengeId + userSubject + systemId + sessionId + origin + pageFingerprint + nonce + TTL`，且只能使用一次；
 - 卡片字段由已注册登录 Adapter 定义，模型和网页内容不能新增密码字段或修改提交地址；

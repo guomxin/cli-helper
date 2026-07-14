@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 INSECURE_PRIVATE_HTTP_WARNING = (
     "WARNING: insecure private HTTP mode is enabled. OA credentials, trusted "
     "form values, and MCP bearer tokens can cross the network without TLS. "
-    "Use only on a firewall-restricted private test network."
+    "Use only on a controlled private test network and never expose these "
+    "ports publicly."
 )
 
 _PRIVATE_NETWORKS = (

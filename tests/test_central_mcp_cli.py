@@ -166,6 +166,7 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(payload["authCardBaseUrl"], "http://10.20.30.40:8780")
         self.assertTrue(payload["insecurePrivateHttp"])
         self.assertIn("without TLS", payload["securityWarning"])
+        self.assertIn("never expose", payload["securityWarning"])
         self.assertIn("WARNING", stderr.getvalue())
         serve.assert_called_once()
 

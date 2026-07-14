@@ -116,7 +116,7 @@ PoC 的 Linux 保护器采用以下边界：
 - AgentBridge 服务器使用固定 RFC 1918 私网 IP，或 IPv6 ULA 地址；
 - OpenClaw 用户电脑能够路由到该地址；
 - AgentBridge 服务器能够访问 OA；
-- TCP 8790 和 8780 只允许预定的 OpenClaw 用户电脑访问；
+- TCP 8790 和 8780 在公司内网可达，当前不调整 Linux 主机防火墙；
 - 不做公网映射，不通过互联网、访客 Wi-Fi 或不受控网络访问。
 
 显式私网 HTTP 模式会拒绝：
@@ -136,7 +136,7 @@ HTTP 模式下，下列数据在内网链路上没有 TLS 加密：
 - 可信业务字段；
 - 写操作授权卡片的交互流量。
 
-主机防火墙只能缩小暴露面，不能代替链路加密。因此该模式仅用于尽快验证跨机器拓扑，不进入生产环境。
+当前假定 Linux 主机防火墙处于关闭状态，不把 UFW/firewalld 配置作为首次 PoC 前置步骤。这意味着所有能够路由到服务器的内网主机理论上都能访问 8780/8790；Bearer 和卡片校验仍会保护业务调用，但不能代替链路加密或网络访问控制。因此该模式仅用于尽快验证跨机器拓扑，不进入生产环境。
 
 ### 4.3 仍然有效的应用层保护
 
@@ -284,28 +284,16 @@ sudo -u agentbridge "$AB_PY" -m bscli.cli.main \
   --home "$AB_HOME" mcp token revoke "$TOKEN_ID"
 ```
 
-## 7. 防火墙配置
+## 7. 网络连通性
 
-在 AgentBridge 服务器上，仅允许 OpenClaw 用户电脑的固定 IP 访问两个端口。选择服务器正在使用的防火墙管理器，不要同时套用下面两组示例。
+当前阶段不修改 Linux 主机防火墙，也不执行 UFW/firewalld 命令。部署前只确认：
 
-UFW 示例：
+- 服务器固定私网 IP 能从 OpenClaw 用户电脑访问；
+- 8780/8790 没有通过 NAT、端口转发或反向代理暴露到公网；
+- 公司内网边界不会把这两个端口转发到不受控网络；
+- 如果目标服务器实际启用了主机防火墙，不要直接关闭，应由运维按现状放通所需来源。
 
-```bash
-OPENCLAW_IP=10.20.30.50
-sudo ufw allow from "$OPENCLAW_IP" to any port 8780 proto tcp
-sudo ufw allow from "$OPENCLAW_IP" to any port 8790 proto tcp
-```
-
-firewalld 示例：
-
-```bash
-OPENCLAW_IP=10.20.30.50
-sudo firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${OPENCLAW_IP}/32\" port port=\"8780\" protocol=\"tcp\" accept"
-sudo firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${OPENCLAW_IP}/32\" port port=\"8790\" protocol=\"tcp\" accept"
-sudo firewall-cmd --reload
-```
-
-还应检查是否存在覆盖范围更大的旧入站规则。不要为了省事把端口开放给整个公司网段。
+待跨机 PoC 验证完成后，再根据公司网络现状决定是否增加主机防火墙或上游 ACL；这属于加固项，不阻塞首次联调。
 
 ## 8. 启动 AgentBridge
 
@@ -478,9 +466,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | --- | --- |
 | 启动提示 `requires TLS` | 缺少 `--allow-insecure-private-http`，或仍在使用默认非回环安全策略 |
 | 启动提示私网地址无效 | 必须绑定服务器真实固定私网 IP，不能使用 `0.0.0.0`、域名或错配端口 |
-| OpenClaw 无法连接 MCP | 检查路由、防火墙、8790 监听和 MCP URL |
+| OpenClaw 无法连接 MCP | 检查路由、8790 监听和 MCP URL；若服务器实际启用了防火墙，再检查现有规则 |
 | MCP 返回 401 | 检查 Bearer Token 是否完整、过期、撤销或绑定错误 |
-| 卡片链接打不开 | 检查 8780、防火墙和 interaction 中返回的 IP 是否是用户电脑可达地址 |
+| 卡片链接打不开 | 检查 8780 监听和 interaction 中返回的 IP 是否是用户电脑可达地址 |
 | 内置浏览器无法输入 | 使用 OpenClaw 提供的 URL 在普通浏览器中打开；AgentBridge 不依赖内置浏览器输入 |
 | Linux 启动时报 `no session-state protector` | Linux 会话保护器尚未实现；这是当前部署阻塞项，不能改用明文 Cookie |
 | 每次都要求登录 | 检查 OA 是否被其他浏览器重新登录、服务用户、密钥文件或 `--home` 是否变化 |
@@ -494,14 +482,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [ ] Linux AEAD 会话保护器及失败关闭测试已经完成；
 - [ ] AgentBridge 始终由固定 Linux 服务用户运行；
 - [ ] 会话密钥文件仅允许 root 和 AgentBridge 服务组读取；
-- [ ] 8780/8790 只对指定 OpenClaw 电脑开放；
+- [ ] 8780/8790 仅位于受控公司内网，没有任何公网映射；
 - [ ] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [ ] OpenClaw 能通过 Bearer Token读取 MCP 工具列表；
 - [ ] 认证卡从 OpenClaw 私聊打开，凭据没有进入聊天；
 - [ ] `oa_workflow_pending_list` 读取真实 OA 数据成功；
 - [ ] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [ ] 错误密钥、篡改密文和无权限用户都不能解密会话；
-- [ ] 未授权电脑不能访问 8780/8790；
+- [ ] 已记录未启用主机防火墙时的内网可达范围和明文传输风险；
 - [ ] 日志、操作账本和 OpenClaw 对话中没有密码、Cookie 或可信字段；
 - [ ] 未经单独确认，没有执行 OA 写操作。
 

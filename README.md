@@ -228,9 +228,12 @@ opens from the OpenClaw conversation in their normal browser.
 
 The insecure switch accepts only an exact RFC 1918 or IPv6 ULA address. It
 rejects wildcard binds such as `0.0.0.0`, hostnames, public IPs, paths, and
-bind/public endpoint mismatches. Restrict ports 8780 and 8790 at the host
-firewall to the intended test clients. Credentials, trusted form values, and
-MCP Bearer tokens are unencrypted on the network in this mode.
+bind/public endpoint mismatches. Keep ports 8780 and 8790 inside the controlled
+company network and never publish or NAT them to an external network. A host
+firewall or upstream ACL is recommended but is not an initial PoC prerequisite;
+without one, every routable intranet host can reach the listeners. Credentials,
+trusted form values, and MCP Bearer tokens are unencrypted on the network in
+this mode.
 
 Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
 Non-loopback deployments require TLS by default; the private-IP switch above is

@@ -34,8 +34,11 @@ Non-loopback MCP and trusted-card endpoints require TLS by default. The only
 development exception is `--allow-insecure-private-http` for a controlled
 single-host intranet PoC. That exception must bind the machine's exact RFC 1918
 or IPv6 ULA address, publish the same IP and port, emit a plaintext-transport
-warning, and be protected by a host firewall. Do not broaden it to wildcard
-binds, hostnames, public addresses, automatic fallback, or production use.
+warning, stay inside a controlled private network, and never be publicly
+mapped. A host firewall or upstream ACL is recommended but is not mandatory for
+the explicitly accepted initial PoC; document the resulting intranet-wide
+reachability. Do not broaden the exception to wildcard binds, hostnames, public
+addresses, automatic fallback, or production use.
 
 ## Change Gate
 
