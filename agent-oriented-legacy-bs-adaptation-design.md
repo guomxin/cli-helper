@@ -17,6 +17,7 @@
 - 新增 Seeyon 表单登录 Adapter；中心 Worker 动态等待登录 iframe，填写已登记的 `login_username/login_password1`，调用页面原生 `loginButtonOnClickHandler()`，登录后通过模板接口与页面标题核验实际身份；验证码等未登记认证方式按稳定错误码安全停止；
 - 新增不依赖客户端扩展的中心只读能力包：`oa.template.list`、`oa.workflow.pending.list`、`oa.workflow.done.list`、`oa.workflow.tracked.list`、`oa.workflow.detail.get`、`oa.workflow.opinions.list`。模板和事项列表优先复用同一 BrowserContext 的 HTTP 会话；待办/已办/跟踪列表从当前用户首页动态发现栏目契约后调用后台接口，详情和意见则在同一中心浏览器中渲染并合并同源 iframe；对智能体只返回业务字段和不透明 `affair_id`，不暴露内部 URL、原始 HTML、Cookie、动作端点或写提示；
 - 新增 `CentralCapabilityService`，CLI 与远程协议共用能力目录、会话恢复、单用户串行租约、Seeyon Adapter、错误语义、幂等键和 SQLite 操作账本，避免协议入口各自复制业务编排；
+- `session login` 已升级为幂等的“确保会话可用”：`active` 会话先用真实 OA 模板接口探测并刷新加密 Cookie 状态，探测成功直接复用且不生成卡片；只有 OA 明确判定登录失效才生成一次性认证卡。网络探测异常返回 `SESSION_CHECK_UNAVAILABLE`，DPAPI 运行身份不一致返回 `SESSION_RUNTIME_MISMATCH`，两者都保留原会话且不要求用户重新输入凭据；
 - 新增中心写授权账本与独立可信操作卡片；授权绑定 `userSubject + systemId + sessionId + capability/version + prepareOperationId + planHash + TTL`，计划不可变、同目标新计划会废止旧授权，批准后只能在适配器提交边界消费一次；
 - 新增通用 `FieldSubmissionStore` 与可信业务字段卡片；字段 Schema、用户、系统、会话、能力版本、TTL 和 CSRF 均由中心端绑定，提交内容一次性冻结，CLI/MCP 和模型只持有不透明 `input_submission_id`；
 - 新增 `oa.business_trip.prepare` 和 `oa.business_trip.save_draft`。第一次 `prepare {}` 只生成出差字段卡；用户提交字段后，第二次 `prepare` 才解析并校验 `【HR】出差申请单` 的模板、CAP4 表单和字段契约，并生成独立授权卡。`save_draft` 仅点击“保存待发”，禁止发送控件，并通过待发页面重载、稳定业务 ID 和逐字段回读确认结果；越过点击边界但无法确认时进入 `unknown`，不得自动重试；

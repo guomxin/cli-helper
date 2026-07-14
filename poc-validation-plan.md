@@ -15,14 +15,14 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
 | SQLite 操作账本 | 已完成首版 | 先落账再执行；同幂等键复用操作，不同输入返回冲突 |
 | 中央会话注册表 | 已完成首版 | `userSubject + systemId` 绑定独立 Profile；支持 `new/awaiting_login/active/expired/quarantined` |
 | 中央 Browser Worker | 已完成首版 | Playwright 持久 Profile、origin 白名单、同 Profile 单租约、正常关闭回收 |
-| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie；不同 Windows 用户解密会失败关闭，Broker 与 Worker 必须使用同一服务安全主体 |
+| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie；不同 Windows 用户解密返回 `SESSION_RUNTIME_MISMATCH` 并保留原会话，Broker 与 Worker 必须使用同一服务安全主体 |
 | OA 模板与事项列表 | 已完成真实验证 | 模板直接复用浏览器上下文 HTTP 会话；事项列表从首页动态发现当前用户栏目参数后调用后台接口；不调用扩展或 localhost Daemon |
 | OA 详情与意见 | 已完成真实验证 | 详情在同一中心会话中渲染并合并同源 iframe；真实样本提取 8 个业务字段和 1 条结构化意见，公开结果不含内部 URL、HTML、Cookie、动作端点和写提示 |
 | 未登录真实诊断 | 已验证 | 模板接口真实返回 `401 application/json`，会话保持未激活并返回 `LOGIN_REQUIRED` |
 | 已登录真实读取 | 已验证 | 新 headless CLI 进程恢复加密会话并读取 118 个模板、3 条待办、9 条已办、9 条跟踪以及一个详情/意见样本；全部 `browser_bridge_used=false` |
 | 操作幂等复用 | 已验证 | 重复使用同一幂等键返回同一 `operationId` 和保存结果，`reused=true` |
 | 可信认证卡片/凭据代理 | 已完成单用户真实验证 | 一次性挑战、固定字段、CSRF、TTL、来源校验、内存凭据、真实 iframe 登录、原生提交和下游身份核验均已验证 |
-| 卡片后跨进程会话恢复 | 已验证 | 停止认证服务后，两个新 CLI 进程各自恢复 `/seeyon` Session Cookie 并读取 118 个模板；均未调用扩展 |
+| 卡片后跨进程会话恢复 | 已验证 | 停止认证服务后，两个新 CLI 进程各自恢复 `/seeyon` Session Cookie 并读取 118 个模板；`session login` 对有效会话执行真实探测、刷新状态并直接返回 `reused=true`，不再生成认证卡；均未调用扩展 |
 | 卡片响应式界面 | 已完成视口验证 | 1280×800 和 390×844 无溢出或遮挡；尚未从真实手机跨网络提交凭据 |
 | Streamable HTTP MCP | 已完成单用户真实纵切 | 官方 MCP SDK 无状态 JSON 传输并发布 10 个工具；独立服务进程和官方客户端完成握手与工具调用；真实调用 `oa_session_login` 完成卡片认证后，通过 `oa_workflow_pending_list` 读取 3 条待办，返回 `central_http_session`、`browserBridgeUsed=false` 和持久化 `operationId`；CLI/MCP 同幂等键返回同一操作 |
 | MCP 调用身份 | 已完成 PoC 绑定 | 预签发短期 Bearer 令牌仅保存摘要并绑定 `userSubject + expectedPrincipalRef + scope + TTL`；工具不接受用户身份参数；无令牌和吊销令牌均返回 401 |
@@ -133,7 +133,7 @@ agentbridge-trusted authorize <operation-id>
 agentbridge-trusted commit <operation-id> --json
 ```
 
-要求：stdout 只输出 JSON，stderr 输出诊断；禁止 Shell 拼接；返回稳定 `status/error.code`。`session login` 只生成非敏感 `AuthChallenge`，不得在 CLI 或 MCP 参数中接收密码。普通 `agentbridge` 是智能体协议面，不包含认证秘密提交、`authorize` 或 `commit`；这些能力只存在于独立可信入口，并且不得注册到模型工具集合。`invoke` 只允许执行 `effect: read`；W1/W2 通过 `invoke` 直接调用时返回 `WRITE_REQUIRES_PREPARE`。可信确认组件显示冻结计划并取得用户确认后，才可调用授权和提交。
+要求：stdout 只输出 JSON，stderr 输出诊断；禁止 Shell 拼接；返回稳定 `status/error.code`。`session login` 是幂等的会话确保操作：有效会话经过真实探测后直接复用，只有 OA 明确失效才生成非敏感 `AuthChallenge`，不得在 CLI 或 MCP 参数中接收密码；探测暂时不可用或运行身份不匹配均不得触发重新认证。普通 `agentbridge` 是智能体协议面，不包含认证秘密提交、`authorize` 或 `commit`；这些能力只存在于独立可信入口，并且不得注册到模型工具集合。`invoke` 只允许执行 `effect: read`；W1/W2 通过 `invoke` 直接调用时返回 `WRITE_REQUIRES_PREPARE`。可信确认组件显示冻结计划并取得用户确认后，才可调用授权和提交。
 
 ### 4.2 能力定义
 
@@ -158,7 +158,7 @@ workflow: flow-name
 - Cookie、下载目录、截图和日志不跨用户共享，也不提交到代码仓库；
 - 同一用户会话串行执行写操作，不同用户会话可以并行；
 - 同一遗留账号被标记为单会话时，手机和桌面调用共享同一中心会话，禁止分别重复登录；
-- 登录过期时返回 `LOGIN_REQUIRED` 和一次性 `AuthChallenge`，由用户完成认证卡片后再继续原 `operationId`。
+- 活跃会话先用真实服务端接口探测并刷新 Cookie 状态；仅在 OA 明确登录过期时返回 `LOGIN_REQUIRED` 和一次性 `AuthChallenge`，由用户完成认证卡片后再继续原 `operationId`；暂时网络失败返回 `SESSION_CHECK_UNAVAILABLE`，运行身份不匹配返回 `SESSION_RUNTIME_MISMATCH`，两者都保留会话且不索要凭据。
 
 双用户验证固定使用中心端两个独立、受限的 Worker OS 身份、容器或虚拟机，并分别持有浏览器和数据目录。首期不接受在同一 Worker 安全主体下仅依赖目录命名模拟两个用户；若 PoC 暂时使用同一主机，必须通过进程身份和 ACL 证明用户 A 的 Worker 无法读取用户 B 的 Profile、下载、截图、Cookie 和日志。
 

@@ -12,6 +12,10 @@ class SessionSecretError(RuntimeError):
     pass
 
 
+class SessionStateAccessDenied(SessionSecretError):
+    """The encrypted state is not usable by the current security context."""
+
+
 class SessionStateProtector(Protocol):
     def protect(self, plaintext: bytes, *, context: bytes) -> bytes: ...
 
@@ -181,6 +185,11 @@ def _windows_dpapi(data: bytes, *, context: bytes, protect: bool) -> bytes:
     _ = input_buffer, entropy_buffer
     if not ok:
         error = ctypes.get_last_error()
+        if not protect and error in {13, -2146893813, 2148073483}:
+            raise SessionStateAccessDenied(
+                "encrypted session state is not accessible to the current "
+                "Windows security principal"
+            )
         raise SessionSecretError(f"Windows DPAPI operation failed with code {error}")
     try:
         return ctypes.string_at(output_blob.data, output_blob.size)

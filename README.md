@@ -67,7 +67,7 @@ python -m bscli.cli.main --home .bscli auth serve \
   --public-base-url http://127.0.0.1:8780
 ~~~
 
-Create a short-lived login challenge:
+Ensure that the user's OA session is usable:
 
 ~~~bash
 python -m bscli.cli.main --home .bscli session login \
@@ -77,9 +77,17 @@ python -m bscli.cli.main --home .bscli session login \
   --card-base-url http://127.0.0.1:8780
 ~~~
 
-Open the returned nextAction.cardUrl in a trusted browser. Credentials are
+`session login` is idempotent. For an active session it performs a live OA
+probe, refreshes the encrypted Cookie state, and returns `succeeded` with
+`reused=true`; it does not create a card. Only when OA confirms that the
+session is no longer authenticated does it return `LOGIN_REQUIRED` and a
+short-lived `nextAction.cardUrl`.
+
+Open that URL in a trusted browser only when it is returned. Credentials are
 submitted directly to the Credential Broker. They are never CLI parameters,
-MCP tool arguments, operation-ledger values, or model-visible fields.
+MCP tool arguments, operation-ledger values, or model-visible fields. Card
+expiry applies to that one authentication challenge, not to an already active
+OA session.
 
 After login, invoke a read capability:
 
@@ -90,8 +98,19 @@ python -m bscli.cli.main --home .bscli capability invoke \
   --idempotency-key <request-key>
 ~~~
 
-An inactive or expired session returns requires_user_action / LOGIN_REQUIRED;
-the service never falls back to a personal browser or retired bridge.
+An inactive or OA-expired session returns `requires_user_action /
+LOGIN_REQUIRED`; the service never falls back to a personal browser or retired
+bridge. A transient live-probe failure returns `SESSION_CHECK_UNAVAILABLE` and
+must be retried without asking for credentials. `SESSION_RUNTIME_MISMATCH`
+means that the encrypted state was opened under a different Windows security
+identity; the session is preserved and the request must be routed through the
+bound central runtime.
+
+Run the trusted-card Broker and capability Worker as one long-running central
+service under a fixed OS security identity. Direct CLI processes that restore
+Windows DPAPI state must run under that same identity. Agent integrations
+should normally use the long-running central MCP service, which keeps this
+runtime boundary stable across calls.
 
 ## Governed Business-Trip Draft
 

@@ -36,7 +36,11 @@ from bscli.core.field_submissions import (
     FieldSubmissionStateError,
     FieldSubmissionStore,
 )
-from bscli.core.session_secrets import SessionStateStore
+from bscli.core.session_secrets import (
+    SessionSecretError,
+    SessionStateAccessDenied,
+    SessionStateStore,
+)
 from bscli.core.sessions import SessionRegistry
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
@@ -57,6 +61,7 @@ class CentralCapabilityService:
         base_url: str,
         registry: CapabilityRegistry | None = None,
         worker_factory: WorkerFactory | None = None,
+        session_state_store: SessionStateStore | None = None,
         trusted_card_base_url: str = "http://127.0.0.1:8780",
     ) -> None:
         self.home = Path(home)
@@ -64,7 +69,9 @@ class CentralCapabilityService:
         self.registry = registry or build_central_capability_registry()
         self.operations = OperationStore(self.db_path)
         self.sessions = SessionRegistry(self.db_path, self.home / "profiles")
-        self.session_states = SessionStateStore(self.home / "session-secrets")
+        self.session_states = session_state_store or SessionStateStore(
+            self.home / "session-secrets"
+        )
         self.challenges = AuthChallengeStore(self.db_path)
         self.field_submissions = FieldSubmissionStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
@@ -153,13 +160,98 @@ class CentralCapabilityService:
         if not expected:
             raise ValueError("expected downstream principal is not configured")
 
+        if session["state"] == "active":
+            reuse_response = self._reuse_active_session(
+                user_subject=user_subject,
+                session=session,
+            )
+            if reuse_response is not None:
+                return reuse_response
+            session = self.sessions.get(session["session_id"])
+
+        return self._create_login_challenge(
+            session=session,
+            expected_principal_ref=expected,
+            card_base_url=card_base_url,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def _reuse_active_session(
+        self,
+        *,
+        user_subject: str,
+        session: dict,
+    ) -> dict | None:
+        with self._session_lock(session["session_id"]):
+            session = self.sessions.get(session["session_id"])
+            if session["state"] != "active":
+                return None
+            try:
+                state = self.session_states.load(session["session_id"])
+            except SessionStateAccessDenied:
+                return _session_runtime_mismatch_response(user_subject, session)
+            except SessionSecretError:
+                return _session_state_unavailable_response(user_subject, session)
+            if state is None:
+                self.sessions.mark_expired(
+                    session["session_id"],
+                    "Encrypted session state is missing.",
+                )
+                return None
+
+            try:
+                with self.worker_factory(session, self.adapter) as worker:
+                    worker.restore_session_state(state)
+                    probe = self.adapter.probe_session(worker)
+                    self.session_states.save(
+                        session["session_id"],
+                        worker.capture_session_state(),
+                    )
+            except SeeyonLoginRequired as exc:
+                self.sessions.mark_expired(session["session_id"], str(exc))
+                self.session_states.delete(session["session_id"])
+                return None
+            except SessionStateAccessDenied:
+                return _session_runtime_mismatch_response(user_subject, session)
+            except SessionSecretError:
+                return _session_state_unavailable_response(user_subject, session)
+            except Exception:
+                return _session_check_unavailable_response(user_subject, session)
+
+            session = self.sessions.activate(
+                session["session_id"],
+                observed_principal_ref=session.get("downstream_principal_ref"),
+            )
+            return {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "sessionId": session["session_id"],
+                "session": session_response(session),
+                "result": {
+                    "authenticated": True,
+                    "templateCount": probe["template_count"],
+                    "transport": probe["transport"],
+                    "browserBridgeUsed": probe["browser_bridge_used"],
+                },
+                "nextAction": None,
+                "reused": True,
+            }
+
+    def _create_login_challenge(
+        self,
+        *,
+        session: dict,
+        expected_principal_ref: str,
+        card_base_url: str,
+        ttl_seconds: int,
+    ) -> dict:
         contract = self.adapter.authentication_contract()
         challenge = self.challenges.create(
             user_subject=session["user_subject"],
             system_id=session["system_id"],
             system_name=contract["system_name"],
             session_id=session["session_id"],
-            expected_principal_ref=expected,
+            expected_principal_ref=expected_principal_ref,
             origin=contract["origin"],
             page_fingerprint=contract["page_fingerprint"],
             nonce=None,
@@ -177,6 +269,7 @@ class CentralCapabilityService:
                 "challengeId": challenge["challenge_id"],
                 "cardUrl": challenge["card_url"],
             },
+            "reused": False,
         }
 
     def get_operation(self, *, user_subject: str, operation_id: str) -> dict:
@@ -222,7 +315,12 @@ class CentralCapabilityService:
             session = self.sessions.get(session["session_id"])
             if session["state"] != "active":
                 raise login_required_action(user_subject, session)
-            state = self.session_states.load(session["session_id"])
+            try:
+                state = self.session_states.load(session["session_id"])
+            except SessionStateAccessDenied as exc:
+                raise _session_runtime_mismatch_action(user_subject, session) from exc
+            except SessionSecretError as exc:
+                raise _session_state_unavailable_action(user_subject, session) from exc
             if state is None:
                 expired_session = self.sessions.mark_expired(
                     session["session_id"],
@@ -530,6 +628,104 @@ def login_required_action(user_subject: str, session: dict | None) -> RequiresUs
             "sessionState": session["state"] if session else "not_found",
         },
     )
+
+
+def _session_runtime_mismatch_action(
+    user_subject: str,
+    session: dict,
+) -> RequiresUserAction:
+    return RequiresUserAction(
+        "SESSION_RUNTIME_MISMATCH",
+        (
+            "The encrypted OA session is bound to a different Windows security "
+            "context. Retry through the central runtime that created the session; "
+            "do not request a new login card."
+        ),
+        next_action=_session_runtime_next_action(
+            user_subject,
+            session,
+            action_type="retry_via_bound_central_runtime",
+        ),
+    )
+
+
+def _session_state_unavailable_action(
+    user_subject: str,
+    session: dict,
+) -> RequiresUserAction:
+    return RequiresUserAction(
+        "SESSION_STATE_UNAVAILABLE",
+        (
+            "The encrypted OA session state cannot be read safely. Retry through "
+            "the bound central runtime or ask an administrator to repair the "
+            "session store before reauthentication."
+        ),
+        next_action=_session_runtime_next_action(
+            user_subject,
+            session,
+            action_type="repair_session_runtime",
+        ),
+    )
+
+
+def _session_runtime_mismatch_response(user_subject: str, session: dict) -> dict:
+    return _session_action_response(
+        _session_runtime_mismatch_action(user_subject, session),
+        session,
+    )
+
+
+def _session_state_unavailable_response(user_subject: str, session: dict) -> dict:
+    return _session_action_response(
+        _session_state_unavailable_action(user_subject, session),
+        session,
+    )
+
+
+def _session_check_unavailable_response(user_subject: str, session: dict) -> dict:
+    action = RequiresUserAction(
+        "SESSION_CHECK_UNAVAILABLE",
+        (
+            "OA session validity could not be checked. Retry later through the "
+            "same central runtime; credentials are not required yet."
+        ),
+        next_action=_session_runtime_next_action(
+            user_subject,
+            session,
+            action_type="retry_session_check",
+        ),
+    )
+    return _session_action_response(action, session)
+
+
+def _session_action_response(action: RequiresUserAction, session: dict) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "status": "requires_user_action",
+        "sessionId": session["session_id"],
+        "error": {
+            "code": action.code,
+            "message": action.message,
+        },
+        "nextAction": action.next_action,
+        "reused": False,
+    }
+
+
+def _session_runtime_next_action(
+    user_subject: str,
+    session: dict,
+    *,
+    action_type: str,
+) -> dict:
+    return {
+        "type": action_type,
+        "system": "oa",
+        "userSubject": user_subject,
+        "sessionId": session["session_id"],
+        "sessionState": session["state"],
+        "sessionPreserved": True,
+    }
 
 
 def session_response(session: dict) -> dict:

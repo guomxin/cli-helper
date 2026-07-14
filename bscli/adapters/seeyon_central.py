@@ -345,6 +345,15 @@ class SeeyonCentralAdapter:
             "browser_bridge_used": False,
         }
 
+    def probe_session(self, worker) -> dict:
+        templates = self.list_templates(worker)
+        return {
+            "authenticated": True,
+            "template_count": int(templates.get("count") or 0),
+            "transport": templates["transport"],
+            "browser_bridge_used": False,
+        }
+
     def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:
         if capability_name == "oa.template.list":
             if arguments:

@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 from bscli.cli.main import main
-from bscli.core.sessions import SessionRegistry
 
 
 class CentralCliTests(unittest.TestCase):
@@ -207,17 +206,26 @@ class CentralCliTests(unittest.TestCase):
         self.assertTrue(payload["challenge"]["cardUrl"].startswith("http://127.0.0.1:8780/auth/"))
         self.assertNotIn("password", json.dumps(payload).lower())
 
-    def test_session_login_does_not_destroy_an_active_session_before_card_submission(self):
+    def test_session_login_prints_reused_active_session_without_card(self):
         with TemporaryDirectory() as tmp:
-            sessions = SessionRegistry(Path(tmp) / "agentbridge.db", Path(tmp) / "profiles")
-            session = sessions.get_or_create(
-                user_subject="user-a",
-                system_id="oa",
-                expected_principal_ref="Alice",
-            )
-            sessions.activate(session["session_id"], observed_principal_ref="Alice")
-
-            with redirect_stdout(io.StringIO()):
+            service = MagicMock()
+            service.start_login.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "sessionId": "session-1",
+                "result": {
+                    "authenticated": True,
+                    "templateCount": 118,
+                    "transport": "central_http_session",
+                    "browserBridgeUsed": False,
+                },
+                "nextAction": None,
+                "reused": True,
+            }
+            with (
+                patch("bscli.cli.main.CentralCapabilityService", return_value=service),
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
                 exit_code = main(
                     [
                         "--home",
@@ -233,8 +241,12 @@ class CentralCliTests(unittest.TestCase):
                     ]
                 )
 
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(sessions.get(session["session_id"])["state"], "active")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertTrue(payload["reused"])
+        self.assertNotIn("challenge", payload)
+        service.start_login.assert_called_once()
 
 
 if __name__ == "__main__":

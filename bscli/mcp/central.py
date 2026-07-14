@@ -354,10 +354,12 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="oa_session_login",
-        title="Start OA Session Login",
+        title="Ensure OA Session Login",
         description=(
-            "Create a short-lived trusted authentication card for the authenticated caller. "
-            "Credentials are entered only in that card and never in MCP arguments."
+            "Reuse and refresh a valid central OA session. Only when OA confirms "
+            "that the session is no longer authenticated, create a short-lived "
+            "trusted authentication card. Credentials are entered only in that "
+            "card and never in MCP arguments."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,

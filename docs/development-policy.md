@@ -14,6 +14,16 @@ The only active runtime is central AgentBridge:
 Do not add a client browser extension, localhost daemon, daemon proxy command,
 personal-browser Profile dependency, or silent fallback execution path.
 
+The Credential Broker, capability Worker, and every process that restores a
+given user's encrypted session state must run under one fixed OS security
+identity. Treat `session login` as an idempotent session-ensure operation:
+
+- reuse an active session only after a live server probe and refresh its state;
+- create an authentication card only after OA confirms login expiry;
+- retry `SESSION_CHECK_UNAVAILABLE` without requesting credentials;
+- route `SESSION_RUNTIME_MISMATCH` through the bound central runtime and never
+  expire, delete, or replace the preserved session as a recovery shortcut.
+
 ## Change Gate
 
 Do not commit or push a behavior change until:

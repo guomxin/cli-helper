@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
 from bscli.adapters.seeyon_central import SeeyonLoginRequired
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.session_secrets import SessionStateAccessDenied
 
 
 BASE_URL = "http://oa.example.test/seeyon/main.do?method=main"
@@ -80,6 +81,140 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(response["status"], "requires_user_action")
             self.assertEqual(response["challenge"]["expectedPrincipalRef"], "Alice")
             self.assertTrue(response["nextAction"]["cardUrl"].startswith("http://127.0.0.1:8780/auth/"))
+
+    def test_start_login_reuses_live_active_session_without_card(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                return_value={
+                    "authenticated": True,
+                    "template_count": 118,
+                    "transport": "central_http_session",
+                    "browser_bridge_used": False,
+                }
+            )
+
+            response = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertEqual(response["status"], "succeeded")
+            self.assertTrue(response["reused"])
+            self.assertNotIn("challenge", response)
+            self.assertIsNone(response["nextAction"])
+            self.assertEqual(response["result"]["templateCount"], 118)
+            self.assertFalse(response["result"]["browserBridgeUsed"])
+            self.assertEqual(worker.restored, {"cookies": []})
+            self.assertEqual(
+                service.sessions.get(session["session_id"])["state"],
+                "active",
+            )
+
+    def test_start_login_creates_card_only_after_live_probe_reports_expired(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                side_effect=SeeyonLoginRequired("OA expired")
+            )
+
+            response = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertFalse(response["reused"])
+            self.assertEqual(
+                response["nextAction"]["type"],
+                "open_authentication_card",
+            )
+            self.assertEqual(
+                service.sessions.get(session["session_id"])["state"],
+                "expired",
+            )
+            self.assertIsNone(service.session_states.load(session["session_id"]))
+
+    def test_start_login_probe_failure_does_not_prompt_for_credentials(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                side_effect=TimeoutError("OA unavailable")
+            )
+
+            response = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "SESSION_CHECK_UNAVAILABLE")
+            self.assertEqual(
+                response["nextAction"]["type"],
+                "retry_session_check",
+            )
+            self.assertNotIn("challenge", response)
+            self.assertEqual(
+                service.sessions.get(session["session_id"])["state"],
+                "active",
+            )
+            self.assertIsNotNone(service.session_states.load(session["session_id"]))
+
+    def test_runtime_identity_mismatch_is_actionable_and_preserves_session(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            inaccessible = InaccessibleSessionStateStore()
+            service.session_states = inaccessible
+
+            response = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                arguments={},
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "SESSION_RUNTIME_MISMATCH")
+            self.assertEqual(
+                response["nextAction"]["type"],
+                "retry_via_bound_central_runtime",
+            )
+            self.assertTrue(response["nextAction"]["sessionPreserved"])
+            self.assertEqual(
+                service.sessions.get(session["session_id"])["state"],
+                "active",
+            )
+            self.assertFalse(inaccessible.deleted)
+
+    def test_start_login_runtime_mismatch_does_not_replace_session_with_card(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            inaccessible = InaccessibleSessionStateStore()
+            service.session_states = inaccessible
+
+            response = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "SESSION_RUNTIME_MISMATCH")
+            self.assertNotIn("challenge", response)
+            self.assertEqual(
+                service.sessions.get(session["session_id"])["state"],
+                "active",
+            )
+            self.assertFalse(inaccessible.deleted)
 
     def test_operation_lookup_does_not_cross_user_boundary(self):
         with TemporaryDirectory() as tmp:
@@ -372,6 +507,17 @@ class FakeWorker:
 
     def capture_session_state(self):
         return {"cookies": []}
+
+
+class InaccessibleSessionStateStore:
+    def __init__(self):
+        self.deleted = False
+
+    def load(self, _session_id):
+        raise SessionStateAccessDenied("different Windows security principal")
+
+    def delete(self, _session_id):
+        self.deleted = True
 
 
 def _business_trip_arguments():
