@@ -24,11 +24,12 @@ capability-migration inventory.
 - A Chromium runtime supported by Playwright
 - Network access from the central worker to the target legacy system
 
-The selected intranet deployment target is Linux, but the current default
-session-state protector is Windows DPAPI. Linux deployment is intentionally
-blocked until the AEAD key-file/systemd-credential protector described in the
-[current deployment plan](docs/current-deployment-plan.md) is implemented and
-validated; plaintext Cookie persistence is not an accepted fallback.
+The selected intranet deployment target is Linux. Set
+`AGENTBRIDGE_SESSION_KEY_FILE` to an absolute path containing exactly 32 random
+bytes; AgentBridge uses AES-256-GCM with session-bound authenticated data and
+rejects symlinks, broad permissions, wrong keys, and modified ciphertext.
+Windows continues to use user-scoped DPAPI. Plaintext Cookie persistence is not
+an accepted fallback.
 
 ~~~bash
 python -m pip install -e .
@@ -108,15 +109,15 @@ An inactive or OA-expired session returns
 `requires_user_action / LOGIN_REQUIRED`; the service never falls back to a personal browser or retired
 bridge. A transient live-probe failure returns `SESSION_CHECK_UNAVAILABLE` and
 must be retried without asking for credentials. `SESSION_RUNTIME_MISMATCH`
-means that the encrypted state was opened under a different Windows security
-identity; the session is preserved and the request must be routed through the
-bound central runtime.
+means that the encrypted state could not be authenticated by the bound runtime,
+for example because a Windows security identity or Linux key changed. The
+session is preserved and the request must be routed through the correct runtime.
 
 Run the trusted-card Broker and capability Worker as one long-running central
-service under a fixed OS security identity. Direct CLI processes that restore
-Windows DPAPI state must run under that same identity. Agent integrations
-should normally use the long-running central MCP service, which keeps this
-runtime boundary stable across calls.
+service under a fixed OS security identity and session-key boundary. Direct CLI
+processes that restore session state must use that same boundary. Agent
+integrations should normally use the long-running central MCP service, which
+keeps it stable across calls.
 
 ## Host-Independent Interactions
 
@@ -249,8 +250,9 @@ validation, rate limiting, and real multi-user worker isolation.
 - Every write follows prepare -> authorize -> commit -> verify.
 - A plan, authorization, and idempotency key are immutable at commit time.
 - No capability silently falls back to a less-governed execution route.
-- Windows session state uses user-scoped DPAPI; production multi-host
-  deployments require an equivalent Vault/KMS-backed protector.
+- Windows session state uses user-scoped DPAPI; Linux uses a restricted
+  key-file AES-256-GCM protector. Production multi-host deployments require a
+  Vault/KMS-backed protector with workload identity and key rotation.
 
 ## Validation
 

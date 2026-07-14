@@ -12,12 +12,12 @@
 
 - 新增版本化 `CapabilitySpec`/目录、统一 `CapabilityEngine`、SQLite `OperationStore` 和按用户隔离的 `SessionRegistry`；
 - 新增中心 `CentralBrowserWorker`，使用 Playwright 持久化 Profile、目标 origin 白名单和单 Profile 进程租约；
-- 新增中心 `SessionStateStore`；OA 的进程级 Session Cookie 使用 Windows DPAPI 加密落盘，Cookie 不进入 CLI、SQLite 账本、普通日志或模型上下文，新 Worker 启动后在内存中恢复；非 Windows 部署必须接入等价 Vault/KMS 保护器后才能启用；
+- 新增中心 `SessionStateStore`；OA 的进程级 Session Cookie 在 Windows 使用 DPAPI、在 Linux 单机 PoC 使用外部 32 字节密钥和 AES-256-GCM 加密落盘，Cookie 不进入 CLI、SQLite 账本、普通日志或模型上下文，新 Worker 启动后在内存中恢复；容器、跨主机和生产部署必须接入 Vault/KMS 或等价工作负载身份保护器；
 - 新增 SQLite `AuthChallengeStore`、可信认证卡片 HTTP/TLS 服务和 `CredentialBroker`；挑战绑定用户、系统、会话、预期下游身份、Origin、页面契约指纹、nonce、TTL 和一次性状态，CSRF Token 只存哈希，账号密码仅在 Broker 调用期间驻留内存；
 - 新增 Seeyon 表单登录 Adapter；中心 Worker 动态等待登录 iframe，填写已登记的 `login_username/login_password1`，调用页面原生 `loginButtonOnClickHandler()`，登录后通过模板接口与页面标题核验实际身份；验证码等未登记认证方式按稳定错误码安全停止；
 - 新增不依赖客户端扩展的中心只读能力包：`oa.template.list`、`oa.workflow.pending.list`、`oa.workflow.done.list`、`oa.workflow.tracked.list`、`oa.workflow.detail.get`、`oa.workflow.opinions.list`。模板和事项列表优先复用同一 BrowserContext 的 HTTP 会话；待办/已办/跟踪列表从当前用户首页动态发现栏目契约后调用后台接口，详情和意见则在同一中心浏览器中渲染并合并同源 iframe；对智能体只返回业务字段和不透明 `affair_id`，不暴露内部 URL、原始 HTML、Cookie、动作端点或写提示；
 - 新增 `CentralCapabilityService`，CLI 与远程协议共用能力目录、会话恢复、单用户串行租约、Seeyon Adapter、错误语义、幂等键和 SQLite 操作账本，避免协议入口各自复制业务编排；
-- `session login` 已升级为幂等的“确保会话可用”：`active` 会话先用真实 OA 模板接口探测并刷新加密 Cookie 状态，探测成功直接复用且不生成卡片；只有 OA 明确判定登录失效才生成一次性认证卡。网络探测异常返回 `SESSION_CHECK_UNAVAILABLE`，DPAPI 运行身份不一致返回 `SESSION_RUNTIME_MISMATCH`，两者都保留原会话且不要求用户重新输入凭据；
+- `session login` 已升级为幂等的“确保会话可用”：`active` 会话先用真实 OA 模板接口探测并刷新加密 Cookie 状态，探测成功直接复用且不生成卡片；只有 OA 明确判定登录失效才生成一次性认证卡。网络探测异常返回 `SESSION_CHECK_UNAVAILABLE`，运行身份或会话密钥不一致返回 `SESSION_RUNTIME_MISMATCH`，两者都保留原会话且不要求用户重新输入凭据；
 - 新增宿主无关的 `agentbridge.interaction.v1`：认证、业务字段和执行授权继续以各自可信账本为权威状态，只通过持久化不透明 `interactionId` 投影统一的 `state/presentation/poll/resume`；CLI 与 MCP 均可查询和恢复，AgentBridge 本身不启动浏览器，也不假设调用方是 Codex。首个 OpenClaw 渲染器可生成通用 `presentation` URL 按钮和 Telegram 私聊 `webApp` 按钮，完成状态由宿主后台轮询后调用统一 resume 工具；
 - 新增中心写授权账本与独立可信操作卡片；授权绑定 `userSubject + systemId + sessionId + capability/version + prepareOperationId + planHash + TTL`，计划不可变、同目标新计划会废止旧授权，批准后只能在适配器提交边界消费一次；
 - 新增通用 `FieldSubmissionStore` 与可信业务字段卡片；字段 Schema、用户、系统、会话、能力版本、TTL 和 CSRF 均由中心端绑定，提交内容一次性冻结，CLI/MCP 和模型只持有不透明 `input_submission_id`；
@@ -27,7 +27,7 @@
 - 新增 `capability list/describe/invoke`、`session status/login`、`auth serve/status`、`operation get/list` CLI，未登录时返回持久化的 `requires_user_action/LOGIN_REQUIRED`；模型协议面不提供密码提交命令；
 - 旧 Chrome 扩展、localhost Daemon、daemon 版 MCP、代理型 OA 命令和对应运输层测试已在退役一期删除；中心能力是唯一公开运行路径且不会静默回退。旧实现中的纯解析、事项知识、写规则和页面契约继续保留为迁移资产，尚未中心化的能力统一记录在 [旧浏览器桥接退役记录](./docs/legacy-bridge-retirement.md)。
 
-可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；全新的 headless CLI 进程可从 DPAPI 密文恢复会话并读取 118 个模板。扩展后的中心只读包又真实读取了 3 条待办、9 条已办和 9 条跟踪事项，并从一条已办事项的中心渲染页及同源 iframe 中提取 8 个业务字段和 1 条结构化意见；所有结果均为 `browser_bridge_used=false`，列表使用 `central_http_session`，详情和意见使用 `central_browser_session`，并生成独立持久化 `operationId`。登录过期会明确返回 `LOGIN_REQUIRED`，不会把登录页误报为业务空数据。Windows DPAPI 的一次开发环境验证还证明：Broker 与能力 Worker 必须运行在同一 Windows 安全主体下；跨用户解密会失败关闭，生产部署应固定服务身份或改用 Vault/KMS。卡片已完成桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
+可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；全新的 headless CLI 进程可从 DPAPI 密文恢复会话并读取 118 个模板。扩展后的中心只读包又真实读取了 3 条待办、9 条已办和 9 条跟踪事项，并从一条已办事项的中心渲染页及同源 iframe 中提取 8 个业务字段和 1 条结构化意见；所有结果均为 `browser_bridge_used=false`，列表使用 `central_http_session`，详情和意见使用 `central_browser_session`，并生成独立持久化 `operationId`。登录过期会明确返回 `LOGIN_REQUIRED`，不会把登录页误报为业务空数据。Windows DPAPI 已验证跨用户解密失败关闭；Linux AES-256-GCM 又在目标 Ubuntu 24.04 机器通过错密钥、错上下文、篡改、权限、重启恢复及全量 170 项测试。生产部署仍应使用固定服务身份并迁移到 Vault/KMS。卡片已完成桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
 
 最小远程 MCP 已通过独立服务进程与官方 MCP 客户端烟测：Bearer 鉴权后可发现中心工具并读取令牌绑定用户的会话状态；无令牌、吊销令牌和跨用户操作读取会失败关闭，CLI 与 MCP 使用同一幂等键时返回同一 `operationId`。随后又完成单用户真实 OA 闭环：官方 MCP 客户端调用 `oa_session_login` 生成可信认证卡，用户完成真实登录后，客户端调用 `oa_workflow_pending_list` 读取 3 条待办，返回 `central_http_session`、`browserBridgeUsed=false` 和持久化操作记录；一次性身份令牌随后自动吊销，MCP 与认证卡监听端口均关闭。首个中心 W1 草稿能力现已完成“认证卡 → 字段卡 → 授权卡 → 保存待发 → 回读”的单用户真实 OA 验证：7 个业务字段由用户直接提交中心 `FieldSubmission`，CLI/MCP 和模型只持有不透明 ID；第二次 prepare 校验真实 CAP4 表单并冻结计划，独立授权在保存边界消费一次。OA 返回待发草稿和稳定业务 ID，服务端重载后 7 个字段全部匹配，结果明确为 `workflow_submitted=false`、`submitted_count=0` 和 `browser_bridge_used=false`；相同幂等键重放返回原操作与原草稿 ID，未生成第二份草稿。字段卡还通过桌面与 390×844 视口检查，测试中发现的隐藏 radio 横向溢出已修复。这仍不是生产远程接入验收：预签发 Bearer 令牌只用于 PoC 引导，真实 OAuth/OIDC、两个 Worker OS 安全主体的多用户隔离、生产证书与反向代理信任、限流、设备绑定、真实手机网络和更多中心写动作尚未完成；旧桥接公开运行时已完成退役一期。由于暂时没有第二个真实 OA 用户，本轮不把代码级绑定和合成身份测试表述为多用户隔离验收。
 

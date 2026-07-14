@@ -4,8 +4,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 from typing import Protocol
 from uuid import uuid4
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+
+SESSION_KEY_FILE_ENV = "AGENTBRIDGE_SESSION_KEY_FILE"
+_AES_GCM_KEY_BYTES = 32
+_AES_GCM_NONCE_BYTES = 12
+_AES_GCM_TAG_BYTES = 16
+_AES_GCM_ENVELOPE = b"ABSS\x01"
+_AES_GCM_AAD_PREFIX = b"agentbridge.session-state.v1\x00"
 
 
 class SessionSecretError(RuntimeError):
@@ -97,12 +109,110 @@ class WindowsDpapiProtector:
         return _windows_dpapi(ciphertext, context=context, protect=False)
 
 
+class AesGcmSessionStateProtector:
+    def __init__(self, key: bytes) -> None:
+        if len(key) != _AES_GCM_KEY_BYTES:
+            raise SessionSecretError("session-state key must contain exactly 32 bytes")
+        self._cipher = AESGCM(key)
+
+    @classmethod
+    def from_key_file(cls, path: Path | str) -> "AesGcmSessionStateProtector":
+        key = _read_session_key_file(path)
+        try:
+            return cls(bytes(key))
+        finally:
+            for index in range(len(key)):
+                key[index] = 0
+
+    def protect(self, plaintext: bytes, *, context: bytes) -> bytes:
+        nonce = os.urandom(_AES_GCM_NONCE_BYTES)
+        encrypted = self._cipher.encrypt(
+            nonce,
+            plaintext,
+            _AES_GCM_AAD_PREFIX + context,
+        )
+        return _AES_GCM_ENVELOPE + nonce + encrypted
+
+    def unprotect(self, ciphertext: bytes, *, context: bytes) -> bytes:
+        minimum_size = (
+            len(_AES_GCM_ENVELOPE) + _AES_GCM_NONCE_BYTES + _AES_GCM_TAG_BYTES
+        )
+        if len(ciphertext) < minimum_size or not ciphertext.startswith(
+            _AES_GCM_ENVELOPE
+        ):
+            raise SessionSecretError("encrypted session state envelope is invalid")
+        nonce_start = len(_AES_GCM_ENVELOPE)
+        nonce_end = nonce_start + _AES_GCM_NONCE_BYTES
+        nonce = ciphertext[nonce_start:nonce_end]
+        encrypted = ciphertext[nonce_end:]
+        try:
+            return self._cipher.decrypt(
+                nonce,
+                encrypted,
+                _AES_GCM_AAD_PREFIX + context,
+            )
+        except InvalidTag as exc:
+            raise SessionStateAccessDenied(
+                "encrypted session state could not be authenticated"
+            ) from exc
+
+
 def _default_protector() -> SessionStateProtector:
     if os.name == "nt":
         return WindowsDpapiProtector()
+    if os.name == "posix":
+        key_file = os.environ.get(SESSION_KEY_FILE_ENV)
+        if not key_file:
+            raise SessionSecretError(
+                f"{SESSION_KEY_FILE_ENV} is required on this operating system"
+            )
+        return AesGcmSessionStateProtector.from_key_file(key_file)
     raise SessionSecretError(
         "no session-state protector is configured for this operating system"
     )
+
+
+def _read_session_key_file(path: Path | str) -> bytearray:
+    key_path = Path(path)
+    if not key_path.is_absolute():
+        raise SessionSecretError("session-state key file path must be absolute")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(key_path, flags)
+    except OSError as exc:
+        raise SessionSecretError("session-state key file could not be opened") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SessionSecretError("session-state key path must be a regular file")
+        if os.name == "posix":
+            permissions = stat.S_IMODE(metadata.st_mode)
+            allowed = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
+            if permissions & ~allowed:
+                raise SessionSecretError(
+                    "session-state key file permissions are too broad"
+                )
+            if metadata.st_uid not in {0, os.geteuid()}:
+                raise SessionSecretError(
+                    "session-state key file owner is not trusted"
+                )
+        key = bytearray()
+        while len(key) <= _AES_GCM_KEY_BYTES:
+            chunk = os.read(descriptor, _AES_GCM_KEY_BYTES + 1 - len(key))
+            if not chunk:
+                break
+            key.extend(chunk)
+    except OSError as exc:
+        raise SessionSecretError("session-state key file could not be read") from exc
+    finally:
+        os.close(descriptor)
+    if len(key) != _AES_GCM_KEY_BYTES:
+        for index in range(len(key)):
+            key[index] = 0
+        raise SessionSecretError("session-state key must contain exactly 32 bytes")
+    return key
 
 
 def _validate_state(state: object) -> None:

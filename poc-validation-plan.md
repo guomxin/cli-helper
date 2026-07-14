@@ -15,7 +15,7 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
 | SQLite 操作账本 | 已完成首版 | 先落账再执行；同幂等键复用操作，不同输入返回冲突 |
 | 中央会话注册表 | 已完成首版 | `userSubject + systemId` 绑定独立 Profile；支持 `new/awaiting_login/active/expired/quarantined` |
 | 中央 Browser Worker | 已完成首版 | Playwright 持久 Profile、origin 白名单、同 Profile 单租约、正常关闭回收 |
-| 加密会话状态 | 已完成 Windows PoC | 进程级 Session Cookie 经 DPAPI 加密落盘；新进程只在内存中恢复；普通日志和账本无 Cookie；不同 Windows 用户解密返回 `SESSION_RUNTIME_MISMATCH` 并保留原会话，Broker 与 Worker 必须使用同一服务安全主体 |
+| 加密会话状态 | 已完成 Windows 与 Linux 单机 PoC | Windows 进程级 Session Cookie 经 DPAPI 加密落盘；Linux 使用外部 32 字节密钥和 AES-256-GCM，session ID 绑定为附加认证数据，并拒绝错密钥、错上下文、篡改、符号链接和过宽权限。目标 Ubuntu 24.04 专项 6 项、全量 170 项通过；普通日志和账本无 Cookie，Broker 与 Worker 必须使用同一服务安全主体和密钥边界 |
 | OA 模板与事项列表 | 已完成真实验证 | 模板直接复用浏览器上下文 HTTP 会话；事项列表从首页动态发现当前用户栏目参数后调用后台接口；不调用扩展或 localhost Daemon |
 | OA 详情与意见 | 已完成真实验证 | 详情在同一中心会话中渲染并合并同源 iframe；真实样本提取 8 个业务字段和 1 条结构化意见，公开结果不含内部 URL、HTML、Cookie、动作端点和写提示 |
 | 未登录真实诊断 | 已验证 | 模板接口真实返回 `401 application/json`，会话保持未激活并返回 `LOGIN_REQUIRED` |

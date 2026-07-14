@@ -30,6 +30,12 @@ identity. Treat `session login` as an idempotent session-ensure operation:
 - route `SESSION_RUNTIME_MISMATCH` through the bound central runtime and never
   expire, delete, or replace the preserved session as a recovery shortcut.
 
+Windows uses user-scoped DPAPI. Linux requires an absolute
+`AGENTBRIDGE_SESSION_KEY_FILE` containing exactly 32 bytes, readable only by a
+trusted owner/service group. The AES-GCM protector must reject symlinks, broad
+permissions, wrong keys, wrong session context, and modified ciphertext. Never
+fall back to plaintext browser storage state.
+
 Non-loopback MCP and trusted-card endpoints require TLS by default. The only
 development exception is `--allow-insecure-private-http` for a controlled
 single-host intranet PoC. That exception must bind the machine's exact RFC 1918
