@@ -469,6 +469,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | OpenClaw 无法连接 MCP | 检查路由、8790 监听和 MCP URL；若服务器实际启用了防火墙，再检查现有规则 |
 | MCP 返回 401 | 检查 Bearer Token 是否完整、过期、撤销或绑定错误 |
 | 卡片链接打不开 | 检查 8780 监听和 interaction 中返回的 IP 是否是用户电脑可达地址 |
+| 私网 HTTP 卡片提交显示“请求来源无效” | 部分 Chrome 环境会发送 `Origin: null` 且省略 `Sec-Fetch-Site`；当前版本仅在显式私网 HTTP PoC 模式下接受这种请求，仍拒绝明确的 `cross-site`，并继续执行 SameSite Cookie、一次性 CSRF 和卡片状态校验 |
 | 内置浏览器无法输入 | 使用 OpenClaw 提供的 URL 在普通浏览器中打开；AgentBridge 不依赖内置浏览器输入 |
 | Linux 启动提示 `AGENTBRIDGE_SESSION_KEY_FILE` | 检查环境变量是否为绝对路径、密钥是否恰好 32 字节、所有者和权限是否符合要求 |
 | 每次都要求登录 | 检查 OA 是否被其他浏览器重新登录、服务用户、密钥文件或 `--home` 是否变化 |
@@ -480,18 +481,18 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] AgentBridge 服务器使用固定私网 IP `10.10.50.213`；
 - [x] 服务器到 OA `10.10.50.110` 网络可达；
 - [x] Linux AEAD 会话保护器及失败关闭测试已经完成；
-- [ ] AgentBridge 始终由固定 Linux 服务用户运行；
-- [ ] 会话密钥文件仅允许 root 和 AgentBridge 服务组读取；
+- [x] AgentBridge 始终由固定 Linux 服务用户 `agentbridge` 运行；
+- [x] 会话密钥文件仅允许 root 和 AgentBridge 服务组读取；
 - [ ] 8780/8790 仅位于受控公司内网，没有任何公网映射；
-- [ ] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
-- [ ] OpenClaw 能通过 Bearer Token读取 MCP 工具列表；
+- [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
+- [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
 - [ ] 认证卡从 OpenClaw 私聊打开，凭据没有进入聊天；
-- [ ] `oa_workflow_pending_list` 读取真实 OA 数据成功；
-- [ ] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
+- [x] `oa_workflow_pending_list` 读取真实 OA 数据成功；
+- [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [x] 错误密钥、篡改密文和过宽权限都不能解密会话；
 - [x] 已记录未启用主机防火墙时的内网可达范围和明文传输风险；
 - [ ] 日志、操作账本和 OpenClaw 对话中没有密码、Cookie 或可信字段；
-- [ ] 未经单独确认，没有执行 OA 写操作。
+- [x] 未经单独确认，没有执行 OA 写操作。
 
 ## 15. 当前完成度
 
@@ -502,21 +503,31 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 固定私网 IP HTTP 显式开关 | 已实现 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
-| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 170 项通过 |
-| 单用户中心会话与真实 OA 纵切 | 已验证 |
+| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 171 项通过 |
+| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，重启后再次读取成功 |
 | OpenClaw interaction renderer 合约 | 已实现并做本地兼容检查 |
-| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | 待执行 |
+| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；外部模型智能体回合待单独授权 |
 | 可安装 OpenClaw 插件与自动接线 | 待实现 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
-| Linux systemd 服务化运行 | 正在部署验证 |
+| Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 域名、HTTPS、OIDC、Vault/KMS | 生产阶段待实现 |
+
+### 2026-07-14 实机验收记录
+
+- AgentBridge 部署在 `10.10.50.213:/home/guomao/agentbridge`，由 systemd 托管；
+- MCP `8790` 与可信卡片 `8780` 均可从 OpenClaw 用户电脑访问，未修改主机防火墙；
+- OpenClaw 2026.7.1 使用 `streamable-http` 注册 `agentbridge`，Bearer 仅保存在本机可信环境文件，`openclaw.json` 保存环境变量引用；
+- OpenClaw `mcp probe` 成功发现 14 个 AgentBridge 工具；
+- 可信认证卡完成真实 OA 登录，服务重启后 `oa_session_login` 返回 `succeeded`、`reused=true`，没有再次发卡；
+- 重启前后 `oa_workflow_pending_list` 均成功读取真实 OA 数据；
+- 私网 HTTP 下的 Chrome opaque origin 兼容修复已在浏览器复现、目标 Ubuntu 专项测试和全量 171 项测试中通过；
+- 没有执行 OA 写操作；OpenClaw 外部模型智能体回合因数据出境边界未获单独授权而未执行。
 
 ## 16. 后续演进顺序
 
-1. 完成本机 OpenClaw 与 `10.10.50.213` AgentBridge 的真实跨机只读联调；
-2. 固化 OpenClaw MCP 配置和 interaction renderer 的安装方式；
-3. 在同一固定 Linux 服务身份下完成 systemd 托管与重启恢复验证；
-4. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
-5. 再扩充工作流写能力，并逐流程完成真实回读验证；
-6. 生产前增加域名、TLS、正式 OAuth/OIDC、限流、审计和 Vault/KMS；
-7. TLS 完成后删除部署环境中的私网明文例外，不把 PoC 开关长期保留为运维捷径。
+1. 实现可安装的 OpenClaw 插件，把 interaction envelope 稳定呈现为私聊中的可信卡片按钮；
+2. 在获得明确数据授权后，完成 OpenClaw 外部模型智能体回合的只读 OA 调用验证；
+3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
+4. 再扩充工作流写能力，并逐流程完成真实回读验证；
+5. 生产前增加域名、TLS、正式 OAuth/OIDC、限流、审计和 Vault/KMS；
+6. TLS 完成后删除部署环境中的私网明文例外，不把 PoC 开关长期保留为运维捷径。

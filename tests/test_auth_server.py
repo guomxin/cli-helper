@@ -154,6 +154,23 @@ class AuthServerConfigTests(unittest.TestCase):
         )
         self.assertFalse(_request_origin_allowed(sec_fetch_site=None, **parameters))
 
+    def test_private_http_poc_allows_opaque_origin_without_fetch_metadata(self):
+        parameters = {
+            "origin": "null",
+            "host_header": "10.20.30.40:8780",
+            "expected_scheme": "http",
+            "allowed_hosts": {"10.20.30.40"},
+            "allow_opaque_without_fetch_metadata": True,
+        }
+
+        self.assertTrue(_request_origin_allowed(sec_fetch_site=None, **parameters))
+        self.assertTrue(
+            _request_origin_allowed(sec_fetch_site="same-origin", **parameters)
+        )
+        self.assertFalse(
+            _request_origin_allowed(sec_fetch_site="cross-site", **parameters)
+        )
+
     def test_origin_check_rejects_untrusted_scheme_host_and_port(self):
         parameters = {
             "sec_fetch_site": "same-origin",

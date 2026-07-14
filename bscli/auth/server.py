@@ -193,6 +193,7 @@ def create_auth_http_server(
                 host_header=self.headers.get("Host") or "",
                 expected_scheme=expected_scheme,
                 allowed_hosts=allowed_hosts,
+                allow_opaque_without_fetch_metadata=config.insecure_private_http,
             )
 
         def _card_target(self):
@@ -315,14 +316,18 @@ def _request_origin_allowed(
     host_header: str,
     expected_scheme: str,
     allowed_hosts: set[str],
+    allow_opaque_without_fetch_metadata: bool = False,
 ) -> bool:
-    # Some browsers serialize a same-origin form POST from a loopback page as
-    # an opaque origin. Sec-Fetch-Site remains browser-controlled evidence that
-    # the navigation came from the card itself.
+    # Some browsers serialize a same-origin form POST from a loopback or
+    # private-HTTP page as an opaque origin. Fetch Metadata is preferred proof;
+    # the explicit private-HTTP PoC mode falls back to the card's CSRF binding.
     if origin is None:
         return True
     if origin.strip().lower() == "null":
-        return (sec_fetch_site or "").strip().lower() == "same-origin"
+        fetch_site = (sec_fetch_site or "").strip().lower()
+        return fetch_site == "same-origin" or (
+            allow_opaque_without_fetch_metadata and not fetch_site
+        )
 
     try:
         parsed_origin = urlparse(origin)
