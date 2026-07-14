@@ -114,7 +114,7 @@ PoC 不以生产高可用、远程移动接入或完整企业治理为目标。
   → 一次性可信授权卡片 → 冻结计划授权（决定绕过模型）
 ```
 
-首期采用一台位于目标系统可达网络区域的中心主机，不建设 Daemon 集群。能力内核、SQLite 账本、凭据代理、HTTP Session、浏览器 Worker 和 Profile 全部在该主机运行；最终用户设备不安装 Chrome 扩展、本地 Daemon 或连接器。现有 BSCLI Chrome 扩展只可用于迁移期接口发现和结果对照，不作为 PoC 验收路径。
+首期采用一台位于目标系统可达网络区域的中心主机，不建设 Daemon 集群。能力内核、SQLite 账本、凭据代理、HTTP Session、浏览器 Worker 和 Profile 全部在该主机运行；最终用户设备不安装 Chrome 扩展、本地 Daemon 或连接器。旧 BSCLI Chrome 扩展、localhost Daemon 和代理型命令已在退役一期删除；迁移线索由 Git 基线和 [退役记录](./docs/legacy-bridge-retirement.md) 保存，不再保留可运行旧路径。
 
 ## 4. 最小组件
 

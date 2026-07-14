@@ -1,9 +1,13 @@
 # OA Write Discovery Notes
 
+> Historical discovery evidence. The Chrome extension and localhost daemon are
+> no longer runnable. Reuse only the observed contracts and promote them into a
+> controlled central inspector or workflow-specific capability.
+
 Date: 2026-06-24
 
-Scope: read-only discovery through the legacy Chrome extension bridge plus
-promotion into workflow-specific central adapters. No OA submit, approve,
+Scope: historical read-only evidence captured through the former browser bridge
+and promotion into workflow-specific central adapters. No OA submit, approve,
 reject, archive, revoke, delete, upload, or send endpoint was invoked during
 discovery.
 

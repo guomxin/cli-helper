@@ -12,7 +12,7 @@ class SystemProfile:
     name: str
     base_url: str
     allowed_origins: list[str]
-    auth_mode: str = "chrome_extension"
+    auth_mode: str = "central_session"
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -50,7 +50,7 @@ class ConfigStore:
         if not path.exists():
             raise KeyError(f"system not found: {system_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
-        return SystemProfile(**data)
+        return _profile_from_data(data)
 
     def list_systems(self) -> list[SystemProfile]:
         if not self.systems_dir.exists():
@@ -58,6 +58,12 @@ class ConfigStore:
         profiles = []
         for path in sorted(self.systems_dir.glob("*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
-            profiles.append(SystemProfile(**data))
+            profiles.append(_profile_from_data(data))
         return profiles
 
+
+def _profile_from_data(data: dict) -> SystemProfile:
+    migrated = dict(data)
+    if migrated.get("auth_mode") == "chrome_extension":
+        migrated["auth_mode"] = "central_session"
+    return SystemProfile(**migrated)

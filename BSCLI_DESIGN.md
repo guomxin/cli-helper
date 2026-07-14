@@ -1,5 +1,9 @@
 # BSCLI Design: Non-Intrusive CLI and Agent Adapter for B/S Systems
 
+> Historical prototype design. The Chrome extension, localhost daemon, and
+> daemon-backed command runtime described below were removed on 2026-07-13.
+> Use agent-oriented-legacy-bs-adaptation-design.md for the active architecture.
+
 ## 1. Goal
 
 Build a non-intrusive adapter platform for existing B/S systems.

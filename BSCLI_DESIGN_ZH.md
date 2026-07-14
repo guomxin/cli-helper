@@ -1,5 +1,9 @@
 # BSCLI 设计方案：非侵入式 B/S 系统 CLI 与智能体适配平台
 
+> 历史原型设计。本文中的 Chrome 扩展、localhost daemon 和 daemon 命令运行时
+> 已于 2026-07-13 删除；当前架构以
+> agent-oriented-legacy-bs-adaptation-design.md 为准。
+
 ## 1. 目标
 
 构建一个面向既有 B/S 系统的非侵入式适配平台。

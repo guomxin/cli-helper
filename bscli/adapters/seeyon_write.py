@@ -288,7 +288,7 @@ def build_oa_write_plan(
     request_reason = (
         f"OA action {normalized_action['code']} has not been promoted to an executable command"
         if not promotion["execute_allowed"]
-        else "confirmed OA write will use the promoted Chrome extension workflow"
+        else "confirmed OA write will use the promoted central workflow capability"
         if mode == "execute"
         else "write endpoint discovery is required before production execution"
     )
@@ -398,7 +398,7 @@ def build_oa_launch_draft_plan(
     request_reason = "dry-run only; no page mutation will be performed"
     if mode == "save-draft":
         request_reason = (
-            "confirmed save-draft will use the Chrome extension launch-page workflow"
+            "confirmed save-draft will use the promoted central launch-page workflow"
             if execute_ready
             else "save-draft is blocked until precheck passes"
         )
@@ -559,7 +559,7 @@ def mark_oa_launch_draft_plan_for_execution(plan: dict[str, Any]) -> None:
     safety["dry_run_only"] = False
     request = plan.setdefault("request", {})
     request["status"] = "queued"
-    request["reason"] = "confirmed save-draft task queued for Chrome extension execution"
+    request["reason"] = "confirmed save-draft task queued for central worker execution"
 
 
 def sanitize_oa_launch_draft_plan_for_audit(plan: dict) -> dict:

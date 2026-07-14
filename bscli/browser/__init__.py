@@ -1,2 +1,1 @@
-"""Browser bridge primitives."""
-
+"""Managed central-browser primitives."""

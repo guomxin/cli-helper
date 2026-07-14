@@ -7,13 +7,13 @@ import re
 import time
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
-from bscli.adapters.seeyon import SEEYON_OA_URL
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_PREPARE_INPUT_SCHEMA,
     BUSINESS_TRIP_SAVE_CAPABILITY,
     BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_system import SEEYON_OA_URL
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
     extract_history_sections,

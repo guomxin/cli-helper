@@ -1,5 +1,8 @@
 # OA Write Action Expansion Playbook
 
+> Central-runtime note: the old browser bridge was removed on 2026-07-13. Any
+> bridge command examples below are historical evidence, not executable steps.
+
 This playbook turns one-off OA exploration into a repeatable promotion path for
 new write actions. Use it when adding a new action for a workflow, a launch
 template, or a special OA module such as meetings.
@@ -64,9 +67,9 @@ Before committing and pushing a new write action:
 
 1. Run focused unit tests that prove confirmation gating, happy path ordering,
    and failure blocking.
-2. Run the relevant broader daemon/CLI tests.
-3. Validate once against real OA using the Chrome extension bridge and the
-   active default-Chrome OA session.
+2. Run the relevant broader central service, CLI, MCP, and card tests.
+3. Validate once against real OA using the managed central session and
+   CentralBrowserWorker, with the retired extension absent.
 4. For non-ASCII values, avoid raw Chinese literals in PowerShell here-strings;
    use UTF-8 JSON or Python-generated Unicode code points.
 5. Verify backend readback and rendered/page-level state when the user would see

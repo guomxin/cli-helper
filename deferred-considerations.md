@@ -124,7 +124,7 @@ organization namespace + userSubject
 - 每个连接器登记业务/技术所有者、系统联系人、关键度、支持级别、兼容矩阵、维护窗口和退役日期；
 - 生命周期：`discovery → shadow → canary → production → degraded/quarantined → deprecated → retired`；
 - 在途操作固定 Capability、Workflow、Adapter、Skill 和模型策略版本；
-- 中心浏览器、驱动、HTTP Adapter 和登录 Adapter 采用受控发布环，兼顾安全补丁和兼容回归；客户端扩展只作为迁移工具管理，不得重新成为生产依赖。
+- 中心浏览器、驱动、HTTP Adapter 和登录 Adapter 采用受控发布环，兼顾安全补丁和兼容回归；客户端扩展运行时已经删除，不得以调试或迁移名义重新成为代码或生产依赖。
 
 ### 3.5 审计、隐私与凭据生命周期
 

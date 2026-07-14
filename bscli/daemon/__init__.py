@@ -1,2 +1,0 @@
-"""Local daemon for BSCLI."""
-

@@ -1,8 +1,13 @@
 # OA Write Safety Model
 
-This document describes both the legacy Chrome-bridge write layer and the new
-central AgentBridge write path. The legacy path remains useful for discovery
-and regression comparison. New production candidates should be promoted into
+> Historical migration reference. The legacy Chrome-bridge runtime was removed
+> on 2026-07-13. Its business rules remain reference material only; all new
+> writes must use central workflow-specific capabilities.
+
+This document preserves rules learned from the deleted Chrome-bridge write
+layer and describes the central AgentBridge write path. Historical evidence
+remains useful for discovery and regression design, but is not runnable.
+New production candidates should be promoted into
 workflow-specific central capabilities with frozen plans, trusted action-card
 authorization, deterministic execution, and server-backed readback.
 
