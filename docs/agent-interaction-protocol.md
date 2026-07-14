@@ -126,25 +126,41 @@ secure keyboard input reliably.
 ## OpenClaw
 
 `bscli.integrations.openclaw.render_openclaw_interaction` converts an envelope
-to OpenClaw `presentation` blocks plus an `automation` polling contract.
+to OpenClaw `presentation` blocks plus an `automation` polling contract and
+remains the host-adapter reference implementation. The production-shaped
+runtime path is the installable native plugin under
+`integrations/openclaw-agentbridge`.
 
-- Telegram private chats receive a `webApp` button.
-- Other channels receive a portable URL button and can apply their native
-  presentation adapter.
-- Completed interactions contain no user button; the adapter calls the resume
-  tool automatically.
-- A channel without interactive controls degrades to the trusted URL.
+The plugin:
 
-The renderer contains no OA business rules and never receives trusted values.
-It has been contract-checked against the locally installed OpenClaw 2026.6.1
-presentation implementation, which accepts both `button.url` and
-`button.webApp.url`.
+- recognizes only `agentbridge.interaction.v1` and the three declared types;
+- accepts card URLs only from explicitly configured exact origins;
+- removes the short-lived card URL before the MCP result reaches the model;
+- renders cards only in private OpenClaw sessions, never groups or channels;
+- uses a Telegram Web App button for HTTPS cards and a portable URL button for
+  the current private-IP HTTP PoC;
+- polls `agentbridge_interaction_get` outside the model loop and resumes a
+  completed interaction once with a stable idempotency key;
+- keeps a following interaction host-side for the next private reply or
+  `/agentbridge pending`;
+- leaves automatic model wake-up disabled by default.
 
-This first version uses polling as the universal completion mechanism. A
-future installable OpenClaw plugin may add authenticated completion webhooks
-and native approve/reject callbacks. Until that callback identity and
-anti-replay path exists, execution authorization remains inside the trusted
-AgentBridge web surface rather than becoming a model-visible chat command.
+`/agentbridge status` returns non-sensitive plugin diagnostics, while
+`/agentbridge pending` redraws the latest unexpired card. The plugin reuses the
+configured AgentBridge MCP endpoint and its environment-backed Authorization
+header without logging or persisting the resolved value.
+
+The plugin and renderer contain no OA business rules and never receive trusted
+form values. On 2026-07-14, version `0.1.0` was linked into local OpenClaw
+2026.7.1; runtime inspection reported the plugin loaded and explicitly enabled,
+with three lifecycle hooks, the `/agentbridge` command, and the OpenClaw tool
+result middleware contract. Gateway RPC and the live startup log both confirmed
+the plugin was active alongside Telegram.
+
+Polling remains the universal completion mechanism. Until an authenticated,
+anti-replay callback path exists, execution authorization stays inside the
+trusted AgentBridge web surface rather than becoming a model-visible chat
+command.
 
 ## Validation Evidence
 

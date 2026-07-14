@@ -391,7 +391,20 @@ OpenClaw 侧需要配置以下连接信息：
 | HTTP Header | `Authorization: Bearer <bearerToken>` |
 | 可信卡片地址 | 无需静态配置，由 interaction 动态返回 |
 
-当前仓库已提供 `render_openclaw_interaction`，可将宿主无关的 interaction envelope 转为 OpenClaw presentation、URL/Web App 按钮和轮询契约。但可安装的 OpenClaw 插件及自动配置流程尚未完成，因此首次跨机部署需要完成一次 OpenClaw 侧接线验证。
+当前仓库已提供可安装的原生插件 `integrations/openclaw-agentbridge`。插件把宿主无关的 interaction envelope 转为 OpenClaw presentation，在模型看到工具结果前移除短期卡片 URL，只在私聊显示卡片，并在模型循环之外轮询和单次恢复交互。`render_openclaw_interaction` 保留为 Python 参考适配器。
+
+在当前 Windows OpenClaw 用户电脑执行一次显式安装和信任锚配置：
+
+```powershell
+openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
+openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" http://10.10.50.213:8780
+openclaw plugins enable agentbridge-interactions
+openclaw gateway restart
+openclaw plugins inspect agentbridge-interactions --runtime --json
+openclaw gateway status --deep --require-rpc
+```
+
+`allowedCardOrigins` 必须是精确来源，不允许路径、通配符或从 MCP 结果自动学习。当前私网 HTTP 模式使用普通 URL 按钮；只有 HTTPS 卡片才使用 Telegram Web App。插件默认 `wakeAgentOnComplete=false`，后台恢复产生的下一张卡片会在下一次私聊回复中显示，也可用 `/agentbridge pending` 主动重显，不会为了发卡自动唤醒外部模型。
 
 OpenClaw 不应要求用户在聊天里回复密码、业务字段或“同意执行”。这些内容必须在可信卡片中完成。
 
@@ -418,7 +431,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 3. 如果 OA 会话不存在，AgentBridge 返回 `requires_user_action` 和认证 interaction；
 4. OpenClaw 在私聊中显示卡片按钮；
 5. 用户用普通浏览器打开卡片并输入 OA 登录信息；
-6. AgentBridge 后台轮询 interaction，完成后调用 `agentbridge_interaction_resume`；
+6. OpenClaw 插件在模型循环之外轮询 interaction，完成后单次调用 `agentbridge_interaction_resume`；
 7. 调用 `oa_workflow_pending_list`，验证能够读取当前用户真实待办；
 8. 核对返回身份、执行通道和操作账本，确认没有使用浏览器桥接。
 
@@ -486,6 +499,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [ ] 8780/8790 仅位于受控公司内网，没有任何公网映射；
 - [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
+- [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
 - [ ] 认证卡从 OpenClaw 私聊打开，凭据没有进入聊天；
 - [x] `oa_workflow_pending_list` 读取真实 OA 数据成功；
 - [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
@@ -505,9 +519,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
 | Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 171 项通过 |
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话并再次读取成功 |
-| OpenClaw interaction renderer 合约 | 已实现并做本地兼容检查 |
+| OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；外部模型智能体回合待单独授权 |
-| 可安装 OpenClaw 插件与自动接线 | 待实现 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.0 已实现并链接安装；来源白名单保留一次显式配置，不自动推断 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 域名、HTTPS、OIDC、Vault/KMS | 生产阶段待实现 |
@@ -518,6 +532,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - MCP `8790` 与可信卡片 `8780` 均可从 OpenClaw 用户电脑访问，未修改主机防火墙；
 - OpenClaw 2026.7.1 使用 `streamable-http` 注册 `agentbridge`，Bearer 仅保存在本机可信环境文件，`openclaw.json` 保存环境变量引用；
 - OpenClaw `mcp probe` 成功发现 14 个 AgentBridge 工具；
+- OpenClaw 原生插件 0.1.0 已链接安装并显式启用；运行时检查确认 3 个生命周期钩子、`/agentbridge` 命令和工具结果中间件契约，Gateway RPC 与启动日志均确认插件实际加载；
 - 可信认证卡完成真实 OA 登录；关闭其他 OA 页面后连续两次重启服务，`oa_session_login` 每次都返回 `succeeded`、`reused=true`，身份绑定一致且没有再次发卡；
 - 登录基线及两次重启后的 `oa_workflow_pending_list` 均成功读取 4 条真实待办，证明 Linux AES-256-GCM 会话状态不只是单次重启可恢复；
 - 对照验证中，普通 Chrome 留有一个已退出登录的 OA 页面时曾出现会话失效；关闭该页面并重新认证后连续两次重启均通过。现有证据不能证明该页面就是唯一原因，但符合 OA 单登录会话竞争特征，PoC 运维阶段应避免同一账号在其他浏览器窗口打开或刷新 OA；
@@ -526,7 +541,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 
 ## 16. 后续演进顺序
 
-1. 实现可安装的 OpenClaw 插件，把 interaction envelope 稳定呈现为私聊中的可信卡片按钮；
+1. 等待下一次合法的 credential、business-input 或 execution-authorization interaction，在 OpenClaw 私聊完成真实按钮、浏览器填写、后台恢复和敏感信息不入对话的端到端验收；
 2. 在获得明确数据授权后，完成 OpenClaw 外部模型智能体回合的只读 OA 调用验证；
 3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
 4. 再扩充工作流写能力，并逐流程完成真实回读验证；

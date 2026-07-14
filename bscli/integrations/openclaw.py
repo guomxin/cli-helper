@@ -44,7 +44,7 @@ def render_openclaw_interaction(
             "label": _BUTTON_LABELS[interaction_type],
             "priority": 100,
         }
-        if channel == "telegram" and private_chat:
+        if channel == "telegram" and private_chat and url.startswith("https://"):
             button["webApp"] = {"url": url}
         else:
             button["url"] = url

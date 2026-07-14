@@ -137,8 +137,11 @@ python -m bscli.cli.main --home .bscli interaction resume \
 ~~~
 
 The equivalent MCP tools are `agentbridge_interaction_get` and
-`agentbridge_interaction_resume`. The first OpenClaw renderer emits portable
-`presentation` blocks and Telegram private-chat `webApp` buttons. See the
+`agentbridge_interaction_resume`. The installable native OpenClaw plugin in
+[`integrations/openclaw-agentbridge`](integrations/openclaw-agentbridge)
+captures these envelopes, withholds trusted URLs from the model, renders cards
+only in private sessions, and polls/resumes outside the model loop. The Python
+renderer remains a host-adapter reference. See the
 [agent interaction protocol](docs/agent-interaction-protocol.md).
 
 ## Governed Business-Trip Draft

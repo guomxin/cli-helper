@@ -1,0 +1,364 @@
+import {
+  buildPresentation,
+  isInteractionExpired,
+  isPrivateSessionKey,
+  processToolResult,
+} from "./interaction.js";
+
+const TERMINAL_STATES = new Set([
+  "declined",
+  "expired",
+  "failed",
+  "superseded",
+]);
+const MAX_INTERACTIONS = 100;
+const MAX_POLL_ERRORS = 5;
+
+export class InteractionCoordinator {
+  constructor({ api, config, mcpClient = null, sleep = defaultSleep, now = Date.now }) {
+    this.api = api;
+    this.config = config;
+    this.mcpClient = mcpClient;
+    this.sleep = sleep;
+    this.now = now;
+    this.records = new Map();
+    this.polls = new Map();
+    this.abortControllers = new Map();
+  }
+
+  captureToolResult(event, context) {
+    const processed = processToolResult(
+      event.result,
+      this.config.allowedCardOrigins,
+    );
+    if (processed.interactions.length === 0) {
+      return undefined;
+    }
+
+    const sessionKey = context.sessionKey;
+    const privateSession = isPrivateSessionKey(sessionKey);
+    for (const interaction of processed.interactions) {
+      if (!privateSession) {
+        this.api.logger.warn(
+          "AgentBridge interaction withheld because the OpenClaw session is not private",
+        );
+        continue;
+      }
+      const record = this.upsert({
+        interaction,
+        sessionKey,
+        runId: context.runId,
+      });
+      this.startPolling(record);
+    }
+    return { result: processed.result };
+  }
+
+  takeForDelivery({ runId, sessionKey }) {
+    this.prune();
+    if (!isPrivateSessionKey(sessionKey)) {
+      return [];
+    }
+    const matches = [...this.records.values()].filter((record) => {
+      if (record.sessionKey !== sessionKey || record.delivered) {
+        return false;
+      }
+      return runId && record.runId ? record.runId === runId : true;
+    });
+    for (const record of matches) {
+      record.delivered = true;
+    }
+    return matches.map((record) => record.interaction);
+  }
+
+  pendingForSession(sessionKey) {
+    this.prune();
+    if (!isPrivateSessionKey(sessionKey)) {
+      return [];
+    }
+    return [...this.records.values()]
+      .filter(
+        (record) =>
+          record.sessionKey === sessionKey &&
+          ["pending", "processing"].includes(record.interaction.state),
+      )
+      .sort((left, right) => right.capturedAt - left.capturedAt)
+      .slice(0, 3)
+      .map((record) => record.interaction);
+  }
+
+  statusForSession(sessionKey) {
+    this.prune();
+    const privateSession = isPrivateSessionKey(sessionKey);
+    const records = privateSession
+      ? [...this.records.values()].filter((record) => record.sessionKey === sessionKey)
+      : [];
+    return {
+      privateSession,
+      allowedOriginCount: this.config.allowedCardOrigins.length,
+      mcpPollingConfigured: Boolean(this.mcpClient && this.config.autoPoll),
+      pendingCount: records.filter((record) =>
+        ["pending", "processing"].includes(record.interaction.state),
+      ).length,
+      activePollCount: records.filter((record) => this.polls.has(record.interaction.interactionId)).length,
+      wakeAgentOnComplete: this.config.wakeAgentOnComplete,
+    };
+  }
+
+  removeSession(sessionKey) {
+    for (const [interactionId, record] of this.records) {
+      if (record.sessionKey === sessionKey) {
+        this.abortControllers.get(interactionId)?.abort();
+        this.records.delete(interactionId);
+      }
+    }
+  }
+
+  stopAll() {
+    for (const controller of this.abortControllers.values()) {
+      controller.abort();
+    }
+    this.abortControllers.clear();
+    this.polls.clear();
+  }
+
+  async waitForIdle() {
+    await Promise.allSettled([...this.polls.values()]);
+  }
+
+  upsert({ interaction, sessionKey, runId }) {
+    const existing = this.records.get(interaction.interactionId);
+    if (existing) {
+      existing.interaction = interaction;
+      existing.sessionKey = sessionKey || existing.sessionKey;
+      existing.runId = runId || existing.runId;
+      return existing;
+    }
+    const record = {
+      interaction,
+      sessionKey,
+      runId,
+      delivered: false,
+      capturedAt: this.now(),
+    };
+    this.records.set(interaction.interactionId, record);
+    this.prune();
+    return record;
+  }
+
+  startPolling(record) {
+    if (
+      !this.config.autoPoll ||
+      !this.mcpClient ||
+      !["pending", "processing"].includes(record.interaction.state) ||
+      this.polls.has(record.interaction.interactionId)
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    this.abortControllers.set(record.interaction.interactionId, controller);
+    const promise = this.poll(record, controller.signal)
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          this.api.logger.warn(
+            `AgentBridge interaction polling stopped: ${safeErrorCode(error)}`,
+          );
+        }
+      })
+      .finally(() => {
+        this.polls.delete(record.interaction.interactionId);
+        this.abortControllers.delete(record.interaction.interactionId);
+      });
+    this.polls.set(record.interaction.interactionId, promise);
+  }
+
+  async poll(record, signal) {
+    const deadline = Math.min(
+      this.now() + this.config.maxPollSeconds * 1000,
+      interactionDeadline(record.interaction) ?? Number.POSITIVE_INFINITY,
+    );
+    let consecutiveErrors = 0;
+
+    while (!signal.aborted && this.now() < deadline) {
+      await this.sleep(this.config.pollIntervalSeconds * 1000, signal);
+      if (signal.aborted) {
+        return;
+      }
+      let response;
+      try {
+        response = await this.mcpClient.callTool(
+          "agentbridge_interaction_get",
+          { interaction_id: record.interaction.interactionId },
+          { signal },
+        );
+        consecutiveErrors = 0;
+      } catch (error) {
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= MAX_POLL_ERRORS) {
+          this.notify(record, "poll_failed", safeErrorCode(error));
+          return;
+        }
+        continue;
+      }
+
+      const processed = processToolResult(
+        response,
+        this.config.allowedCardOrigins,
+      );
+      const current = processed.interactions.find(
+        (item) => item.interactionId === record.interaction.interactionId,
+      );
+      if (!current) {
+        continue;
+      }
+      record.interaction = current;
+      if (TERMINAL_STATES.has(current.state)) {
+        this.notify(record, current.state, null);
+        return;
+      }
+      if (current.state !== "completed") {
+        continue;
+      }
+      if (current.resume.ready !== true || current.resume.completed === true) {
+        this.notify(record, "completed", null);
+        return;
+      }
+      await this.resume(record, signal);
+      return;
+    }
+    if (!signal.aborted) {
+      this.notify(record, "poll_expired", null);
+    }
+  }
+
+  async resume(record, signal) {
+    let response;
+    try {
+      response = await this.mcpClient.callTool(
+        "agentbridge_interaction_resume",
+        {
+          interaction_id: record.interaction.interactionId,
+          idempotency_key: `openclaw:${record.interaction.interactionId}`,
+        },
+        { signal },
+      );
+    } catch (error) {
+      this.notify(record, "resume_failed", safeErrorCode(error));
+      return;
+    }
+
+    const processed = processToolResult(
+      response,
+      this.config.allowedCardOrigins,
+    );
+    const nextInteractions = processed.interactions.filter(
+      (item) => item.interactionId !== record.interaction.interactionId,
+    );
+    for (const interaction of nextInteractions) {
+      const next = this.upsert({
+        interaction,
+        sessionKey: record.sessionKey,
+        runId: null,
+      });
+      this.startPolling(next);
+    }
+    this.notify(
+      record,
+      nextInteractions.length > 0 ? "next_interaction_required" : safeStatus(response),
+      safeResponseErrorCode(response),
+    );
+  }
+
+  notify(record, status, errorCode) {
+    if (!record.sessionKey) {
+      return;
+    }
+    const suffix = errorCode ? `，错误码 ${errorCode}` : "";
+    this.api.runtime.system.enqueueSystemEvent(
+      `AgentBridge 可信交互宿主事件：${status}${suffix}。不要向用户索取密码、业务字段或授权内容。`,
+      {
+        sessionKey: record.sessionKey,
+        contextKey: `agentbridge:${record.interaction.interactionId}`,
+      },
+    );
+    if (this.config.wakeAgentOnComplete) {
+      this.api.runtime.system.requestHeartbeat({
+        source: "hook",
+        intent: "event",
+        reason: "agentbridge-interaction-updated",
+        sessionKey: record.sessionKey,
+        heartbeat: { target: "last" },
+      });
+    }
+  }
+
+  prune() {
+    for (const [interactionId, record] of this.records) {
+      if (isInteractionExpired(record.interaction, this.now())) {
+        this.abortControllers.get(interactionId)?.abort();
+        this.records.delete(interactionId);
+      }
+    }
+    while (this.records.size > MAX_INTERACTIONS) {
+      const oldest = this.records.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      this.abortControllers.get(oldest)?.abort();
+      this.records.delete(oldest);
+    }
+  }
+}
+
+export function presentationForRecords(interactions, channel) {
+  return buildPresentation(interactions, channel);
+}
+
+function interactionDeadline(interaction) {
+  if (!interaction.expiresAt) {
+    return null;
+  }
+  const value = Date.parse(interaction.expiresAt);
+  return Number.isFinite(value) ? value : null;
+}
+
+function safeStatus(response) {
+  const status = String(response?.status ?? "completed")
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "_")
+    .slice(0, 80);
+  return status || "completed";
+}
+
+function safeResponseErrorCode(response) {
+  return response?.error?.code ? safeCode(response.error.code) : null;
+}
+
+function safeErrorCode(error) {
+  return safeCode(error?.code || error?.name || "UNKNOWN_ERROR");
+}
+
+function safeCode(value) {
+  return String(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9_.-]/g, "_")
+    .slice(0, 80);
+}
+
+function defaultSleep(milliseconds, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}

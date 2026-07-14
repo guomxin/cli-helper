@@ -32,6 +32,25 @@ class OpenClawInteractionRendererTests(unittest.TestCase):
         )
         self.assertNotIn("webApp", button)
 
+    def test_telegram_private_http_uses_portable_url_button(self):
+        interaction = _interaction()
+        interaction["presentation"]["url"] = (
+            "http://10.10.50.213:8780/input/opaque"
+        )
+
+        rendered = render_openclaw_interaction(
+            interaction,
+            channel="telegram",
+            private_chat=True,
+        )
+
+        button = rendered["presentation"]["blocks"][-1]["buttons"][0]
+        self.assertEqual(
+            button["url"],
+            "http://10.10.50.213:8780/input/opaque",
+        )
+        self.assertNotIn("webApp", button)
+
     def test_completed_interaction_has_no_user_button_and_is_ready_to_resume(self):
         interaction = _interaction()
         interaction["state"] = "completed"

@@ -1,0 +1,56 @@
+{
+  "id": "agentbridge-interactions",
+  "name": "AgentBridge Interactions",
+  "description": "Renders trusted AgentBridge credential, field-input, and authorization cards in private OpenClaw conversations.",
+  "contracts": {
+    "agentToolResultMiddleware": [
+      "openclaw"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowedCardOrigins": {
+        "type": "array",
+        "description": "Exact trusted origins allowed for AgentBridge card buttons.",
+        "items": {
+          "type": "string",
+          "pattern": "^https?://[^/]+$"
+        },
+        "uniqueItems": true,
+        "default": []
+      },
+      "mcpServerName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100,
+        "default": "agentbridge"
+      },
+      "autoPoll": {
+        "type": "boolean",
+        "default": true
+      },
+      "pollIntervalSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 30,
+        "default": 2
+      },
+      "maxPollSeconds": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 1800,
+        "default": 900
+      },
+      "wakeAgentOnComplete": {
+        "type": "boolean",
+        "description": "Request a model heartbeat after host-side resume. Keep disabled until the model data boundary is approved.",
+        "default": false
+      }
+    }
+  }
+}
