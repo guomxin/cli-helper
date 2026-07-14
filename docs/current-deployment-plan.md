@@ -504,7 +504,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
 | Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 171 项通过 |
-| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，重启后再次读取成功 |
+| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话并再次读取成功 |
 | OpenClaw interaction renderer 合约 | 已实现并做本地兼容检查 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；外部模型智能体回合待单独授权 |
 | 可安装 OpenClaw 插件与自动接线 | 待实现 |
@@ -518,8 +518,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - MCP `8790` 与可信卡片 `8780` 均可从 OpenClaw 用户电脑访问，未修改主机防火墙；
 - OpenClaw 2026.7.1 使用 `streamable-http` 注册 `agentbridge`，Bearer 仅保存在本机可信环境文件，`openclaw.json` 保存环境变量引用；
 - OpenClaw `mcp probe` 成功发现 14 个 AgentBridge 工具；
-- 可信认证卡完成真实 OA 登录，服务重启后 `oa_session_login` 返回 `succeeded`、`reused=true`，没有再次发卡；
-- 重启前后 `oa_workflow_pending_list` 均成功读取真实 OA 数据；
+- 可信认证卡完成真实 OA 登录；关闭其他 OA 页面后连续两次重启服务，`oa_session_login` 每次都返回 `succeeded`、`reused=true`，身份绑定一致且没有再次发卡；
+- 登录基线及两次重启后的 `oa_workflow_pending_list` 均成功读取 4 条真实待办，证明 Linux AES-256-GCM 会话状态不只是单次重启可恢复；
+- 对照验证中，普通 Chrome 留有一个已退出登录的 OA 页面时曾出现会话失效；关闭该页面并重新认证后连续两次重启均通过。现有证据不能证明该页面就是唯一原因，但符合 OA 单登录会话竞争特征，PoC 运维阶段应避免同一账号在其他浏览器窗口打开或刷新 OA；
 - 私网 HTTP 下的 Chrome opaque origin 兼容修复已在浏览器复现、目标 Ubuntu 专项测试和全量 171 项测试中通过；
 - 没有执行 OA 写操作；OpenClaw 外部模型智能体回合因数据出境边界未获单独授权而未执行。
 
