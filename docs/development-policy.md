@@ -9,10 +9,16 @@ The only active runtime is central AgentBridge:
 - CentralCapabilityService shared by CLI and MCP;
 - per-user HTTP sessions and managed Playwright profiles;
 - trusted authentication, business-input, and authorization cards;
+- host-independent `agentbridge.interaction.v1` envelopes with poll/resume;
 - SQLite operation, identity, field-submission, and authorization ledgers.
 
 Do not add a client browser extension, localhost daemon, daemon proxy command,
 personal-browser Profile dependency, or silent fallback execution path.
+
+AgentBridge returns interaction envelopes; it does not launch a browser or
+assume Codex is the caller. Host renderers may translate envelopes into native
+buttons or embedded web apps, but they must contain no OA business rules and
+must not route credentials or trusted business fields through the model.
 
 The Credential Broker, capability Worker, and every process that restores a
 given user's encrypted session state must run under one fixed OS security

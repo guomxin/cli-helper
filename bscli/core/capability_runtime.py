@@ -111,6 +111,13 @@ class CapabilityEngine:
 
 
 def _operation_response(operation: dict, *, reused: bool) -> dict:
+    next_action = operation.get("next_action")
+    interaction = (
+        next_action.get("interaction")
+        if isinstance(next_action, dict)
+        and isinstance(next_action.get("interaction"), dict)
+        else None
+    )
     return {
         "protocolVersion": "0.1",
         "requestId": operation["request_id"],
@@ -119,7 +126,8 @@ def _operation_response(operation: dict, *, reused: bool) -> dict:
         "result": operation.get("result"),
         "error": operation.get("error"),
         "evidenceRefs": [],
-        "nextAction": operation.get("next_action"),
+        "nextAction": next_action,
+        "interaction": interaction,
         "reused": reused,
     }
 

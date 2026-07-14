@@ -36,6 +36,11 @@ from bscli.core.field_submissions import (
     FieldSubmissionStateError,
     FieldSubmissionStore,
 )
+from bscli.core.interactions import (
+    InteractionIntegrityError,
+    InteractionStore,
+    build_interaction_envelope,
+)
 from bscli.core.session_secrets import (
     SessionSecretError,
     SessionStateAccessDenied,
@@ -75,6 +80,7 @@ class CentralCapabilityService:
         self.challenges = AuthChallengeStore(self.db_path)
         self.field_submissions = FieldSubmissionStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
+        self.interactions = InteractionStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
         self.trusted_card_base_url = trusted_card_base_url
@@ -259,6 +265,7 @@ class CentralCapabilityService:
             card_base_url=card_base_url,
             ttl_seconds=ttl_seconds,
         )
+        interaction = self._credential_interaction(challenge)
         return {
             "protocolVersion": "0.1",
             "status": "requires_user_action",
@@ -266,9 +273,12 @@ class CentralCapabilityService:
             "challenge": challenge_response(challenge),
             "nextAction": {
                 "type": "open_authentication_card",
+                "interactionId": interaction["interactionId"],
                 "challengeId": challenge["challenge_id"],
                 "cardUrl": challenge["card_url"],
+                "interaction": interaction,
             },
+            "interaction": interaction,
             "reused": False,
         }
 
@@ -288,6 +298,195 @@ class CentralCapabilityService:
             "count": len(operations),
             "operations": [operation_response(operation) for operation in operations],
         }
+
+    def get_interaction(self, *, user_subject: str, interaction_id: str) -> dict:
+        _record, _resource, interaction = self._load_interaction(
+            user_subject=user_subject,
+            interaction_id=interaction_id,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "interaction": interaction,
+        }
+
+    def resume_interaction(
+        self,
+        *,
+        user_subject: str,
+        interaction_id: str,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        record, resource, interaction = self._load_interaction(
+            user_subject=user_subject,
+            interaction_id=interaction_id,
+        )
+        if interaction["state"] in {
+            "declined",
+            "expired",
+            "failed",
+            "superseded",
+        }:
+            return _interaction_not_ready_response(interaction)
+        if interaction["resume"]["completed"]:
+            operation_id = resource.get("consume_operation_id") or resource.get(
+                "commit_operation_id"
+            )
+            operation = self.operations.get(operation_id) if operation_id else None
+            return {
+                "protocolVersion": "0.1",
+                "status": "already_resumed",
+                "interaction": interaction,
+                "operation": operation_response(operation) if operation else None,
+            }
+
+        if not interaction["resume"]["ready"]:
+            return _interaction_not_ready_response(interaction)
+
+        resume_spec = record["resume_spec"]
+        if resume_spec["kind"] == "session_ready":
+            session = self.sessions.get(record["session_id"])
+            if session["state"] != "active":
+                return _interaction_not_ready_response(
+                    interaction,
+                    code="SESSION_NOT_ACTIVE",
+                    message="The authenticated session is no longer active.",
+                )
+            return {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "interaction": interaction,
+                "result": {"session": session_response(session)},
+                "nextAction": {"type": "retry_original_request"},
+            }
+
+        if resume_spec["kind"] != "capability":
+            raise InteractionIntegrityError("unsupported interaction resume kind")
+        session = self.sessions.get(record["session_id"])
+        resume_epoch = session.get("last_verified_at") or session["updated_at"]
+        response = self.invoke(
+            user_subject=user_subject,
+            capability_name=resume_spec["capability"],
+            arguments=resume_spec["arguments"],
+            idempotency_key=idempotency_key
+            or f"interaction-resume:{record['interaction_id']}:{resume_epoch}",
+        )
+        return {
+            **response,
+            "resumedFromInteractionId": record["interaction_id"],
+        }
+
+    def _load_interaction(
+        self,
+        *,
+        user_subject: str,
+        interaction_id: str,
+    ) -> tuple[dict, dict, dict]:
+        record = self.interactions.get(
+            interaction_id,
+            user_subject=user_subject,
+        )
+        interaction_type = record["interaction_type"]
+        if interaction_type == "credential":
+            resource = self.challenges.get(record["resource_id"])
+        elif interaction_type == "business_input":
+            resource = self.field_submissions.get(record["resource_id"])
+        elif interaction_type == "execution_authorization":
+            resource = self.write_authorizations.get(record["resource_id"])
+        else:
+            raise InteractionIntegrityError("unsupported interaction type")
+        if any(
+            (
+                resource["user_subject"] != record["user_subject"],
+                resource["system_id"] != record["system_id"],
+                resource["session_id"] != record["session_id"],
+            )
+        ):
+            raise InteractionIntegrityError(
+                "interaction binding does not match its trusted resource"
+            )
+        return record, resource, build_interaction_envelope(record, resource)
+
+    def _credential_interaction(self, challenge: dict) -> dict:
+        record = self.interactions.register(
+            interaction_type="credential",
+            user_subject=challenge["user_subject"],
+            system_id=challenge["system_id"],
+            session_id=challenge["session_id"],
+            operation_id=None,
+            resource_id=challenge["challenge_id"],
+            title=f"登录{challenge['system_name']}",
+            message="请在 AgentBridge 安全页面完成登录，凭据不会经过智能体。",
+            display={
+                "systemName": challenge["system_name"],
+                "expectedPrincipalRef": challenge.get("expected_principal_ref"),
+            },
+            resume_spec={
+                "kind": "session_ready",
+                "systemId": challenge["system_id"],
+            },
+            created_at=challenge["created_at"],
+            expires_at=challenge["expires_at"],
+        )
+        return build_interaction_envelope(record, challenge)
+
+    def _business_input_interaction(self, submission: dict) -> dict:
+        schema = submission["form_schema"]
+        record = self.interactions.register(
+            interaction_type="business_input",
+            user_subject=submission["user_subject"],
+            system_id=submission["system_id"],
+            session_id=submission["session_id"],
+            operation_id=submission["create_operation_id"],
+            resource_id=submission["submission_id"],
+            title=str(schema.get("title") or "填写业务信息"),
+            message=str(
+                schema.get("notice")
+                or "请在 AgentBridge 安全页面填写业务信息。"
+            ),
+            display={
+                "systemName": schema.get("system"),
+                "effect": schema.get("effect"),
+                "fieldCount": len(schema.get("fields") or []),
+            },
+            resume_spec={
+                "kind": "capability",
+                "capability": submission["capability_name"],
+                "arguments": {
+                    "input_submission_id": submission["submission_id"],
+                },
+            },
+            created_at=submission["created_at"],
+            expires_at=submission["expires_at"],
+        )
+        return build_interaction_envelope(record, submission)
+
+    def _execution_authorization_interaction(self, authorization: dict) -> dict:
+        summary = authorization["summary"]
+        record = self.interactions.register(
+            interaction_type="execution_authorization",
+            user_subject=authorization["user_subject"],
+            system_id=authorization["system_id"],
+            session_id=authorization["session_id"],
+            operation_id=authorization["prepare_operation_id"],
+            resource_id=authorization["authorization_id"],
+            title=str(summary.get("title") or "确认执行计划"),
+            message="请核对冻结计划并决定是否允许 AgentBridge 执行。",
+            display={
+                "systemName": summary.get("system"),
+                "effect": summary.get("effect"),
+                "fieldCount": len(summary.get("fields") or []),
+            },
+            resume_spec={
+                "kind": "capability",
+                "capability": authorization["capability_name"],
+                "arguments": {
+                    "authorization_id": authorization["authorization_id"],
+                },
+            },
+            created_at=authorization["created_at"],
+            expires_at=authorization["expires_at"],
+        )
+        return build_interaction_envelope(record, authorization)
 
     @contextmanager
     def authentication_worker(
@@ -410,6 +609,7 @@ class CentralCapabilityService:
             card_base_url=self.trusted_card_base_url,
             ttl_seconds=900,
         )
+        interaction = self._execution_authorization_interaction(authorization)
         try:
             self.field_submissions.consume(
                 field_submission["submission_id"],
@@ -431,6 +631,7 @@ class CentralCapabilityService:
             "The business-trip draft plan requires confirmation in the trusted action card.",
             next_action={
                 "type": "open_write_authorization_card",
+                "interactionId": interaction["interactionId"],
                 "authorizationId": authorization["authorization_id"],
                 "cardUrl": authorization["card_url"],
                 "planHash": authorization["plan_hash"],
@@ -444,6 +645,7 @@ class CentralCapabilityService:
                     "capability": BUSINESS_TRIP_SAVE_CAPABILITY,
                     "arguments": {"authorization_id": authorization["authorization_id"]},
                 },
+                "interaction": interaction,
             },
         )
 
@@ -489,13 +691,14 @@ class CentralCapabilityService:
             raise self._field_input_unavailable(submission["state"])
         return submission, submission["values"]
 
-    @staticmethod
-    def _field_input_required(submission: dict) -> RequiresUserAction:
+    def _field_input_required(self, submission: dict) -> RequiresUserAction:
+        interaction = self._business_input_interaction(submission)
         return RequiresUserAction(
             "FIELD_INPUT_REQUIRED",
             "Business-trip fields must be entered in the trusted field card.",
             next_action={
                 "type": "open_field_input_card",
+                "interactionId": interaction["interactionId"],
                 "inputSubmissionId": submission["submission_id"],
                 "cardUrl": submission["card_url"],
                 "expiresAt": submission["expires_at"],
@@ -503,6 +706,7 @@ class CentralCapabilityService:
                     "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
                     "arguments": {"input_submission_id": submission["submission_id"]},
                 },
+                "interaction": interaction,
             },
         )
 
@@ -539,15 +743,18 @@ class CentralCapabilityService:
         if authorization["user_subject"] != session["user_subject"]:
             raise KeyError("write authorization not found")
         if authorization["state"] == "pending":
+            interaction = self._execution_authorization_interaction(authorization)
             raise RequiresUserAction(
                 "WRITE_AUTHORIZATION_REQUIRED",
                 "The trusted action card has not been approved.",
                 next_action={
                     "type": "open_write_authorization_card",
+                    "interactionId": interaction["interactionId"],
                     "authorizationId": authorization_id,
                     "cardUrl": authorization["card_url"],
                     "planHash": authorization["plan_hash"],
                     "expiresAt": authorization["expires_at"],
+                    "interaction": interaction,
                 },
             )
         if authorization["state"] != "approved":
@@ -628,6 +835,42 @@ def login_required_action(user_subject: str, session: dict | None) -> RequiresUs
             "sessionState": session["state"] if session else "not_found",
         },
     )
+
+
+def _interaction_not_ready_response(
+    interaction: dict,
+    *,
+    code: str | None = None,
+    message: str | None = None,
+) -> dict:
+    state = interaction["state"]
+    pending = state in {"pending", "processing"}
+    effective_code = code or {
+        "pending": "INTERACTION_PENDING",
+        "processing": "INTERACTION_PROCESSING",
+        "declined": "INTERACTION_DECLINED",
+        "expired": "INTERACTION_EXPIRED",
+        "superseded": "INTERACTION_SUPERSEDED",
+        "failed": "INTERACTION_FAILED",
+    }.get(state, "INTERACTION_UNAVAILABLE")
+    effective_message = message or (
+        "The trusted user interaction has not completed yet."
+        if pending
+        else f"The trusted user interaction is unavailable: {state}."
+    )
+    return {
+        "protocolVersion": "0.1",
+        "status": "requires_user_action" if pending else "failed",
+        "error": {
+            "code": effective_code,
+            "message": effective_message,
+        },
+        "interaction": interaction,
+        "nextAction": {
+            "type": "wait_for_interaction" if pending else "start_again",
+            "interactionId": interaction["interactionId"],
+        },
+    }
 
 
 def _session_runtime_mismatch_action(
@@ -743,6 +986,13 @@ def session_response(session: dict) -> dict:
 
 
 def operation_response(operation: dict) -> dict:
+    next_action = operation.get("next_action")
+    interaction = (
+        next_action.get("interaction")
+        if isinstance(next_action, dict)
+        and isinstance(next_action.get("interaction"), dict)
+        else None
+    )
     return {
         "operationId": operation["operation_id"],
         "requestId": operation["request_id"],
@@ -752,7 +1002,8 @@ def operation_response(operation: dict) -> dict:
         "status": operation["status"],
         "result": operation.get("result"),
         "error": operation.get("error"),
-        "nextAction": operation.get("next_action"),
+        "nextAction": next_action,
+        "interaction": interaction,
         "createdAt": operation["created_at"],
         "updatedAt": operation["updated_at"],
         "finishedAt": operation.get("finished_at"),

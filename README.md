@@ -98,8 +98,8 @@ python -m bscli.cli.main --home .bscli capability invoke \
   --idempotency-key <request-key>
 ~~~
 
-An inactive or OA-expired session returns `requires_user_action /
-LOGIN_REQUIRED`; the service never falls back to a personal browser or retired
+An inactive or OA-expired session returns
+`requires_user_action / LOGIN_REQUIRED`; the service never falls back to a personal browser or retired
 bridge. A transient live-probe failure returns `SESSION_CHECK_UNAVAILABLE` and
 must be retried without asking for credentials. `SESSION_RUNTIME_MISMATCH`
 means that the encrypted state was opened under a different Windows security
@@ -111,6 +111,28 @@ service under a fixed OS security identity. Direct CLI processes that restore
 Windows DPAPI state must run under that same identity. Agent integrations
 should normally use the long-running central MCP service, which keeps this
 runtime boundary stable across calls.
+
+## Host-Independent Interactions
+
+Authentication, business input, and execution authorization now share
+`agentbridge.interaction.v1`. AgentBridge returns an `interaction` object and
+never launches a browser itself. Codex, OpenClaw, or another host renders the
+trusted URL, polls state outside the model loop, and calls the resume tool when
+the user-bound record is ready.
+
+~~~bash
+python -m bscli.cli.main --home .bscli interaction get \
+  <interaction-id> --user-subject <trusted-user-subject>
+
+python -m bscli.cli.main --home .bscli interaction resume \
+  <interaction-id> --user-subject <trusted-user-subject> \
+  --idempotency-key <stable-resume-key>
+~~~
+
+The equivalent MCP tools are `agentbridge_interaction_get` and
+`agentbridge_interaction_resume`. The first OpenClaw renderer emits portable
+`presentation` blocks and Telegram private-chat `webApp` buttons. See the
+[agent interaction protocol](docs/agent-interaction-protocol.md).
 
 ## Governed Business-Trip Draft
 
@@ -128,28 +150,25 @@ python -m bscli.cli.main --home .bscli capability invoke \
   --json '{}'
 ~~~
 
-2. The user fills the returned /input/<opaque-id> card. Continue using only its
-   opaque submission ID:
+2. The host renders the returned business-input interaction. After the user
+   submits the trusted form and polling reports `resume.ready=true`, resume it:
 
 ~~~bash
-python -m bscli.cli.main --home .bscli capability invoke \
-  oa.business_trip.prepare \
+python -m bscli.cli.main --home .bscli interaction resume \
+  <field-interaction-id> \
   --user-subject <trusted-user-subject> \
-  --card-base-url http://127.0.0.1:8780 \
-  --idempotency-key <prepare-key> \
-  --json '{"input_submission_id":"<input-submission-id>"}'
+  --idempotency-key <prepare-key>
 ~~~
 
 3. The second prepare validates the live template and form contract, freezes
-   the plan, and returns a separate authorization card. After user approval,
-   save the draft:
+   the plan, and returns a separate authorization interaction. After user
+   approval, resume that interaction:
 
 ~~~bash
-python -m bscli.cli.main --home .bscli capability invoke \
-  oa.business_trip.save_draft \
+python -m bscli.cli.main --home .bscli interaction resume \
+  <authorization-interaction-id> \
   --user-subject <trusted-user-subject> \
-  --idempotency-key <save-key> \
-  --json '{"authorization_id":"<authorization-id>"}'
+  --idempotency-key <save-key>
 ~~~
 
 A successful commit reloads the server-backed wait-send item, reads its fields
@@ -222,3 +241,4 @@ items.
 - [PoC validation plan](poc-validation-plan.md)
 - [Deferred production considerations](deferred-considerations.md)
 - [Legacy bridge retirement ledger](docs/legacy-bridge-retirement.md)
+- [Agent interaction protocol](docs/agent-interaction-protocol.md)

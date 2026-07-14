@@ -51,7 +51,7 @@ class TrustedActionApplication:
             return self._message_response(
                 status=200,
                 title="操作已授权",
-                message="可以返回智能体执行这份已冻结的操作计划。",
+                message="计划已经授权。此页面可以关闭，智能体将检测状态并继续执行。",
                 tone="success",
             )
         if state == "consumed":
@@ -164,7 +164,7 @@ class TrustedActionApplication:
                 return self._message_response(
                     status=200,
                     title="操作已授权",
-                    message="可以返回智能体执行这份已冻结的操作计划。",
+                    message="计划已经授权。此页面可以关闭，智能体将检测状态并继续执行。",
                     tone="success",
                 )
             return self._message_response(

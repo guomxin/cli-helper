@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
 from bscli.adapters.seeyon_central import SeeyonLoginRequired
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.interactions import InteractionNotFound
 from bscli.core.session_secrets import SessionStateAccessDenied
 
 
@@ -81,6 +82,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(response["status"], "requires_user_action")
             self.assertEqual(response["challenge"]["expectedPrincipalRef"], "Alice")
             self.assertTrue(response["nextAction"]["cardUrl"].startswith("http://127.0.0.1:8780/auth/"))
+            self.assertEqual(response["interaction"]["type"], "credential")
+            self.assertEqual(
+                response["interaction"]["interactionId"],
+                response["nextAction"]["interactionId"],
+            )
 
     def test_start_login_reuses_live_active_session_without_card(self):
         with TemporaryDirectory() as tmp:
@@ -113,6 +119,71 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 service.sessions.get(session["session_id"])["state"],
                 "active",
             )
+
+    def test_completed_credential_interaction_resumes_to_active_session(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            started = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+            challenge_id = started["challenge"]["challengeId"]
+            csrf = service.challenges.issue_csrf(challenge_id)
+            service.challenges.claim(
+                challenge_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            service.challenges.complete(
+                challenge_id,
+                result={"principal": "Alice"},
+            )
+            session = service.sessions.find(user_subject="user-a", system_id="oa")
+            service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Alice",
+            )
+
+            response = service.resume_interaction(
+                user_subject="user-a",
+                interaction_id=started["interaction"]["interactionId"],
+            )
+
+            self.assertEqual(response["status"], "succeeded")
+            self.assertEqual(response["interaction"]["state"], "completed")
+            self.assertEqual(response["nextAction"]["type"], "retry_original_request")
+            self.assertEqual(response["result"]["session"]["status"], "active")
+
+    def test_failed_credential_interaction_cannot_be_reported_as_resumed(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            started = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+            )
+            challenge_id = started["challenge"]["challengeId"]
+            csrf = service.challenges.issue_csrf(challenge_id)
+            service.challenges.claim(
+                challenge_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            service.challenges.fail(
+                challenge_id,
+                code="LOGIN_REJECTED",
+                message="OA rejected the login.",
+            )
+
+            response = service.resume_interaction(
+                user_subject="user-a",
+                interaction_id=started["interaction"]["interactionId"],
+            )
+
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["error"]["code"], "INTERACTION_FAILED")
+            self.assertEqual(response["nextAction"]["type"], "start_again")
 
     def test_start_login_creates_card_only_after_live_probe_reports_expired(self):
         with TemporaryDirectory() as tmp:
@@ -361,6 +432,160 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             consumed = service.write_authorizations.get(authorization_id)
             self.assertEqual(consumed["state"], "consumed")
             self.assertEqual(consumed["commit_operation_id"], committed["operationId"])
+
+    def test_interaction_resume_completes_business_trip_without_duplicate_effects(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.business_trip.prepare",
+                arguments={},
+            )
+            field_interaction = started["interaction"]
+            self.assertEqual(field_interaction["type"], "business_input")
+            self.assertEqual(field_interaction["state"], "pending")
+            self.assertEqual(
+                field_interaction["interactionId"],
+                started["nextAction"]["interactionId"],
+            )
+            with self.assertRaises(InteractionNotFound):
+                service.get_interaction(
+                    user_subject="user-b",
+                    interaction_id=field_interaction["interactionId"],
+                )
+
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            _submit_business_trip_fields(service, submission_id)
+            completed_field = service.get_interaction(
+                user_subject="user-a",
+                interaction_id=field_interaction["interactionId"],
+            )["interaction"]
+            self.assertEqual(completed_field["state"], "completed")
+            self.assertTrue(completed_field["resume"]["ready"])
+
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "save_business_trip_request_draft",
+                    "target": {"template_id": "template-1"},
+                    "form_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"reason": "Test"},
+                },
+                "summary": {
+                    "title": "保存出差申请草稿",
+                    "system": "致远 OA",
+                    "effect": "保存待发草稿",
+                    "fields": [{"label": "事由", "value": "Test"}],
+                },
+            }
+            with patch(
+                "bscli.core.central_service.prepare_business_trip_draft",
+                return_value=prepared_payload,
+            ) as prepare_draft:
+                prepared = service.resume_interaction(
+                    user_subject="user-a",
+                    interaction_id=field_interaction["interactionId"],
+                )
+                repeated_prepare = service.resume_interaction(
+                    user_subject="user-a",
+                    interaction_id=field_interaction["interactionId"],
+                )
+
+            self.assertEqual(prepared["status"], "requires_user_action")
+            self.assertEqual(
+                prepared["resumedFromInteractionId"],
+                field_interaction["interactionId"],
+            )
+            self.assertEqual(prepared["interaction"]["type"], "execution_authorization")
+            self.assertEqual(repeated_prepare["status"], "already_resumed")
+            prepare_draft.assert_called_once()
+
+            authorization_id = prepared["nextAction"]["authorizationId"]
+            authorization_interaction = prepared["interaction"]
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def save(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {
+                    "draft_saved": True,
+                    "workflow_submitted": False,
+                    "submitted_count": 0,
+                    "verification": {"confirmed": True},
+                }
+
+            with patch(
+                "bscli.core.central_service.save_business_trip_draft",
+                side_effect=save,
+            ) as save_draft:
+                committed = service.resume_interaction(
+                    user_subject="user-a",
+                    interaction_id=authorization_interaction["interactionId"],
+                )
+                repeated_commit = service.resume_interaction(
+                    user_subject="user-a",
+                    interaction_id=authorization_interaction["interactionId"],
+                )
+
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertTrue(committed["result"]["draft_saved"])
+            self.assertEqual(repeated_commit["status"], "already_resumed")
+            save_draft.assert_called_once()
+
+    def test_interaction_resume_retries_after_session_is_reauthenticated(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.business_trip.prepare",
+                arguments={},
+            )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            interaction_id = started["interaction"]["interactionId"]
+            _submit_business_trip_fields(service, submission_id)
+            service.sessions.mark_expired(session["session_id"], "OA expired")
+
+            blocked = service.resume_interaction(
+                user_subject="user-a",
+                interaction_id=interaction_id,
+            )
+            self.assertEqual(blocked["error"]["code"], "LOGIN_REQUIRED")
+
+            service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Alice",
+            )
+            service.session_states.save(session["session_id"], {"cookies": []})
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "save_business_trip_request_draft",
+                    "target": {"template_id": "template-1"},
+                    "form_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"reason": "Test"},
+                },
+                "summary": {"title": "Draft", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_business_trip_draft",
+                return_value=prepared_payload,
+            ) as prepare_draft:
+                resumed = service.resume_interaction(
+                    user_subject="user-a",
+                    interaction_id=interaction_id,
+                )
+
+            self.assertEqual(resumed["status"], "requires_user_action")
+            self.assertEqual(
+                resumed["error"]["code"],
+                "WRITE_AUTHORIZATION_REQUIRED",
+            )
+            prepare_draft.assert_called_once()
 
     def test_business_trip_commit_before_approval_has_no_effect_and_unknown_is_durable(self):
         with TemporaryDirectory() as tmp:

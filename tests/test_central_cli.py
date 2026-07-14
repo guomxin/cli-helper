@@ -204,6 +204,7 @@ class CentralCliTests(unittest.TestCase):
         self.assertEqual(payload["challenge"]["state"], "pending")
         self.assertEqual(payload["challenge"]["systemName"], "致远 OA")
         self.assertTrue(payload["challenge"]["cardUrl"].startswith("http://127.0.0.1:8780/auth/"))
+        self.assertEqual(payload["interaction"]["type"], "credential")
         self.assertNotIn("password", json.dumps(payload).lower())
 
     def test_session_login_prints_reused_active_session_without_card(self):
@@ -247,6 +248,73 @@ class CentralCliTests(unittest.TestCase):
         self.assertTrue(payload["reused"])
         self.assertNotIn("challenge", payload)
         service.start_login.assert_called_once()
+
+    def test_interaction_get_and_resume_use_host_independent_service_methods(self):
+        with TemporaryDirectory() as tmp:
+            service = MagicMock()
+            service.get_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "interaction": {
+                    "interactionId": "interaction-123456",
+                    "type": "business_input",
+                    "state": "completed",
+                    "resume": {"ready": True, "completed": False},
+                },
+            }
+            service.resume_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "resumedFromInteractionId": "interaction-123456",
+            }
+            with (
+                patch("bscli.cli.main.CentralCapabilityService", return_value=service),
+                redirect_stdout(io.StringIO()) as get_stdout,
+            ):
+                get_exit = main(
+                    [
+                        "--home",
+                        tmp,
+                        "interaction",
+                        "get",
+                        "interaction-123456",
+                        "--user-subject",
+                        "user-a",
+                    ]
+                )
+            with (
+                patch("bscli.cli.main.CentralCapabilityService", return_value=service),
+                redirect_stdout(io.StringIO()) as resume_stdout,
+            ):
+                resume_exit = main(
+                    [
+                        "--home",
+                        tmp,
+                        "interaction",
+                        "resume",
+                        "interaction-123456",
+                        "--user-subject",
+                        "user-a",
+                        "--idempotency-key",
+                        "resume-1",
+                    ]
+                )
+
+        self.assertEqual(get_exit, 0)
+        self.assertEqual(resume_exit, 0)
+        self.assertEqual(
+            json.loads(get_stdout.getvalue())["interaction"]["state"],
+            "completed",
+        )
+        self.assertEqual(json.loads(resume_stdout.getvalue())["status"], "succeeded")
+        service.get_interaction.assert_called_once_with(
+            user_subject="user-a",
+            interaction_id="interaction-123456",
+        )
+        service.resume_interaction.assert_called_once_with(
+            user_subject="user-a",
+            interaction_id="interaction-123456",
+            idempotency_key="resume-1",
+        )
 
 
 if __name__ == "__main__":

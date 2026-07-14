@@ -55,6 +55,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_workflow_detail_get", names)
         self.assertIn("oa_session_login", names)
         self.assertIn("agentbridge_operation_list", names)
+        self.assertIn("agentbridge_interaction_get", names)
+        self.assertIn("agentbridge_interaction_resume", names)
         self.assertIn("oa_business_trip_prepare", names)
         self.assertIn("oa_business_trip_save_draft", names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
@@ -174,6 +176,60 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["expected_principal_ref"], "Alice")
         self.assertEqual(call["card_base_url"], "http://127.0.0.1:8780")
         self.assertEqual(call["ttl_seconds"], 600)
+
+    def test_interaction_resume_requires_write_scope_for_business_input(self):
+        with self._server() as (service, store, read_token, client):
+            write_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:draft"],
+                ttl_seconds=3600,
+            )
+            service.get_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "interaction": {
+                    "interactionId": "interaction-123456",
+                    "type": "business_input",
+                    "state": "completed",
+                    "resume": {"ready": True, "completed": False},
+                },
+            }
+            service.resume_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "status": "requires_user_action",
+                "resumedFromInteractionId": "interaction-123456",
+            }
+            denied = self._request(
+                client,
+                "tools/call",
+                request_id=9,
+                token=read_token,
+                params={
+                    "name": "agentbridge_interaction_resume",
+                    "arguments": {"interaction_id": "interaction-123456"},
+                },
+            )
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=10,
+                token=write_identity["token"],
+                params={
+                    "name": "agentbridge_interaction_resume",
+                    "arguments": {
+                        "interaction_id": "interaction-123456",
+                        "idempotency_key": "resume-1",
+                    },
+                },
+            )
+
+        self.assertTrue(denied.json()["result"]["isError"])
+        self.assertFalse(response.json()["result"]["isError"])
+        service.resume_interaction.assert_called_once_with(
+            user_subject="user-a",
+            interaction_id="interaction-123456",
+            idempotency_key="resume-1",
+        )
 
     def test_revoked_token_is_rejected_without_calling_service(self):
         with self._server() as (service, store, token, client):

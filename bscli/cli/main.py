@@ -28,6 +28,7 @@ from bscli.core.central_service import (
 )
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.field_submissions import FieldSubmissionStore
+from bscli.core.interactions import InteractionIntegrityError, InteractionNotFound
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.session_secrets import SessionStateStore
@@ -54,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_auth(args, home)
     if args.area == "operation":
         return handle_operation(args, home)
+    if args.area == "interaction":
+        return handle_interaction(args, home)
     if args.area == "adapter":
         return handle_adapter(args)
     if args.area == "mcp":
@@ -131,6 +134,23 @@ def build_parser() -> argparse.ArgumentParser:
     operation_list = operation_sub.add_parser("list")
     operation_list.add_argument("--user-subject")
     operation_list.add_argument("--limit", type=int, default=100)
+
+    interaction = subparsers.add_parser("interaction")
+    interaction_sub = interaction.add_subparsers(dest="action", required=True)
+    interaction_get = interaction_sub.add_parser("get")
+    interaction_get.add_argument("interaction_id")
+    interaction_get.add_argument("--user-subject", required=True)
+    interaction_get.add_argument("--base-url")
+    interaction_get.add_argument("--card-base-url", default="http://127.0.0.1:8780")
+    interaction_resume = interaction_sub.add_parser("resume")
+    interaction_resume.add_argument("interaction_id")
+    interaction_resume.add_argument("--user-subject", required=True)
+    interaction_resume.add_argument("--idempotency-key")
+    interaction_resume.add_argument("--base-url")
+    interaction_resume.add_argument(
+        "--card-base-url",
+        default="http://127.0.0.1:8780",
+    )
 
     adapter = subparsers.add_parser("adapter")
     adapter_sub = adapter.add_subparsers(dest="action", required=True)
@@ -389,6 +409,41 @@ def handle_operation(args: argparse.Namespace, home: Path) -> int:
         )
         return 0
     raise ValueError(f"unknown operation action: {args.action}")
+
+
+def handle_interaction(args: argparse.Namespace, home: Path) -> int:
+    service = CentralCapabilityService(
+        home=home,
+        base_url=_central_base_url(home, args.base_url),
+        trusted_card_base_url=args.card_base_url,
+    )
+    try:
+        if args.action == "get":
+            response = service.get_interaction(
+                user_subject=args.user_subject,
+                interaction_id=args.interaction_id,
+            )
+        elif args.action == "resume":
+            response = service.resume_interaction(
+                user_subject=args.user_subject,
+                interaction_id=args.interaction_id,
+                idempotency_key=args.idempotency_key,
+            )
+        else:
+            raise ValueError(f"unknown interaction action: {args.action}")
+    except InteractionNotFound as exc:
+        print_json(_central_cli_error("INTERACTION_NOT_FOUND", str(exc)))
+        return 2
+    except (InteractionIntegrityError, OperationConflictError, ValueError) as exc:
+        print_json(_central_cli_error("INTERACTION_INVALID", str(exc)))
+        return 2
+    print_json(response)
+    return 0 if response.get("status") in {
+        None,
+        "succeeded",
+        "requires_user_action",
+        "already_resumed",
+    } else 1
 
 
 def handle_mcp(args: argparse.Namespace) -> int:

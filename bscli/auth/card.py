@@ -65,7 +65,7 @@ class TrustedAuthApplication:
             return self._message_response(
                 status=200,
                 title="认证完成",
-                message="OA 会话已经建立，可以返回智能体继续操作。",
+                message="OA 会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
                 tone="success",
             )
         return self._message_response(
@@ -168,7 +168,7 @@ class TrustedAuthApplication:
                 return self._message_response(
                     status=200,
                     title="认证完成",
-                    message="OA 会话已经建立，可以返回智能体继续操作。",
+                    message="OA 会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
                     tone="success",
                 )
             error_code = str((result.get("error") or {}).get("code") or "BROKER_LOGIN_FAILED")

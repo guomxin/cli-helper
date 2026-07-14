@@ -64,7 +64,7 @@ class TrustedFieldApplication:
             return self._message_response(
                 status=200,
                 title="字段已提交",
-                message="请返回智能体继续校验表单并生成操作计划。",
+                message="字段已经安全提交。此页面可以关闭，智能体将检测状态并继续生成计划。",
                 tone="success",
             )
         if state == "consumed":
@@ -209,7 +209,7 @@ class TrustedFieldApplication:
             return self._message_response(
                 status=200,
                 title="字段已提交",
-                message="请返回智能体继续校验表单并生成操作计划。",
+                message="字段已经安全提交。此页面可以关闭，智能体将检测状态并继续生成计划。",
                 tone="success",
             )
         finally:

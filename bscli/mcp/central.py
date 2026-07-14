@@ -382,6 +382,68 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_interaction_get",
+        title="Get AgentBridge User Interaction",
+        description=(
+            "Read one host-independent trusted interaction envelope. Poll this tool "
+            "until resume.ready is true; never collect credential or business-field "
+            "values in the model conversation."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_interaction_get(
+        interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.get_interaction,
+            user_subject=identity["user_subject"],
+            interaction_id=interaction_id,
+        )
+
+    @mcp.tool(
+        name="agentbridge_interaction_resume",
+        title="Resume Completed AgentBridge Interaction",
+        description=(
+            "Continue an interaction after the user completed its trusted surface. "
+            "This tool cannot enter fields or approve a plan; it only consumes an "
+            "already completed, user-bound interaction."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_interaction_resume(
+        interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        current = await asyncio.to_thread(
+            service.get_interaction,
+            user_subject=identity["user_subject"],
+            interaction_id=interaction_id,
+        )
+        if current["interaction"]["type"] in {
+            "business_input",
+            "execution_authorization",
+        }:
+            identity = _request_identity(
+                identity_store,
+                required_scopes={"oa:write:draft"},
+            )
+        return await asyncio.to_thread(
+            service.resume_interaction,
+            user_subject=identity["user_subject"],
+            interaction_id=interaction_id,
+            idempotency_key=idempotency_key,
+        )
+
+    @mcp.tool(
         name="agentbridge_operation_get",
         title="Get AgentBridge Operation",
         description="Get one operation owned by the authenticated caller.",
