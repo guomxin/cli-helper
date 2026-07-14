@@ -52,6 +52,70 @@ class AuthServerConfigTests(unittest.TestCase):
                     tls_key=key,
                 )
 
+    def test_explicit_private_ip_http_is_allowed_for_restricted_poc(self):
+        config = validate_auth_server_config(
+            host="10.20.30.40",
+            port=8780,
+            public_base_url="http://10.20.30.40:8780",
+            tls_cert=None,
+            tls_key=None,
+            allow_insecure_private_http=True,
+        )
+
+        self.assertEqual(config.public_base_url, "http://10.20.30.40:8780")
+        self.assertFalse(config.secure_cookie)
+        self.assertTrue(config.insecure_private_http)
+
+    def test_insecure_private_http_rejects_unsafe_or_mismatched_endpoints(self):
+        cases = [
+            (
+                "wildcard bind",
+                "0.0.0.0",
+                8780,
+                "http://10.20.30.40:8780",
+                "RFC 1918 or IPv6 ULA",
+            ),
+            (
+                "public address",
+                "203.0.113.10",
+                8780,
+                "http://203.0.113.10:8780",
+                "RFC 1918 or IPv6 ULA",
+            ),
+            (
+                "hostname",
+                "agentbridge.internal",
+                8780,
+                "http://agentbridge.internal:8780",
+                "literal private IP",
+            ),
+            (
+                "different public IP",
+                "10.20.30.40",
+                8780,
+                "http://10.20.30.41:8780",
+                "match the bind IP",
+            ),
+            (
+                "different public port",
+                "10.20.30.40",
+                8780,
+                "http://10.20.30.40:8781",
+                "match the bind port",
+            ),
+        ]
+
+        for name, host, port, public_base_url, message in cases:
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                validate_auth_server_config(
+                    host=host,
+                    port=port,
+                    public_base_url=public_base_url,
+                    tls_cert=None,
+                    tls_key=None,
+                    allow_insecure_private_http=True,
+                )
+
     def test_loopback_origin_aliases_are_treated_as_the_same_trusted_source(self):
         allowed_hosts = {"127.0.0.1", "localhost", "::1"}
 

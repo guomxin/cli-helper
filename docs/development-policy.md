@@ -30,6 +30,13 @@ identity. Treat `session login` as an idempotent session-ensure operation:
 - route `SESSION_RUNTIME_MISMATCH` through the bound central runtime and never
   expire, delete, or replace the preserved session as a recovery shortcut.
 
+Non-loopback MCP and trusted-card endpoints require TLS by default. The only
+development exception is `--allow-insecure-private-http` for a controlled
+single-host intranet PoC. That exception must bind the machine's exact RFC 1918
+or IPv6 ULA address, publish the same IP and port, emit a plaintext-transport
+warning, and be protected by a host firewall. Do not broaden it to wildcard
+binds, hostnames, public addresses, automatic fallback, or production use.
+
 ## Change Gate
 
 Do not commit or push a behavior change until:

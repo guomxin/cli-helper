@@ -30,6 +30,7 @@ from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.field_submissions import FieldSubmissionStore
 from bscli.core.interactions import InteractionIntegrityError, InteractionNotFound
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
@@ -124,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     auth_serve.add_argument("--public-base-url")
     auth_serve.add_argument("--tls-cert")
     auth_serve.add_argument("--tls-key")
+    auth_serve.add_argument(
+        "--allow-insecure-private-http",
+        action="store_true",
+        help="allow literal private-IP HTTP for a restricted PoC network",
+    )
     auth_serve.add_argument("--base-url")
     auth_serve.add_argument("--login-timeout", type=float, default=45)
 
@@ -179,6 +185,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_central_serve.add_argument("--auth-public-base-url")
     mcp_central_serve.add_argument("--auth-tls-cert")
     mcp_central_serve.add_argument("--auth-tls-key")
+    mcp_central_serve.add_argument(
+        "--allow-insecure-private-http",
+        action="store_true",
+        help="allow literal private-IP HTTP for a restricted PoC network",
+    )
     mcp_central_serve.add_argument("--base-url")
     mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
     mcp_token = mcp_sub.add_parser("token")
@@ -330,6 +341,7 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
             public_base_url=args.public_base_url,
             tls_cert=args.tls_cert,
             tls_key=args.tls_key,
+            allow_insecure_private_http=args.allow_insecure_private_http,
         )
     except ValueError as exc:
         print_json(_central_cli_error("AUTH_SERVER_CONFIG_INVALID", str(exc)))
@@ -364,17 +376,20 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
     field_application = TrustedFieldApplication(
         submission_store=FieldSubmissionStore(_central_db_path(home))
     )
-    print_json(
-        {
-            "protocolVersion": "0.1",
-            "status": "serving",
-            "service": "trusted_authentication_card",
-            "cardTypes": ["authentication", "business_input", "write_authorization"],
-            "listen": {"host": config.host, "port": config.port},
-            "publicBaseUrl": config.public_base_url,
-            "tls": config.tls_cert is not None,
-        }
-    )
+    startup = {
+        "protocolVersion": "0.1",
+        "status": "serving",
+        "service": "trusted_authentication_card",
+        "cardTypes": ["authentication", "business_input", "write_authorization"],
+        "listen": {"host": config.host, "port": config.port},
+        "publicBaseUrl": config.public_base_url,
+        "tls": config.tls_cert is not None,
+        "insecurePrivateHttp": config.insecure_private_http,
+    }
+    if config.insecure_private_http:
+        startup["securityWarning"] = INSECURE_PRIVATE_HTTP_WARNING
+        print(INSECURE_PRIVATE_HTTP_WARNING, file=sys.stderr, flush=True)
+    print_json(startup)
     sys.stdout.flush()
     try:
         serve_auth_cards(
@@ -531,6 +546,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
             public_base_url=args.public_base_url,
             tls_cert=args.tls_cert,
             tls_key=args.tls_key,
+            allow_insecure_private_http=args.allow_insecure_private_http,
         )
         auth_config = validate_auth_server_config(
             host=args.auth_host,
@@ -538,6 +554,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
             public_base_url=args.auth_public_base_url,
             tls_cert=args.auth_tls_cert,
             tls_key=args.auth_tls_key,
+            allow_insecure_private_http=args.allow_insecure_private_http,
         )
         if mcp_config.port == auth_config.port:
             raise ValueError("central MCP and authentication card services must use different ports")
@@ -550,18 +567,24 @@ def handle_mcp(args: argparse.Namespace) -> int:
         trusted_card_base_url=auth_config.public_base_url,
     )
     identity_store = McpIdentityTokenStore(_central_db_path(home))
-    print_json(
-        {
-            "protocolVersion": "0.1",
-            "status": "serving",
-            "service": "agentbridge_oa_mcp",
-            "mcpUrl": mcp_config.mcp_url,
-            "authCardBaseUrl": auth_config.public_base_url,
-            "transport": "streamable_http",
-            "stateless": True,
-            "authentication": "bearer_identity_token",
-        }
+    insecure_private_http = (
+        mcp_config.insecure_private_http or auth_config.insecure_private_http
     )
+    startup = {
+        "protocolVersion": "0.1",
+        "status": "serving",
+        "service": "agentbridge_oa_mcp",
+        "mcpUrl": mcp_config.mcp_url,
+        "authCardBaseUrl": auth_config.public_base_url,
+        "transport": "streamable_http",
+        "stateless": True,
+        "authentication": "bearer_identity_token",
+        "insecurePrivateHttp": insecure_private_http,
+    }
+    if insecure_private_http:
+        startup["securityWarning"] = INSECURE_PRIVATE_HTTP_WARNING
+        print(INSECURE_PRIVATE_HTTP_WARNING, file=sys.stderr, flush=True)
+    print_json(startup)
     sys.stdout.flush()
     try:
         serve_central_mcp(

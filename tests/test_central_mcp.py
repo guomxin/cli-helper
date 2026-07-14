@@ -36,6 +36,56 @@ class CentralMcpTests(unittest.TestCase):
                 tls_key=None,
             )
 
+    def test_explicit_private_ip_http_is_allowed_for_restricted_poc(self):
+        config = validate_central_mcp_server_config(
+            host="10.20.30.40",
+            port=8790,
+            public_base_url="http://10.20.30.40:8790",
+            tls_cert=None,
+            tls_key=None,
+            allow_insecure_private_http=True,
+        )
+
+        self.assertEqual(config.mcp_url, "http://10.20.30.40:8790/mcp")
+        self.assertTrue(config.insecure_private_http)
+
+    def test_private_ip_http_mcp_accepts_its_configured_host(self):
+        with TemporaryDirectory() as tmp:
+            service = MagicMock()
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            issued = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                ttl_seconds=3600,
+            )
+            config = validate_central_mcp_server_config(
+                host="10.20.30.40",
+                port=8790,
+                public_base_url="http://10.20.30.40:8790",
+                tls_cert=None,
+                tls_key=None,
+                allow_insecure_private_http=True,
+            )
+            server = create_central_mcp_server(
+                service=service,
+                identity_store=store,
+                config=config,
+                auth_card_base_url="http://10.20.30.40:8780",
+            )
+            with TestClient(
+                server.streamable_http_app(),
+                base_url="http://10.20.30.40:8790",
+            ) as client:
+                response = self._request(
+                    client,
+                    "tools/list",
+                    request_id=1,
+                    token=issued["token"],
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("tools", response.json()["result"])
+
     def test_unauthenticated_request_is_rejected(self):
         with self._server() as (_service, _store, _token, client):
             response = self._request(client, "tools/list", request_id=1, authenticated=False)

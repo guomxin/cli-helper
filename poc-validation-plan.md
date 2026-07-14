@@ -179,11 +179,15 @@ PoC 只实现普通表单登录的最小挑战响应协议：
 LOGIN_REQUIRED
   → 服务端生成 AuthChallenge
   → 可信宿主按服务端 Schema 渲染认证卡片
-  → 秘密字段通过独立 TLS 通道提交给凭据代理
+  → 秘密字段通过独立可信通道提交给凭据代理
   → Browser Worker 填写真实登录页面
   → 核验实际登录账号
   → 会话变为 active
 ```
+
+生产通道必须使用 TLS。为先验证“用户电脑运行 OpenClaw、另一台内网机器运行
+AgentBridge”的部署拓扑，允许通过显式 `--allow-insecure-private-http` 开关使用
+固定私网 IP 的 HTTP；该模式必须由主机防火墙限制测试客户端，且不能作为生产验收项。
 
 - `AuthChallenge` 绑定 `challengeId + userSubject + systemId + sessionId + origin + pageFingerprint + nonce + TTL`，且只能使用一次；
 - 卡片字段由已注册登录 Adapter 定义，模型和网页内容不能新增密码字段或修改提交地址；

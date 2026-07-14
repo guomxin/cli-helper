@@ -201,10 +201,36 @@ Connect the MCP client to http://127.0.0.1:8790/mcp with an Authorization Bearer
 header. MCP tools derive caller identity from the server-side token binding and
 do not accept userSubject arguments.
 
+For an initial controlled intranet PoC, OpenClaw may run on the user's
+workstation while AgentBridge runs on another company-network machine. Replace
+`10.20.30.40` with that machine's exact private IP:
+
+~~~powershell
+python -m bscli.cli.main --home .bscli mcp central-serve `
+  --host 10.20.30.40 `
+  --port 8790 `
+  --public-base-url http://10.20.30.40:8790 `
+  --auth-host 10.20.30.40 `
+  --auth-port 8780 `
+  --auth-public-base-url http://10.20.30.40:8780 `
+  --allow-insecure-private-http
+~~~
+
+Configure OpenClaw with `http://10.20.30.40:8790/mcp`. Interaction envelopes
+then carry trusted-card URLs under `http://10.20.30.40:8780`, which the user
+opens from the OpenClaw conversation in their normal browser.
+
+The insecure switch accepts only an exact RFC 1918 or IPv6 ULA address. It
+rejects wildcard binds such as `0.0.0.0`, hostnames, public IPs, paths, and
+bind/public endpoint mismatches. Restrict ports 8780 and 8790 at the host
+firewall to the intended test clients. Credentials, trusted form values, and
+MCP Bearer tokens are unencrypted on the network in this mode.
+
 Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
-Non-loopback deployments require TLS. Production remote access also requires
-enterprise OAuth/OIDC, token lifecycle policy, reverse-proxy trust validation,
-rate limiting, and real multi-user worker isolation.
+Non-loopback deployments require TLS by default; the private-IP switch above is
+a temporary PoC exception, not a production mode. Production remote access also
+requires enterprise OAuth/OIDC, token lifecycle policy, reverse-proxy trust
+validation, rate limiting, and real multi-user worker isolation.
 
 ## Security Invariants
 

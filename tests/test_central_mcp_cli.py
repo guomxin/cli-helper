@@ -1,7 +1,7 @@
 import io
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -130,6 +130,75 @@ class CentralMcpCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 2)
         self.assertEqual(payload["error"]["code"], "CENTRAL_MCP_CONFIG_INVALID")
+
+    def test_central_server_allows_explicit_private_http_and_warns(self):
+        with TemporaryDirectory() as tmp:
+            with (
+                patch("bscli.cli.main.serve_central_mcp") as serve,
+                redirect_stdout(io.StringIO()) as stdout,
+                redirect_stderr(io.StringIO()) as stderr,
+            ):
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "mcp",
+                        "central-serve",
+                        "--host",
+                        "10.20.30.40",
+                        "--port",
+                        "8790",
+                        "--public-base-url",
+                        "http://10.20.30.40:8790",
+                        "--auth-host",
+                        "10.20.30.40",
+                        "--auth-port",
+                        "8780",
+                        "--auth-public-base-url",
+                        "http://10.20.30.40:8780",
+                        "--allow-insecure-private-http",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["mcpUrl"], "http://10.20.30.40:8790/mcp")
+        self.assertEqual(payload["authCardBaseUrl"], "http://10.20.30.40:8780")
+        self.assertTrue(payload["insecurePrivateHttp"])
+        self.assertIn("without TLS", payload["securityWarning"])
+        self.assertIn("WARNING", stderr.getvalue())
+        serve.assert_called_once()
+
+    def test_standalone_auth_server_allows_explicit_private_http_and_warns(self):
+        with TemporaryDirectory() as tmp:
+            with (
+                patch("bscli.cli.main.serve_auth_cards") as serve,
+                redirect_stdout(io.StringIO()) as stdout,
+                redirect_stderr(io.StringIO()) as stderr,
+            ):
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "auth",
+                        "serve",
+                        "--host",
+                        "10.20.30.40",
+                        "--port",
+                        "8780",
+                        "--public-base-url",
+                        "http://10.20.30.40:8780",
+                        "--allow-insecure-private-http",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["publicBaseUrl"], "http://10.20.30.40:8780")
+        self.assertTrue(payload["insecurePrivateHttp"])
+        self.assertIn("without TLS", payload["securityWarning"])
+        self.assertIn("WARNING", stderr.getvalue())
+        serve.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.network_security import validate_insecure_private_http_endpoint
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,10 @@ class CentralMcpServerConfig:
     @property
     def mcp_url(self) -> str:
         return f"{self.public_base_url}/mcp"
+
+    @property
+    def insecure_private_http(self) -> bool:
+        return self.tls_cert is None and not _is_loopback_host(self.host)
 
 
 class StoredIdentityTokenVerifier(TokenVerifier):
@@ -70,6 +75,7 @@ def validate_central_mcp_server_config(
     public_base_url: str | None,
     tls_cert: str | Path | None,
     tls_key: str | Path | None,
+    allow_insecure_private_http: bool = False,
 ) -> CentralMcpServerConfig:
     if port < 1 or port > 65535:
         raise ValueError("central MCP server port is invalid")
@@ -83,9 +89,16 @@ def validate_central_mcp_server_config(
             raise ValueError("non-loopback central MCP service requires a public base URL")
         public_base_url = f"http://127.0.0.1:{port}"
     normalized = _normalize_public_base_url(public_base_url)
-    if not loopback and cert is None:
+    if not loopback and cert is None and not allow_insecure_private_http:
         raise ValueError("non-loopback central MCP service requires TLS")
-    if not loopback and not normalized.startswith("https://"):
+    if not loopback and cert is None:
+        validate_insecure_private_http_endpoint(
+            host=host,
+            port=port,
+            public_base_url=normalized,
+            service_name="central MCP service",
+        )
+    elif not loopback and not normalized.startswith("https://"):
         raise ValueError("non-loopback central MCP public URL must use HTTPS")
     if cert is not None and not normalized.startswith("https://"):
         raise ValueError("TLS central MCP service must use an HTTPS public URL")

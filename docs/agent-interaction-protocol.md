@@ -63,6 +63,13 @@ used by a phone or a remote agent host. Hosts must treat the URL as sensitive
 interaction metadata: render it only to the bound user's private channel and
 do not copy it into ordinary logs or a public conversation.
 
+During the initial controlled intranet PoC, AgentBridge may instead publish a
+literal private-IP HTTP URL when the operator explicitly enables
+`--allow-insecure-private-http`. This preserves the same host-independent
+interaction envelope and lets a desktop OpenClaw client open the card on a
+different intranet machine, but the transport is plaintext and is not a
+production or public/mobile-network deployment mode.
+
 State handling is deliberately small:
 
 - `pending` and `processing`: keep polling; resume is not ready;

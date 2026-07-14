@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import MAX_AUTH_BODY_BYTES, AuthCardResponse, TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
+from bscli.core.network_security import validate_insecure_private_http_endpoint
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,10 @@ class AuthServerConfig:
     def secure_cookie(self) -> bool:
         return self.public_base_url.startswith("https://")
 
+    @property
+    def insecure_private_http(self) -> bool:
+        return self.tls_cert is None and not _is_loopback_host(self.host)
+
 
 class AuthHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
@@ -39,6 +44,7 @@ def validate_auth_server_config(
     public_base_url: str | None,
     tls_cert: str | Path | None,
     tls_key: str | Path | None,
+    allow_insecure_private_http: bool = False,
 ) -> AuthServerConfig:
     if port < 0 or port > 65535:
         raise ValueError("authentication server port is invalid")
@@ -47,14 +53,21 @@ def validate_auth_server_config(
     if (cert is None) != (key is None):
         raise ValueError("both TLS certificate and key are required")
     loopback = _is_loopback_host(host)
-    if not loopback and cert is None:
+    if not loopback and cert is None and not allow_insecure_private_http:
         raise ValueError("non-loopback authentication card service requires TLS")
     if public_base_url is None:
         if not loopback:
             raise ValueError("non-loopback authentication card service requires public base URL")
         public_base_url = f"http://127.0.0.1:{port}"
     normalized_base_url = _normalize_public_base_url(public_base_url)
-    if not loopback and not normalized_base_url.startswith("https://"):
+    if not loopback and cert is None:
+        validate_insecure_private_http_endpoint(
+            host=host,
+            port=port,
+            public_base_url=normalized_base_url,
+            service_name="authentication card service",
+        )
+    elif not loopback and not normalized_base_url.startswith("https://"):
         raise ValueError("non-loopback authentication card public URL must use HTTPS")
     if cert is not None and not normalized_base_url.startswith("https://"):
         raise ValueError("TLS authentication card service must use an HTTPS public URL")
