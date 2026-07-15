@@ -1,4 +1,5 @@
 import json
+import threading
 import warnings
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.auth.server import AuthServerConfig
 from bscli.mcp.central import (
+    CentralSessionKeepalive,
     create_central_mcp_server,
     serve_central_mcp,
     validate_central_mcp_server_config,
@@ -26,6 +28,35 @@ from bscli.mcp.central import (
 
 
 class CentralMcpTests(unittest.TestCase):
+    def test_controlled_keepalive_worker_runs_and_stops(self):
+        service = MagicMock()
+        called = threading.Event()
+        service.run_session_keepalive_cycle.side_effect = lambda **_kwargs: (
+            called.set()
+            or {
+                "activeSessions": 1,
+                "eligibleSessions": 1,
+                "keptAlive": 1,
+                "expired": 0,
+                "deferred": 0,
+                "outsideLease": 0,
+            }
+        )
+        keepalive = CentralSessionKeepalive(
+            service,
+            interval_seconds=0.01,
+            activity_lease_seconds=1,
+            initial_delay_seconds=0,
+        )
+
+        keepalive.start()
+        self.assertTrue(called.wait(timeout=1))
+        keepalive.stop()
+
+        service.run_session_keepalive_cycle.assert_called_with(
+            activity_lease_seconds=1,
+        )
+
     def test_non_loopback_server_requires_https_and_tls(self):
         with self.assertRaisesRegex(ValueError, "requires TLS"):
             validate_central_mcp_server_config(
@@ -397,6 +428,7 @@ class CentralMcpTests(unittest.TestCase):
         with (
             patch("bscli.mcp.central.create_auth_http_server", return_value=auth_server),
             patch("bscli.mcp.central.create_central_mcp_server", return_value=mcp),
+            patch("bscli.mcp.central.CentralSessionKeepalive") as keepalive_class,
             patch("bscli.mcp.central.uvicorn.run") as run,
         ):
             serve_central_mcp(
@@ -407,6 +439,8 @@ class CentralMcpTests(unittest.TestCase):
             )
 
         auth_server.serve_forever.assert_called_once_with(poll_interval=0.25)
+        keepalive_class.return_value.start.assert_called_once_with()
+        keepalive_class.return_value.stop.assert_called_once_with()
         run.assert_called_once()
         self.assertIs(run.call_args.args[0], app)
         auth_server.shutdown.assert_called_once()

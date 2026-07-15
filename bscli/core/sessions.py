@@ -130,6 +130,32 @@ class SessionRegistry:
             raise KeyError(f"session not found: {session_id}")
         return _session_from_row(row)
 
+    def list_active(self, *, system_id: str | None = None) -> list[dict]:
+        query = "SELECT * FROM sessions WHERE state = 'active'"
+        parameters: tuple[str, ...] = ()
+        if system_id is not None:
+            query += " AND system_id = ?"
+            parameters = (system_id,)
+        query += " ORDER BY updated_at, session_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [_session_from_row(row) for row in rows]
+
+    def touch_activity(self, session_id: str) -> dict:
+        now = _utc_now()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE sessions
+                SET updated_at = ?
+                WHERE session_id = ? AND state = 'active'
+                """,
+                (now, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("only an active session can record activity")
+        return self.get(session_id)
+
     def mark_awaiting_login(self, session_id: str) -> dict:
         return self._set_state(session_id, "awaiting_login", last_error=None)
 

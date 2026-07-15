@@ -2,6 +2,7 @@ import unittest
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
@@ -212,6 +213,37 @@ class AgentBridgeCoreTests(unittest.TestCase):
             with self.assertRaises(SessionPrincipalMismatch):
                 registry.activate(unverified["session_id"], observed_principal_ref=None)
             self.assertEqual(registry.get(unverified["session_id"])["state"], "quarantined")
+
+    def test_session_registry_lists_active_sessions_and_records_activity(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            active = registry.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            active = registry.activate(
+                active["session_id"],
+                observed_principal_ref="Alice",
+            )
+            registry.get_or_create(
+                user_subject="user-b",
+                system_id="oa",
+                expected_principal_ref="Bob",
+            )
+
+            time.sleep(0.01)
+            touched = registry.touch_activity(active["session_id"])
+
+            self.assertGreater(touched["updated_at"], active["updated_at"])
+            self.assertEqual(
+                [session["session_id"] for session in registry.list_active(system_id="oa")],
+                [active["session_id"]],
+            )
+            registry.mark_expired(active["session_id"])
+            with self.assertRaisesRegex(ValueError, "active session"):
+                registry.touch_activity(active["session_id"])
 
     def test_session_state_store_encrypts_cookie_state_at_rest(self):
         with TemporaryDirectory() as tmp:

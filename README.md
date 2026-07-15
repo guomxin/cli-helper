@@ -212,8 +212,16 @@ python -m bscli.cli.main --home .bscli mcp central-serve \
   --host 127.0.0.1 \
   --port 8790 \
   --auth-host 127.0.0.1 \
-  --auth-port 8780
+  --auth-port 8780 \
+  --session-keepalive-interval 600 \
+  --session-keepalive-lease 28800
 ~~~
+
+Session keepalive is disabled unless `--session-keepalive-interval` is set. The
+example probes active OA sessions every 10 minutes while they remain inside an
+eight-hour activity lease. Login and real agent requests renew that lease;
+background probes do not renew themselves. An explicit OA login response
+expires the session, while a transient probe failure preserves it for retry.
 
 Connect the MCP client to http://127.0.0.1:8790/mcp with an Authorization Bearer
 header. MCP tools derive caller identity from the server-side token binding and
@@ -231,7 +239,9 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
   --auth-host 10.20.30.40 `
   --auth-port 8780 `
   --auth-public-base-url http://10.20.30.40:8780 `
-  --allow-insecure-private-http
+  --allow-insecure-private-http `
+  --session-keepalive-interval 600 `
+  --session-keepalive-lease 28800
 ~~~
 
 Configure OpenClaw with `http://10.20.30.40:8790/mcp`. Interaction envelopes

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
 from typing import Callable, Iterator
@@ -113,6 +113,7 @@ class CentralCapabilityService:
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
         if spec.adapter == "seeyon-central":
+            self._record_user_activity(user_subject=user_subject, system_id="oa")
             engine.register_handler(
                 capability_name,
                 lambda context, inputs: self._invoke_seeyon(
@@ -152,6 +153,7 @@ class CentralCapabilityService:
             user_subject=user_subject,
             session=session,
             record_verification=False,
+            record_activity=True,
         )
         checked_at = _utc_now()
         if live_check is None:
@@ -222,6 +224,7 @@ class CentralCapabilityService:
         user_subject: str,
         session: dict,
         record_verification: bool = True,
+        record_activity: bool = True,
     ) -> dict | None:
         with self._session_lock(session["session_id"]):
             session = self.sessions.get(session["session_id"])
@@ -253,6 +256,8 @@ class CentralCapabilityService:
                 self.session_states.delete(session["session_id"])
                 return None
             except SeeyonSessionCheckUnavailable as exc:
+                if record_activity:
+                    session = self.sessions.touch_activity(session["session_id"])
                 return _session_check_unavailable_response(
                     user_subject,
                     session,
@@ -263,6 +268,8 @@ class CentralCapabilityService:
             except SessionSecretError:
                 return _session_state_unavailable_response(user_subject, session)
             except Exception:
+                if record_activity:
+                    session = self.sessions.touch_activity(session["session_id"])
                 return _session_check_unavailable_response(user_subject, session)
 
             if record_verification:
@@ -270,6 +277,8 @@ class CentralCapabilityService:
                     session["session_id"],
                     observed_principal_ref=session.get("downstream_principal_ref"),
                 )
+            elif record_activity:
+                session = self.sessions.touch_activity(session["session_id"])
             else:
                 session = self.sessions.get(session["session_id"])
             return {
@@ -286,6 +295,51 @@ class CentralCapabilityService:
                 "nextAction": None,
                 "reused": True,
             }
+
+    def run_session_keepalive_cycle(
+        self,
+        *,
+        activity_lease_seconds: float,
+        now: datetime | None = None,
+    ) -> dict:
+        if activity_lease_seconds <= 0:
+            raise ValueError("activity lease must be positive")
+        checked_at = _as_utc(now or datetime.now(timezone.utc))
+        active_sessions = self.sessions.list_active(system_id="oa")
+        summary = {
+            "checkedAt": checked_at.isoformat(),
+            "activeSessions": len(active_sessions),
+            "eligibleSessions": 0,
+            "keptAlive": 0,
+            "expired": 0,
+            "deferred": 0,
+            "outsideLease": 0,
+            "inactive": 0,
+        }
+        lease = timedelta(seconds=activity_lease_seconds)
+        for session in active_sessions:
+            last_activity = _parse_utc(session.get("updated_at"))
+            if last_activity is None or checked_at - last_activity > lease:
+                summary["outsideLease"] += 1
+                continue
+            summary["eligibleSessions"] += 1
+            response = self._reuse_active_session(
+                user_subject=session["user_subject"],
+                session=session,
+                record_verification=False,
+                record_activity=False,
+            )
+            if response is None:
+                current = self.sessions.get(session["session_id"])
+                if current["state"] == "expired":
+                    summary["expired"] += 1
+                else:
+                    summary["inactive"] += 1
+            elif response.get("status") == "succeeded":
+                summary["keptAlive"] += 1
+            else:
+                summary["deferred"] += 1
+        return summary
 
     def _create_login_challenge(
         self,
@@ -865,6 +919,15 @@ class CentralCapabilityService:
         with lock:
             yield
 
+    def _record_user_activity(self, *, user_subject: str, system_id: str) -> None:
+        session = self.sessions.find(user_subject=user_subject, system_id=system_id)
+        if session is None or session["state"] != "active":
+            return
+        with self._session_lock(session["session_id"]):
+            current = self.sessions.get(session["session_id"])
+            if current["state"] == "active":
+                self.sessions.touch_activity(current["session_id"])
+
     @staticmethod
     def _default_worker_factory(session: dict, adapter: SeeyonCentralAdapter):
         return CentralBrowserWorker(
@@ -1050,12 +1113,28 @@ def session_response(session: dict) -> dict:
         "expectedPrincipalRef": session.get("expected_principal_ref"),
         "downstreamPrincipalRef": session.get("downstream_principal_ref"),
         "lastVerifiedAt": session.get("last_verified_at"),
+        "lastActivityAt": session.get("updated_at"),
         "lastError": session.get("last_error"),
     }
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return _as_utc(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def operation_response(operation: dict) -> dict:

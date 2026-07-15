@@ -192,6 +192,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_central_serve.add_argument("--base-url")
     mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
+    mcp_central_serve.add_argument(
+        "--session-keepalive-interval",
+        type=float,
+        default=0,
+        help="seconds between central OA keepalive probes; 0 disables keepalive",
+    )
+    mcp_central_serve.add_argument(
+        "--session-keepalive-lease",
+        type=float,
+        default=28_800,
+        help="maximum seconds to keep OA alive after the latest real user activity",
+    )
     mcp_token = mcp_sub.add_parser("token")
     mcp_token_sub = mcp_token.add_subparsers(dest="token_action", required=True)
     mcp_token_issue = mcp_token_sub.add_parser("issue")
@@ -540,6 +552,25 @@ def handle_mcp(args: argparse.Namespace) -> int:
     try:
         if args.login_timeout < 1 or args.login_timeout > 300:
             raise ValueError("--login-timeout must be between 1 and 300 seconds")
+        if args.session_keepalive_interval < 0:
+            raise ValueError("--session-keepalive-interval cannot be negative")
+        if args.session_keepalive_interval and not (
+            60 <= args.session_keepalive_interval <= 1_800
+        ):
+            raise ValueError(
+                "--session-keepalive-interval must be 0 or between 60 and 1800 seconds"
+            )
+        if not 60 <= args.session_keepalive_lease <= 604_800:
+            raise ValueError(
+                "--session-keepalive-lease must be between 60 and 604800 seconds"
+            )
+        if (
+            args.session_keepalive_interval
+            and args.session_keepalive_lease < args.session_keepalive_interval
+        ):
+            raise ValueError(
+                "--session-keepalive-lease cannot be shorter than the keepalive interval"
+            )
         mcp_config = validate_central_mcp_server_config(
             host=args.host,
             port=args.port,
@@ -580,6 +611,11 @@ def handle_mcp(args: argparse.Namespace) -> int:
         "stateless": True,
         "authentication": "bearer_identity_token",
         "insecurePrivateHttp": insecure_private_http,
+        "sessionKeepalive": {
+            "enabled": args.session_keepalive_interval > 0,
+            "intervalSeconds": args.session_keepalive_interval,
+            "activityLeaseSeconds": args.session_keepalive_lease,
+        },
     }
     if insecure_private_http:
         startup["securityWarning"] = INSECURE_PRIVATE_HTTP_WARNING
@@ -593,6 +629,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
             mcp_config=mcp_config,
             auth_config=auth_config,
             login_timeout_seconds=args.login_timeout,
+            keepalive_interval_seconds=args.session_keepalive_interval,
+            keepalive_activity_lease_seconds=args.session_keepalive_lease,
         )
     except KeyboardInterrupt:
         return 0

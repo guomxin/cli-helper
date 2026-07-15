@@ -315,7 +315,9 @@ sudo -u agentbridge env \
   --auth-host "$AB_IP" \
   --auth-port 8780 \
   --auth-public-base-url "http://${AB_IP}:8780" \
-  --allow-insecure-private-http
+  --allow-insecure-private-http \
+  --session-keepalive-interval 600 \
+  --session-keepalive-lease 28800
 ```
 
 正常启动时，标准输出中的 JSON 应至少包含：
@@ -325,7 +327,12 @@ sudo -u agentbridge env \
   "status": "serving",
   "mcpUrl": "http://10.10.50.213:8790/mcp",
   "authCardBaseUrl": "http://10.10.50.213:8780",
-  "insecurePrivateHttp": true
+  "insecurePrivateHttp": true,
+  "sessionKeepalive": {
+    "enabled": true,
+    "intervalSeconds": 600,
+    "activityLeaseSeconds": 28800
+  }
 }
 ```
 
@@ -356,9 +363,12 @@ ExecStart=/home/guomao/agentbridge/venv/bin/python \
   --public-base-url http://10.10.50.213:8790 \
   --auth-host 10.10.50.213 --auth-port 8780 \
   --auth-public-base-url http://10.10.50.213:8780 \
-  --allow-insecure-private-http
+  --allow-insecure-private-http \
+  --session-keepalive-interval 600 \
+  --session-keepalive-lease 28800
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=20
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -368,6 +378,10 @@ ReadWritePaths=/home/guomao/agentbridge/data
 [Install]
 WantedBy=multi-user.target
 ```
+
+仓库中的可复现单元文件为
+`deploy/systemd/agentbridge.service`。修改启动参数时先更新并验证该文件，
+再安装到 `/etc/systemd/system/agentbridge.service`，不要只在服务器上做无法追踪的临时修改。
 
 执行：
 
@@ -477,6 +491,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - `SESSION_CHECK_UNAVAILABLE` 表示暂时无法核验，不应让用户重新输入密码；
 - 卡片 TTL 过期只影响本次交互，不会主动清除已经有效的 OA 会话。
 
+当前中心部署显式启用受控保活：每 10 分钟为租约内的活动会话执行一次轻量 OA 探测，最近一次登录或真实智能体调用将活动租约续到 8 小时。后台心跳本身不续租，因此无人使用时不会永久维持 OA 登录。心跳复用加密会话状态和单会话锁，不创建认证卡；明确登录失效时正常过期，临时错误只记录为 deferred 并保留会话。程序默认仍为关闭状态，其他部署必须显式配置后才启用。
+
 ## 13. 常见问题定位
 
 | 现象 | 检查与处理 |
@@ -511,6 +527,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] 认证卡从 OpenClaw Telegram 私聊打开，凭据没有进入聊天；
 - [x] `oa_workflow_pending_list` 读取真实 OA 数据成功；
 - [x] 读取真实待办后立即执行 `oa_session_status`，实时核验仍为活动会话；
+- [x] 10 分钟受控保活连续跨过 45 分钟空闲窗口，随后状态探测和真实待办读取均成功；
 - [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [x] 错误密钥、篡改密文和过宽权限都不能解密会话；
 - [x] 已记录未启用主机防火墙时的内网可达范围和明文传输风险；
@@ -526,8 +543,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 固定私网 IP HTTP 显式开关 | 已实现 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
-| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；本次会话修复本地全量 179 项通过 |
-| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；2026-07-15 再次验证读取待办不会误删会话 |
+| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；会话修复本地全量 179 项、受控保活本地全量 187 项通过 |
+| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；Telegram 智能体已真实调用状态查询和登录工具，并展示安全登录按钮 |
 | 可安装 OpenClaw 插件与本机接线 | 0.1.1 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话，来源白名单仍需显式配置 |
@@ -564,7 +581,17 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 修复后，活动会话状态查询执行真实 OA 探测，并分别返回认证纪元 `lastVerifiedAt` 与本次探测时间 `checkedAt`；状态探测不改写认证纪元，避免影响已冻结写计划的会话绑定；
 - OA 响应分类改为保守失效：明确登录跳转、401/403 或同时包含用户名与密码字段的登录表单才触发 `LOGIN_REQUIRED`；超时、限流、5xx 和非登录 HTML 返回 `SESSION_CHECK_UNAVAILABLE`，不删除密文状态；诊断信息只包含 HTTP 状态、规范化媒体类型、耗时或异常类别，不记录 URL、正文、Cookie 和凭据；
 - 修复于 2026-07-15 12:42 部署到 `10.10.50.213` 并重启 systemd 服务。用户于 12:58:39 完成可信卡认证，13:00 通过 Telegram/OpenClaw 真实读取 3 条 OA 待办，13:01:29 再次实时检查仍为“已登录，有效”，服务日志无异常；
-- 当前未增加定时 keepalive。现有证据已证明本次故障来自错误分类而非空闲超时；只有后续定时观测确认 OA 存在可重复的空闲失效阈值时，才评估低频保活。
+- 本次修复先解决误分类，没有在证据不足时直接增加 keepalive；后续真实观察确认 OA 会话确实会在无请求时失效，因此另行实现并验证受控保活。
+
+### 2026-07-15 OA 受控保活验收记录
+
+- 保活由中心 MCP 进程调度，不依赖 OpenClaw、Telegram、用户浏览器或 Chrome 扩展；它复用加密会话状态和单会话锁，短暂启动 Browser Worker 完成探测后立即关闭；
+- 程序默认关闭保活。当前部署显式设置 `--session-keepalive-interval 600` 和 `--session-keepalive-lease 28800`；登录与真实智能体调用刷新活动租约，后台心跳不刷新自己的租约，避免无限维持无人使用的会话；
+- 初次采用 20 分钟间隔时，用户于 14:21:11 登录，首次心跳在 14:39:16 发现 OA 已明确注销，会话只维持约 18 分钟，因此 `1200` 秒在当前 OA 上被判定为不可靠参数，没有作为成功结果提交；
+- 调整为 10 分钟并关闭其他 OA 页面后，服务于 15:08:49 以 PID `928148` 启动，用户于 15:11:38 认证。15:18:52、15:28:53、15:38:54、15:48:55、15:58:56 五轮心跳全部返回 `kept_alive=1`，无 expired 或 deferred；
+- 五轮后台心跳期间，数据库中的 `last_verified_at` 和活动租约时间均保持 15:11:38，证明心跳没有改写身份认证纪元，也没有自我续租；
+- 16:12:53，即认证约 61 分钟后，用户通过 Telegram/OpenClaw 实时检查仍为“已登录，有效”，界面分别显示认证时间 15:11:38、最近活动与本次检查时间 16:12:53；随后 `oa_workflow_pending_list` 成功读取 3 条真实待办；
+- 本轮没有执行 OA 写操作。日志中的保活信息只包含活动、合格、成功、过期、延迟和租约外计数，不包含用户标识、URL、Cookie、页面正文或凭据。
 
 ## 16. 后续演进顺序
 

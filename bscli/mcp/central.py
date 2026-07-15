@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import ipaddress
+import logging
 from pathlib import Path
 import threading
 from typing import Annotated, Any, Literal
@@ -32,6 +33,9 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 
 
+_LOGGER = logging.getLogger("uvicorn.error")
+
+
 @dataclass(frozen=True)
 class CentralMcpServerConfig:
     host: str
@@ -47,6 +51,76 @@ class CentralMcpServerConfig:
     @property
     def insecure_private_http(self) -> bool:
         return self.tls_cert is None and not _is_loopback_host(self.host)
+
+
+class CentralSessionKeepalive:
+    def __init__(
+        self,
+        service: CentralCapabilityService,
+        *,
+        interval_seconds: float,
+        activity_lease_seconds: float,
+        initial_delay_seconds: float = 1,
+    ) -> None:
+        if interval_seconds < 0:
+            raise ValueError("keepalive interval cannot be negative")
+        if activity_lease_seconds <= 0:
+            raise ValueError("keepalive activity lease must be positive")
+        if interval_seconds > 0 and activity_lease_seconds < interval_seconds:
+            raise ValueError("keepalive activity lease cannot be shorter than its interval")
+        self.service = service
+        self.interval_seconds = interval_seconds
+        self.activity_lease_seconds = activity_lease_seconds
+        self.initial_delay_seconds = initial_delay_seconds
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.interval_seconds > 0
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        if self._thread is not None:
+            raise RuntimeError("central session keepalive is already started")
+        self._thread = threading.Thread(
+            target=self._run,
+            name="agentbridge-oa-keepalive",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+
+    def _run(self) -> None:
+        if self._stop_event.wait(max(0, self.initial_delay_seconds)):
+            return
+        while not self._stop_event.is_set():
+            try:
+                summary = self.service.run_session_keepalive_cycle(
+                    activity_lease_seconds=self.activity_lease_seconds,
+                )
+                _LOGGER.info(
+                    "AgentBridge OA keepalive cycle: active=%d eligible=%d "
+                    "kept_alive=%d expired=%d deferred=%d outside_lease=%d",
+                    summary["activeSessions"],
+                    summary["eligibleSessions"],
+                    summary["keptAlive"],
+                    summary["expired"],
+                    summary["deferred"],
+                    summary["outsideLease"],
+                )
+            except Exception as exc:
+                _LOGGER.warning(
+                    "AgentBridge OA keepalive cycle failed: error=%s",
+                    exc.__class__.__name__,
+                )
+            if self._stop_event.wait(self.interval_seconds):
+                return
 
 
 class StoredIdentityTokenVerifier(TokenVerifier):
@@ -503,6 +577,8 @@ def serve_central_mcp(
     mcp_config: CentralMcpServerConfig,
     auth_config: AuthServerConfig,
     login_timeout_seconds: float = 45,
+    keepalive_interval_seconds: float = 0,
+    keepalive_activity_lease_seconds: float = 28_800,
 ) -> None:
     broker = CredentialBroker(
         challenge_store=service.challenges,
@@ -534,7 +610,13 @@ def serve_central_mcp(
         name="agentbridge-auth-card",
         daemon=True,
     )
+    keepalive = CentralSessionKeepalive(
+        service,
+        interval_seconds=keepalive_interval_seconds,
+        activity_lease_seconds=keepalive_activity_lease_seconds,
+    )
     auth_thread.start()
+    keepalive.start()
     try:
         mcp = create_central_mcp_server(
             service=service,
@@ -551,6 +633,7 @@ def serve_central_mcp(
             access_log=False,
         )
     finally:
+        keepalive.stop()
         auth_server.shutdown()
         auth_server.server_close()
         auth_thread.join(timeout=5)

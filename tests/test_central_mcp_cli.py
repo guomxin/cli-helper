@@ -110,7 +110,76 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(payload["mcpUrl"], "http://127.0.0.1:8790/mcp")
         self.assertEqual(payload["authCardBaseUrl"], "http://127.0.0.1:8780")
         self.assertEqual(payload["authentication"], "bearer_identity_token")
+        self.assertFalse(payload["sessionKeepalive"]["enabled"])
+        self.assertEqual(payload["sessionKeepalive"]["intervalSeconds"], 0)
         serve.assert_called_once()
+        self.assertEqual(serve.call_args.kwargs["keepalive_interval_seconds"], 0)
+        self.assertEqual(
+            serve.call_args.kwargs["keepalive_activity_lease_seconds"],
+            28_800,
+        )
+
+    def test_central_server_enables_bounded_session_keepalive(self):
+        with TemporaryDirectory() as tmp:
+            with (
+                patch("bscli.cli.main.serve_central_mcp") as serve,
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "mcp",
+                        "central-serve",
+                        "--session-keepalive-interval",
+                        "1200",
+                        "--session-keepalive-lease",
+                        "28800",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["sessionKeepalive"],
+            {
+                "enabled": True,
+                "intervalSeconds": 1200.0,
+                "activityLeaseSeconds": 28800.0,
+            },
+        )
+        self.assertEqual(serve.call_args.kwargs["keepalive_interval_seconds"], 1200.0)
+        self.assertEqual(
+            serve.call_args.kwargs["keepalive_activity_lease_seconds"],
+            28800.0,
+        )
+
+    def test_central_server_rejects_uncontrolled_keepalive_settings(self):
+        cases = [
+            (["--session-keepalive-interval", "45"], "must be 0 or between"),
+            (
+                [
+                    "--session-keepalive-interval",
+                    "1200",
+                    "--session-keepalive-lease",
+                    "600",
+                ],
+                "cannot be shorter",
+            ),
+        ]
+        for arguments, expected_message in cases:
+            with self.subTest(arguments=arguments), TemporaryDirectory() as tmp:
+                with redirect_stdout(io.StringIO()) as stdout:
+                    exit_code = main(
+                        ["--home", tmp, "mcp", "central-serve", *arguments]
+                    )
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(
+                    payload["error"]["code"],
+                    "CENTRAL_MCP_CONFIG_INVALID",
+                )
+                self.assertIn(expected_message, payload["error"]["message"])
 
     def test_central_server_rejects_same_mcp_and_auth_port(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
