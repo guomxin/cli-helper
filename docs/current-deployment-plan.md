@@ -316,11 +316,7 @@ python -m bscli.cli.main pki issue-server `
 Import-Certificate `
   -FilePath "$PkiState\root-ca.crt" `
   -CertStoreLocation Cert:\CurrentUser\Root
-[Environment]::SetEnvironmentVariable(
-  "NODE_EXTRA_CA_CERTS",
-  "$PkiState\root-ca.crt",
-  "User"
-)
+openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$PkiState\root-ca.crt"
 ```
 
 根 CA 默认有效 10 年，叶证书最长 397 天。续期复用同一 DPAPI 根状态并使用
@@ -463,8 +459,7 @@ OpenClaw 侧需要配置以下连接信息：
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
-$ca = "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", $ca, "User")
+openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw plugins enable agentbridge-interactions
@@ -474,6 +469,11 @@ openclaw gateway status --deep --require-rpc
 ```
 
 链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.4, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+
+`env.vars.NODE_EXTRA_CA_CERTS` 是 OpenClaw 的持久托管环境，不要只在一次性的
+PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
+`gateway status --deep --require-rpc --json` 的 `environmentValueSources` 必须包含
+`NODE_EXTRA_CA_CERTS`，再通过真实 MCP 只读调用确认新进程已信任内部 CA。
 
 `allowedCardOrigins` 必须是精确 HTTPS 来源，不允许路径、通配符或从 MCP 结果自动学习。认证、业务字段和执行授权三类卡片在 Telegram 中都使用 Web App；卡片页面只通过自托管的无数据桥发送 ready、expand 和 close，不加载可读取表单的第三方脚本。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
 
@@ -666,8 +666,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 在 Windows 管理工作站创建专用 EC P-256 根 CA；根私钥仅以当前用户 DPAPI 密文保存在 `%USERPROFILE%\.agentbridge\pki\root-ca.key.dpapi`，仓库、Linux 和 OpenClaw 配置均不保存根私钥；
 - 根证书 SHA-256 指纹为 `E6F0628EAFAFAAFFC5A71075247E35EF2B764B8D61986F486984F4A923F63BB5`，有效期至 2036-07-12；正式叶证书 SHA-256 指纹为 `13346384A6912F59077B013FFCD233967A17C49B8132895EB4E51D4B684701EE`，SAN 为 `IP:10.10.50.213`，有效期至 2027-08-16；
 - 叶证书和叶私钥安装在 `/home/guomao/agentbridge/config/tls`，权限分别为 `0644 root:agentbridge` 与 `0640 root:agentbridge`；systemd 服务已移除 `--allow-insecure-private-http`，8780/8790 均以 HTTPS 启动，证书链验证通过，明文 HTTP 连接被拒绝；
-- OpenClaw MCP 地址已切换为 `https://10.10.50.213:8790/mcp`，卡片来源白名单切换为 `https://10.10.50.213:8780`；当前用户 `NODE_EXTRA_CA_CERTS` 已持久化，Gateway PID `26488` 的深度 RPC、配置审计和插件加载检查均通过；
-- OpenClaw 智能体通过正式 HTTPS MCP 实际调用 `oa_session_status` 和 `oa_workflow_pending_list`：会话为 active，身份为辛国茂 / guomao，待办 4 条，2 次工具调用均成功且无失败；本轮严格只读，没有调用登录、字段、授权或任何 OA 写工具；
+- OpenClaw MCP 地址已切换为 `https://10.10.50.213:8790/mcp`，卡片来源白名单切换为 `https://10.10.50.213:8780`；CA 路径通过 `env.vars.NODE_EXTRA_CA_CERTS` 写入 OpenClaw 持久托管环境，重建任务后的 Gateway PID `11652`，深度 RPC、配置审计和插件加载检查均通过，`environmentValueSources` 明确包含该键；
+- OpenClaw 智能体在初次切换和托管任务重建后分别通过正式 HTTPS MCP 实际调用 `oa_session_status` 和 `oa_workflow_pending_list`：会话均为 active，身份为辛国茂 / guomao，待办均为 4 条，每轮 2 次工具调用均成功且无失败；两轮都严格只读，没有调用登录、字段、授权或任何 OA 写工具；
 - 三类卡片页面均加入自托管、无数据读取能力的 Telegram 生命周期桥，只发送 ready、expand 和完成后的 close；页面不加载第三方脚本，卡片字段不会被桥接脚本读取。Node 集成测试确认 credential、business-input 和 execution-authorization 在 HTTPS 下全部使用 `button.webApp`，不回退普通 URL；
 - 本机自动测试为 Python `194 passed, 3 skipped`、Node `17/17`；目标 Ubuntu 全量测试为 `194 passed, 1 skipped`，`compileall`、`pip check`、systemd 单元校验和 npm pack dry-run 均通过；
 - 此前使用同类内部 CA 和私网 IP 证书的 Telegram Desktop 实验已确认 `tdesktop 9.6` WebView 能加载页面并提供原生 Telegram bridge。正式根 CA 的 Windows 当前用户信任仍需用户在受保护的系统提示中确认一次；不得以注册表、组策略或机器级信任绕过该边界。

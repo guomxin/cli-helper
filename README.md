@@ -265,11 +265,19 @@ python -m bscli.cli.main --home .bscli mcp central-serve \
   --session-keepalive-lease 28800
 ~~~
 
-Configure OpenClaw with `https://10.20.30.40:8790/mcp`, set its exact trusted
-card origin to `https://10.20.30.40:8780`, and make the root certificate
-available to the Gateway through `NODE_EXTRA_CA_CERTS`. Telegram then presents
-credential, business-input, and execution-authorization cards as native Web App
-buttons inside its own WebView instead of opening an external browser.
+Configure OpenClaw with the HTTPS endpoint and exact trusted-card origin. Store
+the CA path in OpenClaw's durable service environment so it is written into the
+managed Gateway launcher and survives future restarts:
+
+~~~powershell
+openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
+openclaw config set mcp.servers.agentbridge.url https://10.20.30.40:8790/mcp
+openclaw config set plugins.entries.agentbridge-interactions.config.allowedCardOrigins.0 https://10.20.30.40:8780
+~~~
+
+Telegram then presents credential, business-input, and execution-authorization
+cards as native Web App buttons inside its own WebView instead of opening an
+external browser.
 
 Loopback HTTP remains a local-development mechanism. The explicit private-IP
 HTTP switch is retained only for isolated recovery and must not be used for a

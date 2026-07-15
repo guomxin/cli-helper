@@ -20,8 +20,7 @@ Security behavior is intentionally fail closed:
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
-$ca = "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", $ca, "User")
+openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw plugins enable agentbridge-interactions
@@ -37,6 +36,11 @@ startup log contains the expected plugin version, for example:
 ```text
 AgentBridge interaction plugin registered (version=0.1.4, ...)
 ```
+
+The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
+variable. After installing or rebuilding the managed task, deep status should
+list `NODE_EXTRA_CA_CERTS` under `environmentValueSources`; a real MCP read then
+proves that the restarted Node process trusts the internal CA.
 
 On Windows, a managed `openclaw gateway restart` can legitimately take more
 than two minutes even when the command runner times out first. Wait at least
