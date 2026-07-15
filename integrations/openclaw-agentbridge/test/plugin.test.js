@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
-import { CARD_ORIGIN, CARD_URL, toolResult } from "./fixtures.js";
+import { CARD_ORIGIN, CARD_URL, interaction, toolResult } from "./fixtures.js";
 
 test("binds a real Telegram direct session before middleware and injects its card", () => {
   const harness = fakeApi({ autoPoll: false });
@@ -209,6 +209,181 @@ test("polls, resumes once, and queues only a non-sensitive host event", async ()
   assert.equal(harness.heartbeats.length, 0);
 });
 
+test("proactively wakes the private agent and delivers the next trusted card", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const authorizationUrl = `${CARD_ORIGIN}/authorize/opaque-authorization-token`;
+  const authorization = interaction({
+    interactionId: "interaction-authorization-123456",
+    type: "execution_authorization",
+    title: "确认保存 OA 待发草稿",
+    presentation: {
+      url: authorizationUrl,
+    },
+  });
+  const client = {
+    async callTool(name, arguments_, options = {}) {
+      if (name === "agentbridge_interaction_get") {
+        if (arguments_.interaction_id === authorization.interactionId) {
+          return new Promise((resolve) => {
+            options.signal.addEventListener(
+              "abort",
+              () => resolve({ status: "succeeded", interaction: authorization }),
+              { once: true },
+            );
+          });
+        }
+        return { status: "succeeded", interaction: completed };
+      }
+      return toolResult(authorization);
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-proactive",
+    runId: "run-original",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-proactive",
+      toolName: "oa_business_trip_prepare",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  for (
+    let index = 0;
+    index < 20 && harness.sentPayloads.length === 0;
+    index += 1
+  ) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].to, "7052061588");
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[0].payload).includes(authorizationUrl),
+    true,
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+  assert.equal(harness.heartbeats.length, 0);
+  const idle = coordinator.waitForIdle();
+  coordinator.stopAll();
+  await idle;
+});
+
+test("delivers a final trusted status directly without waking the model", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+
+  await coordinator.notify(
+    {
+      sessionKey,
+      interaction: { interactionId: "interaction-completed-123456" },
+    },
+    "succeeded",
+    null,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].to, "7052061588");
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "AgentBridge 已完成本次安全操作。",
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+  assert.equal(harness.heartbeats.length, 0);
+});
+
+test("uses an opaque heartbeat only when direct status delivery is unavailable", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+
+  await coordinator.notify(
+    {
+      sessionKey,
+      interaction: { interactionId: "interaction-completed-123456" },
+    },
+    "succeeded",
+    null,
+  );
+
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(harness.systemEvents.length, 1);
+  assert.equal(harness.systemEvents[0].text.includes(CARD_URL), false);
+  assert.equal(harness.heartbeatRuns.length, 1);
+  assert.equal(
+    harness.heartbeatRuns[0].reason,
+    "hook:agentbridge-interaction-updated",
+  );
+  assert.equal(harness.heartbeats.length, 0);
+});
+
+test("queues a heartbeat fallback when the immediate completion wake is skipped", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    __heartbeatResult: { status: "skipped", reason: "flood" },
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+
+  await coordinator.wakeAgent("agent:main:telegram:direct:7052061588");
+
+  assert.equal(harness.heartbeatRuns.length, 1);
+  assert.equal(
+    harness.heartbeatRuns[0].reason,
+    "hook:agentbridge-interaction-updated",
+  );
+  assert.equal(harness.heartbeats.length, 1);
+  assert.equal(
+    harness.heartbeats[0].reason,
+    "hook:agentbridge-interaction-updated",
+  );
+  assert.equal(
+    harness.logs.warn.some((line) => line.includes("FLOOD")),
+    true,
+  );
+});
+
 function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
   harness.hooks.before_tool_call(
     {
@@ -226,11 +401,29 @@ function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
   );
 }
 
+function bindDeliveryRoute(harness, { sessionKey, to }) {
+  harness.hooks.message_received(
+    {
+      from: to,
+      senderId: to,
+      sessionKey,
+      content: "测试消息",
+    },
+    {
+      channelId: "telegram",
+      conversationId: to,
+      sessionKey,
+    },
+  );
+}
+
 function fakeApi(pluginConfig) {
   const hooks = {};
   const logs = { info: [], warn: [] };
   const systemEvents = [];
   const heartbeats = [];
+  const heartbeatRuns = [];
+  const sentPayloads = [];
   const state = {
     middleware: null,
     middlewareOptions: null,
@@ -251,6 +444,21 @@ function fakeApi(pluginConfig) {
       },
     },
     runtime: {
+      channel: {
+        outbound: {
+          async loadAdapter() {
+            return {
+              renderPresentation({ payload }) {
+                return payload;
+              },
+              async sendPayload(context) {
+                sentPayloads.push(context);
+                return { channel: "telegram", messageId: "message-1" };
+              },
+            };
+          },
+        },
+      },
       system: {
         enqueueSystemEvent(text, options) {
           systemEvents.push({ text, options });
@@ -258,6 +466,13 @@ function fakeApi(pluginConfig) {
         },
         requestHeartbeat(options) {
           heartbeats.push(options);
+        },
+        async runHeartbeatOnce(options) {
+          heartbeatRuns.push(options);
+          return pluginConfig.__heartbeatResult || {
+            status: "ran",
+            durationMs: 1,
+          };
         },
       },
     },
@@ -278,6 +493,8 @@ function fakeApi(pluginConfig) {
     logs,
     systemEvents,
     heartbeats,
+    heartbeatRuns,
+    sentPayloads,
     get middleware() {
       return state.middleware;
     },

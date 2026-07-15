@@ -546,6 +546,12 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 self.assertEqual(started["status"], "requires_user_action")
                 self.assertEqual(started["error"]["code"], "FIELD_INPUT_REQUIRED")
                 submission_id = started["nextAction"]["inputSubmissionId"]
+                submission = service.field_submissions.get(submission_id)
+                self.assertEqual(
+                    datetime.fromisoformat(submission["expires_at"])
+                    - datetime.fromisoformat(submission["created_at"]),
+                    timedelta(minutes=30),
+                )
                 _submit_business_trip_fields(service, submission_id)
                 prepared = service.invoke(
                     user_subject="user-a",
@@ -567,6 +573,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             authorization_id = prepared["nextAction"]["authorizationId"]
             authorization = service.write_authorizations.get(authorization_id)
             self.assertEqual(authorization["state"], "pending")
+            self.assertEqual(
+                datetime.fromisoformat(authorization["expires_at"])
+                - datetime.fromisoformat(authorization["created_at"]),
+                timedelta(minutes=30),
+            )
             self.assertEqual(
                 prepared["nextAction"]["then"]["capability"],
                 "oa.business_trip.save_draft",
@@ -670,6 +681,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 field_interaction["interactionId"],
             )
             self.assertEqual(prepared["interaction"]["type"], "execution_authorization")
+            self.assertTrue(
+                prepared["interaction"]["presentation"][
+                    "modelMustNotCollectValues"
+                ]
+            )
             self.assertEqual(repeated_prepare["status"], "already_resumed")
             prepare_draft.assert_called_once()
 

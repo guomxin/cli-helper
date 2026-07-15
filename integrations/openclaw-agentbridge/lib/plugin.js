@@ -3,7 +3,7 @@ import { InteractionCoordinator, presentationForRecords } from "./coordinator.js
 import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 
-const PLUGIN_VERSION = "0.1.1";
+const PLUGIN_VERSION = "0.1.4";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -42,10 +42,15 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     coordinator.bindToolCall(event, context);
   });
 
+  api.on("message_received", (event, context) => {
+    bindTrustedDeliveryRoute(coordinator, event, context);
+  });
+
   api.on("reply_payload_sending", (event, context) => {
     if (!["final", "block"].includes(event.kind)) {
       return undefined;
     }
+    bindTrustedDeliveryRoute(coordinator, event, context);
     const interactions = coordinator.takeForDelivery({
       runId: event.runId || context.runId,
       sessionKey: event.sessionKey || context.sessionKey,
@@ -127,4 +132,19 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, origins=${config.allowedCardOrigins.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+function bindTrustedDeliveryRoute(coordinator, event, context) {
+  coordinator.bindDeliveryRoute({
+    sessionKey: event.sessionKey || context.sessionKey,
+    channel: event.channel || context.channelId,
+    to:
+      context.conversationId ||
+      event.conversationId ||
+      event.senderId ||
+      context.senderId ||
+      event.from,
+    accountId: event.accountId || context.accountId,
+    threadId: event.threadId || context.threadId,
+  });
 }

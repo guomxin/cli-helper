@@ -56,6 +56,38 @@ class InteractionStoreTests(unittest.TestCase):
             self.assertNotIn("resource_id", envelope)
             self.assertNotIn("resume_spec", envelope)
 
+    def test_execution_authorization_requires_host_owned_user_decision(self):
+        with TemporaryDirectory() as tmp:
+            store = InteractionStore(Path(tmp) / "agentbridge.db")
+            record = store.register(
+                interaction_type="execution_authorization",
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                operation_id="operation-1",
+                resource_id="authorization-1",
+                title="确认保存草稿",
+                message="请核对并确认。",
+                display={"fieldCount": 7},
+                resume_spec={
+                    "kind": "capability",
+                    "capability": "oa.business_trip.save_draft",
+                    "arguments": {"authorization_id": "authorization-1"},
+                },
+                created_at="2026-07-14T00:00:00+00:00",
+                expires_at="2026-07-14T00:15:00+00:00",
+            )
+            resource = {
+                "state": "pending",
+                "card_url": "https://cards.example.test/authorize/authorization-1",
+            }
+
+            envelope = build_interaction_envelope(record, resource)
+
+            self.assertTrue(
+                envelope["presentation"]["modelMustNotCollectValues"]
+            )
+
     @staticmethod
     def _register(store, *, session_id="session-a"):
         return store.register(

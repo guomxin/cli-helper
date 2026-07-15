@@ -283,8 +283,7 @@ def build_interaction_envelope(record: dict, resource: dict) -> dict:
             "preferred": "embedded_secure_web_app",
             "fallback": "url",
             "url": resource["card_url"],
-            "modelMustNotCollectValues": interaction_type
-            in {"credential", "business_input"},
+            "modelMustNotCollectValues": True,
         },
         "display": record["display"],
         "expiresAt": record["expires_at"],

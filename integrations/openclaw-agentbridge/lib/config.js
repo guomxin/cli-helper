@@ -2,8 +2,8 @@ const DEFAULTS = Object.freeze({
   mcpServerName: "agentbridge",
   autoPoll: true,
   pollIntervalSeconds: 2,
-  maxPollSeconds: 900,
-  wakeAgentOnComplete: false,
+  maxPollSeconds: 1800,
+  wakeAgentOnComplete: true,
 });
 
 export function resolvePluginConfig(raw) {

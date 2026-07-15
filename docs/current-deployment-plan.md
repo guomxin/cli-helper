@@ -418,9 +418,9 @@ openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
 
-链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.1, ...)`。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.4, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
-`allowedCardOrigins` 必须是精确来源，不允许路径、通配符或从 MCP 结果自动学习。当前私网 HTTP 模式使用普通 URL 按钮；只有 HTTPS 卡片才使用 Telegram Web App。插件默认 `wakeAgentOnComplete=false`，后台恢复产生的下一张卡片会在下一次私聊回复中显示，也可用 `/agentbridge pending` 主动重显，不会为了发卡自动唤醒外部模型。
+`allowedCardOrigins` 必须是精确来源，不允许路径、通配符或从 MCP 结果自动学习。当前私网 HTTP 模式使用普通 URL 按钮；只有 HTTPS 卡片才使用 Telegram Web App。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
 
 OpenClaw 不应要求用户在聊天里回复密码、业务字段或“同意执行”。这些内容必须在可信卡片中完成。
 
@@ -543,11 +543,11 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 固定私网 IP HTTP 显式开关 | 已实现 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
-| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；会话修复本地全量 179 项、受控保活本地全量 187 项通过 |
+| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；会话修复本地全量 179 项、受控保活本地全量 187 项、可信交互本地全量 188 项通过 |
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；Telegram 智能体已真实调用状态查询和登录工具，并展示安全登录按钮 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.1 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话，来源白名单仍需显式配置 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.4 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息，来源白名单仍需显式配置 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 域名、HTTPS、OIDC、Vault/KMS | 生产阶段待实现 |
@@ -592,6 +592,15 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 五轮后台心跳期间，数据库中的 `last_verified_at` 和活动租约时间均保持 15:11:38，证明心跳没有改写身份认证纪元，也没有自我续租；
 - 16:12:53，即认证约 61 分钟后，用户通过 Telegram/OpenClaw 实时检查仍为“已登录，有效”，界面分别显示认证时间 15:11:38、最近活动与本次检查时间 16:12:53；随后 `oa_workflow_pending_list` 成功读取 3 条真实待办；
 - 本轮没有执行 OA 写操作。日志中的保活信息只包含活动、合格、成功、过期、延迟和租约外计数，不包含用户标识、URL、Cookie、页面正文或凭据。
+
+### 2026-07-15 OpenClaw 可信交互续接验收记录
+
+- 用户在 Telegram 发起“出差申请单保存待发草稿”后完成业务字段卡；插件在后台恢复同一交互，并于 22:34:49 通过原 Telegram 私聊路由直接投递独立执行授权卡，日志记录 `AgentBridge next trusted card delivered directly` 和 Telegram `messageId=88`，卡片 URL 与已填写业务字段均未经过模型；
+- 用户完成授权与执行后，首次完成通知因普通 heartbeat 原因被空 `HEARTBEAT.md` 门控，日志明确返回 `EMPTY-HEARTBEAT-FILE`。插件已改用 `hook:agentbridge-interaction-updated` 原因前缀，并增加单元测试固定该契约；
+- 修复后的无害通知探针已越过 heartbeat 文件门控并进入模型回合，未再出现 `EMPTY-HEARTBEAT-FILE`；但模型按 heartbeat 协议返回 `HEARTBEAT_OK` 后被宿主静默，证明最终完成通知不应依赖模型生成；
+- 插件 0.1.4 因而将无后续卡片的成功、拒绝、过期和失败也改为宿主固定文本直投，只有通道适配器不可用时才使用不含敏感数据的 heartbeat 兜底。自动测试分别覆盖卡片直投、终态直投、路由缺失兜底和 hook 原因前缀；
+- 0.1.4 于 23:39:47 被新 Gateway 进程实际加载，PID `24620` 正常监听 18789，深度 RPC 检查通过；随后使用同一 Telegram 出站插件发送不经过模型和 OA 的宿主直达验收消息，返回 `messageId=90`。结合此前真实授权卡直投和 16 项 Node 测试，终态直投链路具备可提交证据；
+- Windows Gateway 重启实测可能超过两分钟。运维验证必须等待托管重启收敛后再检查，避免超时后重复启动造成双进程竞争。
 
 ## 16. 后续演进顺序
 

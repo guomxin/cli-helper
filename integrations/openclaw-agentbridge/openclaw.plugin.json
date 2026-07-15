@@ -44,12 +44,12 @@
         "type": "integer",
         "minimum": 30,
         "maximum": 1800,
-        "default": 900
+        "default": 1800
       },
       "wakeAgentOnComplete": {
         "type": "boolean",
-        "description": "Request a model heartbeat after host-side resume. Keep disabled until the model data boundary is approved.",
-        "default": false
+        "description": "Request a model heartbeat containing only an opaque completion status so the next trusted card is delivered proactively.",
+        "default": true
       }
     }
   }

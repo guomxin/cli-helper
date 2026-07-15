@@ -58,6 +58,7 @@ from bscli.core.write_authorizations import (
 
 
 WorkerFactory = Callable[[dict, SeeyonCentralAdapter], CentralBrowserWorker]
+BUSINESS_TRIP_INTERACTION_TTL_SECONDS = 1800
 
 
 class CentralCapabilityService:
@@ -711,7 +712,7 @@ class CentralCapabilityService:
             plan=plan,
             summary=summary,
             card_base_url=self.trusted_card_base_url,
-            ttl_seconds=900,
+            ttl_seconds=BUSINESS_TRIP_INTERACTION_TTL_SECONDS,
         )
         interaction = self._execution_authorization_interaction(authorization)
         try:
@@ -771,7 +772,7 @@ class CentralCapabilityService:
                 create_operation_id=context.operation_id,
                 form_schema=BUSINESS_TRIP_FIELD_CARD_SCHEMA,
                 card_base_url=self.trusted_card_base_url,
-                ttl_seconds=900,
+                ttl_seconds=BUSINESS_TRIP_INTERACTION_TTL_SECONDS,
             )
             raise self._field_input_required(submission)
         try:

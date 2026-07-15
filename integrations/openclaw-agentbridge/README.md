@@ -11,8 +11,10 @@ Security behavior is intentionally fail closed:
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
-- background polling can resume a completed interaction once, while automatic
-  model wake-up is disabled by default.
+- background polling resumes a completed interaction once and delivers the
+  next trusted card or a fixed terminal-status message through the original
+  private channel without involving the model; an opaque heartbeat is retained
+  only as a delivery fallback.
 
 ## Local installation
 
@@ -30,8 +32,14 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.1, ...)
+AgentBridge interaction plugin registered (version=0.1.4, ...)
 ```
+
+On Windows, a managed `openclaw gateway restart` can legitimately take more
+than two minutes even when the command runner times out first. Wait at least
+120 seconds before diagnosing failure, and do not issue a second restart or
+kill Node processes during that window. Confirm the final listener, deep RPC
+status, and plugin-version log before taking recovery action.
 
 If a Node/NVM switch leaves the Windows Scheduled Task missing or an old
 Gateway process alive, repair the launcher and restart with:
@@ -47,11 +55,18 @@ or prints that header.
 
 Telegram receives a native Web App button only when the trusted card uses
 HTTPS. The controlled private-IP HTTP PoC uses a normal URL button so the card
-opens in the user's browser. New interactions produced by background resume are
-kept host-side; they appear on the next private reply or through
-`/agentbridge pending`. Automatic model wake-up remains disabled unless
-`wakeAgentOnComplete` is deliberately enabled after the model data boundary is
-approved.
+opens in the user's browser. The plugin records the trusted private delivery
+route that initiated an interaction. After a trusted page is completed,
+background resume first sends the next trusted card directly through that same
+channel adapter, without exposing its URL or submitted values to the model.
+When no next card exists, success, rejection, expiry, and failure are reported
+as fixed host-owned status text through the same adapter. If either direct path
+is unavailable, an opaque private-session heartbeat is used as a fallback. The
+fallback wake reason is hook-prefixed so OpenClaw does not gate it on a non-empty
+`HEARTBEAT.md`; the event still contains no submitted values, credentials, or
+trusted-card URL. `/agentbridge pending` remains a manual redraw fallback. Set
+`wakeAgentOnComplete=false` only when provider policy forbids that heartbeat
+fallback.
 
 In a private conversation, `/agentbridge status` reports safe diagnostics and
 `/agentbridge pending` redraws the latest unexpired trusted interaction.

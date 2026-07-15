@@ -27,6 +27,25 @@ export class InteractionCoordinator {
     this.polls = new Map();
     this.abortControllers = new Map();
     this.toolBindings = new Map();
+    this.sessionRoutes = new Map();
+  }
+
+  bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
+    if (!isPrivateSessionKey(sessionKey)) {
+      return false;
+    }
+    const normalizedChannel = safeRoutePart(channel);
+    const normalizedTo = safeRoutePart(to);
+    if (!normalizedChannel || !normalizedTo) {
+      return false;
+    }
+    this.sessionRoutes.set(sessionKey, {
+      channel: normalizedChannel,
+      to: normalizedTo,
+      accountId: safeRoutePart(accountId) || null,
+      threadId: normalizeThreadId(threadId),
+    });
+    return true;
   }
 
   bindToolCall(event, context) {
@@ -140,6 +159,7 @@ export class InteractionCoordinator {
         this.toolBindings.delete(toolCallId);
       }
     }
+    this.sessionRoutes.delete(sessionKey);
   }
 
   stopAll() {
@@ -149,6 +169,7 @@ export class InteractionCoordinator {
     this.abortControllers.clear();
     this.polls.clear();
     this.toolBindings.clear();
+    this.sessionRoutes.clear();
   }
 
   async waitForIdle() {
@@ -224,7 +245,7 @@ export class InteractionCoordinator {
       } catch (error) {
         consecutiveErrors += 1;
         if (consecutiveErrors >= MAX_POLL_ERRORS) {
-          this.notify(record, "poll_failed", safeErrorCode(error));
+          await this.notify(record, "poll_failed", safeErrorCode(error));
           return;
         }
         continue;
@@ -242,21 +263,21 @@ export class InteractionCoordinator {
       }
       record.interaction = current;
       if (TERMINAL_STATES.has(current.state)) {
-        this.notify(record, current.state, null);
+        await this.notify(record, current.state, null);
         return;
       }
       if (current.state !== "completed") {
         continue;
       }
       if (current.resume.ready !== true || current.resume.completed === true) {
-        this.notify(record, "completed", null);
+        await this.notify(record, "completed", null);
         return;
       }
       await this.resume(record, signal);
       return;
     }
     if (!signal.aborted) {
-      this.notify(record, "poll_expired", null);
+      await this.notify(record, "poll_expired", null);
     }
   }
 
@@ -272,7 +293,7 @@ export class InteractionCoordinator {
         { signal },
       );
     } catch (error) {
-      this.notify(record, "resume_failed", safeErrorCode(error));
+      await this.notify(record, "resume_failed", safeErrorCode(error));
       return;
     }
 
@@ -291,15 +312,28 @@ export class InteractionCoordinator {
       });
       this.startPolling(next);
     }
-    this.notify(
+    await this.notify(
       record,
       nextInteractions.length > 0 ? "next_interaction_required" : safeStatus(response),
       safeResponseErrorCode(response),
+      nextInteractions,
     );
   }
 
-  notify(record, status, errorCode) {
+  async notify(record, status, errorCode, nextInteractions = []) {
     if (!record.sessionKey) {
+      return;
+    }
+    if (
+      nextInteractions.length > 0 &&
+      (await this.deliverInteractionsDirect(record.sessionKey, nextInteractions))
+    ) {
+      return;
+    }
+    if (
+      nextInteractions.length === 0 &&
+      (await this.deliverStatusDirect(record.sessionKey, status, errorCode))
+    ) {
       return;
     }
     const suffix = errorCode ? `，错误码 ${errorCode}` : "";
@@ -311,14 +345,149 @@ export class InteractionCoordinator {
       },
     );
     if (this.config.wakeAgentOnComplete) {
-      this.api.runtime.system.requestHeartbeat({
-        source: "hook",
-        intent: "event",
-        reason: "agentbridge-interaction-updated",
-        sessionKey: record.sessionKey,
-        heartbeat: { target: "last" },
-      });
+      await this.wakeAgent(record.sessionKey);
     }
+  }
+
+  async deliverInteractionsDirect(sessionKey, interactions) {
+    const route = this.sessionRoutes.get(sessionKey);
+    if (!route) {
+      this.api.logger.warn(
+        "AgentBridge direct card delivery unavailable because the private session route is missing",
+      );
+      return false;
+    }
+    try {
+      const presentation = buildPresentation(interactions, route.channel);
+      if (!presentation) {
+        return false;
+      }
+      const text = "AgentBridge 已收到你提交的信息，请继续完成下面的安全操作。";
+      const initialPayload = { text, presentation };
+      if (!(await this.sendRoutePayload(route, initialPayload, presentation))) {
+        this.api.logger.warn(
+          `AgentBridge direct card delivery unavailable for channel ${route.channel}`,
+        );
+        return false;
+      }
+      const deliveredIds = new Set(
+        interactions.map((interaction) => interaction.interactionId),
+      );
+      for (const item of this.records.values()) {
+        if (
+          item.sessionKey === sessionKey &&
+          deliveredIds.has(item.interaction.interactionId)
+        ) {
+          item.delivered = true;
+        }
+      }
+      this.api.logger.info(
+        `AgentBridge next trusted card delivered directly (channel=${route.channel}, count=${interactions.length})`,
+      );
+      return true;
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge direct card delivery failed: ${safeErrorCode(error)}`,
+      );
+      return false;
+    }
+  }
+
+  async deliverStatusDirect(sessionKey, status, errorCode) {
+    const route = this.sessionRoutes.get(sessionKey);
+    if (!route) {
+      this.api.logger.warn(
+        "AgentBridge direct status delivery unavailable because the private session route is missing",
+      );
+      return false;
+    }
+    const text = safeStatusMessage(status, errorCode);
+    try {
+      if (!(await this.sendRoutePayload(route, { text }))) {
+        this.api.logger.warn(
+          `AgentBridge direct status delivery unavailable for channel ${route.channel}`,
+        );
+        return false;
+      }
+      this.api.logger.info(
+        `AgentBridge trusted interaction status delivered directly (channel=${route.channel}, status=${safeCode(status)})`,
+      );
+      return true;
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge direct status delivery failed: ${safeErrorCode(error)}`,
+      );
+      return false;
+    }
+  }
+
+  async sendRoutePayload(route, initialPayload, presentation = null) {
+    const adapter = await this.api.runtime.channel.outbound.loadAdapter(
+      route.channel,
+    );
+    if (!adapter?.sendPayload) {
+      return false;
+    }
+    const text =
+      typeof initialPayload.text === "string" ? initialPayload.text : "";
+    const baseContext = {
+      cfg: this.api.config,
+      to: route.to,
+      text,
+      ...(route.accountId ? { accountId: route.accountId } : {}),
+      ...(route.threadId !== null ? { threadId: route.threadId } : {}),
+    };
+    const payload =
+      presentation && adapter.renderPresentation
+        ? await adapter.renderPresentation({
+            payload: initialPayload,
+            presentation,
+            ctx: { ...baseContext, payload: initialPayload },
+          })
+        : initialPayload;
+    if (!payload) {
+      return false;
+    }
+    await adapter.sendPayload({
+      ...baseContext,
+      text: typeof payload.text === "string" ? payload.text : text,
+      payload,
+    });
+    return true;
+  }
+
+  async wakeAgent(sessionKey) {
+    const options = {
+      // OpenClaw infers hook wake semantics from this prefix when the plugin
+      // runtime's runHeartbeatOnce facade cannot forward an explicit source.
+      reason: "hook:agentbridge-interaction-updated",
+      sessionKey,
+      heartbeat: { target: "last" },
+    };
+    if (typeof this.api.runtime.system.runHeartbeatOnce === "function") {
+      try {
+        const result = await this.api.runtime.system.runHeartbeatOnce(options);
+        if (result?.status === "ran") {
+          this.api.logger.info("AgentBridge completion heartbeat ran immediately");
+          return;
+        }
+        this.api.logger.warn(
+          `AgentBridge immediate heartbeat did not run: ${safeCode(result?.reason || result?.status || "UNKNOWN")}`,
+        );
+      } catch (error) {
+        this.api.logger.warn(
+          `AgentBridge immediate heartbeat failed: ${safeErrorCode(error)}`,
+        );
+      }
+    }
+    this.api.runtime.system.requestHeartbeat({
+      source: "hook",
+      intent: "event",
+      reason: options.reason,
+      sessionKey,
+      heartbeat: options.heartbeat,
+    });
+    this.api.logger.info("AgentBridge completion heartbeat queued as fallback");
   }
 
   prune() {
@@ -401,12 +570,55 @@ function safeCode(value) {
     .slice(0, 80);
 }
 
+function safeStatusMessage(status, errorCode) {
+  const code = errorCode ? `（错误码：${safeCode(errorCode)}）` : "";
+  switch (safeStatus({ status })) {
+    case "succeeded":
+      return "AgentBridge 已完成本次安全操作。";
+    case "already_resumed":
+      return "AgentBridge 已完成本次安全操作，无需重复处理。";
+    case "declined":
+      return "你已拒绝本次 AgentBridge 安全操作，系统未继续执行。";
+    case "expired":
+      return "本次 AgentBridge 安全交互已过期，请在智能体中重新发起。";
+    case "superseded":
+      return "本次 AgentBridge 安全交互已被新的请求替代。";
+    case "completed":
+      return "AgentBridge 已收到安全页面的处理结果。";
+    case "poll_expired":
+      return "AgentBridge 等待安全交互完成已超时，请在智能体中重新发起。";
+    case "poll_failed":
+      return `AgentBridge 暂时无法查询安全交互状态${code}。`;
+    case "resume_failed":
+      return `AgentBridge 未能继续执行本次安全操作${code}。`;
+    case "failed":
+      return `AgentBridge 未能完成本次安全操作${code}。`;
+    default:
+      return `AgentBridge 安全交互状态已更新：${safeCode(status)}${code}。`;
+  }
+}
+
 function normalizeToolCallId(value) {
   if (typeof value !== "string") {
     return null;
   }
   const normalized = value.trim();
   return normalized ? normalized.slice(0, 256) : null;
+}
+
+function safeRoutePart(value) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, 512) : null;
+}
+
+function normalizeThreadId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return safeRoutePart(value);
 }
 
 function defaultSleep(milliseconds, signal) {
