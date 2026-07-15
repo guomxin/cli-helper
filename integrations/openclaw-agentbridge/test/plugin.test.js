@@ -4,20 +4,22 @@ import assert from "node:assert/strict";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import { CARD_ORIGIN, CARD_URL, toolResult } from "./fixtures.js";
 
-test("registers middleware and injects one trusted presentation into a private final reply", () => {
+test("binds a real Telegram direct session before middleware and injects its card", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  bindToolCall(harness, {
+    toolCallId: "tool-1",
+    runId: "run-1",
+    sessionKey: "agent:main:telegram:direct:7052061588",
+  });
 
   const replacement = harness.middleware(
     {
+      toolCallId: "tool-1",
       toolName: "oa_session_login",
       result: toolResult(),
     },
-    {
-      runtime: "openclaw",
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-    },
+    { runtime: "openclaw" },
   );
   assert.equal(JSON.stringify(replacement).includes(CARD_URL), false);
 
@@ -25,11 +27,15 @@ test("registers middleware and injects one trusted presentation into a private f
     {
       kind: "final",
       runId: "run-1",
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:main:telegram:direct:7052061588",
       channel: "telegram",
       payload: { text: "请完成登录。" },
     },
-    { channelId: "telegram", sessionKey: "agent:main:main", runId: "run-1" },
+    {
+      channelId: "telegram",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      runId: "run-1",
+    },
   );
   assert.equal(first.payload.presentation.blocks.at(-1).buttons[0].url, CARD_URL);
   assert.equal(first.payload.text, "请完成登录。");
@@ -38,11 +44,15 @@ test("registers middleware and injects one trusted presentation into a private f
     {
       kind: "final",
       runId: "run-1",
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:main:telegram:direct:7052061588",
       channel: "telegram",
       payload: { text: "重复回复" },
     },
-    { channelId: "telegram", sessionKey: "agent:main:main", runId: "run-1" },
+    {
+      channelId: "telegram",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      runId: "run-1",
+    },
   );
   assert.equal(second, undefined);
   assert.deepEqual(harness.middlewareOptions, { runtimes: ["openclaw"] });
@@ -51,14 +61,19 @@ test("registers middleware and injects one trusted presentation into a private f
 test("never renders a captured card in a group session", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  bindToolCall(harness, {
+    toolCallId: "tool-group",
+    runId: "run-group",
+    sessionKey: "agent:main:telegram:group:-100",
+  });
 
   const replacement = harness.middleware(
-    { toolName: "oa_session_login", result: toolResult() },
     {
-      runtime: "openclaw",
-      runId: "run-group",
-      sessionKey: "agent:main:telegram:group:-100",
+      toolCallId: "tool-group",
+      toolName: "oa_session_login",
+      result: toolResult(),
     },
+    { runtime: "openclaw" },
   );
   assert.equal(JSON.stringify(replacement).includes(CARD_URL), false);
   const reply = harness.hooks.reply_payload_sending(
@@ -75,16 +90,54 @@ test("never renders a captured card in a group session", () => {
   assert.equal(harness.logs.warn.some((line) => line.includes("not private")), true);
 });
 
+test("withholds an unbound card when result middleware has no session context", () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+
+  const replacement = harness.middleware(
+    {
+      toolCallId: "tool-unbound",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(JSON.stringify(replacement).includes(CARD_URL), false);
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      channel: "telegram",
+      payload: { text: "no card" },
+    },
+    {
+      channelId: "telegram",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+    },
+  );
+  assert.equal(reply, undefined);
+  assert.equal(
+    harness.logs.warn.some((line) => line.includes("session binding")),
+    true,
+  );
+});
+
 test("pending command redraws a previously delivered interaction without a model call", async () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  bindToolCall(harness, {
+    toolCallId: "tool-2",
+    runId: "run-2",
+    sessionKey: "agent:main:main",
+  });
   harness.middleware(
-    { toolName: "oa_session_login", result: toolResult() },
     {
-      runtime: "openclaw",
-      runId: "run-2",
-      sessionKey: "agent:main:main",
+      toolCallId: "tool-2",
+      toolName: "oa_session_login",
+      result: toolResult(),
     },
+    { runtime: "openclaw" },
   );
 
   const result = await harness.command.handler({
@@ -131,13 +184,18 @@ test("polls, resumes once, and queues only a non-sensitive host event", async ()
     mcpClient: client,
     sleep: async () => {},
   });
+  bindToolCall(harness, {
+    toolCallId: "tool-3",
+    runId: "run-3",
+    sessionKey: "agent:main:main",
+  });
   harness.middleware(
-    { toolName: "oa_session_login", result: toolResult() },
     {
-      runtime: "openclaw",
-      runId: "run-3",
-      sessionKey: "agent:main:main",
+      toolCallId: "tool-3",
+      toolName: "oa_session_login",
+      result: toolResult(),
     },
+    { runtime: "openclaw" },
   );
 
   await coordinator.waitForIdle();
@@ -150,6 +208,23 @@ test("polls, resumes once, and queues only a non-sensitive host event", async ()
   assert.equal(harness.systemEvents[0].text.includes(CARD_URL), false);
   assert.equal(harness.heartbeats.length, 0);
 });
+
+function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
+  harness.hooks.before_tool_call(
+    {
+      toolName: "oa_session_login",
+      params: {},
+      toolCallId,
+      runId,
+    },
+    {
+      channelId: "telegram",
+      sessionKey,
+      runId,
+      toolCallId,
+    },
+  );
+}
 
 function fakeApi(pluginConfig) {
   const hooks = {};

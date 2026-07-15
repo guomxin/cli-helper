@@ -13,6 +13,8 @@ const TERMINAL_STATES = new Set([
 ]);
 const MAX_INTERACTIONS = 100;
 const MAX_POLL_ERRORS = 5;
+const MAX_TOOL_BINDINGS = 1000;
+const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 
 export class InteractionCoordinator {
   constructor({ api, config, mcpClient = null, sleep = defaultSleep, now = Date.now }) {
@@ -24,9 +26,24 @@ export class InteractionCoordinator {
     this.records = new Map();
     this.polls = new Map();
     this.abortControllers = new Map();
+    this.toolBindings = new Map();
+  }
+
+  bindToolCall(event, context) {
+    const toolCallId = normalizeToolCallId(event.toolCallId);
+    if (!toolCallId) {
+      return;
+    }
+    this.toolBindings.set(toolCallId, {
+      sessionKey: context.sessionKey || null,
+      runId: event.runId || context.runId || null,
+      capturedAt: this.now(),
+    });
+    this.pruneToolBindings();
   }
 
   captureToolResult(event, context) {
+    const binding = this.takeToolBinding(event.toolCallId);
     const processed = processToolResult(
       event.result,
       this.config.allowedCardOrigins,
@@ -35,20 +52,26 @@ export class InteractionCoordinator {
       return undefined;
     }
 
-    const sessionKey = context.sessionKey;
+    const sessionKey = binding?.sessionKey || context.sessionKey;
+    const runId = binding?.runId || context.runId;
     const privateSession = isPrivateSessionKey(sessionKey);
     for (const interaction of processed.interactions) {
       if (!privateSession) {
         this.api.logger.warn(
-          "AgentBridge interaction withheld because the OpenClaw session is not private",
+          sessionKey
+            ? "AgentBridge interaction withheld because the OpenClaw session is not private"
+            : "AgentBridge interaction withheld because no private session binding was available",
         );
         continue;
       }
       const record = this.upsert({
         interaction,
         sessionKey,
-        runId: context.runId,
+        runId,
       });
+      this.api.logger.info(
+        `AgentBridge interaction captured for private session (type=${interaction.type}, state=${interaction.state})`,
+      );
       this.startPolling(record);
     }
     return { result: processed.result };
@@ -112,6 +135,11 @@ export class InteractionCoordinator {
         this.records.delete(interactionId);
       }
     }
+    for (const [toolCallId, binding] of this.toolBindings) {
+      if (binding.sessionKey === sessionKey) {
+        this.toolBindings.delete(toolCallId);
+      }
+    }
   }
 
   stopAll() {
@@ -120,6 +148,7 @@ export class InteractionCoordinator {
     }
     this.abortControllers.clear();
     this.polls.clear();
+    this.toolBindings.clear();
   }
 
   async waitForIdle() {
@@ -293,6 +322,7 @@ export class InteractionCoordinator {
   }
 
   prune() {
+    this.pruneToolBindings();
     for (const [interactionId, record] of this.records) {
       if (isInteractionExpired(record.interaction, this.now())) {
         this.abortControllers.get(interactionId)?.abort();
@@ -306,6 +336,32 @@ export class InteractionCoordinator {
       }
       this.abortControllers.get(oldest)?.abort();
       this.records.delete(oldest);
+    }
+  }
+
+  takeToolBinding(toolCallId) {
+    const normalized = normalizeToolCallId(toolCallId);
+    if (!normalized) {
+      return null;
+    }
+    const binding = this.toolBindings.get(normalized) || null;
+    this.toolBindings.delete(normalized);
+    return binding;
+  }
+
+  pruneToolBindings() {
+    const cutoff = this.now() - TOOL_BINDING_TTL_MS;
+    for (const [toolCallId, binding] of this.toolBindings) {
+      if (binding.capturedAt <= cutoff) {
+        this.toolBindings.delete(toolCallId);
+      }
+    }
+    while (this.toolBindings.size > MAX_TOOL_BINDINGS) {
+      const oldest = this.toolBindings.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      this.toolBindings.delete(oldest);
     }
   }
 }
@@ -343,6 +399,14 @@ function safeCode(value) {
     .toUpperCase()
     .replace(/[^A-Z0-9_.-]/g, "_")
     .slice(0, 80);
+}
+
+function normalizeToolCallId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, 256) : null;
 }
 
 function defaultSleep(milliseconds, signal) {

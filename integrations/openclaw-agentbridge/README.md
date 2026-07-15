@@ -25,6 +25,22 @@ openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
 
+Linked plugin source changes require a real Gateway process restart. A config
+hot reload can leave Node's previously imported module in memory. Verify the
+startup log contains the expected plugin version, for example:
+
+```text
+AgentBridge interaction plugin registered (version=0.1.1, ...)
+```
+
+If a Node/NVM switch leaves the Windows Scheduled Task missing or an old
+Gateway process alive, repair the launcher and restart with:
+
+```powershell
+openclaw gateway install --force --json
+openclaw gateway status --deep --require-rpc --json
+```
+
 The plugin reuses the configured `mcp.servers.agentbridge` endpoint and its
 environment-backed Authorization header for background polling. It never stores
 or prints that header.
@@ -39,3 +55,10 @@ approved.
 
 In a private conversation, `/agentbridge status` reports safe diagnostics and
 `/agentbridge pending` redraws the latest unexpired trusted interaction.
+
+`oa_session_status` only reports whether the OA session is usable and never
+creates a card. To exercise the authentication-card path, ask OpenClaw to log
+in to OA so it calls `oa_session_login`. OpenClaw 2026.7.1 does not include the
+conversation key in tool-result middleware context, so version 0.1.1 binds the
+private session during `before_tool_call` and consumes that binding by
+`toolCallId`. Missing or non-private bindings still fail closed.

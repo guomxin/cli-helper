@@ -3,6 +3,8 @@ import { InteractionCoordinator, presentationForRecords } from "./coordinator.js
 import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 
+const PLUGIN_VERSION = "0.1.1";
+
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
   const mcpClient = Object.hasOwn(dependencies, "mcpClient")
@@ -34,6 +36,11 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     (event, context) => coordinator.captureToolResult(event, context),
     { runtimes: ["openclaw"] },
   );
+
+  // OpenClaw 2026.7.1 omits session context from result middleware.
+  api.on("before_tool_call", (event, context) => {
+    coordinator.bindToolCall(event, context);
+  });
 
   api.on("reply_payload_sending", (event, context) => {
     if (!["final", "block"].includes(event.kind)) {
@@ -117,7 +124,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   });
 
   api.logger.info(
-    `AgentBridge interaction plugin registered (origins=${config.allowedCardOrigins.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
+    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, origins=${config.allowedCardOrigins.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
 }

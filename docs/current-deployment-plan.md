@@ -404,6 +404,8 @@ openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
 
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.1, ...)`。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+
 `allowedCardOrigins` 必须是精确来源，不允许路径、通配符或从 MCP 结果自动学习。当前私网 HTTP 模式使用普通 URL 按钮；只有 HTTPS 卡片才使用 Telegram Web App。插件默认 `wakeAgentOnComplete=false`，后台恢复产生的下一张卡片会在下一次私聊回复中显示，也可用 `/agentbridge pending` 主动重显，不会为了发卡自动唤醒外部模型。
 
 OpenClaw 不应要求用户在聊天里回复密码、业务字段或“同意执行”。这些内容必须在可信卡片中完成。
@@ -436,6 +438,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 8. 核对返回身份、执行通道和操作账本，确认没有使用浏览器桥接。
 
 如果 `oa_session_login` 直接返回 `succeeded` 和 `reused=true`，说明中心会话仍然有效，不应再次要求用户登录。
+
+`oa_session_status` 是纯状态查询，不会创建认证 interaction。因此“检查 OA 登录状态”只会得到 `active` 或 `expired`；需要发起认证时，应明确调用 `oa_session_login`，自然语言可直接使用“登录 OA”。
 
 ### 10.3 重启恢复验证
 
@@ -484,6 +488,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 卡片链接打不开 | 检查 8780 监听和 interaction 中返回的 IP 是否是用户电脑可达地址 |
 | 私网 HTTP 卡片提交显示“请求来源无效” | 部分 Chrome 环境会发送 `Origin: null` 且省略 `Sec-Fetch-Site`；当前版本仅在显式私网 HTTP PoC 模式下接受这种请求，仍拒绝明确的 `cross-site`，并继续执行 SameSite Cookie、一次性 CSRF 和卡片状态校验 |
 | 内置浏览器无法输入 | 使用 OpenClaw 提供的 URL 在普通浏览器中打开；AgentBridge 不依赖内置浏览器输入 |
+| Telegram 只回复“OA 登录已过期”，没有安全登录按钮 | 检查智能体实际调用的工具；`oa_session_status` 不发卡，应调用 `oa_session_login` |
+| Telegram 私聊已生成 interaction 但没有按钮 | 检查日志是否出现 `captured for private session`；若出现 `withheld because the OpenClaw session is not private`，确认插件至少为 0.1.1 并完整重启 Gateway，不能只做配置热加载 |
+| 切换 Node/NVM 后 Gateway 仍运行旧插件或计划任务丢失 | 执行 `openclaw gateway install --force --json`，再核对 Gateway PID 已变化且启动日志打印预期插件版本 |
 | Linux 启动提示 `AGENTBRIDGE_SESSION_KEY_FILE` | 检查环境变量是否为绝对路径、密钥是否恰好 32 字节、所有者和权限是否符合要求 |
 | 每次都要求登录 | 检查 OA 是否被其他浏览器重新登录、服务用户、密钥文件或 `--home` 是否变化 |
 | `SESSION_RUNTIME_MISMATCH` 或解密失败 | 恢复原 Linux 服务用户和正确密钥，不要删除或替换已有会话状态 |
@@ -500,7 +507,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
 - [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
-- [ ] 认证卡从 OpenClaw 私聊打开，凭据没有进入聊天；
+- [x] 认证卡从 OpenClaw Telegram 私聊打开，凭据没有进入聊天；
 - [x] `oa_workflow_pending_list` 读取真实 OA 数据成功；
 - [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [x] 错误密钥、篡改密文和过宽权限都不能解密会话；
@@ -520,8 +527,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 171 项通过 |
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话并再次读取成功 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
-| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；外部模型智能体回合待单独授权 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.0 已实现并链接安装；来源白名单保留一次显式配置，不自动推断 |
+| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；Telegram 智能体已真实调用状态查询和登录工具，并展示安全登录按钮 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.1 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话，来源白名单仍需显式配置 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 域名、HTTPS、OIDC、Vault/KMS | 生产阶段待实现 |
@@ -539,10 +546,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 私网 HTTP 下的 Chrome opaque origin 兼容修复已在浏览器复现、目标 Ubuntu 专项测试和全量 171 项测试中通过；
 - 没有执行 OA 写操作；OpenClaw 外部模型智能体回合因数据出境边界未获单独授权而未执行。
 
+### 2026-07-15 OpenClaw Telegram 认证卡验收记录
+
+- OpenClaw 2026.7.1 的工具结果中间件未携带会话键，旧版插件因而把真实 Telegram 私聊 interaction 误判为非私聊并失败关闭；
+- 插件 0.1.1 在 `before_tool_call` 阶段按 `toolCallId` 暂存私聊会话绑定，工具结果中间件消费该绑定后再执行来源校验、URL 隐藏和卡片交付；无绑定及群聊仍然失败关闭；
+- Windows Node/NVM 环境切换后，原 Gateway 进程仍缓存旧模块且 Scheduled Task 丢失；使用 `openclaw gateway install --force --json` 清理旧 PID、重建任务并启动新进程，日志确认加载 `version=0.1.1`；
+- 用户在 Telegram 私聊发送“登录 OA”，智能体真实调用 `oa_session_login`；日志出现 `AgentBridge interaction captured for private session`，Telegram 显示安全登录按钮，用户通过普通浏览器完成登录；
+- 登录后用户在同一 Telegram 私聊发送“检查 OA 登录状态”，`oa_session_status` 返回“已登录，有效”，身份为辛国茂，最近验证时间为 2026-07-15 10:58:23（GMT+8），错误为空；
+- OpenClaw 工具结果和对话记录中的短期卡片 URL 均被替换为宿主侧占位文本，密码未进入模型消息或聊天；
+- “检查 OA 登录状态”实际调用 `oa_session_status`，只返回状态且不会发卡。这属于工具语义差异，不是卡片丢失。
+
 ## 16. 后续演进顺序
 
-1. 等待下一次合法的 credential、business-input 或 execution-authorization interaction，在 OpenClaw 私聊完成真实按钮、浏览器填写、后台恢复和敏感信息不入对话的端到端验收；
-2. 在获得明确数据授权后，完成 OpenClaw 外部模型智能体回合的只读 OA 调用验证；
+1. 选择“出差申请单保存待发草稿”验证 business-input 字段卡在 Telegram 中的展示、填写、回传和敏感字段隔离，不提交工作流；
+2. 为同一冻结执行计划验证独立 execution-authorization 授权卡、一次性提交和 OA 状态回读；
 3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
 4. 再扩充工作流写能力，并逐流程完成真实回读验证；
 5. 生产前增加域名、TLS、正式 OAuth/OIDC、限流、审计和 Vault/KMS；
