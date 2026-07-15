@@ -20,7 +20,10 @@ Security behavior is intentionally fail closed:
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
-openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" http://10.10.50.213:8780
+$ca = "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
+[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", $ca, "User")
+openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
 openclaw plugins inspect agentbridge-interactions --runtime --json
@@ -53,10 +56,13 @@ The plugin reuses the configured `mcp.servers.agentbridge` endpoint and its
 environment-backed Authorization header for background polling. It never stores
 or prints that header.
 
-Telegram receives a native Web App button only when the trusted card uses
-HTTPS. The controlled private-IP HTTP PoC uses a normal URL button so the card
-opens in the user's browser. The plugin records the trusted private delivery
-route that initiated an interaction. After a trusted page is completed,
+Telegram receives a native Web App button when the trusted card uses HTTPS.
+Credential, business-input, and execution-authorization cards all use this
+embedded path; private HTTP remains a portable-link fallback for local
+development only. AgentBridge pages use a small self-hosted lifecycle bridge
+that signals ready, expand, and close without reading or forwarding form data.
+The plugin records the trusted private delivery route that initiated an
+interaction. After a trusted page is completed,
 background resume first sends the next trusted card directly through that same
 channel adapter, without exposing its URL or submitted values to the model.
 When no next card exists, success, rejection, expiry, and failure are reported

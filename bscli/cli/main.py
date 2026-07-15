@@ -29,10 +29,11 @@ from bscli.core.central_service import (
 from bscli.core.config import ConfigStore, SystemProfile
 from bscli.core.field_submissions import FieldSubmissionStore
 from bscli.core.interactions import InteractionIntegrityError, InteractionNotFound
+from bscli.core.internal_pki import InternalCertificateAuthorityStore
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
-from bscli.core.session_secrets import SessionStateStore
+from bscli.core.session_secrets import SessionStateStore, WindowsDpapiProtector
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
 from bscli.core.write_authorizations import WriteAuthorizationStore
 from bscli.mcp.central import (
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_interaction(args, home)
     if args.area == "adapter":
         return handle_adapter(args)
+    if args.area == "pki":
+        return handle_pki(args)
     if args.area == "mcp":
         return handle_mcp(args)
     parser.error("missing command")
@@ -172,6 +175,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="http://10.10.50.110/seeyon/main.do?method=main",
     )
 
+    pki = subparsers.add_parser("pki")
+    pki_sub = pki.add_subparsers(dest="action", required=True)
+    pki_issue = pki_sub.add_parser("issue-server")
+    pki_issue.add_argument("--ip", required=True)
+    pki_issue.add_argument(
+        "--state-dir",
+        default=str(Path.home() / ".agentbridge" / "pki"),
+        help="DPAPI-protected internal root CA state directory",
+    )
+    pki_issue.add_argument("--output-dir", required=True)
+    pki_issue.add_argument("--root-common-name", default="AgentBridge Internal Root CA")
+    pki_issue.add_argument("--root-valid-days", type=int, default=3650)
+    pki_issue.add_argument("--server-valid-days", type=int, default=397)
+    pki_issue.add_argument("--force", action="store_true")
+
     mcp = subparsers.add_parser("mcp")
     mcp_sub = mcp.add_subparsers(dest="action", required=True)
     mcp_central_serve = mcp_sub.add_parser("central-serve")
@@ -223,6 +241,37 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_token_revoke.add_argument("token_id")
 
     return parser
+
+
+def handle_pki(args: argparse.Namespace) -> int:
+    if args.action != "issue-server":
+        raise ValueError(f"unknown PKI action: {args.action}")
+    if sys.platform != "win32":
+        print_json(
+            _central_cli_error(
+                "PKI_PLATFORM_UNSUPPORTED",
+                "internal CA issuance requires Windows DPAPI on the administrator workstation",
+            )
+        )
+        return 2
+    try:
+        store = InternalCertificateAuthorityStore(
+            Path(args.state_dir).expanduser(),
+            WindowsDpapiProtector(),
+        )
+        result = store.issue_server_certificate(
+            server_ip=args.ip,
+            output_dir=Path(args.output_dir).expanduser(),
+            root_common_name=args.root_common_name,
+            root_valid_days=args.root_valid_days,
+            server_valid_days=args.server_valid_days,
+            force=args.force,
+        )
+    except (FileExistsError, OSError, ValueError) as exc:
+        print_json(_central_cli_error("PKI_ISSUE_FAILED", str(exc)))
+        return 2
+    print_json(result.as_dict())
+    return 0
 
 
 def handle_system(args: argparse.Namespace, store: ConfigStore) -> int:

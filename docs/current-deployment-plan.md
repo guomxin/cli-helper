@@ -1,33 +1,36 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-14
+> 文档日期：2026-07-16
 >
 > 适用阶段：单用户、受控公司内网、跨机器联调
 >
 > 安全定位：临时 PoC 方案，不是生产部署基线
 
-> 当前部署判断：网络拓扑、私网 HTTP 和 Linux AES-256-GCM 会话保护器
-> 已具备，并已在目标 Ubuntu 24.04 机器通过全量测试；正在进行首次正式部署。
+> 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
+> 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
+> 只读链路已通过验证。Windows 当前用户仍需完成一次正式根 CA 的系统信任确认，
+> 才能在 Telegram WebView 中打开正式环境卡片。
 
 ## 1. 方案结论
 
 当前采用“用户电脑运行智能体宿主，内网服务器集中运行 AgentBridge”的部署方式：
 
-- 用户电脑运行 OpenClaw 和普通桌面浏览器；
+- 用户电脑运行 OpenClaw、Telegram Desktop 和必要时使用的普通桌面浏览器；
 - 公司内网另一台 Linux 机器运行 AgentBridge；
 - AgentBridge 通过中心 HTTP Session 和受控 Playwright Browser Worker 访问 OA；
 - 用户电脑不安装 Chrome 扩展、本地 Daemon 或 OA 连接器；
-- OpenClaw 通过 Streamable HTTP MCP 调用 AgentBridge；
+- OpenClaw 通过 Streamable HTTPS MCP 调用 AgentBridge；
 - 登录、业务字段填写和写操作授权通过 AgentBridge 可信卡片完成；
-- 当前 PoC 使用固定私网 IP 和 HTTP，不要求域名与 HTTPS 证书；
-- 非回环 HTTP 必须显式使用 `--allow-insecure-private-http`，默认安全策略仍要求 TLS。
+- Telegram 对三类 HTTPS 卡片使用原生 Web App 按钮，在应用内 WebView 中展示；
+- 当前 PoC 使用固定私网 IP、HTTPS 和专用内部 CA，不要求域名或公网证书；
+- 已部署服务不启用 `--allow-insecure-private-http`，8780/8790 的明文 HTTP 均被拒绝。
 
 当前目标服务器为 `10.10.50.213`：
 
 | 服务 | 地址 | 调用方 |
 | --- | --- | --- |
-| AgentBridge MCP | `http://10.10.50.213:8790/mcp` | 用户电脑上的 OpenClaw |
-| 可信卡片服务 | `http://10.10.50.213:8780` | 用户电脑上的普通浏览器 |
+| AgentBridge MCP | `https://10.10.50.213:8790/mcp` | 用户电脑上的 OpenClaw |
+| 可信卡片服务 | `https://10.10.50.213:8780` | Telegram 应用内 WebView；普通浏览器仅作兼容入口 |
 | OA | 由 `oa` 系统配置确定 | AgentBridge 中心 Worker |
 
 ## 2. 部署拓扑
@@ -36,7 +39,7 @@
 flowchart LR
     subgraph U["用户电脑"]
         O["OpenClaw"]
-        B["普通桌面浏览器"]
+        B["Telegram WebView / 兼容浏览器"]
     end
 
     subgraph S["公司内网 AgentBridge 服务器"]
@@ -50,8 +53,8 @@ flowchart LR
 
     OA["遗留 OA"]
 
-    O -->|"Streamable HTTP + Bearer"| M
-    O -.->|"展示 interaction URL"| B
+    O -->|"Streamable HTTPS + Bearer"| M
+    O -.->|"原生 Web App 按钮"| B
     B -->|"认证 / 字段 / 授权卡片"| C
     M --> A
     C --> R
@@ -70,8 +73,10 @@ flowchart LR
 保留以下组件：
 
 - OpenClaw；
+- Telegram Desktop；
 - 用户日常使用的普通浏览器；
 - OpenClaw 保存的 AgentBridge MCP Bearer Token。
+- AgentBridge 内部根 CA 公钥；根私钥不进入用户电脑的应用配置。
 
 用户电脑不再部署：
 
@@ -115,24 +120,23 @@ Linux 会话状态保护器已经实现并在 `10.10.50.213` 验证。Cookie 不
 - TCP 8790 和 8780 在公司内网可达，当前不调整 Linux 主机防火墙；
 - 不做公网映射，不通过互联网、访客 Wi-Fi 或不受控网络访问。
 
-显式私网 HTTP 模式会拒绝：
+当前 HTTPS 部署要求：
 
-- `0.0.0.0` 等通配绑定；
-- 主机名或域名；
-- 公网 IP；
-- URL 路径；
-- 绑定 IP、公开 IP 或端口不一致。
+- 叶证书 SAN 必须包含固定私网 IP `10.10.50.213`；
+- MCP 与卡片服务使用同一受控证书包，但分别监听 8790 和 8780；
+- Linux 只保存叶证书与叶私钥，不保存根 CA 私钥；
+- Windows 管理工作站只以当前用户 DPAPI 密文保存根私钥；
+- 明文 HTTP 连接被 TLS 监听器拒绝，不允许自动降级。
 
 ### 4.2 已接受的 PoC 风险
 
-HTTP 模式下，下列数据在内网链路上没有 TLS 加密：
+当前假定 Linux 主机防火墙处于关闭状态，不把 UFW/firewalld 配置作为首次
+PoC 前置步骤。这意味着所有能够路由到服务器的内网主机理论上都能发起
+8780/8790 的 TLS 连接；Bearer、短期卡片令牌和应用层校验仍负责业务授权，
+但不能代替来源 ACL。内部 CA 的分发、撤销和续期目前也是人工运维流程。
 
-- MCP Bearer Token；
-- OA 账号、密码和验证码；
-- 可信业务字段；
-- 写操作授权卡片的交互流量。
-
-当前假定 Linux 主机防火墙处于关闭状态，不把 UFW/firewalld 配置作为首次 PoC 前置步骤。这意味着所有能够路由到服务器的内网主机理论上都能访问 8780/8790；Bearer 和卡片校验仍会保护业务调用，但不能代替链路加密或网络访问控制。因此该模式仅用于尽快验证跨机器拓扑，不进入生产环境。
+因此当前部署已经消除内网明文传输，但仍不是生产安全基线。生产化仍需企业
+PKI 或集中证书生命周期、OAuth/OIDC、令牌轮换、限流、审计和 Vault/KMS。
 
 ### 4.3 仍然有效的应用层保护
 
@@ -294,11 +298,52 @@ sudo -u agentbridge "$AB_PY" -m bscli.cli.main \
 
 待跨机 PoC 验证完成后，再根据公司网络现状决定是否增加主机防火墙或上游 ACL；这属于加固项，不阻塞首次联调。
 
+### 7.1 内部 CA 与私网 IP 证书
+
+在运行 OpenClaw 的 Windows 管理工作站签发证书。根私钥只以当前用户
+DPAPI 密文保存在 `%USERPROFILE%\.agentbridge\pki`，签发时短暂进入内存；
+Linux 服务器只接收叶证书与叶私钥，Git 仓库不保存任何私钥：
+
+```powershell
+$PkiState = "$env:USERPROFILE\.agentbridge\pki"
+$TlsPackage = Join-Path $env:TEMP "agentbridge-tls"
+
+python -m bscli.cli.main pki issue-server `
+  --ip 10.10.50.213 `
+  --state-dir $PkiState `
+  --output-dir $TlsPackage
+
+Import-Certificate `
+  -FilePath "$PkiState\root-ca.crt" `
+  -CertStoreLocation Cert:\CurrentUser\Root
+[Environment]::SetEnvironmentVariable(
+  "NODE_EXTRA_CA_CERTS",
+  "$PkiState\root-ca.crt",
+  "User"
+)
+```
+
+根 CA 默认有效 10 年，叶证书最长 397 天。续期复用同一 DPAPI 根状态并使用
+`--force` 重新签发叶证书。不要把 `root-ca.key.dpapi` 复制给其他 Windows 用户；
+它只能由创建它的 Windows 安全主体解密。
+
+将 `$TlsPackage\server.crt` 和 `$TlsPackage\server.key` 上传到临时目录后，
+在 Linux 上安装为：
+
+```bash
+sudo install -d -m 0750 -o root -g agentbridge /home/guomao/agentbridge/config/tls
+sudo install -m 0644 -o root -g agentbridge server.crt /home/guomao/agentbridge/config/tls/server.crt
+sudo install -m 0640 -o root -g agentbridge server.key /home/guomao/agentbridge/config/tls/server.key
+```
+
+上传与安装完成后删除临时叶私钥副本。根证书是公开信任锚，可以保留在
+PKI 状态目录用于 OpenClaw、浏览器和后续客户端安装。
+
 ## 8. 启动 AgentBridge
 
 ### 8.1 前台联调
 
-初次联调先以前台进程启动，便于看到配置错误和安全告警：
+初次联调先以前台进程启动，便于看到配置错误：
 
 ```bash
 AB_PY=/home/guomao/agentbridge/venv/bin/python
@@ -311,11 +356,14 @@ sudo -u agentbridge env \
   "$AB_PY" -m bscli.cli.main --home "$AB_HOME" mcp central-serve \
   --host "$AB_IP" \
   --port 8790 \
-  --public-base-url "http://${AB_IP}:8790" \
+  --public-base-url "https://${AB_IP}:8790" \
+  --tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --tls-key /home/guomao/agentbridge/config/tls/server.key \
   --auth-host "$AB_IP" \
   --auth-port 8780 \
-  --auth-public-base-url "http://${AB_IP}:8780" \
-  --allow-insecure-private-http \
+  --auth-public-base-url "https://${AB_IP}:8780" \
+  --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
   --session-keepalive-lease 28800
 ```
@@ -325,9 +373,9 @@ sudo -u agentbridge env \
 ```json
 {
   "status": "serving",
-  "mcpUrl": "http://10.10.50.213:8790/mcp",
-  "authCardBaseUrl": "http://10.10.50.213:8780",
-  "insecurePrivateHttp": true,
+  "mcpUrl": "https://10.10.50.213:8790/mcp",
+  "authCardBaseUrl": "https://10.10.50.213:8780",
+  "insecurePrivateHttp": false,
   "sessionKeepalive": {
     "enabled": true,
     "intervalSeconds": 600,
@@ -336,7 +384,7 @@ sudo -u agentbridge env \
 }
 ```
 
-标准错误会明确警告凭据、字段和 Token 未受 TLS 保护。这是预期行为，不能通过隐藏告警来解决。
+启动输出中的 MCP 与卡片地址必须都是 HTTPS，且不得再出现私网明文警告。
 
 ### 8.2 systemd 托管
 
@@ -360,10 +408,13 @@ Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session
 ExecStart=/home/guomao/agentbridge/venv/bin/python \
   -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve \
   --host 10.10.50.213 --port 8790 \
-  --public-base-url http://10.10.50.213:8790 \
+  --public-base-url https://10.10.50.213:8790 \
+  --tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --tls-key /home/guomao/agentbridge/config/tls/server.key \
   --auth-host 10.10.50.213 --auth-port 8780 \
-  --auth-public-base-url http://10.10.50.213:8780 \
-  --allow-insecure-private-http \
+  --auth-public-base-url https://10.10.50.213:8780 \
+  --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
   --session-keepalive-lease 28800
 Restart=on-failure
@@ -373,6 +424,7 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+ReadOnlyPaths=/home/guomao/agentbridge/config
 ReadWritePaths=/home/guomao/agentbridge/data
 
 [Install]
@@ -401,7 +453,7 @@ OpenClaw 侧需要配置以下连接信息：
 | 配置项 | 值 |
 | --- | --- |
 | MCP Transport | Streamable HTTP |
-| MCP URL | `http://10.10.50.213:8790/mcp` |
+| MCP URL | `https://10.10.50.213:8790/mcp` |
 | HTTP Header | `Authorization: Bearer <bearerToken>` |
 | 可信卡片地址 | 无需静态配置，由 interaction 动态返回 |
 
@@ -411,7 +463,10 @@ OpenClaw 侧需要配置以下连接信息：
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
-openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" http://10.10.50.213:8780
+$ca = "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
+[Environment]::SetEnvironmentVariable("NODE_EXTRA_CA_CERTS", $ca, "User")
+openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
 openclaw plugins inspect agentbridge-interactions --runtime --json
@@ -420,7 +475,7 @@ openclaw gateway status --deep --require-rpc
 
 链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.4, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
-`allowedCardOrigins` 必须是精确来源，不允许路径、通配符或从 MCP 结果自动学习。当前私网 HTTP 模式使用普通 URL 按钮；只有 HTTPS 卡片才使用 Telegram Web App。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
+`allowedCardOrigins` 必须是精确 HTTPS 来源，不允许路径、通配符或从 MCP 结果自动学习。认证、业务字段和执行授权三类卡片在 Telegram 中都使用 Web App；卡片页面只通过自托管的无数据桥发送 ready、expand 和 close，不加载可读取表单的第三方脚本。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
 
 OpenClaw 不应要求用户在聊天里回复密码、业务字段或“同意执行”。这些内容必须在可信卡片中完成。
 
@@ -521,6 +576,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] AgentBridge 始终由固定 Linux 服务用户 `agentbridge` 运行；
 - [x] 会话密钥文件仅允许 root 和 AgentBridge 服务组读取；
 - [ ] 8780/8790 仅位于受控公司内网，没有任何公网映射；
+- [x] 8780/8790 均使用私网 IP HTTPS，证书链通过校验且明文 HTTP 被拒绝；
+- [x] 根私钥仅以 Windows 当前用户 DPAPI 密文保存，Linux 只部署叶证书和叶私钥；
+- [ ] 正式根 CA 已由用户确认导入 Windows 当前用户根证书库，并完成三类正式卡片的 Telegram WebView 点击验收；
 - [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
 - [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
@@ -530,7 +588,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] 10 分钟受控保活连续跨过 45 分钟空闲窗口，随后状态探测和真实待办读取均成功；
 - [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [x] 错误密钥、篡改密文和过宽权限都不能解密会话；
-- [x] 已记录未启用主机防火墙时的内网可达范围和明文传输风险；
+- [x] 已记录未启用主机防火墙时的内网可达范围、内部 CA 分发和证书生命周期风险；
 - [ ] 日志、操作账本和 OpenClaw 对话中没有密码、Cookie 或可信字段；
 - [x] 未经单独确认，没有执行 OA 写操作。
 
@@ -540,17 +598,18 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | --- | --- |
 | 中心 AgentBridge、Credential Broker 和可信卡片 | 已实现 |
 | Streamable HTTP MCP 与 Bearer 身份绑定 | 已实现 |
-| 固定私网 IP HTTP 显式开关 | 已实现 |
+| 固定私网 IP HTTPS 与内部 CA | 已实现并部署；服务端证书链、TLS 端点和明文拒绝已验证 |
+| 固定私网 IP HTTP 显式开关 | 仅保留为隔离恢复能力，当前部署未启用 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
 | Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；会话修复本地全量 179 项、受控保活本地全量 187 项、可信交互本地全量 188 项通过 |
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
-| OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
-| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；Telegram 智能体已真实调用状态查询和登录工具，并展示安全登录按钮 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.4 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息，来源白名单仍需显式配置 |
+| OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
+| OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.4 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息，HTTPS 来源白名单需显式配置 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
-| 域名、HTTPS、OIDC、Vault/KMS | 生产阶段待实现 |
+| 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
 
 ### 2026-07-14 实机验收记录
 
@@ -602,11 +661,21 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 0.1.4 于 23:39:47 被新 Gateway 进程实际加载，PID `24620` 正常监听 18789，深度 RPC 检查通过；随后使用同一 Telegram 出站插件发送不经过模型和 OA 的宿主直达验收消息，返回 `messageId=90`。结合此前真实授权卡直投和 16 项 Node 测试，终态直投链路具备可提交证据；
 - Windows Gateway 重启实测可能超过两分钟。运维验证必须等待托管重启收敛后再检查，避免超时后重复启动造成双进程竞争。
 
+### 2026-07-16 内网 IP HTTPS 与 Telegram Web App 改造验收记录
+
+- 在 Windows 管理工作站创建专用 EC P-256 根 CA；根私钥仅以当前用户 DPAPI 密文保存在 `%USERPROFILE%\.agentbridge\pki\root-ca.key.dpapi`，仓库、Linux 和 OpenClaw 配置均不保存根私钥；
+- 根证书 SHA-256 指纹为 `E6F0628EAFAFAAFFC5A71075247E35EF2B764B8D61986F486984F4A923F63BB5`，有效期至 2036-07-12；正式叶证书 SHA-256 指纹为 `13346384A6912F59077B013FFCD233967A17C49B8132895EB4E51D4B684701EE`，SAN 为 `IP:10.10.50.213`，有效期至 2027-08-16；
+- 叶证书和叶私钥安装在 `/home/guomao/agentbridge/config/tls`，权限分别为 `0644 root:agentbridge` 与 `0640 root:agentbridge`；systemd 服务已移除 `--allow-insecure-private-http`，8780/8790 均以 HTTPS 启动，证书链验证通过，明文 HTTP 连接被拒绝；
+- OpenClaw MCP 地址已切换为 `https://10.10.50.213:8790/mcp`，卡片来源白名单切换为 `https://10.10.50.213:8780`；当前用户 `NODE_EXTRA_CA_CERTS` 已持久化，Gateway PID `26488` 的深度 RPC、配置审计和插件加载检查均通过；
+- OpenClaw 智能体通过正式 HTTPS MCP 实际调用 `oa_session_status` 和 `oa_workflow_pending_list`：会话为 active，身份为辛国茂 / guomao，待办 4 条，2 次工具调用均成功且无失败；本轮严格只读，没有调用登录、字段、授权或任何 OA 写工具；
+- 三类卡片页面均加入自托管、无数据读取能力的 Telegram 生命周期桥，只发送 ready、expand 和完成后的 close；页面不加载第三方脚本，卡片字段不会被桥接脚本读取。Node 集成测试确认 credential、business-input 和 execution-authorization 在 HTTPS 下全部使用 `button.webApp`，不回退普通 URL；
+- 本机自动测试为 Python `194 passed, 3 skipped`、Node `17/17`；目标 Ubuntu 全量测试为 `194 passed, 1 skipped`，`compileall`、`pip check`、systemd 单元校验和 npm pack dry-run 均通过；
+- 此前使用同类内部 CA 和私网 IP 证书的 Telegram Desktop 实验已确认 `tdesktop 9.6` WebView 能加载页面并提供原生 Telegram bridge。正式根 CA 的 Windows 当前用户信任仍需用户在受保护的系统提示中确认一次；不得以注册表、组策略或机器级信任绕过该边界。
+
 ## 16. 后续演进顺序
 
-1. 选择“出差申请单保存待发草稿”验证 business-input 字段卡在 Telegram 中的展示、填写、回传和敏感字段隔离，不提交工作流；
-2. 为同一冻结执行计划验证独立 execution-authorization 授权卡、一次性提交和 OA 状态回读；
+1. 由用户确认导入正式根 CA，分别对认证、业务字段和执行授权卡完成 Telegram WebView 正式环境点击验收；
+2. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
 3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
 4. 再扩充工作流写能力，并逐流程完成真实回读验证；
-5. 生产前增加域名、TLS、正式 OAuth/OIDC、限流、审计和 Vault/KMS；
-6. TLS 完成后删除部署环境中的私网明文例外，不把 PoC 开关长期保留为运维捷径。
+5. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。

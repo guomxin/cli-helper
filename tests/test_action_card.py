@@ -32,6 +32,11 @@ class TrustedActionCardTests(unittest.TestCase):
             self.assertIn("SameSite=Strict", response.headers["Set-Cookie"])
             self.assertEqual(response.headers["X-Frame-Options"], "DENY")
             self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+            self.assertIn("script-src 'nonce-", response.headers["Content-Security-Policy"])
+            self.assertIn('postEvent("web_app_ready")', html)
+            self.assertIn('postEvent("web_app_expand")', html)
+            self.assertIn("if (false && (platform || canPost || canNotify))", html)
+            self.assertNotIn("telegram.org", html)
 
     def test_card_does_not_disable_submitter_before_form_serialization(self):
         with TemporaryDirectory() as tmp:
@@ -81,6 +86,10 @@ class TrustedActionCardTests(unittest.TestCase):
             self.assertEqual(denied.status, 403)
             self.assertEqual(approved.status, 200)
             self.assertIn("操作已授权", approved.body.decode("utf-8"))
+            self.assertIn(
+                "if (true && (platform || canPost || canNotify))",
+                approved.body.decode("utf-8"),
+            )
             self.assertEqual(store.get(authorization["authorization_id"])["state"], "approved")
             self.assertEqual(replay.status, 409)
 
@@ -103,6 +112,10 @@ class TrustedActionCardTests(unittest.TestCase):
 
             self.assertEqual(response.status, 200)
             self.assertIn("操作已取消", response.body.decode("utf-8"))
+            self.assertIn(
+                "if (true && (platform || canPost || canNotify))",
+                response.body.decode("utf-8"),
+            )
             self.assertEqual(store.get(authorization["authorization_id"])["state"], "rejected")
             self.assertIn("Secure", page.headers["Set-Cookie"])
 

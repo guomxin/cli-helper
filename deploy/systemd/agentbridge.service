@@ -11,7 +11,7 @@ WorkingDirectory=/home/guomao/agentbridge/app
 Environment=HOME=/home/guomao/agentbridge/data
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
-ExecStart=/home/guomao/agentbridge/venv/bin/python -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve --host 10.10.50.213 --port 8790 --public-base-url http://10.10.50.213:8790 --auth-host 10.10.50.213 --auth-port 8780 --auth-public-base-url http://10.10.50.213:8780 --allow-insecure-private-http --session-keepalive-interval 600 --session-keepalive-lease 28800
+ExecStart=/home/guomao/agentbridge/venv/bin/python -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve --host 10.10.50.213 --port 8790 --public-base-url https://10.10.50.213:8790 --tls-cert /home/guomao/agentbridge/config/tls/server.crt --tls-key /home/guomao/agentbridge/config/tls/server.key --auth-host 10.10.50.213 --auth-port 8780 --auth-public-base-url https://10.10.50.213:8780 --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt --auth-tls-key /home/guomao/agentbridge/config/tls/server.key --session-keepalive-interval 600 --session-keepalive-lease 28800
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -19,6 +19,7 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+ReadOnlyPaths=/home/guomao/agentbridge/config
 ReadWritePaths=/home/guomao/agentbridge/data
 
 [Install]

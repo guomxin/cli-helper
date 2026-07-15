@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from bscli.auth.card import AuthCardResponse, MAX_AUTH_BODY_BYTES
+from bscli.auth.embedded import EMBEDDED_SAFE_AREA_CSS, render_embedded_web_app_bridge
 from bscli.core.field_submissions import (
     FieldSubmissionAccessDenied,
     FieldSubmissionIntegrityError,
@@ -230,6 +231,7 @@ class TrustedFieldApplication:
         body = _document(
             title=title,
             nonce=nonce,
+            close_when_complete=tone == "success",
             body=f"""
             <main class="shell">
               <section class="card status-card {escape(tone)}" aria-labelledby="status-title">
@@ -484,12 +486,18 @@ def _numeric_attribute(name: str, value: Any) -> str:
     return f' {name}="{escape(str(value))}"' if value is not None else ""
 
 
-def _document(*, title: str, nonce: str, body: str) -> str:
+def _document(
+    *,
+    title: str,
+    nonce: str,
+    body: str,
+    close_when_complete: bool = False,
+) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{escape(title)} · AgentBridge</title>
   <style nonce="{nonce}">
@@ -545,9 +553,10 @@ def _document(*, title: str, nonce: str, body: str) -> str:
     @media (max-width:620px) {{ .shell {{ align-items:flex-start; padding:20px 10px; }}
       .card {{ padding:24px 18px; box-shadow:none; }} h1 {{ font-size:21px; }}
       .form-grid {{ grid-template-columns:1fr; }} .field.wide {{ grid-column:auto; }} }}
+    {EMBEDDED_SAFE_AREA_CSS}
   </style>
 </head>
-<body>{body}</body>
+<body>{body}{render_embedded_web_app_bridge(nonce=nonce, close_when_complete=close_when_complete)}</body>
 </html>"""
 
 
@@ -562,7 +571,7 @@ def _security_headers(nonce: str) -> dict[str, str]:
         "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
         "Content-Security-Policy": (
             "default-src 'none'; "
-            f"style-src 'nonce-{nonce}'; "
+            f"style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'; "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         ),
     }

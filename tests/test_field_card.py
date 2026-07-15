@@ -31,6 +31,11 @@ class TrustedFieldCardTests(unittest.TestCase):
             self.assertIn("SameSite=Strict", response.headers["Set-Cookie"])
             self.assertEqual(response.headers["X-Frame-Options"], "DENY")
             self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+            self.assertIn("script-src 'nonce-", response.headers["Content-Security-Policy"])
+            self.assertIn('postEvent("web_app_ready")', html)
+            self.assertIn('postEvent("web_app_expand")', html)
+            self.assertIn("if (false && (platform || canPost || canNotify))", html)
+            self.assertNotIn("telegram.org", html)
 
     def test_invalid_time_range_is_shown_without_consuming_card(self):
         with TemporaryDirectory() as tmp:
@@ -87,6 +92,7 @@ class TrustedFieldCardTests(unittest.TestCase):
             accepted_body = accepted.body.decode("utf-8")
             self.assertIn("字段已提交", accepted_body)
             self.assertIn("请返回智能体继续", accepted_body)
+            self.assertIn("if (true && (platform || canPost || canNotify))", accepted_body)
             self.assertEqual(stored["values"]["start_time"], "2026-07-14 09:00")
             self.assertFalse(stored["values"]["has_direct_supervisor"])
             self.assertEqual(stored["values"]["trip_days"], 1)

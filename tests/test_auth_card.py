@@ -27,6 +27,11 @@ class TrustedAuthCardTests(unittest.TestCase):
             self.assertEqual(response.headers["Cache-Control"], "no-store")
             self.assertEqual(response.headers["X-Frame-Options"], "DENY")
             self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+            self.assertIn("script-src 'nonce-", response.headers["Content-Security-Policy"])
+            self.assertIn('postEvent("web_app_ready")', html)
+            self.assertIn('postEvent("web_app_expand")', html)
+            self.assertIn("if (false && (platform || canPost || canNotify))", html)
+            self.assertNotIn("telegram.org", html)
             self.assertIn("HttpOnly", response.headers["Set-Cookie"])
             self.assertIn("SameSite=Strict", response.headers["Set-Cookie"])
             self.assertIn("Max-Age=300", response.headers["Set-Cookie"])
@@ -62,6 +67,7 @@ class TrustedAuthCardTests(unittest.TestCase):
             self.assertEqual(broker.received["password"], "card-secret")
             self.assertNotIn("card-secret", rendered)
             self.assertIn("认证完成", rendered)
+            self.assertIn("if (true && (platform || canPost || canNotify))", rendered)
 
     def test_card_rejects_oversized_or_wrong_content_type(self):
         with TemporaryDirectory() as tmp:

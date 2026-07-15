@@ -47,6 +47,26 @@ test("renders private HTTP as a URL button and Telegram HTTPS as a Web App", () 
   assert.equal("url" in httpsButton, false);
 });
 
+test("embeds every trusted card type in the Telegram Web App surface", () => {
+  const cases = [
+    ["credential", "/auth/opaque-credential-token", "安全登录"],
+    ["business_input", "/input/opaque-field-token", "填写信息"],
+    ["execution_authorization", "/authorize/opaque-action-token", "核对并确认"],
+  ];
+  for (const [type, path, label] of cases) {
+    const url = `https://10.10.50.213:8780${path}`;
+    const envelope = interaction({ type, presentation: { url } });
+    const normalized = processToolResult(toolResult(envelope), [
+      "https://10.10.50.213:8780",
+    ]).interactions[0];
+    const button = buildPresentation([normalized], "telegram").blocks.at(-1).buttons[0];
+
+    assert.equal(button.label, label);
+    assert.deepEqual(button.webApp, { url });
+    assert.equal("url" in button, false);
+  }
+});
+
 test("classifies only main and direct sessions as private", () => {
   assert.equal(isPrivateSessionKey("agent:main:main"), true);
   assert.equal(isPrivateSessionKey("agent:main:telegram:direct:123"), true);

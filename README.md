@@ -227,47 +227,63 @@ Connect the MCP client to http://127.0.0.1:8790/mcp with an Authorization Bearer
 header. MCP tools derive caller identity from the server-side token binding and
 do not accept userSubject arguments.
 
-For an initial controlled intranet PoC, OpenClaw may run on the user's
-workstation while AgentBridge runs on another company-network machine. Replace
-`10.20.30.40` with that machine's exact private IP:
+For an intranet deployment, OpenClaw may run on the user's workstation while
+AgentBridge runs on another company-network machine. Issue a private-IP server
+certificate from a DPAPI-protected AgentBridge internal CA on the Windows
+administrator workstation:
 
 ~~~powershell
-python -m bscli.cli.main --home .bscli mcp central-serve `
-  --host 10.20.30.40 `
-  --port 8790 `
-  --public-base-url http://10.20.30.40:8790 `
-  --auth-host 10.20.30.40 `
-  --auth-port 8780 `
-  --auth-public-base-url http://10.20.30.40:8780 `
-  --allow-insecure-private-http `
-  --session-keepalive-interval 600 `
+$TlsPackage = Join-Path $env:TEMP "agentbridge-tls"
+python -m bscli.cli.main pki issue-server `
+  --ip 10.20.30.40 `
+  --state-dir "$env:USERPROFILE\.agentbridge\pki" `
+  --output-dir $TlsPackage
+Import-Certificate `
+  -FilePath "$env:USERPROFILE\.agentbridge\pki\root-ca.crt" `
+  -CertStoreLocation Cert:\CurrentUser\Root
+~~~
+
+Deploy only `$TlsPackage\server.crt` and `$TlsPackage\server.key` to the Linux
+host, then delete the temporary package. The protected root
+private key stays on the Windows workstation and must never be copied to Linux
+or committed. Start AgentBridge with both listeners using the same IP-SAN
+certificate:
+
+~~~bash
+python -m bscli.cli.main --home .bscli mcp central-serve \
+  --host 10.20.30.40 \
+  --port 8790 \
+  --public-base-url https://10.20.30.40:8790 \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key \
+  --auth-host 10.20.30.40 \
+  --auth-port 8780 \
+  --auth-public-base-url https://10.20.30.40:8780 \
+  --auth-tls-cert /path/to/server.crt \
+  --auth-tls-key /path/to/server.key \
+  --session-keepalive-interval 600 \
   --session-keepalive-lease 28800
 ~~~
 
-Configure OpenClaw with `http://10.20.30.40:8790/mcp`. Interaction envelopes
-then carry trusted-card URLs under `http://10.20.30.40:8780`, which the user
-opens from the OpenClaw conversation in their normal browser.
+Configure OpenClaw with `https://10.20.30.40:8790/mcp`, set its exact trusted
+card origin to `https://10.20.30.40:8780`, and make the root certificate
+available to the Gateway through `NODE_EXTRA_CA_CERTS`. Telegram then presents
+credential, business-input, and execution-authorization cards as native Web App
+buttons inside its own WebView instead of opening an external browser.
 
-The insecure switch accepts only an exact RFC 1918 or IPv6 ULA address. It
-rejects wildcard binds such as `0.0.0.0`, hostnames, public IPs, paths, and
-bind/public endpoint mismatches. Keep ports 8780 and 8790 inside the controlled
-company network and never publish or NAT them to an external network. A host
-firewall or upstream ACL is recommended but is not an initial PoC prerequisite;
-without one, every routable intranet host can reach the listeners. Credentials,
-trusted form values, and MCP Bearer tokens are unencrypted on the network in
-this mode.
-
-Loopback HTTP and pre-issued Bearer tokens are PoC bootstrap mechanisms.
-Non-loopback deployments require TLS by default; the private-IP switch above is
-a temporary PoC exception, not a production mode. Production remote access also
-requires enterprise OAuth/OIDC, token lifecycle policy, reverse-proxy trust
-validation, rate limiting, and real multi-user worker isolation.
+Loopback HTTP remains a local-development mechanism. The explicit private-IP
+HTTP switch is retained only for isolated recovery and must not be used for a
+routable deployment. Production remote access also requires enterprise
+OAuth/OIDC, token lifecycle policy, rate limiting, and real multi-user worker
+isolation.
 
 ## Security Invariants
 
 - Final-user devices install no browser extension, local daemon, or OA connector.
 - Each user has a distinct central session and managed browser profile.
 - Credentials and trusted-card field values bypass the model and MCP.
+- The internal root private key is DPAPI-protected on the administrator
+  workstation; Linux receives only a leaf certificate and leaf private key.
 - Every write follows prepare -> authorize -> commit -> verify.
 - A plan, authorization, and idempotency key are immutable at commit time.
 - No capability silently falls back to a less-governed execution route.
@@ -289,9 +305,10 @@ opinions, business-field collection, authorization, wait-send draft save,
 field readback, and idempotent replay. Every validated operation reported
 browser_bridge_used=false.
 
-A second real OA user, production TLS/reverse-proxy deployment, real mobile
-network access, and additional central write workflows remain open validation
-items.
+A second real OA user, formal Windows root-trust confirmation plus production
+Telegram WebView clicks, real mobile CA distribution, and additional central
+write workflows remain open validation items. The current intranet server and
+OpenClaw path already use private-IP HTTPS with a dedicated internal CA.
 
 ## Design Documents
 

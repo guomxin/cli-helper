@@ -7,6 +7,7 @@ from math import ceil
 import secrets
 from urllib.parse import parse_qs
 
+from bscli.auth.embedded import EMBEDDED_SAFE_AREA_CSS, render_embedded_web_app_bridge
 from bscli.core.auth_challenges import (
     AuthChallengeStore,
     ChallengeAccessDenied,
@@ -256,6 +257,7 @@ def _render_message(*, title: str, message: str, tone: str, nonce: str) -> str:
     return _document(
         title=title,
         nonce=nonce,
+        close_when_complete=tone == "success",
         body=f"""
         <main class="auth-shell">
           <section class="auth-card status-card {escape(tone)}" aria-labelledby="status-title">
@@ -269,12 +271,18 @@ def _render_message(*, title: str, message: str, tone: str, nonce: str) -> str:
     )
 
 
-def _document(*, title: str, nonce: str, body: str) -> str:
+def _document(
+    *,
+    title: str,
+    nonce: str,
+    body: str,
+    close_when_complete: bool = False,
+) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{escape(title)} · AgentBridge</title>
   <style nonce="{nonce}">
@@ -377,9 +385,10 @@ def _document(*, title: str, nonce: str, body: str) -> str:
       h1 {{ font-size: 21px; }}
       .identity-strip div {{ grid-template-columns: 72px minmax(0, 1fr); }}
     }}
+    {EMBEDDED_SAFE_AREA_CSS}
   </style>
 </head>
-<body>{body}</body>
+<body>{body}{render_embedded_web_app_bridge(nonce=nonce, close_when_complete=close_when_complete)}</body>
 </html>"""
 
 

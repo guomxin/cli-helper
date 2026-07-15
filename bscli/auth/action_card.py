@@ -7,6 +7,7 @@ import secrets
 from urllib.parse import parse_qs
 
 from bscli.auth.card import AuthCardResponse, MAX_AUTH_BODY_BYTES
+from bscli.auth.embedded import EMBEDDED_SAFE_AREA_CSS, render_embedded_web_app_bridge
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
     WriteAuthorizationNotFound,
@@ -190,6 +191,7 @@ class TrustedActionApplication:
         body = _document(
             title=title,
             nonce=nonce,
+            close_when_complete=tone in {"success", "neutral"},
             body=f"""
             <main class="shell">
               <section class="card status-card {escape(tone)}" aria-labelledby="status-title">
@@ -248,12 +250,18 @@ def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) ->
     )
 
 
-def _document(*, title: str, nonce: str, body: str) -> str:
+def _document(
+    *,
+    title: str,
+    nonce: str,
+    body: str,
+    close_when_complete: bool = False,
+) -> str:
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>{escape(title)} · AgentBridge</title>
   <style nonce="{nonce}">
@@ -298,9 +306,10 @@ def _document(*, title: str, nonce: str, body: str) -> str:
       .card {{ padding:24px 20px; box-shadow:none; }} h1 {{ font-size:21px; }}
       .detail-list div {{ grid-template-columns:76px minmax(0,1fr); }}
       .actions {{ grid-template-columns:1fr; }} }}
+    {EMBEDDED_SAFE_AREA_CSS}
   </style>
 </head>
-<body>{body}</body>
+<body>{body}{render_embedded_web_app_bridge(nonce=nonce, close_when_complete=close_when_complete)}</body>
 </html>"""
 
 

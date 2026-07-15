@@ -137,13 +137,16 @@ The plugin:
 - accepts card URLs only from explicitly configured exact origins;
 - removes the short-lived card URL before the MCP result reaches the model;
 - renders cards only in private OpenClaw sessions, never groups or channels;
-- uses a Telegram Web App button for HTTPS cards and a portable URL button for
-  the current private-IP HTTP PoC;
+- uses a Telegram Web App button for every HTTPS credential, business-input,
+  and execution-authorization card; private HTTP is a local-development link
+  fallback only;
+- relies on a self-hosted, data-blind page bridge for ready, expand, and close;
+  the bridge neither reads form controls nor loads third-party JavaScript;
 - polls `agentbridge_interaction_get` outside the model loop and resumes a
   completed interaction once with a stable idempotency key;
-- keeps a following interaction host-side for the next private reply or
-  `/agentbridge pending`;
-- leaves automatic model wake-up disabled by default.
+- delivers a following interaction or terminal status directly through the
+  originating private channel, with `/agentbridge pending` as a manual redraw;
+- uses an opaque model wake-up only when direct host delivery is unavailable.
 
 `/agentbridge status` returns non-sensitive plugin diagnostics, while
 `/agentbridge pending` redraws the latest unexpired card. The plugin reuses the
