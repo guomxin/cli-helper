@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -84,6 +85,7 @@ class CentralBrowserWorker:
     ) -> dict:
         self._require_started()
         self._validate_url(url)
+        started_at = time.monotonic()
         options: dict[str, Any] = {
             "method": method.upper(),
             "headers": headers or {},
@@ -112,6 +114,7 @@ class CentralBrowserWorker:
                 "content_type": content_type,
                 "json": payload,
                 "text": text,
+                "elapsed_ms": max(0, round((time.monotonic() - started_at) * 1000)),
             }
         finally:
             dispose = getattr(response, "dispose", None)

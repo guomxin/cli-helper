@@ -7,7 +7,10 @@ import time
 from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
-from bscli.adapters.seeyon_central import SeeyonLoginRequired
+from bscli.adapters.seeyon_central import (
+    SeeyonLoginRequired,
+    SeeyonSessionCheckUnavailable,
+)
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.interactions import InteractionNotFound
 from bscli.core.session_secrets import SessionStateAccessDenied
@@ -62,6 +65,92 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(response["nextAction"]["sessionState"], "expired")
             self.assertEqual(service.sessions.get(session["session_id"])["state"], "expired")
             self.assertIsNone(service.session_states.load(session["session_id"]))
+
+    def test_temporary_session_check_failure_preserves_active_session(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            session = self._activate(service)
+            service.adapter.invoke_capability = MagicMock(
+                side_effect=SeeyonSessionCheckUnavailable(
+                    "OA session check did not return JSON (HTTP 200, content_type=text/html)."
+                )
+            )
+
+            response = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.workflow.pending.list",
+                arguments={},
+            )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "SESSION_CHECK_UNAVAILABLE")
+            self.assertTrue(response["nextAction"]["sessionPreserved"])
+            self.assertIn("HTTP 200", response["error"]["message"])
+            self.assertEqual(service.sessions.get(session["session_id"])["state"], "active")
+            self.assertIsNotNone(service.session_states.load(session["session_id"]))
+
+    def test_session_status_live_checks_an_active_session(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                return_value={
+                    "authenticated": True,
+                    "template_count": 118,
+                    "transport": "central_http_session",
+                    "browser_bridge_used": False,
+                }
+            )
+
+            response = service.session_status(user_subject="user-a")
+
+            self.assertEqual(response["status"], "active")
+            self.assertEqual(response["statusSource"], "live")
+            self.assertIsNotNone(response["checkedAt"])
+            self.assertEqual(response["lastVerifiedAt"], session["last_verified_at"])
+            self.assertEqual(
+                response["lastVerifiedAt"],
+                service.sessions.get(session["session_id"])["last_verified_at"],
+            )
+            self.assertEqual(worker.restored, {"cookies": []})
+            service.adapter.probe_session.assert_called_once_with(worker)
+
+    def test_session_status_reports_live_expiry_and_deletes_invalid_state(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                side_effect=SeeyonLoginRequired("OA expired")
+            )
+
+            response = service.session_status(user_subject="user-a")
+
+            self.assertEqual(response["status"], "expired")
+            self.assertEqual(response["statusSource"], "live")
+            self.assertIsNotNone(response["checkedAt"])
+            self.assertEqual(service.sessions.get(session["session_id"])["state"], "expired")
+            self.assertIsNone(service.session_states.load(session["session_id"]))
+
+    def test_session_status_returns_check_unavailable_without_deleting_state(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                side_effect=SeeyonSessionCheckUnavailable(
+                    "OA session check received a temporary response (HTTP 503)."
+                )
+            )
+
+            response = service.session_status(user_subject="user-a")
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "SESSION_CHECK_UNAVAILABLE")
+            self.assertEqual(response["statusSource"], "live")
+            self.assertEqual(response["session"]["status"], "active")
+            self.assertTrue(response["nextAction"]["sessionPreserved"])
+            self.assertIsNotNone(service.session_states.load(session["session_id"]))
 
     def test_start_login_uses_server_bound_expected_principal(self):
         with TemporaryDirectory() as tmp:

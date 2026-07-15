@@ -2,7 +2,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from bscli.adapters.seeyon_central import SeeyonCentralAdapter, SeeyonLoginRequired
+from bscli.adapters.seeyon_central import (
+    SeeyonCentralAdapter,
+    SeeyonLoginRequired,
+    SeeyonSessionCheckUnavailable,
+)
 from bscli.browser.central import CentralBrowserWorker, CentralProfileInUseError
 
 
@@ -22,6 +26,8 @@ class CentralBrowserTests(unittest.TestCase):
 
             self.assertEqual(response["status"], 200)
             self.assertEqual(response["json"], {"code": 0, "data": {"templates": []}})
+            self.assertIsInstance(response["elapsed_ms"], int)
+            self.assertGreaterEqual(response["elapsed_ms"], 0)
             launch = controller.chromium.launches[0]
             self.assertEqual(launch["user_data_dir"], str(Path(tmp) / "profile"))
             self.assertTrue(launch["headless"])
@@ -193,6 +199,68 @@ class CentralBrowserTests(unittest.TestCase):
 
         with self.assertRaises(SeeyonLoginRequired):
             adapter.list_templates(worker)
+
+    def test_seeyon_adapter_detects_login_form_without_login_url(self):
+        worker = FakeWorker(
+            {
+                "status": 200,
+                "url": "http://oa.example.test/seeyon/rest/template/myTemplate",
+                "content_type": "text/html; charset=UTF-8",
+                "json": None,
+                "text": (
+                    '<form><input id="login_username" type="text">'
+                    '<input id="login_password1" type="password"></form>'
+                ),
+                "elapsed_ms": 12,
+            }
+        )
+        adapter = SeeyonCentralAdapter(base_url="http://oa.example.test/seeyon/main.do?method=main")
+
+        with self.assertRaises(SeeyonLoginRequired):
+            adapter.list_templates(worker)
+
+    def test_seeyon_adapter_preserves_session_for_non_login_html(self):
+        worker = FakeWorker(
+            {
+                "status": 200,
+                "url": "http://oa.example.test/seeyon/rest/template/myTemplate",
+                "content_type": "text/html; charset=UTF-8",
+                "json": None,
+                "text": "<html><h1>Temporary upstream error</h1><p>internal detail</p></html>",
+                "elapsed_ms": 321,
+            }
+        )
+        adapter = SeeyonCentralAdapter(base_url="http://oa.example.test/seeyon/main.do?method=main")
+
+        with self.assertRaises(SeeyonSessionCheckUnavailable) as raised:
+            adapter.list_templates(worker)
+
+        message = str(raised.exception)
+        self.assertIn("HTTP 200", message)
+        self.assertIn("content_type=text/html", message)
+        self.assertIn("elapsed_ms=321", message)
+        self.assertNotIn("internal detail", message)
+
+    def test_seeyon_adapter_preserves_session_for_temporary_http_failure(self):
+        worker = FakeWorker(
+            {
+                "status": 503,
+                "url": "http://oa.example.test/seeyon/rest/template/myTemplate",
+                "content_type": "text/html",
+                "json": None,
+                "text": "private upstream body",
+                "elapsed_ms": 30000,
+            }
+        )
+        adapter = SeeyonCentralAdapter(base_url="http://oa.example.test/seeyon/main.do?method=main")
+
+        with self.assertRaises(SeeyonSessionCheckUnavailable) as raised:
+            adapter.list_templates(worker)
+
+        message = str(raised.exception)
+        self.assertIn("HTTP 503", message)
+        self.assertIn("elapsed_ms=30000", message)
+        self.assertNotIn("private upstream body", message)
 
     def test_seeyon_authentication_contract_has_fixed_registered_secret_fields(self):
         adapter = SeeyonCentralAdapter(

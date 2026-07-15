@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 from typing import Callable, Iterator
@@ -8,6 +9,7 @@ from typing import Callable, Iterator
 from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
     SeeyonLoginRequired,
+    SeeyonSessionCheckUnavailable,
     build_central_capability_registry,
 )
 from bscli.adapters.seeyon_business_trip import (
@@ -136,8 +138,40 @@ class CentralCapabilityService:
                 "status": "not_found",
                 "systemId": system_id,
                 "userSubject": user_subject,
+                "statusSource": "registry",
+                "checkedAt": None,
             }
-        return session_response(session)
+        if system_id != "oa" or session["state"] != "active":
+            return {
+                **session_response(session),
+                "statusSource": "registry",
+                "checkedAt": None,
+            }
+
+        live_check = self._reuse_active_session(
+            user_subject=user_subject,
+            session=session,
+            record_verification=False,
+        )
+        checked_at = _utc_now()
+        if live_check is None:
+            return {
+                **session_response(self.sessions.get(session["session_id"])),
+                "statusSource": "live",
+                "checkedAt": checked_at,
+            }
+        if live_check.get("status") == "succeeded":
+            return {
+                **live_check["session"],
+                "statusSource": "live",
+                "checkedAt": checked_at,
+            }
+        return {
+            **live_check,
+            "session": session_response(self.sessions.get(session["session_id"])),
+            "statusSource": "live",
+            "checkedAt": checked_at,
+        }
 
     def start_login(
         self,
@@ -187,6 +221,7 @@ class CentralCapabilityService:
         *,
         user_subject: str,
         session: dict,
+        record_verification: bool = True,
     ) -> dict | None:
         with self._session_lock(session["session_id"]):
             session = self.sessions.get(session["session_id"])
@@ -217,6 +252,12 @@ class CentralCapabilityService:
                 self.sessions.mark_expired(session["session_id"], str(exc))
                 self.session_states.delete(session["session_id"])
                 return None
+            except SeeyonSessionCheckUnavailable as exc:
+                return _session_check_unavailable_response(
+                    user_subject,
+                    session,
+                    diagnostics=str(exc),
+                )
             except SessionStateAccessDenied:
                 return _session_runtime_mismatch_response(user_subject, session)
             except SessionSecretError:
@@ -224,10 +265,13 @@ class CentralCapabilityService:
             except Exception:
                 return _session_check_unavailable_response(user_subject, session)
 
-            session = self.sessions.activate(
-                session["session_id"],
-                observed_principal_ref=session.get("downstream_principal_ref"),
-            )
+            if record_verification:
+                session = self.sessions.activate(
+                    session["session_id"],
+                    observed_principal_ref=session.get("downstream_principal_ref"),
+                )
+            else:
+                session = self.sessions.get(session["session_id"])
             return {
                 "protocolVersion": "0.1",
                 "status": "succeeded",
@@ -569,6 +613,12 @@ class CentralCapabilityService:
                 expired_session = self.sessions.mark_expired(session["session_id"], str(exc))
                 self.session_states.delete(session["session_id"])
                 raise login_required_action(user_subject, expired_session) from exc
+            except SeeyonSessionCheckUnavailable as exc:
+                raise _session_check_unavailable_action(
+                    user_subject,
+                    session,
+                    diagnostics=str(exc),
+                ) from exc
 
     def _prepare_business_trip(
         self,
@@ -925,18 +975,37 @@ def _session_state_unavailable_response(user_subject: str, session: dict) -> dic
     )
 
 
-def _session_check_unavailable_response(user_subject: str, session: dict) -> dict:
-    action = RequiresUserAction(
+def _session_check_unavailable_action(
+    user_subject: str,
+    session: dict,
+    *,
+    diagnostics: str | None = None,
+) -> RequiresUserAction:
+    detail = f" Diagnostic: {diagnostics}" if diagnostics else ""
+    return RequiresUserAction(
         "SESSION_CHECK_UNAVAILABLE",
         (
             "OA session validity could not be checked. Retry later through the "
-            "same central runtime; credentials are not required yet."
+            f"same central runtime; credentials are not required yet.{detail}"
         ),
         next_action=_session_runtime_next_action(
             user_subject,
             session,
             action_type="retry_session_check",
         ),
+    )
+
+
+def _session_check_unavailable_response(
+    user_subject: str,
+    session: dict,
+    *,
+    diagnostics: str | None = None,
+) -> dict:
+    action = _session_check_unavailable_action(
+        user_subject,
+        session,
+        diagnostics=diagnostics,
     )
     return _session_action_response(action, session)
 
@@ -983,6 +1052,10 @@ def session_response(session: dict) -> dict:
         "lastVerifiedAt": session.get("last_verified_at"),
         "lastError": session.get("last_error"),
     }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def operation_response(operation: dict) -> dict:

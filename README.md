@@ -90,6 +90,14 @@ probe, refreshes the encrypted Cookie state, and returns `succeeded` with
 session is no longer authenticated does it return `LOGIN_REQUIRED` and a
 short-lived `nextAction.cardUrl`.
 
+`session status` and the MCP `oa_session_status` tool also live-probe an active
+session. Their response distinguishes the authentication epoch
+(`lastVerifiedAt`) from the current liveness check (`checkedAt`) and identifies
+the source as `live`. Inactive sessions are reported from the registry without
+starting a browser. A temporary HTTP error or an unexpected non-login response
+returns `SESSION_CHECK_UNAVAILABLE` and preserves the encrypted session state;
+only an explicit login response expires and deletes that state.
+
 Open that URL in a trusted browser only when it is returned. Credentials are
 submitted directly to the Credential Broker. They are never CLI parameters,
 MCP tool arguments, operation-ledger values, or model-visible fields. Card

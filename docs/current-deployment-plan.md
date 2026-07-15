@@ -439,7 +439,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 
 如果 `oa_session_login` 直接返回 `succeeded` 和 `reused=true`，说明中心会话仍然有效，不应再次要求用户登录。
 
-`oa_session_status` 是纯状态查询，不会创建认证 interaction。因此“检查 OA 登录状态”只会得到 `active` 或 `expired`；需要发起认证时，应明确调用 `oa_session_login`，自然语言可直接使用“登录 OA”。
+`oa_session_status` 不会创建认证 interaction。对于活动会话，它会使用已加密保存的会话状态实时访问 OA，并返回 `statusSource=live` 和本次 `checkedAt`；`lastVerifiedAt` 仍表示登录或身份验证纪元，不会被单纯的状态检查改写。对于非活动会话，它只读取注册表并返回 `statusSource=registry`。临时网络错误、OA 5xx 或非登录页的异常 HTML 返回 `SESSION_CHECK_UNAVAILABLE`，保留已有会话；只有明确的登录跳转、401/403 或可结构化识别的登录表单才将会话标记为过期并删除密文状态。需要发起认证时，应明确调用 `oa_session_login`，自然语言可直接使用“登录 OA”。
 
 ### 10.3 重启恢复验证
 
@@ -495,6 +495,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 每次都要求登录 | 检查 OA 是否被其他浏览器重新登录、服务用户、密钥文件或 `--home` 是否变化 |
 | `SESSION_RUNTIME_MISMATCH` 或解密失败 | 恢复原 Linux 服务用户和正确密钥，不要删除或替换已有会话状态 |
 | `SESSION_CHECK_UNAVAILABLE` | 检查 OA 网络并重试，不要创建新认证挑战 |
+| 读待办后状态突然变为过期 | 先看是否存在明确登录响应；超时、5xx 和非登录 HTML 应返回 `SESSION_CHECK_UNAVAILABLE` 并保留会话，不能仅因响应不是 JSON 就判定登录失效 |
 
 ## 14. 验收清单
 
@@ -509,6 +510,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
 - [x] 认证卡从 OpenClaw Telegram 私聊打开，凭据没有进入聊天；
 - [x] `oa_workflow_pending_list` 读取真实 OA 数据成功；
+- [x] 读取真实待办后立即执行 `oa_session_status`，实时核验仍为活动会话；
 - [x] AgentBridge 重启后能用同一服务用户和密钥恢复会话；
 - [x] 错误密钥、篡改密文和过宽权限都不能解密会话；
 - [x] 已记录未启用主机防火墙时的内网可达范围和明文传输风险；
@@ -524,8 +526,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 固定私网 IP HTTP 显式开关 | 已实现 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |
 | MCP SDK 私网 Host 与认证请求 | 已自动验证 |
-| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和全量 171 项通过 |
-| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话并再次读取成功 |
+| Linux AES-256-GCM 会话状态保护器 | 已实现；目标 Ubuntu 专项 6 项和原全量 171 项通过；本次会话修复本地全量 179 项通过 |
+| 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；2026-07-15 再次验证读取待办不会误删会话 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；私网 HTTP 会回退为普通 URL 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | MCP 注册、Bearer 认证和 14 个工具探测已完成；Telegram 智能体已真实调用状态查询和登录工具，并展示安全登录按钮 |
 | 可安装 OpenClaw 插件与本机接线 | 0.1.1 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话，来源白名单仍需显式配置 |
@@ -555,6 +557,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 登录后用户在同一 Telegram 私聊发送“检查 OA 登录状态”，`oa_session_status` 返回“已登录，有效”，身份为辛国茂，最近验证时间为 2026-07-15 10:58:23（GMT+8），错误为空；
 - OpenClaw 工具结果和对话记录中的短期卡片 URL 均被替换为宿主侧占位文本，密码未进入模型消息或聊天；
 - “检查 OA 登录状态”实际调用 `oa_session_status`，只返回状态且不会发卡。这属于工具语义差异，不是卡片丢失。
+
+### 2026-07-15 OA 会话误过期修复验收记录
+
+- 原问题表现为：`oa_session_status` 从注册表返回活动状态，但随后 `oa_workflow_pending_list` 在模板中心预检阶段把任意非 JSON 响应都当作登录过期，并删除加密会话状态；因此“状态有效”和“读取即过期”可以在几分钟内连续出现；
+- 修复后，活动会话状态查询执行真实 OA 探测，并分别返回认证纪元 `lastVerifiedAt` 与本次探测时间 `checkedAt`；状态探测不改写认证纪元，避免影响已冻结写计划的会话绑定；
+- OA 响应分类改为保守失效：明确登录跳转、401/403 或同时包含用户名与密码字段的登录表单才触发 `LOGIN_REQUIRED`；超时、限流、5xx 和非登录 HTML 返回 `SESSION_CHECK_UNAVAILABLE`，不删除密文状态；诊断信息只包含 HTTP 状态、规范化媒体类型、耗时或异常类别，不记录 URL、正文、Cookie 和凭据；
+- 修复于 2026-07-15 12:42 部署到 `10.10.50.213` 并重启 systemd 服务。用户于 12:58:39 完成可信卡认证，13:00 通过 Telegram/OpenClaw 真实读取 3 条 OA 待办，13:01:29 再次实时检查仍为“已登录，有效”，服务日志无异常；
+- 当前未增加定时 keepalive。现有证据已证明本次故障来自错误分类而非空闲超时；只有后续定时观测确认 OA 存在可重复的空闲失效阈值时，才评估低频保活。
 
 ## 16. 后续演进顺序
 

@@ -54,6 +54,8 @@ class CentralCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "not_found")
         self.assertEqual(payload["systemId"], "oa")
+        self.assertEqual(payload["statusSource"], "registry")
+        self.assertIsNone(payload["checkedAt"])
         self.assertFalse((Path(tmp) / "profiles").exists())
 
     def test_capability_invoke_without_session_returns_login_action_and_operation(self):

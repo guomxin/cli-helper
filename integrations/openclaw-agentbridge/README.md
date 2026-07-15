@@ -56,9 +56,12 @@ approved.
 In a private conversation, `/agentbridge status` reports safe diagnostics and
 `/agentbridge pending` redraws the latest unexpired trusted interaction.
 
-`oa_session_status` only reports whether the OA session is usable and never
-creates a card. To exercise the authentication-card path, ask OpenClaw to log
-in to OA so it calls `oa_session_login`. OpenClaw 2026.7.1 does not include the
-conversation key in tool-result middleware context, so version 0.1.1 binds the
-private session during `before_tool_call` and consumes that binding by
-`toolCallId`. Missing or non-private bindings still fail closed.
+`oa_session_status` live-verifies an active OA session but never creates a card.
+Its `checkedAt` value is the current liveness-check time; `lastVerifiedAt`
+remains the authentication epoch. `SESSION_CHECK_UNAVAILABLE` means retry
+without requesting credentials because the encrypted session is preserved. To
+exercise the authentication-card path, ask OpenClaw to log in to OA so it calls
+`oa_session_login`. OpenClaw 2026.7.1 does not include the conversation key in
+tool-result middleware context, so version 0.1.1 binds the private session
+during `before_tool_call` and consumes that binding by `toolCallId`. Missing or
+non-private bindings still fail closed.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from html import unescape
+from html.parser import HTMLParser
 import json
 import re
 import time
@@ -43,6 +44,10 @@ class SeeyonUnsupportedAuthMethod(RuntimeError):
 
 
 class SeeyonReadContractMismatch(RuntimeError):
+    pass
+
+
+class SeeyonSessionCheckUnavailable(RuntimeError):
     pass
 
 
@@ -312,7 +317,7 @@ class SeeyonCentralAdapter:
         while time.monotonic() < deadline:
             try:
                 templates = self.list_templates(worker)
-            except SeeyonLoginRequired:
+            except (SeeyonLoginRequired, SeeyonSessionCheckUnavailable):
                 time.sleep(0.25)
                 continue
             observed_principal = _principal_from_title(worker.page_title)
@@ -328,16 +333,38 @@ class SeeyonCentralAdapter:
         )
 
     def list_templates(self, worker) -> dict:
-        response = worker.request("GET", self.template_center_url)
+        try:
+            response = worker.request("GET", self.template_center_url)
+        except Exception as exc:
+            raise SeeyonSessionCheckUnavailable(
+                f"OA session check request failed ({_safe_exception_code(exc)})."
+            ) from exc
         status = int(response.get("status") or 0)
         final_url = str(response.get("url") or "")
         payload = response.get("json")
-        if (
-            status in {301, 302, 303, 307, 308, 401, 403}
-            or _looks_like_login_url(final_url)
-            or not isinstance(payload, dict)
+        text = str(response.get("text") or "")
+        if status in {301, 302, 303, 307, 308, 401, 403} or _looks_like_login_url(
+            final_url
         ):
             raise SeeyonLoginRequired("The central OA session is not logged in or has expired.")
+        if status < 200 or status >= 300:
+            diagnostics = _safe_response_diagnostics(response)
+            if status in {408, 425, 429} or status >= 500:
+                raise SeeyonSessionCheckUnavailable(
+                    f"OA session check received a temporary response ({diagnostics})."
+                )
+            raise SeeyonReadContractMismatch(
+                f"The OA template center returned an unexpected response ({diagnostics})."
+            )
+        if not isinstance(payload, dict):
+            if _looks_like_login_html(text):
+                raise SeeyonLoginRequired(
+                    "The central OA session is not logged in or has expired."
+                )
+            raise SeeyonSessionCheckUnavailable(
+                "OA session check did not return JSON "
+                f"({_safe_response_diagnostics(response)})."
+            )
         result = parse_template_center_response(payload, base_url=self.base_url)
         return {
             **result,
@@ -581,7 +608,7 @@ class SeeyonCentralAdapter:
         while time.monotonic() < deadline:
             try:
                 templates = self.list_templates(worker)
-            except SeeyonLoginRequired as exc:
+            except (SeeyonLoginRequired, SeeyonSessionCheckUnavailable) as exc:
                 last_error = exc
                 time.sleep(max(poll_interval, 0.1))
                 continue
@@ -714,6 +741,61 @@ def _public_text(value) -> str:
 def _looks_like_login_url(url: str) -> bool:
     lowered = url.lower()
     return any(marker in lowered for marker in ("/login", "login.do", "method=login"))
+
+
+def _looks_like_login_html(value: str) -> bool:
+    detector = _LoginFormDetector()
+    try:
+        detector.feed(str(value or "")[:262_144])
+    except Exception:
+        return False
+    return detector.has_username and detector.has_password
+
+
+def _safe_response_diagnostics(response: dict) -> str:
+    status = int(response.get("status") or 0)
+    media_type = str(response.get("content_type") or "unknown")
+    media_type = media_type.split(";", 1)[0].strip().lower()
+    media_type = re.sub(r"[^a-z0-9.+/-]", "_", media_type)[:80] or "unknown"
+    try:
+        elapsed_ms = max(0, int(response.get("elapsed_ms") or 0))
+    except (TypeError, ValueError):
+        elapsed_ms = 0
+    return f"HTTP {status}, content_type={media_type}, elapsed_ms={elapsed_ms}"
+
+
+def _safe_exception_code(exc: Exception) -> str:
+    value = re.sub(r"[^A-Z0-9_.-]", "_", exc.__class__.__name__.upper())[:80]
+    return value or "REQUEST_ERROR"
+
+
+class _LoginFormDetector(HTMLParser):
+    _USERNAME_NAMES = {"login_username", "loginname", "username"}
+    _PASSWORD_NAMES = {"login_password1", "login_password", "password", "pwd"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.has_username = False
+        self.has_password = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "input":
+            return
+        values = {
+            str(name or "").lower(): str(value or "").strip()
+            for name, value in attrs
+        }
+        input_type = values.get("type", "").lower()
+        field_name = (values.get("name") or values.get("id") or "").lower()
+        autocomplete = values.get("autocomplete", "").lower()
+        if input_type == "password" or field_name in self._PASSWORD_NAMES:
+            self.has_password = True
+        if (
+            field_name in self._USERNAME_NAMES
+            or autocomplete == "username"
+            or input_type == "text"
+        ):
+            self.has_username = True
 
 
 def _principal_from_title(title: str) -> str | None:

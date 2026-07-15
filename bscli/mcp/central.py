@@ -352,8 +352,11 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="oa_session_status",
-        title="Get OA Session Status",
-        description="Get the authenticated caller's central OA session state.",
+        title="Verify OA Session Status",
+        description=(
+            "Verify the authenticated caller's active central OA session against OA. "
+            "Non-active sessions are reported from the registry without asking for credentials."
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
