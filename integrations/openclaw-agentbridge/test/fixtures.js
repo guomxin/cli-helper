@@ -53,6 +53,26 @@ export function toolResult(envelope = interaction()) {
   };
 }
 
+export function operationAuditResult(envelope = interaction()) {
+  const payload = {
+    protocolVersion: "0.1",
+    count: 1,
+    operations: [
+      {
+        operationId: "operation-audit-1234567890",
+        capability: "oa.business_trip.prepare",
+        status: "requires_user_action",
+        nextAction: { interaction: envelope },
+        interaction: envelope,
+      },
+    ],
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+    details: { structuredContent: payload },
+  };
+}
+
 function deepMerge(left, right) {
   const result = structuredClone(left);
   for (const [key, value] of Object.entries(right)) {

@@ -8,8 +8,8 @@
 
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
-> 只读链路已通过验证。Windows 当前用户仍需完成一次正式根 CA 的系统信任确认，
-> 才能在 Telegram WebView 中打开正式环境卡片。
+> 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，业务字段卡和
+> 执行授权卡已在 Telegram WebView 实测；认证卡留待下一次自然登录时验收。
 
 ## 1. 方案结论
 
@@ -468,7 +468,7 @@ openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
 
-链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.4, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.5, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
 `env.vars.NODE_EXTRA_CA_CERTS` 是 OpenClaw 的持久托管环境，不要只在一次性的
 PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
@@ -578,7 +578,8 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [ ] 8780/8790 仅位于受控公司内网，没有任何公网映射；
 - [x] 8780/8790 均使用私网 IP HTTPS，证书链通过校验且明文 HTTP 被拒绝；
 - [x] 根私钥仅以 Windows 当前用户 DPAPI 密文保存，Linux 只部署叶证书和叶私钥；
-- [ ] 正式根 CA 已由用户确认导入 Windows 当前用户根证书库，并完成三类正式卡片的 Telegram WebView 点击验收；
+- [x] 正式根 CA 已由用户确认导入 Windows 当前用户根证书库；Windows 原生 TLS、业务字段卡和执行授权卡的 Telegram WebView 已验收；
+- [ ] 正式 HTTPS 认证卡留待下一次自然 OA 登录时完成 Telegram WebView 点击验收；
 - [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
 - [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
@@ -606,7 +607,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.4 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息，HTTPS 来源白名单需显式配置 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.5 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息；审计历史中的旧卡片只脱敏、不捕获，HTTPS 来源白名单需显式配置 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
@@ -669,12 +670,16 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - OpenClaw MCP 地址已切换为 `https://10.10.50.213:8790/mcp`，卡片来源白名单切换为 `https://10.10.50.213:8780`；CA 路径通过 `env.vars.NODE_EXTRA_CA_CERTS` 写入 OpenClaw 持久托管环境，重建任务后的 Gateway PID `11652`，深度 RPC、配置审计和插件加载检查均通过，`environmentValueSources` 明确包含该键；
 - OpenClaw 智能体在初次切换和托管任务重建后分别通过正式 HTTPS MCP 实际调用 `oa_session_status` 和 `oa_workflow_pending_list`：会话均为 active，身份为辛国茂 / guomao，待办均为 4 条，每轮 2 次工具调用均成功且无失败；两轮都严格只读，没有调用登录、字段、授权或任何 OA 写工具；
 - 三类卡片页面均加入自托管、无数据读取能力的 Telegram 生命周期桥，只发送 ready、expand 和完成后的 close；页面不加载第三方脚本，卡片字段不会被桥接脚本读取。Node 集成测试确认 credential、business-input 和 execution-authorization 在 HTTPS 下全部使用 `button.webApp`，不回退普通 URL；
-- 本机自动测试为 Python `194 passed, 3 skipped`、Node `17/17`；目标 Ubuntu 全量测试为 `194 passed, 1 skipped`，`compileall`、`pip check`、systemd 单元校验和 npm pack dry-run 均通过；
-- 此前使用同类内部 CA 和私网 IP 证书的 Telegram Desktop 实验已确认 `tdesktop 9.6` WebView 能加载页面并提供原生 Telegram bridge。正式根 CA 的 Windows 当前用户信任仍需用户在受保护的系统提示中确认一次；不得以注册表、组策略或机器级信任绕过该边界。
+- 用户已在受保护的系统提示中把正式根 CA 导入 Windows 当前用户根证书库。验收通过证书原始 DER 重新计算 SHA-256 指纹，不把 Windows UI 的 SHA-1 `Thumbprint` 当作 SHA-256；未显式指定 CA 的 Windows 原生 HTTPS 请求已到达卡片服务并得到预期 404；
+- 正式验收使用真实 Telegram 入站消息发起出差申请字段卡，而不把 CLI `--deliver` 当作等价证据。用户提交字段后，宿主后台续接并在同一 Telegram 私聊显示执行授权卡；字段值和短期卡片 URL 均未进入模型消息；
+- 用户在执行授权卡中选择取消。授权记录进入 `rejected`，`commit_operation_id` 和 `consumed_at` 均为空；本轮没有创建新的 `oa.business_trip.save_draft` 操作，也没有执行 OA 写入；
+- 插件 0.1.5 将操作审计记录中的旧 interaction 与当前交互分离：旧卡片 URL 仍被脱敏，但不会进入投递和轮询。Node `20/20`、Python `194 passed, 3 skipped` 和 npm pack dry-run 均通过；Gateway 重启后 PID `4200` 正常监听，深度 RPC 通过，启动日志确认加载 0.1.5；
+- OpenClaw 随后真实只调用一次 `agentbridge_operation_list(limit=3)`，成功返回 3 条记录且工具失败数为 0；日志没有新增中间件结果无效警告，也没有误捕获历史卡片。目标 Ubuntu 全量测试仍为 `194 passed, 1 skipped`，`compileall`、`pip check` 和 systemd 单元校验均通过；
+- 正式根 CA、Windows 原生 TLS、业务字段卡和执行授权卡已完成验收。认证卡使用同一 HTTPS Web App 通路并有自动测试覆盖，但为避免主动注销当前 OA 会话，正式点击验收留到下一次自然登录。
 
 ## 16. 后续演进顺序
 
-1. 由用户确认导入正式根 CA，分别对认证、业务字段和执行授权卡完成 Telegram WebView 正式环境点击验收；
+1. 在下一次自然 OA 登录时完成正式 HTTPS 认证卡的 Telegram WebView 点击验收，不为测试主动注销当前会话；
 2. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
 3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
 4. 再扩充工作流写能力，并逐流程完成真实回读验证；

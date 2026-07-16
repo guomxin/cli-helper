@@ -7,7 +7,13 @@ import {
   processToolResult,
   WITHHELD_URL,
 } from "../lib/interaction.js";
-import { CARD_ORIGIN, CARD_URL, interaction, toolResult } from "./fixtures.js";
+import {
+  CARD_ORIGIN,
+  CARD_URL,
+  interaction,
+  operationAuditResult,
+  toolResult,
+} from "./fixtures.js";
 
 test("extracts a trusted interaction and withholds its URL from the model result", () => {
   const processed = processToolResult(toolResult(), [CARD_ORIGIN]);
@@ -25,6 +31,17 @@ test("rejects an interaction from an origin that was not explicitly trusted", ()
 
   assert.deepEqual(processed.interactions, []);
   assert.equal(processed.result.content[0].text.includes(CARD_URL), true);
+});
+
+test("redacts historical card URLs without treating audit records as live interactions", () => {
+  const original = operationAuditResult();
+  const processed = processToolResult(original, [CARD_ORIGIN]);
+
+  assert.deepEqual(processed.interactions, []);
+  assert.equal(processed.sanitized, true);
+  assert.equal(JSON.stringify(processed.result).includes(CARD_URL), false);
+  assert.equal(JSON.stringify(processed.result).includes(WITHHELD_URL), true);
+  assert.equal(JSON.stringify(original).includes(CARD_URL), true);
 });
 
 test("renders private HTTP as a URL button and Telegram HTTPS as a Web App", () => {

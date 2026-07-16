@@ -2,7 +2,69 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
-import { CARD_ORIGIN, CARD_URL, interaction, toolResult } from "./fixtures.js";
+import {
+  CARD_ORIGIN,
+  CARD_URL,
+  interaction,
+  operationAuditResult,
+  toolResult,
+} from "./fixtures.js";
+
+test("leaves an ordinary non-interaction tool result untouched", () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const result = {
+    content: [{ type: "text", text: '{"status":"succeeded","count":3}' }],
+    details: { structuredContent: { status: "succeeded", count: 3 } },
+  };
+
+  const replacement = harness.middleware(
+    {
+      toolCallId: "tool-plain",
+      toolName: "oa_workflow_pending",
+      result,
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(replacement, undefined);
+});
+
+test("sanitizes operation audit history without capturing an old card", () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  bindToolCall(harness, {
+    toolCallId: "tool-audit",
+    runId: "run-audit",
+    sessionKey: "agent:main:telegram:direct:7052061588",
+  });
+
+  const replacement = harness.middleware(
+    {
+      toolCallId: "tool-audit",
+      toolName: "agentbridge_operation_list",
+      result: operationAuditResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(JSON.stringify(replacement).includes(CARD_URL), false);
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "run-audit",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      channel: "telegram",
+      payload: { text: "audit complete" },
+    },
+    {
+      channelId: "telegram",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      runId: "run-audit",
+    },
+  );
+  assert.equal(reply, undefined);
+});
 
 test("binds a real Telegram direct session before middleware and injects its card", () => {
   const harness = fakeApi({ autoPoll: false });

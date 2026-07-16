@@ -313,10 +313,12 @@ opinions, business-field collection, authorization, wait-send draft save,
 field readback, and idempotent replay. Every validated operation reported
 browser_bridge_used=false.
 
-A second real OA user, formal Windows root-trust confirmation plus production
-Telegram WebView clicks, real mobile CA distribution, and additional central
-write workflows remain open validation items. The current intranet server and
-OpenClaw path already use private-IP HTTPS with a dedicated internal CA.
+Formal Windows current-user root trust, native TLS, and production Telegram
+WebView clicks for business-input and execution-authorization cards are now
+validated; the authorization was cancelled and produced no OA write. A second
+real OA user, the next natural credential-card login, real mobile CA distribution,
+and additional central write workflows remain open validation items. The current
+intranet server and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
 
 ## Design Documents
 

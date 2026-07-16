@@ -67,7 +67,7 @@ export class InteractionCoordinator {
       event.result,
       this.config.allowedCardOrigins,
     );
-    if (processed.interactions.length === 0) {
+    if (!processed.sanitized) {
       return undefined;
     }
 

@@ -180,3 +180,23 @@ path without an OA write:
 - attempting to resume the untouched field interaction returned
   `INTERACTION_PENDING`; no OA form was opened and no draft or workflow state
   was created.
+
+On 2026-07-16, the private-IP HTTPS deployment completed a real Telegram
+inbound validation with the formal internal CA:
+
+- Windows current-user root trust and native TLS validation succeeded;
+- a `business_input` card opened inside Telegram Desktop, submitted directly
+  to AgentBridge, and resumed to an `execution_authorization` card through the
+  original private-channel route;
+- the user cancelled the authorization; its state became `rejected`, no commit
+  operation was created, and OA was not written;
+- plugin 0.1.5 redacts interactions found inside operation audit history but
+  does not capture or deliver them as current cards;
+- a real OpenClaw `agentbridge_operation_list(limit=3)` call completed with one
+  tool call, zero failures, no new invalid-middleware warning, and no historical
+  card capture.
+
+The formal HTTPS credential-card click remains intentionally deferred until
+the next natural login so the active OA session is not invalidated only for a
+test. The same card type and HTTPS Web App mapping remain covered by automated
+tests.

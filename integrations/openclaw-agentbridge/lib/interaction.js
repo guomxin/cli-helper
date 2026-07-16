@@ -34,22 +34,31 @@ const STATE_LABELS = {
 const MAX_WALK_DEPTH = 14;
 const MAX_WALK_NODES = 10000;
 const MAX_JSON_TEXT_LENGTH = 1024 * 1024;
+const HISTORICAL_INTERACTION_CONTAINERS = new Set([
+  "operation",
+  "operations",
+]);
 
 export function processToolResult(result, allowedOrigins) {
   const normalizedOrigins = new Set(
     allowedOrigins.map(normalizeHttpOrigin).filter(Boolean),
   );
   const interactions = collectInteractions(result, normalizedOrigins);
-  if (interactions.length === 0) {
-    return { interactions, result };
+  const trustedInteractions = collectInteractions(result, normalizedOrigins, {
+    includeHistorical: true,
+  });
+  if (trustedInteractions.length === 0) {
+    return { interactions, result, sanitized: false };
   }
   return {
     interactions,
-    result: sanitizeTrustedResult(result, interactions),
+    result: sanitizeTrustedResult(result, trustedInteractions),
+    sanitized: true,
   };
 }
 
-export function collectInteractions(value, allowedOrigins) {
+export function collectInteractions(value, allowedOrigins, options = {}) {
+  const includeHistorical = options.includeHistorical === true;
   const interactions = new Map();
   const visited = new WeakSet();
   let visitedNodes = 0;
@@ -80,7 +89,16 @@ export function collectInteractions(value, allowedOrigins) {
       interactions.set(interaction.interactionId, interaction);
       return;
     }
-    for (const child of Array.isArray(current) ? current : Object.values(current)) {
+    const entries = Array.isArray(current)
+      ? current.entries()
+      : Object.entries(current);
+    for (const [key, child] of entries) {
+      if (
+        !includeHistorical &&
+        HISTORICAL_INTERACTION_CONTAINERS.has(String(key))
+      ) {
+        continue;
+      }
       walk(child, depth + 1);
     }
   }
@@ -161,10 +179,7 @@ export function sanitizeTrustedResult(result, interactions) {
 
   function sanitize(value) {
     if (typeof value === "string") {
-      const parsed = parseJsonText(value);
-      if (parsed !== null) {
-        return JSON.stringify(sanitize(parsed));
-      }
+
       let text = value;
       for (const url of urls) {
         text = text.split(url).join(WITHHELD_URL);

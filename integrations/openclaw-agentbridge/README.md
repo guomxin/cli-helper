@@ -8,6 +8,8 @@ Security behavior is intentionally fail closed:
 
 - card URLs are accepted only from `allowedCardOrigins`;
 - card URLs are removed before tool results are returned to the model;
+- interactions nested in operation audit history are sanitized but never
+  captured, polled, or delivered as the current card;
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
@@ -34,7 +36,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.4, ...)
+AgentBridge interaction plugin registered (version=0.1.5, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
