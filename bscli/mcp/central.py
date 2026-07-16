@@ -14,6 +14,7 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp.resources import FunctionResource
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
@@ -31,6 +32,16 @@ from bscli.broker.credential import CredentialBroker
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
+from bscli.mcp.presentation import (
+    MCP_APP_MIME_TYPE,
+    MCP_APP_RESOURCE_URI,
+    MCP_PROFILE_RESOURCE_URI,
+    build_server_profile,
+    interaction_tool_meta,
+    load_mcp_app_html,
+    package_interaction_result,
+    server_profile_json,
+)
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
@@ -225,6 +236,44 @@ def create_central_mcp_server(
         idempotentHint=True,
         openWorldHint=True,
     )
+    profile = build_server_profile(mcp_url=config.mcp_url)
+
+    @mcp.resource(
+        MCP_PROFILE_RESOURCE_URI,
+        name="agentbridge_server_profile",
+        title="AgentBridge Server Profile",
+        description="Machine-readable remote MCP, interaction, and client-footprint profile.",
+        mime_type="application/json",
+    )
+    def agentbridge_server_profile_resource() -> str:
+        return server_profile_json(mcp_url=config.mcp_url)
+
+    app_resource = FunctionResource.from_function(
+        load_mcp_app_html,
+        uri=MCP_APP_RESOURCE_URI,
+        name="agentbridge_trusted_interaction",
+        title="AgentBridge Trusted Interaction",
+        description="Host-rendered trusted interaction surface for AgentBridge cards.",
+        mime_type="text/html",
+    )
+    # FastMCP 1.23 rejects MIME parameters even though MCP Apps requires this profile.
+    object.__setattr__(app_resource, "mime_type", MCP_APP_MIME_TYPE)
+    mcp.add_resource(app_resource)
+
+    @mcp.prompt(
+        name="agentbridge_oa_operator",
+        title="Operate OA through AgentBridge",
+        description="Concise operating rules for agent hosts without an installed Skill.",
+    )
+    def agentbridge_oa_operator() -> str:
+        return (
+            "Use AgentBridge OA tools with the authenticated server-bound identity. "
+            "Never ask the user to send OA passwords, business form values, or approval "
+            "decisions in chat. When a result requires trusted interaction, let an MCP "
+            "App or private host adapter render it. If no app appears, call "
+            "agentbridge_interaction_get with the returned interaction ID. Resume only "
+            "after resume.ready is true. Writes remain prepare -> authorize -> commit -> verify."
+        )
 
     async def invoke(
         ctx: Context,
@@ -237,7 +286,7 @@ def create_central_mcp_server(
             identity_store,
             required_scopes=required_scopes or {"oa:read"},
         )
-        return await asyncio.to_thread(
+        response = await asyncio.to_thread(
             service.invoke,
             user_subject=identity["user_subject"],
             capability_name=capability_name,
@@ -245,6 +294,20 @@ def create_central_mcp_server(
             idempotency_key=idempotency_key,
             request_id=str(ctx.request_id),
         )
+        return package_interaction_result(response)
+
+    @mcp.tool(
+        name="agentbridge_server_profile",
+        title="Get AgentBridge Server Profile",
+        description=(
+            "Describe this remote MCP endpoint, trusted-interaction delivery methods, "
+            "client footprint, and write-safety boundary."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_server_profile() -> dict[str, Any]:
+        return profile
 
     @mcp.tool(
         name="oa_template_list",
@@ -365,6 +428,7 @@ def create_central_mcp_server(
     @mcp.tool(
         name="oa_business_trip_prepare",
         title="Prepare OA Business Trip Draft",
+        meta=interaction_tool_meta(),
         description=(
             "Start trusted business-trip field entry, or continue with its opaque submission "
             "ID to validate the live OA form and create a separate confirmation card."
@@ -399,6 +463,7 @@ def create_central_mcp_server(
     @mcp.tool(
         name="oa_business_trip_save_draft",
         title="Save Authorized OA Business Trip Draft",
+        meta=interaction_tool_meta(),
         description=(
             "Consume one approved trusted authorization, save the frozen plan as a "
             "wait-send OA draft, and verify it by server reload. It never submits the workflow."
@@ -445,6 +510,7 @@ def create_central_mcp_server(
     @mcp.tool(
         name="oa_session_login",
         title="Ensure OA Session Login",
+        meta=interaction_tool_meta(),
         description=(
             "Reuse and refresh a valid central OA session. Only when OA confirms "
             "that the session is no longer authenticated, create a short-lived "
@@ -460,20 +526,23 @@ def create_central_mcp_server(
         structured_output=True,
     )
     async def oa_session_login(
+        ctx: Context,
         challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 300,
     ) -> dict[str, Any]:
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        response = await asyncio.to_thread(
             service.start_login,
             user_subject=identity["user_subject"],
             expected_principal_ref=identity["expected_principal_ref"],
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
         )
+        return package_interaction_result(response)
 
     @mcp.tool(
         name="agentbridge_interaction_get",
         title="Get AgentBridge User Interaction",
+        meta=interaction_tool_meta(),
         description=(
             "Read one host-independent trusted interaction envelope. Poll this tool "
             "until resume.ready is true; never collect credential or business-field "
@@ -486,15 +555,17 @@ def create_central_mcp_server(
         interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
     ) -> dict[str, Any]:
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        response = await asyncio.to_thread(
             service.get_interaction,
             user_subject=identity["user_subject"],
             interaction_id=interaction_id,
         )
+        return package_interaction_result(response)
 
     @mcp.tool(
         name="agentbridge_interaction_resume",
         title="Resume Completed AgentBridge Interaction",
+        meta=interaction_tool_meta(),
         description=(
             "Continue an interaction after the user completed its trusted surface. "
             "This tool cannot enter fields or approve a plan; it only consumes an "
@@ -526,12 +597,13 @@ def create_central_mcp_server(
                 identity_store,
                 required_scopes={"oa:write:draft"},
             )
-        return await asyncio.to_thread(
+        response = await asyncio.to_thread(
             service.resume_interaction,
             user_subject=identity["user_subject"],
             interaction_id=interaction_id,
             idempotency_key=idempotency_key,
         )
+        return package_interaction_result(response)
 
     @mcp.tool(
         name="agentbridge_operation_get",

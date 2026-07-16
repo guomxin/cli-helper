@@ -25,6 +25,12 @@ from bscli.mcp.central import (
     serve_central_mcp,
     validate_central_mcp_server_config,
 )
+from bscli.mcp.presentation import (
+    MCP_APP_MIME_TYPE,
+    MCP_APP_RESOURCE_URI,
+    MCP_PROFILE_RESOURCE_URI,
+    PRIVATE_INTERACTION_META_KEY,
+)
 
 
 class CentralMcpTests(unittest.TestCase):
@@ -138,6 +144,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_operation_list", names)
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)
+        self.assertIn("agentbridge_server_profile", names)
         self.assertIn("oa_business_trip_prepare", names)
         self.assertIn("oa_business_trip_save_draft", names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
@@ -153,6 +160,94 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("input_submission_id", prepare_schema)
         self.assertNotIn("reason", prepare_schema)
         self.assertNotIn("start_time", prepare_schema)
+        interaction_get = next(
+            tool for tool in tools if tool["name"] == "agentbridge_interaction_get"
+        )
+        self.assertEqual(
+            interaction_get["_meta"]["ui"]["resourceUri"],
+            MCP_APP_RESOURCE_URI,
+        )
+
+    def test_profile_resource_prompt_and_tool_are_discoverable(self):
+        with self._server() as (_service, _store, token, client):
+            resources = self._request(
+                client,
+                "resources/list",
+                request_id=20,
+                token=token,
+            ).json()["result"]["resources"]
+            prompts = self._request(
+                client,
+                "prompts/list",
+                request_id=21,
+                token=token,
+            ).json()["result"]["prompts"]
+            profile = self._request(
+                client,
+                "tools/call",
+                request_id=22,
+                token=token,
+                params={"name": "agentbridge_server_profile", "arguments": {}},
+            ).json()["result"]["structuredContent"]
+            app_resource = self._request(
+                client,
+                "resources/read",
+                request_id=23,
+                token=token,
+                params={"uri": MCP_APP_RESOURCE_URI},
+            ).json()["result"]["contents"][0]
+            operator_prompt = self._request(
+                client,
+                "prompts/get",
+                request_id=24,
+                token=token,
+                params={"name": "agentbridge_oa_operator", "arguments": {}},
+            ).json()["result"]
+
+        resources_by_uri = {item["uri"]: item for item in resources}
+        self.assertIn(MCP_PROFILE_RESOURCE_URI, resources_by_uri)
+        self.assertEqual(
+            resources_by_uri[MCP_APP_RESOURCE_URI]["mimeType"],
+            MCP_APP_MIME_TYPE,
+        )
+        self.assertEqual(profile["mcp"]["endpoint"], "http://testserver/mcp")
+        self.assertIn("agentbridge_oa_operator", [item["name"] for item in prompts])
+        self.assertEqual(app_resource["mimeType"], MCP_APP_MIME_TYPE)
+        self.assertIn("AGENTBRIDGE TRUSTED INTERACTION", app_resource["text"])
+        self.assertIn(
+            "prepare -> authorize -> commit -> verify",
+            operator_prompt["messages"][0]["content"]["text"],
+        )
+
+    def test_interaction_card_url_is_private_mcp_result_metadata(self):
+        card_url = "https://cards.example.test/input/opaque-resource"
+        with self._server() as (service, _store, token, client):
+            service.get_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "interaction": _trusted_interaction(card_url),
+            }
+            payload = self._request(
+                client,
+                "tools/call",
+                request_id=25,
+                token=token,
+                params={
+                    "name": "agentbridge_interaction_get",
+                    "arguments": {"interaction_id": "interaction-1234567890"},
+                },
+            ).json()["result"]
+
+        model_visible = json.dumps(
+            {
+                "content": payload["content"],
+                "structuredContent": payload["structuredContent"],
+            }
+        )
+        self.assertNotIn(card_url, model_visible)
+        self.assertEqual(
+            payload["_meta"][PRIVATE_INTERACTION_META_KEY]["presentation"]["url"],
+            card_url,
+        )
 
     def test_business_trip_prepare_requires_write_scope_and_uses_server_identity(self):
         with self._server() as (service, store, read_token, client):
@@ -545,6 +640,34 @@ class CentralMcpFixture:
     def __exit__(self, exc_type, exc, traceback):
         self.client_context.__exit__(exc_type, exc, traceback)
         self.temp.cleanup()
+
+
+def _trusted_interaction(card_url):
+    return {
+        "schemaVersion": "agentbridge.interaction.v1",
+        "interactionId": "interaction-1234567890",
+        "type": "business_input",
+        "state": "pending",
+        "title": "Business trip input",
+        "message": "Enter the requested business fields.",
+        "presentation": {
+            "owner": "agentbridge",
+            "preferred": "embedded_secure_web_app",
+            "fallback": "url",
+            "url": card_url,
+            "modelMustNotCollectValues": True,
+        },
+        "display": {"systemName": "OA", "fieldCount": 6},
+        "poll": {
+            "tool": "agentbridge_interaction_get",
+            "recommendedIntervalSeconds": 2,
+        },
+        "resume": {
+            "tool": "agentbridge_interaction_resume",
+            "ready": False,
+            "completed": False,
+        },
+    }
 
 
 if __name__ == "__main__":

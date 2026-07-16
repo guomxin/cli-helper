@@ -135,6 +135,15 @@ never launches a browser itself. Codex, OpenClaw, or another host renders the
 trusted URL, polls state outside the model loop, and calls the resume tool when
 the user-bound record is ready.
 
+On MCP, the trusted URL is moved to host-private
+`CallToolResult._meta["io.agentbridge/interaction"]`; model-visible content and
+structured output contain only a fixed placeholder. Tools that directly
+present trusted interactions advertise the standard MCP Apps resource
+`ui://agentbridge/trusted-interaction.html`. A compatible host can therefore
+render, poll, resume, and hand a following interaction back to the user without
+an AgentBridge-specific plugin. The current OpenClaw plugin remains the adapter
+for hosts that do not yet implement MCP Apps.
+
 ~~~bash
 python -m bscli.cli.main --home .bscli interaction get \
   <interaction-id> --user-subject <trusted-user-subject>
@@ -150,7 +159,8 @@ The equivalent MCP tools are `agentbridge_interaction_get` and
 captures these envelopes, withholds trusted URLs from the model, renders cards
 only in private sessions, and polls/resumes outside the model loop. The Python
 renderer remains a host-adapter reference. See the
-[agent interaction protocol](docs/agent-interaction-protocol.md).
+[agent interaction protocol](docs/agent-interaction-protocol.md) and the
+[remote MCP low-install onboarding guide](docs/remote-mcp-onboarding.md).
 
 ## Governed Business-Trip Draft
 
@@ -227,6 +237,12 @@ Connect the MCP client to http://127.0.0.1:8790/mcp with an Authorization Bearer
 header. MCP tools derive caller identity from the server-side token binding and
 do not accept userSubject arguments.
 
+After connection, call `agentbridge_server_profile` to discover the transport,
+interaction delivery methods, client footprint, and write-safety boundary.
+The same profile is available as `agentbridge://server/profile`, and the
+`agentbridge_oa_operator` MCP prompt supplies concise operating rules without
+requiring a separately installed Skill.
+
 For an intranet deployment, OpenClaw may run on the user's workstation while
 AgentBridge runs on another company-network machine. Issue a private-IP server
 certificate from a DPAPI-protected AgentBridge internal CA on the Windows
@@ -279,6 +295,12 @@ Telegram then presents credential, business-input, and execution-authorization
 cards as native Web App buttons inside its own WebView instead of opening an
 external browser.
 
+The OpenClaw plugin is a host compatibility adapter, not part of the central
+business architecture. MCP Apps-capable hosts need only the remote MCP
+connection, TLS trust, and MCP authorization. Core-MCP-only hosts can use read
+tools while the OA session is active, but require either MCP Apps or a private
+host adapter for login, business input, and execution authorization.
+
 Loopback HTTP remains a local-development mechanism. The explicit private-IP
 HTTP switch is retained only for isolated recovery and must not be used for a
 routable deployment. Production remote access also requires enterprise
@@ -305,6 +327,14 @@ isolation.
 python -m unittest discover -s tests
 python -m compileall -q bscli
 python -m pip check
+
+cd integrations/mcp-app
+npm ci
+npm run check
+npm run build
+
+cd ../openclaw-agentbridge
+npm test
 ~~~
 
 The central path has completed single-user real-OA validation for trusted-card
@@ -328,3 +358,4 @@ intranet server and OpenClaw path use private-IP HTTPS with a dedicated internal
 - [Deferred production considerations](deferred-considerations.md)
 - [Legacy bridge retirement ledger](docs/legacy-bridge-retirement.md)
 - [Agent interaction protocol](docs/agent-interaction-protocol.md)
+- [Remote MCP low-install onboarding](docs/remote-mcp-onboarding.md)

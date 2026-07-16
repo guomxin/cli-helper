@@ -442,7 +442,19 @@ sudo journalctl -u agentbridge -f
 
 Playwright/Chromium 与上述 systemd 加固项需要在目标 Linux 发行版上验证；遇到限制时应逐项定位所需权限，不应直接移除全部隔离设置。
 
-## 9. OpenClaw 接入
+## 9. 智能体宿主接入
+
+### 9.1 通用远程 MCP
+
+通用智能体宿主优先只配置远程 MCP、TLS 信任和 MCP 身份，不安装 AgentBridge 业务 CLI、浏览器扩展或本地 OA 组件。接入后先调用 `agentbridge_server_profile`，也可以读取 `agentbridge://server/profile` 或使用 `agentbridge_oa_operator` Prompt 获取基本操作边界。
+
+支持 MCP Apps 的宿主会根据工具 `_meta.ui.resourceUri` 加载 `ui://agentbridge/trusted-interaction.html`。完整卡片 envelope 位于宿主私有的 `CallToolResult._meta["io.agentbridge/interaction"]`，模型可见结果中的 URL 已由服务端替换为固定占位符。MCP App 在模型循环之外打开安全页面、轮询、单次续跑，并接住后续卡片。
+
+仅支持核心 MCP 的宿主可以在 OA 会话有效时使用只读能力；遇到登录、字段填写或执行授权时，必须具备 MCP Apps 或经过批准的私有宿主适配器。服务不会把卡片 URL 降级暴露给模型。
+
+当前仍使用管理员签发的 Bearer 和内部 CA，因此“添加 MCP 地址并授权”尚未完全一键化。标准 OAuth 2.1、浏览器身份绑定和第二用户隔离验证仍是后续生产化工作。详细说明见 [远程 MCP 低安装接入](remote-mcp-onboarding.md)。
+
+### 9.2 当前 OpenClaw 兼容适配
 
 OpenClaw 侧需要配置以下连接信息：
 
@@ -599,6 +611,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | --- | --- |
 | 中心 AgentBridge、Credential Broker 和可信卡片 | 已实现 |
 | Streamable HTTP MCP 与 Bearer 身份绑定 | 已实现 |
+| MCP 自描述、私有交互元数据与 MCP Apps | 已实现；提供 Profile Tool/Resource、操作 Prompt 和单文件 UI Resource，模型可见结果不含卡片 URL |
 | 固定私网 IP HTTPS 与内部 CA | 已实现并部署；服务端证书链、TLS 端点和明文拒绝已验证 |
 | 固定私网 IP HTTP 显式开关 | 仅保留为隔离恢复能力，当前部署未启用 |
 | 通配地址、公网地址和端点错配拒绝 | 已实现并有自动测试 |

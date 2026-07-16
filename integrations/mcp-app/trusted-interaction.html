@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentBridge 可信交互</title>
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <header>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">AGENTBRIDGE TRUSTED INTERACTION</p>
+          <h1 id="title">正在连接</h1>
+        </div>
+      </header>
+      <p id="message" class="message">正在等待 AgentBridge 返回交互状态。</p>
+      <dl id="facts" class="facts" hidden></dl>
+      <p id="status" class="status" data-tone="neutral">准备中</p>
+      <button id="primary-action" type="button" hidden>打开安全页面</button>
+    </main>
+    <script type="module" src="/src/app.ts"></script>
+  </body>
+</html>

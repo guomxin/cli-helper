@@ -70,6 +70,25 @@ interaction envelope and lets a desktop OpenClaw client open the card on a
 different intranet machine, but the transport is plaintext and is not a
 production or public/mobile-network deployment mode.
 
+## MCP Transport Projection
+
+The direct service and CLI contracts may return the complete envelope. The MCP
+projection separates model-visible status from host-private presentation data:
+
+- `content` and `structuredContent` keep the interaction ID, type, state,
+  non-sensitive display data, poll contract, and resume contract;
+- every occurrence of the trusted URL is replaced by a fixed placeholder;
+- the complete envelope is carried in
+  `CallToolResult._meta["io.agentbridge/interaction"]`;
+- interactive tools advertise `_meta.ui.resourceUri` with
+  `ui://agentbridge/trusted-interaction.html`.
+
+An MCP host must not inject the private result metadata into model context or
+ordinary logs. An approved MCP App or host adapter may consume it only for the
+bound user's private interaction surface. This is the MCP equivalent of the
+OpenClaw plugin's pre-model URL withholding, but it is now enforced by the
+server result projection as well.
+
 State handling is deliberately small:
 
 - `pending` and `processing`: keep polling; resume is not ready;
@@ -82,8 +101,9 @@ State handling is deliberately small:
 ## Host Algorithm
 
 1. Invoke a business capability or session-ensure tool.
-2. When the result contains `interaction`, render its trusted URL as an
-   embedded web app or a portable link button.
+2. Obtain the complete envelope from host-private MCP result metadata or the
+   direct CLI/service contract. Never recover the URL from model-visible text.
+   Render it as an MCP App action or a private host-adapter button.
 3. Poll `agentbridge_interaction_get` outside the model loop at the recommended
    interval. Do not ask the model to collect or repeat trusted values.
 4. When `resume.ready` becomes true, call
@@ -98,6 +118,35 @@ consume a trusted record that the bound user has already completed. Existing
 session locks, single-use field submissions, single-use authorizations, and
 operation idempotency remain the write-safety boundary.
 
+## MCP Apps
+
+Tools that can directly return a trusted interaction reference the bundled
+`ui://agentbridge/trusted-interaction.html` resource with the official
+`text/html;profile=mcp-app` MIME type. A compatible host renders that resource
+inside its isolated MCP Apps surface.
+
+The bundled App:
+
+- reads the complete envelope only from host-private result metadata;
+- asks the host to open the AgentBridge HTTPS page;
+- polls `agentbridge_interaction_get` outside the model loop;
+- resumes a ready interaction once with a stable idempotency key;
+- renders a following interaction without asking the model to reconstruct the
+  workflow;
+- updates model context at terminal state and, when supported, requests one
+  concise follow-up turn.
+
+A core-MCP-only host can still use read tools while the OA session is valid.
+When a trusted interaction is required, it must either support MCP Apps or use a
+private adapter such as the current OpenClaw plugin. AgentBridge fails closed
+instead of exposing a card URL to the model.
+
+Core MCP URL elicitation is intentionally deferred. The current card URL is a
+short-lived capability URL, but the web opener is not yet independently
+authenticated against the MCP subject. Standards-compliant URL elicitation
+requires that browser-user binding so a forwarded URL cannot be used for the
+wrong account.
+
 ## CLI
 
 ```bash
@@ -111,7 +160,9 @@ python -m bscli.cli.main --home .bscli interaction resume \
 
 The equivalent MCP tools are `agentbridge_interaction_get` and
 `agentbridge_interaction_resume`. MCP identity comes from the bound Bearer
-token; the tools do not accept `userSubject`.
+token; the tools do not accept `userSubject`. Service discovery is available
+through `agentbridge_server_profile`, `agentbridge://server/profile`, and the
+`agentbridge_oa_operator` prompt.
 
 ## Codex Development Validation
 

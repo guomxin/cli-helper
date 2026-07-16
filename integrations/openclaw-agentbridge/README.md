@@ -4,6 +4,14 @@ This native OpenClaw plugin recognizes `agentbridge.interaction.v1` envelopes
 returned by AgentBridge MCP tools and renders trusted card buttons in private
 conversations.
 
+AgentBridge also publishes a standard MCP Apps resource. This plugin is the
+compatibility adapter for OpenClaw versions that do not yet provide equivalent
+MCP Apps rendering, private-session binding, polling, and resume behavior; it
+is not a dependency of the central OA business implementation. The plugin can
+read the full envelope from host-private
+`CallToolResult._meta["io.agentbridge/interaction"]`, while the model-visible
+result contains only the redacted interaction status.
+
 Security behavior is intentionally fail closed:
 
 - card URLs are accepted only from `allowedCardOrigins`;

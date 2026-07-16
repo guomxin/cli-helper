@@ -1,0 +1,223 @@
+# AgentBridge 远程 MCP 低安装接入
+
+> 状态：内网 PoC 已实现
+>
+> 当前端点：`https://10.10.50.213:8790/mcp`
+>
+> 目标：智能体宿主只连接远程 MCP 并完成身份授权，不在用户电脑部署 OA 业务组件。
+
+## 1. 结论
+
+AgentBridge 的首选交付方式是远程 Streamable HTTP MCP。OA 登录态、受控浏览器、API 调用、会话保活、写操作治理和审计都留在内网服务器。
+
+用户电脑当前只需要：
+
+- 一个支持远程 MCP 的智能体宿主；
+- 对 AgentBridge HTTPS 证书链的信任；
+- 一个由 AgentBridge 服务端签发并绑定用户身份的 MCP 凭据；
+- 在宿主不支持 MCP Apps 时，可选安装宿主交互适配器。
+
+用户电脑不需要：
+
+- Chrome 扩展；
+- 本地 AgentBridge daemon；
+- 本地 OA 连接器或 Cookie 管理器；
+- 本地 Browser Worker；
+- 强制安装 AgentBridge 业务 CLI。
+
+因此，CLI 不再是普通用户的主入口。它保留给运维、诊断、脚本自动化和不支持远程 MCP 的兼容场景。
+
+## 2. MCP 自描述能力
+
+AgentBridge 现在通过 MCP 自身发布接入信息，不要求宿主预装 Skill 才能理解基本规则：
+
+| 类型 | 名称 | 用途 |
+| --- | --- | --- |
+| Tool | `agentbridge_server_profile` | 返回传输、认证、交互方式、客户端安装范围和写安全边界 |
+| Resource | `agentbridge://server/profile` | 提供同一份机器可读服务画像 |
+| Prompt | `agentbridge_oa_operator` | 提供精简操作规则，明确敏感信息不得进入聊天 |
+| UI Resource | `ui://agentbridge/trusted-interaction.html` | MCP Apps 可信交互视图 |
+
+宿主接入后应先调用 `agentbridge_server_profile`，再调用 `oa_session_status` 验证身份绑定和 OA 会话状态。
+
+## 3. 宿主能力分层
+
+### 3.1 支持 MCP Apps
+
+这是首选路径，不需要 AgentBridge 专用宿主插件。
+
+带可信交互能力的工具在 `tools/list` 中声明：
+
+```json
+{
+  "_meta": {
+    "ui": {
+      "resourceUri": "ui://agentbridge/trusted-interaction.html",
+      "visibility": ["model", "app"]
+    }
+  }
+}
+```
+
+宿主读取 UI Resource，并在隔离视图中呈现 AgentBridge MCP App。该视图负责：
+
+1. 呈现认证、字段填写或执行授权的摘要；
+2. 请求宿主打开 AgentBridge HTTPS 安全页面；
+3. 在模型循环之外轮询 `agentbridge_interaction_get`；
+4. 当 `resume.ready=true` 时，以稳定幂等键调用 `agentbridge_interaction_resume`；
+5. 如果续跑产生下一张卡，继续同一交互循环；
+6. 到达终态后更新宿主模型上下文；宿主支持消息能力时，触发智能体继续原请求。
+
+MCP App 只处理交互编排，不包含 OA 表单规则，也不接收 OA 密码或已填写字段。
+
+### 3.2 仅支持核心 MCP
+
+只读工具和已有有效 OA 会话仍可直接使用。
+
+当工具需要可信交互时，模型可见结果只包含交互 ID、状态和安全提示，不包含卡片 URL。模型可以调用 `agentbridge_interaction_get` 检查状态，但如果宿主既不支持 MCP Apps，也没有私有交互适配器，就不能完成登录、字段填写或执行授权。
+
+这是有意的安全失败关闭，不会退化为让模型在聊天中收集密码或业务字段。
+
+### 3.3 OpenClaw
+
+当前 OpenClaw 通过 `integrations/openclaw-agentbridge` 适配器补足宿主交互能力：
+
+- 从 MCP 私有结果元数据识别可信交互；
+- 只向已绑定的私聊会话投递；
+- 把 HTTPS 卡片映射为 Telegram Web App；
+- 在后台轮询、续跑，并直接投递下一张卡或固定终态；
+- 在模型看到结果前移除卡片 URL。
+
+当 OpenClaw 原生支持 MCP Apps 并具备等价的私有会话约束、轮询和续跑能力后，该插件可以退化为可选增强，最终不再作为必需组件。
+
+### 3.4 CLI 和 Skill
+
+CLI 与 Skill 是兼容层，不是主部署形态：
+
+- CLI：管理员签发身份、诊断、部署验证和脚本调用；
+- Skill：帮助不善于自动发现 MCP 工具的智能体组织调用；
+- 远程 MCP：普通智能体的首选业务入口。
+
+## 4. 交互隐私投影
+
+AgentBridge 内部仍使用完整的 `agentbridge.interaction.v1` envelope。通过 MCP 返回时分成两部分：
+
+### 模型可见部分
+
+`content` 和 `structuredContent` 保留：
+
+- 交互 ID；
+- 类型与状态；
+- 非敏感展示字段；
+- 轮询和续跑工具名；
+- “不得在聊天中收集值”的规则。
+
+所有可信卡片 URL 都替换为固定占位符。
+
+### 宿主私有部分
+
+完整 envelope 放在：
+
+```text
+CallToolResult._meta["io.agentbridge/interaction"]
+```
+
+MCP Apps 或经过批准的宿主适配器可以读取该字段。宿主必须：
+
+- 不把 `_meta` 注入模型上下文；
+- 不在普通日志中记录短期 URL；
+- 只在已绑定用户的私有界面中呈现；
+- 不从结果中自动学习新的可信来源；
+- 对允许的卡片 origin 使用明确白名单。
+
+## 5. 当前接入步骤
+
+### 5.1 通用 MCP Apps 宿主
+
+1. 让用户电脑信任 AgentBridge 内部根 CA。
+2. 在宿主中添加远程 MCP：
+   `https://10.10.50.213:8790/mcp`。
+3. 配置管理员签发的 Bearer Token，Token 不得进入聊天或普通配置文档。
+4. 调用 `agentbridge_server_profile`。
+5. 调用 `oa_session_status`。
+6. 用 `oa_session_login` 验证宿主是否能呈现 MCP App。
+7. 完成一次只读工具调用，再选择明确、低风险的写流程验证治理链。
+
+### 5.2 当前 OpenClaw
+
+除 MCP 地址、CA 和 Bearer 外，安装并启用：
+
+```powershell
+openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
+openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
+openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
+openclaw plugins enable agentbridge-interactions
+```
+
+完整重启 Gateway 后至少等待 120 秒，再以深度 RPC、监听端口和插件版本日志判断结果。
+
+## 6. 为什么暂不启用 MCP URL Elicitation
+
+MCP URL Elicitation 适合把密码、第三方授权等敏感交互导向模型不可见的安全网页。但标准要求服务器验证“打开 URL 的人”就是发起 MCP 请求的用户，并禁止把可直接冒用的预认证 URL 当作普通跳转地址。
+
+当前 AgentBridge 卡片使用短期、单次、用户绑定的 capability URL，并依赖私有宿主投递约束。它已经适合受控内网 PoC，但还没有独立的浏览器用户会话来抵抗链接转发。
+
+因此当前服务画像明确标记：
+
+```json
+{
+  "method": "mcp_url_elicitation",
+  "status": "deferred",
+  "reason": "requires independent browser-user identity binding"
+}
+```
+
+在完成以下任一方案前，不把当前卡片伪装成标准 URL Elicitation：
+
+- AgentBridge OAuth/OIDC 浏览器会话，并与 MCP `sub` 绑定；
+- 企业统一身份认证；
+- 等价的强身份配对与防重放机制。
+
+## 7. 尚未完成的一键接入
+
+当前已经减少客户端业务组件，但“添加 MCP 地址并授权”还不是完全一键：
+
+- 私网 IP HTTPS 仍需内部 CA 信任；
+- MCP 身份仍由管理员签发 Bearer，而不是标准 OAuth 2.1 授权流程；
+- OpenClaw 当前仍需要适配器才能获得 Telegram 内嵌卡片和自动续跑；
+- 尚未完成第二用户、第二台 Windows 和手机 CA 分发验证。
+
+后续优先级：
+
+1. 增加 MCP OAuth 2.1、Protected Resource Metadata 和浏览器身份绑定；
+2. 验证 MCP Apps 宿主的真实内嵌显示与自动续跑；
+3. 推动 OpenClaw 使用原生 MCP Apps 或等价宿主能力；
+4. 通过企业 PKI、GPO/MDM 或正式可信证书取消人工 CA 安装；
+5. 完成第二用户隔离和移动端验证。
+
+## 8. 验证命令
+
+```bash
+python -m unittest discover -s tests
+python -m compileall -q bscli
+python -m pip check
+```
+
+```bash
+cd integrations/mcp-app
+npm ci
+npm run check
+npm run build
+```
+
+```bash
+cd integrations/openclaw-agentbridge
+npm test
+```
+
+MCP Apps 规范说明见：
+
+- <https://modelcontextprotocol.io/extensions/apps/overview>
+- <https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation>
+- <https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization>

@@ -26,6 +26,32 @@ test("extracts a trusted interaction and withholds its URL from the model result
   assert.equal(JSON.stringify(toolResult()).includes(CARD_URL), true);
 });
 
+test("reads the MCP App private metadata envelope without leaking its URL", () => {
+  const privateEnvelope = interaction();
+  const result = {
+    content: [{ type: "text", text: "AgentBridge requires trusted interaction." }],
+    structuredContent: {
+      interaction: {
+        ...privateEnvelope,
+        presentation: {
+          ...privateEnvelope.presentation,
+          url: "[trusted AgentBridge URL withheld from model context]",
+        },
+      },
+    },
+    _meta: {
+      "io.agentbridge/interaction": privateEnvelope,
+    },
+  };
+
+  const processed = processToolResult(result, [CARD_ORIGIN]);
+
+  assert.equal(processed.interactions.length, 1);
+  assert.equal(processed.interactions[0].presentation.url, CARD_URL);
+  assert.equal(JSON.stringify(processed.result).includes(CARD_URL), false);
+  assert.equal(JSON.stringify(result).includes(CARD_URL), true);
+});
+
 test("rejects an interaction from an origin that was not explicitly trusted", () => {
   const processed = processToolResult(toolResult(), ["https://cards.example.test"]);
 
