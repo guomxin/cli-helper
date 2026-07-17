@@ -26,6 +26,12 @@ Security behavior is intentionally fail closed:
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
+- repeated `oa_session_login` calls for the same bound session and unchanged
+  authentication contract reuse the existing unexpired credential card and
+  interaction, including while the trusted page is processing;
+- only a successful credential resume that explicitly returns
+  `nextAction.type=retry_original_request` may queue a non-sensitive
+  continuation and wake the same private agent once;
 - background polling resumes a completed interaction once and delivers the
   next trusted card or a fixed terminal-status message through the original
   private channel without involving the model; an opaque heartbeat is retained
@@ -49,7 +55,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.6, ...)
+AgentBridge interaction plugin registered (version=0.1.7, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -85,13 +91,23 @@ interaction. After a trusted page is completed,
 background resume first sends the next trusted card directly through that same
 channel adapter, without exposing its URL or submitted values to the model.
 When no next card exists, success, rejection, expiry, and failure are reported
-as fixed host-owned status text through the same adapter. If either direct path
+as fixed host-owned status text through the same adapter.
+
+A successful credential resume with
+`nextAction.type=retry_original_request` is the deliberate exception to the
+model-free terminal path: the plugin sends the fixed status, enqueues a
+non-sensitive instruction to retry the original user request, and wakes that
+same private agent exactly once. Business-input and execution-authorization
+completion never infer this continuation.
+
+If either direct path
 is unavailable, an opaque private-session heartbeat is used as a fallback. The
 fallback wake reason is hook-prefixed so OpenClaw does not gate it on a non-empty
 `HEARTBEAT.md`; the event still contains no submitted values, credentials, or
 trusted-card URL. `/agentbridge pending` remains a manual redraw fallback. Set
-`wakeAgentOnComplete=false` only when provider policy forbids that heartbeat
-fallback.
+`wakeAgentOnComplete=false` only when provider policy forbids background model
+wake-ups. Direct card and status delivery still work, but credential completion
+then requires the user or host to retry the original request.
 
 In a private conversation, `/agentbridge status` reports safe diagnostics and
 `/agentbridge pending` redraws the latest unexpired trusted interaction.

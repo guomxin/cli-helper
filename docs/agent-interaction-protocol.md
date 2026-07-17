@@ -98,6 +98,12 @@ State handling is deliberately small:
 - `declined`, `expired`, `failed`, or `superseded`: stop and start a new
   interaction only when the user still wants the operation.
 
+For `credential` login, a repeated request with the same bound user, system,
+session, and authentication contract reuses the existing unexpired `pending`
+or `processing` challenge and its interaction. An expired challenge is replaced;
+a changed contract may supersede a pending challenge, while a mismatched
+processing challenge fails closed until that attempt finishes.
+
 ## Host Algorithm
 
 1. Invoke a business capability or session-ensure tool.
@@ -110,7 +116,12 @@ State handling is deliberately small:
    `agentbridge_interaction_resume(interaction_id)` once with a stable
    idempotency key.
 5. Render any new interaction returned by resume and repeat the same algorithm.
-6. Stop when the capability succeeds, fails, becomes unknown, or the user
+6. Only when a successful `credential` resume explicitly returns
+   `nextAction.type=retry_original_request`, enqueue one non-sensitive event in
+   the originating private conversation and schedule one agent turn to retry
+   the original request. Do not infer this from status text or apply it to other
+   interaction types.
+7. Stop when the capability succeeds, fails, becomes unknown, or the user
    declines the interaction.
 
 The resume tool cannot enter business fields or approve a plan. It can only
@@ -201,7 +212,11 @@ The plugin:
   completed interaction once with a stable idempotency key;
 - delivers a following interaction or terminal status directly through the
   originating private channel, with `/agentbridge pending` as a manual redraw;
-- uses an opaque model wake-up only when direct host delivery is unavailable.
+- after a successful credential resume explicitly requests
+  `retry_original_request`, queues one value-free continuation event and wakes
+  the same private agent once;
+- uses an opaque model wake-up only when ordinary direct host delivery is
+  unavailable; it never derives credential continuation from model text.
 
 `/agentbridge status` returns non-sensitive plugin diagnostics, while
 `/agentbridge pending` redraws the latest unexpired card. The plugin reuses the

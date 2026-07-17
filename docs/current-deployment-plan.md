@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-16
+> 文档日期：2026-07-17
 >
 > 适用阶段：单用户、受控公司内网、跨机器联调
 >
@@ -8,8 +8,8 @@
 
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
-> 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，业务字段卡和
-> 执行授权卡已在 Telegram WebView 实测；认证卡留待下一次自然登录时验收。
+> 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
+> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.7 已部署登录卡复用与登录后自动续办。
 
 ## 1. 方案结论
 
@@ -620,7 +620,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.6 已实现并链接安装；除私聊绑定、可信直投和历史卡片隔离外，还兼容 OpenClaw 2026.7.1 丢弃顶层 MCP `_meta` 的行为：只从已配置 AgentBridge MCP 服务的严格校验引用中后台取回私有交互；URL 不进入模型上下文 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.7 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用和登录成功后一次性续办；URL 与可信值不进入模型上下文 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
@@ -688,7 +688,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 用户在执行授权卡中选择取消。授权记录进入 `rejected`，`commit_operation_id` 和 `consumed_at` 均为空；本轮没有创建新的 `oa.business_trip.save_draft` 操作，也没有执行 OA 写入；
 - 插件 0.1.5 将操作审计记录中的旧 interaction 与当前交互分离：旧卡片 URL 仍被脱敏，但不会进入投递和轮询。Node `20/20`、Python `194 passed, 3 skipped` 和 npm pack dry-run 均通过；Gateway 重启后 PID `4200` 正常监听，深度 RPC 通过，启动日志确认加载 0.1.5；
 - OpenClaw 随后真实只调用一次 `agentbridge_operation_list(limit=3)`，成功返回 3 条记录且工具失败数为 0；日志没有新增中间件结果无效警告，也没有误捕获历史卡片。目标 Ubuntu 全量测试仍为 `194 passed, 1 skipped`，`compileall`、`pip check` 和 systemd 单元校验均通过；
-- 正式根 CA、Windows 原生 TLS、业务字段卡和执行授权卡已完成验收。认证卡使用同一 HTTPS Web App 通路并有自动测试覆盖，但为避免主动注销当前 OA 会话，正式点击验收留到下一次自然登录。
+- 正式根 CA、Windows 原生 TLS、业务字段卡和执行授权卡已完成验收。认证卡当时为避免主动注销当前 OA 会话而留待下一次自然登录，并已在 2026-07-17 的真实宿主验收中完成。
 
 ### 2026-07-17 远程 MCP 真实宿主验收一期
 
@@ -699,6 +699,16 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 用户提交字段后，插件自动轮询并恢复交互，直接投递执行授权卡；用户选择取消后，Telegram 收到固定 `DECLINED` 终态通知。生产库只读核验显示最新授权为 `rejected`、`commit_operation_id` 为空、`consumed_at` 为空，操作表没有 2026-07-17 新增的 `oa.business_trip.save_draft`，本轮没有 OA 写入；
 - 本轮把“真实私聊入站或 `/agentbridge pending`”固定为卡片验收路径；CLI `--deliver` 只用于工具和文本投递诊断，不再作为宿主卡片渲染证据；
 - 自动回归基线为 Node 插件 `24/24`、Python 3.12 全量 `197 passed, 3 skipped`；`npm pack --dry-run` 只包含 9 个声明文件，差异格式检查通过。
+
+### 2026-07-17 登录卡复用与登录后自动续办
+
+- 中央认证挑战存储增加原子 `create_or_reuse`：同一绑定用户、系统、会话和认证契约下，未过期的 `pending` 或 `processing` 挑战复用原 challenge、卡片 URL 与 interaction；过期挑战才换新，契约不匹配的处理中挑战继续失败关闭；
+- `oa_session_login` 将复用结果显式返回给宿主。重复请求不会再把用户正在填写的登录卡标成 `superseded`，也不会创建第二个轮询任务；
+- OpenClaw 插件 0.1.7 仅在 credential 恢复成功且中央服务明确返回 `nextAction.type=retry_original_request` 时，向原私聊写入一条不含凭据、字段、授权内容和卡片 URL 的续办事件，并用 `hook:agentbridge-login-completed` 唤醒同一智能体一次；业务字段卡和执行授权卡不会据此误续办；
+- 本地回归为 Python 3.12 `200 passed, 3 skipped, 19 subtests passed`、Node 插件 `25/25`；npm dry-run 仍只包含 9 个声明文件，差异格式检查通过；
+- 两个中央 Python 文件重新安装到 `10.10.50.213` 后完成 `compileall`，systemd 服务恢复 `active`。本机 OpenClaw Gateway 单次托管重启耗时约 167 秒，最终 PID `6972` 正常监听 18789，深度 RPC、配置审计通过，运行时确认插件 0.1.7 已加载并注册 5 个钩子；
+- 通过插件同款后台 MCP 客户端执行只读实机探针：`oa_session_status` 返回 active；`oa_session_login` 返回 `succeeded`、`reused=true`、无 interaction、无 next action，证明部署后当前有效 OA 会话不会重复发卡；
+- 为避免人为注销仍有效的 OA 会话，本轮没有强制制造过期。过期状态下的“同一卡复用 + 登录完成后自动重试原请求”已由中央服务和宿主自动测试固定，Telegram 真实端到端观察留到下一次自然过期时完成。
 
 ## 16. 后续演进顺序
 

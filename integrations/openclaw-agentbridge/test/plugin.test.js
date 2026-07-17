@@ -351,6 +351,100 @@ test("polls, resumes once, and queues only a non-sensitive host event", async ()
   assert.equal(harness.heartbeats.length, 0);
 });
 
+test("continues the original request once after credential login succeeds", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: { authenticated: true },
+        nextAction: { type: "retry_original_request" },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-login-continuation",
+    runId: "run-login-continuation",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-continuation",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["agentbridge_interaction_get", "agentbridge_interaction_resume"],
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].to, "7052061588");
+  assert.equal(harness.sentPayloads[0].payload.text.includes("AgentBridge"), true);
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[0].payload).includes(CARD_URL),
+    false,
+  );
+  assert.equal(harness.systemEvents.length, 1);
+  assert.equal(
+    harness.systemEvents[0].text.includes("继续处理触发本次登录的原始用户请求"),
+    true,
+  );
+  assert.equal(harness.systemEvents[0].text.includes(CARD_URL), false);
+  assert.equal(harness.systemEvents[0].options.sessionKey, sessionKey);
+  assert.equal(
+    harness.systemEvents[0].options.contextKey,
+    "agentbridge:continue:" + completed.interactionId,
+  );
+  assert.equal(harness.heartbeatRuns.length, 1);
+  assert.equal(
+    harness.heartbeatRuns[0].reason,
+    "hook:agentbridge-login-completed",
+  );
+  assert.equal(harness.heartbeats.length, 0);
+
+  const record = coordinator.records.get(completed.interactionId);
+  await coordinator.notify(
+    record,
+    "succeeded",
+    null,
+    [],
+    { resumeOriginalRequest: true },
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.systemEvents.length, 1);
+  assert.equal(harness.heartbeatRuns.length, 1);
+});
+
 test("proactively wakes the private agent and delivers the next trusted card", async () => {
   const harness = fakeApi({
     autoPoll: true,

@@ -261,6 +261,38 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 response["nextAction"]["interactionId"],
             )
 
+    def test_start_login_reuses_matching_unexpired_card_and_interaction(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+
+            first = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+                ttl_seconds=300,
+            )
+            second = service.start_login(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                card_base_url="http://127.0.0.1:8780",
+                ttl_seconds=300,
+            )
+
+            self.assertFalse(first["reused"])
+            self.assertTrue(second["reused"])
+            self.assertEqual(
+                second["challenge"]["challengeId"],
+                first["challenge"]["challengeId"],
+            )
+            self.assertEqual(
+                second["nextAction"]["cardUrl"],
+                first["nextAction"]["cardUrl"],
+            )
+            self.assertEqual(
+                second["interaction"]["interactionId"],
+                first["interaction"]["interactionId"],
+            )
+
     def test_start_login_reuses_live_active_session_without_card(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

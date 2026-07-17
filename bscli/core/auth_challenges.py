@@ -103,11 +103,74 @@ class AuthChallengeStore:
         expected_principal_ref: str | None = None,
         ttl_seconds: int = 300,
     ) -> dict:
+        challenge, _reused = self._create(
+            user_subject=user_subject,
+            system_id=system_id,
+            session_id=session_id,
+            origin=origin,
+            page_fingerprint=page_fingerprint,
+            nonce=nonce,
+            fields=fields,
+            card_base_url=card_base_url,
+            system_name=system_name,
+            expected_principal_ref=expected_principal_ref,
+            ttl_seconds=ttl_seconds,
+            reuse_active=False,
+        )
+        return challenge
+
+    def create_or_reuse(
+        self,
+        *,
+        user_subject: str,
+        system_id: str,
+        session_id: str,
+        origin: str,
+        page_fingerprint: str,
+        nonce: str | None,
+        fields: list[dict],
+        card_base_url: str,
+        system_name: str = "Legacy system",
+        expected_principal_ref: str | None = None,
+        ttl_seconds: int = 300,
+    ) -> tuple[dict, bool]:
+        return self._create(
+            user_subject=user_subject,
+            system_id=system_id,
+            session_id=session_id,
+            origin=origin,
+            page_fingerprint=page_fingerprint,
+            nonce=nonce,
+            fields=fields,
+            card_base_url=card_base_url,
+            system_name=system_name,
+            expected_principal_ref=expected_principal_ref,
+            ttl_seconds=ttl_seconds,
+            reuse_active=True,
+        )
+
+    def _create(
+        self,
+        *,
+        user_subject: str,
+        system_id: str,
+        session_id: str,
+        origin: str,
+        page_fingerprint: str,
+        nonce: str | None,
+        fields: list[dict],
+        card_base_url: str,
+        system_name: str,
+        expected_principal_ref: str | None,
+        ttl_seconds: int,
+        reuse_active: bool,
+    ) -> tuple[dict, bool]:
         if not user_subject or not system_id or not session_id:
             raise ValueError("challenge user, system, and session are required")
         normalized_origin = _validate_origin(origin)
         normalized_card_base_url = _validate_card_base_url(card_base_url)
         normalized_fields = _validate_fields(fields)
+        fields_json = _canonical_json(normalized_fields)
         if not page_fingerprint:
             raise ValueError("challenge page fingerprint is required")
         if ttl_seconds < 30 or ttl_seconds > 900:
@@ -119,15 +182,52 @@ class AuthChallengeStore:
         card_url = f"{normalized_card_base_url}/auth/{challenge_id}"
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            processing = connection.execute(
+            active_rows = connection.execute(
                 """
-                SELECT challenge_id FROM auth_challenges
-                WHERE session_id = ? AND state = 'processing'
+                SELECT * FROM auth_challenges
+                WHERE session_id = ? AND state IN ('pending', 'processing')
+                ORDER BY created_at DESC
                 """,
                 (session_id,),
-            ).fetchone()
+            ).fetchall()
+            active_rows = [
+                self._expire_if_needed(connection, row)
+                for row in active_rows
+            ]
+            active_rows = [
+                row
+                for row in active_rows
+                if row["state"] in {"pending", "processing"}
+            ]
+            reusable = next(
+                (
+                    row
+                    for row in active_rows
+                    if _challenge_contract_matches(
+                        row,
+                        user_subject=user_subject,
+                        system_id=system_id,
+                        system_name=system_name,
+                        expected_principal_ref=expected_principal_ref,
+                        origin=normalized_origin,
+                        page_fingerprint=page_fingerprint,
+                        fields_json=fields_json,
+                        card_base_url=normalized_card_base_url,
+                    )
+                ),
+                None,
+            )
+            if reuse_active and reusable is not None:
+                return _challenge_from_row(reusable), True
+
+            processing = next(
+                (row for row in active_rows if row["state"] == "processing"),
+                None,
+            )
             if processing is not None:
-                raise ChallengeStateError("an authentication challenge is already processing")
+                raise ChallengeStateError(
+                    "an authentication challenge is already processing"
+                )
             connection.execute(
                 """
                 UPDATE auth_challenges
@@ -156,7 +256,7 @@ class AuthChallengeStore:
                     normalized_origin,
                     page_fingerprint,
                     nonce or secrets.token_urlsafe(24),
-                    _canonical_json(normalized_fields),
+                    fields_json,
                     card_url,
                     _format_time(now),
                     _format_time(now),
@@ -164,7 +264,7 @@ class AuthChallengeStore:
                 ),
             )
             row = self._select(connection, challenge_id)
-        return _challenge_from_row(row)
+        return _challenge_from_row(row), False
 
     def get(self, challenge_id: str) -> dict:
         with self._connect() as connection:
@@ -318,6 +418,36 @@ class AuthChallengeStore:
             )
             return self._select(connection, row["challenge_id"])
         return row
+
+
+def _challenge_contract_matches(
+    row: sqlite3.Row,
+    *,
+    user_subject: str,
+    system_id: str,
+    system_name: str,
+    expected_principal_ref: str | None,
+    origin: str,
+    page_fingerprint: str,
+    fields_json: str,
+    card_base_url: str,
+) -> bool:
+    expected_card_parent = f"{card_base_url}/auth"
+    actual_card_parent = str(row["card_url"]).rsplit("/", 1)[0]
+    return all(
+        (
+            row["challenge_type"] == "legacy_form_login",
+            row["user_subject"] == user_subject,
+            row["system_id"] == system_id,
+            row["system_name"] == system_name,
+            str(row["expected_principal_ref"] or "")
+            == str(expected_principal_ref or ""),
+            row["origin"] == origin,
+            row["page_fingerprint"] == page_fingerprint,
+            row["fields_json"] == fields_json,
+            actual_card_parent == expected_card_parent,
+        )
+    )
 
 
 def _challenge_from_row(row: sqlite3.Row) -> dict:

@@ -48,7 +48,7 @@
       },
       "wakeAgentOnComplete": {
         "type": "boolean",
-        "description": "Request a model heartbeat containing only an opaque completion status so the next trusted card is delivered proactively.",
+        "description": "Allow non-sensitive background model wake-ups, including one original-request retry after a successful credential login.",
         "default": true
       }
     }

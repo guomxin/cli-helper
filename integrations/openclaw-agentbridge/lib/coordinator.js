@@ -268,6 +268,7 @@ export class InteractionCoordinator {
       sessionKey,
       runId,
       delivered: false,
+      continuationQueued: false,
       capturedAt: this.now(),
     };
     this.records.set(interaction.interactionId, record);
@@ -396,10 +397,23 @@ export class InteractionCoordinator {
       nextInteractions.length > 0 ? "next_interaction_required" : safeStatus(response),
       safeResponseErrorCode(response),
       nextInteractions,
+      {
+        resumeOriginalRequest: shouldResumeOriginalRequest(
+          record,
+          response,
+          nextInteractions,
+        ),
+      },
     );
   }
 
-  async notify(record, status, errorCode, nextInteractions = []) {
+  async notify(
+    record,
+    status,
+    errorCode,
+    nextInteractions = [],
+    { resumeOriginalRequest = false } = {},
+  ) {
     if (!record.sessionKey) {
       return;
     }
@@ -407,6 +421,33 @@ export class InteractionCoordinator {
       nextInteractions.length > 0 &&
       (await this.deliverInteractionsDirect(record.sessionKey, nextInteractions))
     ) {
+      return;
+    }
+    if (resumeOriginalRequest && this.config.wakeAgentOnComplete) {
+      if (record.continuationQueued) {
+        return;
+      }
+      record.continuationQueued = true;
+      await this.deliverStatusDirect(record.sessionKey, status, errorCode);
+      this.api.runtime.system.enqueueSystemEvent(
+        [
+          "AgentBridge 登录已完成。",
+          "继续处理触发本次登录的原始用户请求，并重新调用所需工具取得最新结果。",
+          "除非实时会话检查再次明确要求登录，否则不要重复调用登录工具。",
+          "不要索取或复述密码、业务字段、授权内容或可信卡片 URL。",
+        ].join(""),
+        {
+          sessionKey: record.sessionKey,
+          contextKey: `agentbridge:continue:${record.interaction.interactionId}`,
+        },
+      );
+      await this.wakeAgent(
+        record.sessionKey,
+        "hook:agentbridge-login-completed",
+      );
+      this.api.logger.info(
+        "AgentBridge original request continuation queued after login",
+      );
       return;
     }
     if (
@@ -535,11 +576,11 @@ export class InteractionCoordinator {
     return true;
   }
 
-  async wakeAgent(sessionKey) {
+  async wakeAgent(sessionKey, reason = "hook:agentbridge-interaction-updated") {
     const options = {
       // OpenClaw infers hook wake semantics from this prefix when the plugin
       // runtime's runHeartbeatOnce facade cannot forward an explicit source.
-      reason: "hook:agentbridge-interaction-updated",
+      reason,
       sessionKey,
       heartbeat: { target: "last" },
     };
@@ -642,6 +683,16 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
   }
   return details.structuredContent;
 }
+
+function shouldResumeOriginalRequest(record, response, nextInteractions) {
+  return Boolean(
+    record?.interaction?.type === "credential" &&
+      nextInteractions.length === 0 &&
+      safeStatus(response) === "succeeded" &&
+      response?.nextAction?.type === "retry_original_request",
+  );
+}
+
 function safeStatus(response) {
   const status = String(response?.status ?? "completed")
     .toLowerCase()

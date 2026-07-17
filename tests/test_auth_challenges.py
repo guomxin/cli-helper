@@ -110,6 +110,91 @@ class AuthChallengeStoreTests(unittest.TestCase):
             self.assertEqual(store.get(first["challenge_id"])["state"], "superseded")
             self.assertEqual(store.get(second["challenge_id"])["state"], "pending")
 
+    def test_matching_active_challenge_is_reused_while_pending_or_processing(self):
+        with TemporaryDirectory() as tmp:
+            store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
+
+            first, first_reused = store.create_or_reuse(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                origin="http://oa.example.test",
+                page_fingerprint="fingerprint",
+                nonce="nonce-a",
+                fields=_login_fields(),
+                card_base_url="http://127.0.0.1:8780",
+            )
+            pending, pending_reused = store.create_or_reuse(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                origin="http://oa.example.test",
+                page_fingerprint="fingerprint",
+                nonce="nonce-b",
+                fields=_login_fields(),
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertFalse(first_reused)
+            self.assertTrue(pending_reused)
+            self.assertEqual(pending["challenge_id"], first["challenge_id"])
+            self.assertEqual(pending["card_url"], first["card_url"])
+
+            csrf = store.issue_csrf(first["challenge_id"])
+            store.claim(
+                first["challenge_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            processing, processing_reused = store.create_or_reuse(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                origin="http://oa.example.test",
+                page_fingerprint="fingerprint",
+                nonce="nonce-c",
+                fields=_login_fields(),
+                card_base_url="http://127.0.0.1:8780",
+            )
+
+            self.assertTrue(processing_reused)
+            self.assertEqual(processing["challenge_id"], first["challenge_id"])
+            self.assertEqual(processing["state"], "processing")
+
+    def test_expired_challenge_is_replaced_instead_of_reused(self):
+        with TemporaryDirectory() as tmp:
+            clock = MutableClock(datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc))
+            store = AuthChallengeStore(Path(tmp) / "agentbridge.db", clock=clock)
+            first, _reused = store.create_or_reuse(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                origin="http://oa.example.test",
+                page_fingerprint="fingerprint",
+                nonce="nonce-a",
+                fields=_login_fields(),
+                card_base_url="http://127.0.0.1:8780",
+                ttl_seconds=60,
+            )
+
+            clock.value += timedelta(seconds=61)
+            second, reused = store.create_or_reuse(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                origin="http://oa.example.test",
+                page_fingerprint="fingerprint",
+                nonce="nonce-b",
+                fields=_login_fields(),
+                card_base_url="http://127.0.0.1:8780",
+                ttl_seconds=60,
+            )
+
+            self.assertFalse(reused)
+            self.assertNotEqual(second["challenge_id"], first["challenge_id"])
+            self.assertEqual(store.get(first["challenge_id"])["state"], "expired")
+            self.assertEqual(second["state"], "pending")
+
 
 def _login_fields() -> list[dict]:
     return [

@@ -351,7 +351,7 @@ class CentralCapabilityService:
         ttl_seconds: int,
     ) -> dict:
         contract = self.adapter.authentication_contract()
-        challenge = self.challenges.create(
+        challenge, reused = self.challenges.create_or_reuse(
             user_subject=session["user_subject"],
             system_id=session["system_id"],
             system_name=contract["system_name"],
@@ -378,7 +378,7 @@ class CentralCapabilityService:
                 "interaction": interaction,
             },
             "interaction": interaction,
-            "reused": False,
+            "reused": reused,
         }
 
     def get_operation(self, *, user_subject: str, operation_id: str) -> dict:
