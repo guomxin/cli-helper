@@ -43,6 +43,12 @@ auth_mode=central_session。中心运行时不存在旧路径自动回退。
 | 流程意见 | oa.workflow.opinions.list |
 | 出差申请字段收集与计划冻结 | oa.business_trip.prepare |
 | 出差申请保存待发 | oa.business_trip.save_draft |
+| 补签申请字段收集与计划冻结 | oa.missed_punch.prepare |
+| 补签申请保存待发 | oa.missed_punch.save_draft |
+| 补签待办审批意见收集与计划冻结 | oa.missed_punch.approval.prepare |
+| 补签待办审批通过 | oa.missed_punch.approve |
+| 会议字段收集、会议室预检与计划冻结 | oa.meeting.create.prepare |
+| 会议创建、发送与双重回读 | oa.meeting.create |
 
 ## 4. 尚待中心化的业务能力
 
@@ -51,10 +57,9 @@ auth_mode=central_session。中心运行时不存在旧路径自动回退。
 
 | 能力族 | 退役前实现线索 | 后续目标 |
 | --- | --- | --- |
-| 待办审批提交 | ContinueSubmit、意见清洗、动作可用性、提交后待办消失核验 | 按工作流实现 W2 prepare/authorize/commit/verify |
-| 会议创建 | 会议编辑页、会议正文保存、会议 AJAX、中文编码与创建后查询核验 | oa.meeting.create.* 中心能力 |
+| 其他待办审批提交 | 补签审批已中心化；其余流程仍需逐表单验证 ContinueSubmit、必填字段和回读规则 | 按工作流继续实现 prepare/authorize/commit/verify |
 | 会议邀请回复 | 会议详情、参加/不参加/待定、回复后回读 | oa.meeting.reply.* 中心能力 |
-| 通用申请单草稿 | 模板匹配、启动页检查、CAP4 字段、保存待发 | 每种申请单独立能力，不发布底层原子接口 |
+| 其他申请单草稿 | 出差、补签已中心化；其余模板仍需独立 CAP4 字段契约与保存回读 | 每种申请单独立能力，不发布底层原子接口 |
 | 事项矩阵 | 已发/已办/跟踪聚类、模板匹配、发起与接收处理覆盖度 | 基于中心列表离线分析并形成能力 backlog |
 | 写动作探索 | endpoint candidates、launch inspection、preflight、promotion evidence | 中心内部 inspector，不对智能体暴露任意请求 |
 | 附件、时间线和证据投影 | 详情页投影与附件元数据 | 扩展现有中心只读能力 |
@@ -73,7 +78,7 @@ daemon/extension 重新上线。迁移时只提取业务契约、样本和核验
 
 ## 6. 后续阶段
 
-1. 按价值和频率迁移审批、会议和高频申请单；
+1. 继续按价值和频率迁移其他审批、高频申请单和会议邀请回复；
 2. 为中心 Worker 增加受控内部探索器，替代旧 bridge 调试命令；
 3. 每迁移一个能力，从本清单删除对应缺口并补充真实环境证据；
 4. 完成第二用户隔离、真实手机网络和生产身份体系验证。

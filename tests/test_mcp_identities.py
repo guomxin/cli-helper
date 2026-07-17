@@ -87,6 +87,44 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             self.assertEqual(verified["scopes"], ["oa:read", "oa:write:draft"])
             self.assertIsNotNone(store.verify(issued["token"], required_scopes={"oa:read"}))
 
+    def test_approval_and_meeting_scopes_are_independent(self):
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            approval = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:approval"],
+            )
+            meeting = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:meeting"],
+            )
+
+            self.assertIsNotNone(
+                store.verify(
+                    approval["token"],
+                    required_scopes={"oa:write:approval"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(
+                    approval["token"],
+                    required_scopes={"oa:write:meeting"},
+                )
+            )
+            self.assertIsNotNone(
+                store.verify(
+                    meeting["token"],
+                    required_scopes={"oa:write:meeting"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(
+                    meeting["token"],
+                    required_scopes={"oa:write:approval"},
+                )
+            )
     def test_unsupported_scope_and_unsafe_subject_are_rejected(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

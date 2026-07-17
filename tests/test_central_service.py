@@ -12,7 +12,10 @@ from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
     SeeyonSessionCheckUnavailable,
 )
-from bscli.core.central_service import CentralCapabilityService
+from bscli.core.central_service import (
+    CentralCapabilityService,
+    capability_required_scopes,
+)
 from bscli.core.interactions import InteractionNotFound
 from bscli.core.session_secrets import SessionStateAccessDenied
 
@@ -21,6 +24,9 @@ BASE_URL = "http://oa.example.test/seeyon/main.do?method=main"
 
 
 class CentralCapabilityServiceTests(unittest.TestCase):
+    def test_unmapped_write_scope_policy_fails_closed(self):
+        with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
+            capability_required_scopes("oa.future.unmapped_write")
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
@@ -915,6 +921,162 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "submitted",
             )
 
+    def test_missed_punch_approval_field_card_freezes_affair_context(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.missed_punch.approval.prepare",
+                arguments={"affair_id": "affair-1"},
+            )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            interaction_id = started["interaction"]["interactionId"]
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=interaction_id,
+                ),
+                frozenset({"oa:write:approval"}),
+            )
+            submission = service.field_submissions.get(submission_id)
+            self.assertEqual(
+                submission["form_schema"]["_agentbridge_resume_arguments"],
+                {"affair_id": "affair-1"},
+            )
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values={"opinion": "同意"},
+            )
+
+            mismatched = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.missed_punch.approval.prepare",
+                arguments={
+                    "affair_id": "affair-2",
+                    "input_submission_id": submission_id,
+                },
+            )
+            self.assertEqual(mismatched["status"], "requires_user_action")
+            self.assertEqual(mismatched["error"]["code"], "FIELD_INPUT_UNAVAILABLE")
+
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "approve_missed_punch_request",
+                    "target": {"affair_id": "affair-1", "title": "补签申请"},
+                    "action_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"opinion": "同意"},
+                },
+                "summary": {"title": "审批补签申请", "system": "致远 OA", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_missed_punch_approval",
+                return_value=prepared_payload,
+            ) as prepare:
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.missed_punch.approval.prepare",
+                    arguments={
+                        "affair_id": "affair-1",
+                        "input_submission_id": submission_id,
+                    },
+                )
+
+            self.assertEqual(prepared["status"], "requires_user_action")
+            self.assertEqual(prepared["error"]["code"], "WRITE_AUTHORIZATION_REQUIRED")
+            self.assertEqual(
+                prepared["nextAction"]["then"]["capability"],
+                "oa.missed_punch.approve",
+            )
+            self.assertEqual(
+                prepare.call_args.args[2],
+                {"affair_id": "affair-1", "opinion": "同意"},
+            )
+
+    def test_meeting_interaction_uses_meeting_scope_and_generic_commit(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.meeting.create.prepare",
+                arguments={},
+            )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=started["interaction"]["interactionId"],
+                ),
+                frozenset({"oa:write:meeting"}),
+            )
+            fields = {
+                "subject": "智能体测试",
+                "room": "3号会议室",
+                "start_time": "2026-07-20 14:00",
+                "end_time": "2026-07-20 16:00",
+            }
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values=fields,
+            )
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "create_meeting",
+                    "target": {"room_id": "room-3", "room_name": "3号会议室"},
+                    "action_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": fields,
+                },
+                "summary": {"title": "创建并发送会议", "system": "致远 OA", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_meeting_create",
+                return_value=prepared_payload,
+            ):
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting.create.prepare",
+                    arguments={"input_submission_id": submission_id},
+                )
+            authorization_id = prepared["nextAction"]["authorizationId"]
+            authorization_interaction_id = prepared["interaction"]["interactionId"]
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=authorization_interaction_id,
+                ),
+                frozenset({"oa:write:meeting"}),
+            )
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def create(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {"meeting_created": True, "meeting_sent": True, "submitted_count": 1}
+
+            with patch("bscli.core.central_service.create_meeting", side_effect=create):
+                committed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting.create",
+                    arguments={"authorization_id": authorization_id},
+                )
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertTrue(committed["result"]["meeting_created"])
+            self.assertEqual(
+                service.write_authorizations.get(authorization_id)["state"],
+                "consumed",
+            )
     @staticmethod
     def _service(tmp, worker):
         return CentralCapabilityService(

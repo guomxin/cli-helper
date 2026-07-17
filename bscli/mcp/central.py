@@ -24,6 +24,16 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_SAVE_CAPABILITY,
 )
+from bscli.adapters.seeyon_meeting import (
+    MEETING_CREATE_CAPABILITY,
+    MEETING_PREPARE_CAPABILITY,
+)
+from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+    MISSED_PUNCH_APPROVE_CAPABILITY,
+    MISSED_PUNCH_PREPARE_CAPABILITY,
+    MISSED_PUNCH_SAVE_CAPABILITY,
+)
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
@@ -490,6 +500,199 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="oa_missed_punch_prepare",
+        title="Prepare OA Missed-Punch Draft",
+        meta=interaction_tool_meta(),
+        description=(
+            "Start trusted missed-punch field entry, or continue with its opaque "
+            "submission ID to validate the live form and create a draft-save confirmation."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_missed_punch_prepare(
+        ctx: Context,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            MISSED_PUNCH_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
+        name="oa_missed_punch_save_draft",
+        title="Save Authorized OA Missed-Punch Draft",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, save a wait-send missed-punch draft, "
+            "and verify it by server reload. It never submits the workflow."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_missed_punch_save_draft(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MISSED_PUNCH_SAVE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
+        name="oa_missed_punch_approval_prepare",
+        title="Prepare OA Missed-Punch Approval",
+        meta=interaction_tool_meta(),
+        description=(
+            "Bind one opaque pending affair ID, collect the opinion in a trusted card, "
+            "validate the exact missed-punch target, and create an approval confirmation."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_missed_punch_approval_prepare(
+        ctx: Context,
+        affair_id: Annotated[str, Field(min_length=1, max_length=256)],
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"affair_id": affair_id}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:approval"},
+        )
+
+    @mcp.tool(
+        name="oa_missed_punch_approve",
+        title="Approve Authorized OA Missed-Punch Request",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, approve the frozen missed-punch item, "
+            "and verify that it left the pending collection."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_missed_punch_approve(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MISSED_PUNCH_APPROVE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:approval"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_create_prepare",
+        title="Prepare OA Meeting Creation",
+        meta=interaction_tool_meta(),
+        description=(
+            "Collect meeting fields in a trusted card, resolve the room, check live "
+            "availability, and create a separate meeting-create confirmation."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_create_prepare(
+        ctx: Context,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            MEETING_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:meeting"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_create",
+        title="Create Authorized OA Meeting",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, recheck room availability, create and "
+            "send the meeting, then verify room-list and meeting-view readback."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_create(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MEETING_CREATE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:meeting"},
+        )
+
+    @mcp.tool(
         name="oa_session_status",
         title="Verify OA Session Status",
         description=(
@@ -584,19 +787,15 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         identity = _request_identity(identity_store)
-        current = await asyncio.to_thread(
-            service.get_interaction,
+        required_scopes = await asyncio.to_thread(
+            service.interaction_required_scopes,
             user_subject=identity["user_subject"],
             interaction_id=interaction_id,
         )
-        if current["interaction"]["type"] in {
-            "business_input",
-            "execution_authorization",
-        }:
-            identity = _request_identity(
-                identity_store,
-                required_scopes={"oa:write:draft"},
-            )
+        identity = _request_identity(
+            identity_store,
+            required_scopes=set(required_scopes),
+        )
         response = await asyncio.to_thread(
             service.resume_interaction,
             user_subject=identity["user_subject"],

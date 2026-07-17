@@ -30,6 +30,10 @@ class CentralMcpCliTests(unittest.TestCase):
                         "12",
                         "--scope",
                         "oa:write:draft",
+                        "--scope",
+                        "oa:write:approval",
+                        "--scope",
+                        "oa:write:meeting",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -47,7 +51,12 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(issued["identityToken"]["expectedPrincipalRef"], "Alice")
         self.assertEqual(
             issued["identityToken"]["scopes"],
-            ["oa:read", "oa:write:draft"],
+            [
+                "oa:read",
+                "oa:write:approval",
+                "oa:write:draft",
+                "oa:write:meeting",
+            ],
         )
         self.assertEqual(listed["count"], 1)
         self.assertNotIn("bearerToken", listed)

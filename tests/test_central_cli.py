@@ -10,14 +10,14 @@ from bscli.cli.main import main
 
 
 class CentralCliTests(unittest.TestCase):
-    def test_capability_list_exposes_reads_and_governed_business_trip_draft(self):
+    def test_capability_list_exposes_reads_and_governed_write_workflows(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
             exit_code = main(["--home", tmp, "capability", "list"])
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 8)
+        self.assertEqual(len(payload["capabilities"]), 14)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -28,6 +28,18 @@ class CentralCliTests(unittest.TestCase):
         self.assertEqual(
             capabilities["oa.business_trip.save_draft"]["effect"],
             "reversible_write",
+        )
+        self.assertEqual(
+            capabilities["oa.missed_punch.save_draft"]["effect"],
+            "reversible_write",
+        )
+        self.assertEqual(
+            capabilities["oa.missed_punch.approve"]["effect"],
+            "controlled_write",
+        )
+        self.assertEqual(
+            capabilities["oa.meeting.create"]["effect"],
+            "controlled_write",
         )
         prepare_schema = capabilities["oa.business_trip.prepare"]["input_schema"]
         self.assertEqual(

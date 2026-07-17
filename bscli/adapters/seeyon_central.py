@@ -14,6 +14,22 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_SAVE_CAPABILITY,
     BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_meeting import (
+    MEETING_CREATE_CAPABILITY,
+    MEETING_CREATE_INPUT_SCHEMA,
+    MEETING_PREPARE_CAPABILITY,
+    MEETING_PREPARE_INPUT_SCHEMA,
+)
+from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+    MISSED_PUNCH_APPROVAL_PREPARE_INPUT_SCHEMA,
+    MISSED_PUNCH_APPROVE_CAPABILITY,
+    MISSED_PUNCH_APPROVE_INPUT_SCHEMA,
+    MISSED_PUNCH_PREPARE_CAPABILITY,
+    MISSED_PUNCH_PREPARE_INPUT_SCHEMA,
+    MISSED_PUNCH_SAVE_CAPABILITY,
+    MISSED_PUNCH_SAVE_INPUT_SCHEMA,
+)
 from bscli.adapters.seeyon_system import SEEYON_OA_URL
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
@@ -196,6 +212,87 @@ def build_central_capability_registry() -> CapabilityRegistry:
             workflow="business-trip-draft-save-v1",
         )
     )
+    for spec in (
+        CapabilitySpec(
+            name=MISSED_PUNCH_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect missed-punch fields in a trusted card, validate the live OA "
+                "form, and create a separate draft-save authorization."
+            ),
+            input_schema=MISSED_PUNCH_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="missed-punch-draft-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=MISSED_PUNCH_SAVE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, save the frozen missed-punch plan "
+                "as an OA wait-send draft, and verify it without submitting approval."
+            ),
+            input_schema=MISSED_PUNCH_SAVE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="missed-punch-draft-save-v1",
+        ),
+        CapabilitySpec(
+            name=MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect an approval opinion in a trusted card, validate one exact "
+                "pending missed-punch item, and create a separate approval authorization."
+            ),
+            input_schema=MISSED_PUNCH_APPROVAL_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="missed-punch-approval-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=MISSED_PUNCH_APPROVE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, approve the frozen missed-punch "
+                "target, and verify that it left the pending collection."
+            ),
+            input_schema=MISSED_PUNCH_APPROVE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="missed-punch-approval-commit-v1",
+        ),
+        CapabilitySpec(
+            name=MEETING_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect meeting fields in a trusted card, resolve and validate room "
+                "availability, and create a separate meeting-create authorization."
+            ),
+            input_schema=MEETING_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="meeting-create-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=MEETING_CREATE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, recheck room availability, create "
+                "and send the meeting, then verify room-list and meeting-view readback."
+            ),
+            input_schema=MEETING_CREATE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="meeting-create-commit-v1",
+        ),
+    ):
+        registry.register(spec)
     for capability_name, collection in _WORKFLOW_LIST_CAPABILITIES.items():
         registry.register(
             CapabilitySpec(
@@ -493,6 +590,20 @@ class SeeyonCentralAdapter:
             "transport": "central_browser_session",
             "browser_bridge_used": False,
         }
+
+    def resolve_workflow_detail(
+        self,
+        worker,
+        *,
+        collection: str,
+        affair_id: str,
+    ) -> tuple[dict, dict]:
+        """Resolve one workflow for a process adapter without exposing its URL."""
+        return self._render_workflow_detail(
+            worker,
+            collection=_validated_collection(collection),
+            affair_id=_validated_identifier(affair_id, "affair_id"),
+        )
 
     def _fetch_workflow_collection(self, worker, collection: str) -> dict:
         self.list_templates(worker)

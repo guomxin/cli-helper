@@ -232,7 +232,12 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_token_issue.add_argument(
         "--scope",
         action="append",
-        choices=["oa:read", "oa:write:draft"],
+        choices=[
+            "oa:read",
+            "oa:write:draft",
+            "oa:write:approval",
+            "oa:write:meeting",
+        ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")
     mcp_token_list.add_argument("--user-subject")

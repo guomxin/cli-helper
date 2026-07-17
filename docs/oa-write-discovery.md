@@ -177,6 +177,39 @@ First launch-side expansion batch:
   `oa matter launch-*` sequence remains a migration oracle, not the target
   production protocol.
 
+### Current Central Expansion (2026-07-18)
+
+The second central expansion promotes two additional workflow families without
+restoring the retired bridge:
+
+- `【HR】补签申请单` launch uses template id `-8494358180075582561` and
+  CAP4 form app id `-3950641196724501449`. A read-only central-session probe
+  confirmed `field0007` start time, `field0008` end time, calculated
+  `field0009` duration, `field0010` location, `field0011` reason, and
+  `field0012` explanation. The exact reason options are `忘记打卡`,
+  `人脸识别有误`, and `其他`. `oa.missed_punch.prepare` collects values through
+  a trusted field card and freezes the live form contract;
+  `oa.missed_punch.save_draft` consumes a separate authorization, clicks only
+  `saveDraft_a`, and verifies the wait-send reload. `sendId_a` remains forbidden.
+- Received missed-punch approval is exposed as
+  `oa.missed_punch.approval.prepare` and `oa.missed_punch.approve`. The opaque
+  pending `affair_id` is frozen into the field interaction, the opinion is
+  collected outside the model conversation, the exact title and
+  `ContinueSubmit` availability are revalidated, and success requires pending
+  disappearance. The internal page binding is not an agent-facing command.
+- Meeting creation is exposed as `oa.meeting.create.prepare` and
+  `oa.meeting.create`. Prepare performs `meetingInfo`, `roomListInfo`, and
+  `validateRoomApps` checks without creating a meeting. After a separate trusted
+  authorization, commit repeats the room checks, saves the standard body with
+  ASCII-escaped JSON, sends through `meetingAjaxManager.send`, and requires both
+  room-list and `meetingView` readback. The initial public contract deliberately
+  uses the current OA user as the sole attendee; organization-picker expansion
+  remains separate work.
+
+All six capabilities use the encrypted per-user central browser session and
+report `browser_bridge_used=false`. The old `oa matter`, `oa launch`, and
+`oa meeting create execute` commands below are retained only as historical
+contract-discovery evidence and are not runnable/public production paths.
 - `【报销】差旅费审批报销单`: template id `-2046021869351779722`; outer launch
   shell matches the same collaboration save-draft pattern. Frame-aware rendered
   snapshots now expose the CAP4 business form text, and `business_form` reports
@@ -192,9 +225,10 @@ First launch-side expansion batch:
   `meetingAjaxManager.send`. The successful live validation case created a
   3# room meeting in one pass and verified `meetingInfo`, `meetingView`, room
   schedule description, and absence of the Seeyon body-count error. The matter
-  matrix now reports this as a special `direct_create_ready` module capability,
-  and the registry exposes `meeting_create_inspect`, `meeting_create_dry_run`,
-  and `meeting_create_execute` for agent use.
+  historical matter matrix reported this as `direct_create_ready`. Those
+  daemon-era command names now serve only as migration evidence; the current
+  agent surface is `oa.meeting.create.prepare` plus `oa.meeting.create` over the
+  central MCP runtime.
 
 The first promoted launch-page execution plan is save draft. `oa launch dry-run`
 validates requested fields and the `saveDraft` / "保存待发" control without

@@ -17,7 +17,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.adapter = SeeyonCentralAdapter(base_url=BASE_URL)
         self.worker = FakeWorkflowWorker()
 
-    def test_registry_exposes_reads_and_governed_business_trip_draft(self):
+    def test_registry_exposes_reads_and_governed_write_workflows(self):
         registry = build_central_capability_registry()
 
         names = [spec.name for spec in registry.list(system="oa")]
@@ -27,6 +27,12 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             [
                 "oa.business_trip.prepare",
                 "oa.business_trip.save_draft",
+                "oa.meeting.create",
+                "oa.meeting.create.prepare",
+                "oa.missed_punch.approval.prepare",
+                "oa.missed_punch.approve",
+                "oa.missed_punch.prepare",
+                "oa.missed_punch.save_draft",
                 "oa.template.list",
                 "oa.workflow.detail.get",
                 "oa.workflow.done.list",
@@ -44,11 +50,23 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             set(prepare.input_schema["properties"]),
             {"input_submission_id"},
         )
+        self.assertEqual(effects["oa.missed_punch.prepare"], "reversible_write")
+        self.assertEqual(effects["oa.missed_punch.save_draft"], "reversible_write")
+        self.assertEqual(effects["oa.missed_punch.approval.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.missed_punch.approve"], "controlled_write")
+        self.assertEqual(effects["oa.meeting.create.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.meeting.create"], "controlled_write")
         self.assertTrue(
             all(
-                effect == "read"
-                for name, effect in effects.items()
-                if not name.startswith("oa.business_trip.")
+                effects[name] == "read"
+                for name in {
+                    "oa.template.list",
+                    "oa.workflow.detail.get",
+                    "oa.workflow.done.list",
+                    "oa.workflow.opinions.list",
+                    "oa.workflow.pending.list",
+                    "oa.workflow.tracked.list",
+                }
             )
         )
 

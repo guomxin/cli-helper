@@ -147,6 +147,12 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_server_profile", names)
         self.assertIn("oa_business_trip_prepare", names)
         self.assertIn("oa_business_trip_save_draft", names)
+        self.assertIn("oa_missed_punch_prepare", names)
+        self.assertIn("oa_missed_punch_save_draft", names)
+        self.assertIn("oa_missed_punch_approval_prepare", names)
+        self.assertIn("oa_missed_punch_approve", names)
+        self.assertIn("oa_meeting_create_prepare", names)
+        self.assertIn("oa_meeting_create", names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
         prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
@@ -154,6 +160,10 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["destructiveHint"])
+        approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
+        create_meeting = next(tool for tool in tools if tool["name"] == "oa_meeting_create")
+        self.assertTrue(approve["annotations"]["destructiveHint"])
+        self.assertTrue(create_meeting["annotations"]["destructiveHint"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
         prepare_schema = prepare["inputSchema"]["properties"]
@@ -294,6 +304,81 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
         self.assertEqual(call["arguments"], {})
 
+    def test_approval_and_meeting_tools_enforce_separate_scopes(self):
+        with self._server() as (service, store, read_token, client):
+            approval_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:approval"],
+                ttl_seconds=3600,
+            )
+            meeting_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:meeting"],
+                ttl_seconds=3600,
+            )
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "mcp-write",
+                "operationId": "operation-1",
+                "status": "succeeded",
+                "result": {"submitted_count": 1},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            authorization_id = "a" * 32
+            read_denied = self._request(
+                client,
+                "tools/call",
+                request_id=31,
+                token=read_token,
+                params={
+                    "name": "oa_missed_punch_approve",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+            approval_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=32,
+                token=approval_identity["token"],
+                params={
+                    "name": "oa_missed_punch_approve",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+            approval_meeting_denied = self._request(
+                client,
+                "tools/call",
+                request_id=33,
+                token=approval_identity["token"],
+                params={
+                    "name": "oa_meeting_create",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+            meeting_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=34,
+                token=meeting_identity["token"],
+                params={
+                    "name": "oa_meeting_create",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+
+        self.assertTrue(read_denied.json()["result"]["isError"])
+        self.assertFalse(approval_allowed.json()["result"]["isError"])
+        self.assertTrue(approval_meeting_denied.json()["result"]["isError"])
+        self.assertFalse(meeting_allowed.json()["result"]["isError"])
+        self.assertEqual(
+            [call.kwargs["capability_name"] for call in service.invoke.call_args_list],
+            ["oa.missed_punch.approve", "oa.meeting.create"],
+        )
     def test_authenticated_tool_uses_server_bound_identity_and_shared_service(self):
         with self._server() as (service, _store, token, client):
             service.invoke.return_value = {
@@ -360,6 +445,9 @@ class CentralMcpTests(unittest.TestCase):
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:draft"],
                 ttl_seconds=3600,
+            )
+            service.interaction_required_scopes.return_value = frozenset(
+                {"oa:write:draft"}
             )
             service.get_interaction.return_value = {
                 "protocolVersion": "0.1",

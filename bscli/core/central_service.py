@@ -21,6 +21,29 @@ from bscli.adapters.seeyon_business_trip import (
     prepare_business_trip_draft,
     save_business_trip_draft,
 )
+from bscli.adapters.seeyon_meeting import (
+    MEETING_CREATE_CAPABILITY,
+    MEETING_FIELD_CARD_SCHEMA,
+    MEETING_PREPARE_CAPABILITY,
+    MeetingContractMismatch,
+    MeetingOutcomeUnknown,
+    create_meeting,
+    prepare_meeting_create,
+)
+from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+    MISSED_PUNCH_APPROVE_CAPABILITY,
+    MISSED_PUNCH_FIELD_CARD_SCHEMA,
+    MISSED_PUNCH_PREPARE_CAPABILITY,
+    MISSED_PUNCH_SAVE_CAPABILITY,
+    MissedPunchContractMismatch,
+    MissedPunchOutcomeUnknown,
+    approve_missed_punch_request,
+    prepare_missed_punch_approval,
+    prepare_missed_punch_draft,
+    save_missed_punch_draft,
+)
 from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
@@ -58,7 +81,77 @@ from bscli.core.write_authorizations import (
 
 
 WorkerFactory = Callable[[dict, SeeyonCentralAdapter], CentralBrowserWorker]
-BUSINESS_TRIP_INTERACTION_TTL_SECONDS = 1800
+TRUSTED_WRITE_INTERACTION_TTL_SECONDS = 1800
+
+_TRUSTED_WRITE_DEFINITIONS = {
+    BUSINESS_TRIP_PREPARE_CAPABILITY: {
+        "commit_capability": BUSINESS_TRIP_SAVE_CAPABILITY,
+        "field_schema": BUSINESS_TRIP_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_business_trip_draft",
+        "commit_function": "save_business_trip_draft",
+        "contract_error": BusinessTripContractMismatch,
+        "outcome_error": BusinessTripOutcomeUnknown,
+        "field_message": "Business-trip fields must be entered in the trusted field card.",
+        "authorization_message": "The business-trip draft plan requires confirmation in the trusted action card.",
+    },
+    MISSED_PUNCH_PREPARE_CAPABILITY: {
+        "commit_capability": MISSED_PUNCH_SAVE_CAPABILITY,
+        "field_schema": MISSED_PUNCH_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_missed_punch_draft",
+        "commit_function": "save_missed_punch_draft",
+        "contract_error": MissedPunchContractMismatch,
+        "outcome_error": MissedPunchOutcomeUnknown,
+        "field_message": "Missed-punch fields must be entered in the trusted field card.",
+        "authorization_message": "The missed-punch draft plan requires confirmation in the trusted action card.",
+    },
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: {
+        "commit_capability": MISSED_PUNCH_APPROVE_CAPABILITY,
+        "field_schema": MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
+        "context_fields": ("affair_id",),
+        "prepare_function": "prepare_missed_punch_approval",
+        "commit_function": "approve_missed_punch_request",
+        "contract_error": MissedPunchContractMismatch,
+        "outcome_error": MissedPunchOutcomeUnknown,
+        "field_message": "The missed-punch approval opinion must be entered in the trusted field card.",
+        "authorization_message": "The missed-punch approval plan requires confirmation in the trusted action card.",
+    },
+    MEETING_PREPARE_CAPABILITY: {
+        "commit_capability": MEETING_CREATE_CAPABILITY,
+        "field_schema": MEETING_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_meeting_create",
+        "commit_function": "create_meeting",
+        "contract_error": MeetingContractMismatch,
+        "outcome_error": MeetingOutcomeUnknown,
+        "field_message": "Meeting fields must be entered in the trusted field card.",
+        "authorization_message": "The meeting-create plan requires confirmation in the trusted action card.",
+    },
+}
+
+_TRUSTED_WRITE_COMMITS = {
+    definition["commit_capability"]: (prepare_capability, definition)
+    for prepare_capability, definition in _TRUSTED_WRITE_DEFINITIONS.items()
+}
+
+_CAPABILITY_SCOPES = {
+    BUSINESS_TRIP_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
+    BUSINESS_TRIP_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
+    MISSED_PUNCH_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
+    MISSED_PUNCH_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    MISSED_PUNCH_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
+    MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
+}
+
+
+def capability_required_scopes(capability_name: str) -> frozenset[str]:
+    try:
+        return _CAPABILITY_SCOPES[capability_name]
+    except KeyError as exc:
+        raise KeyError(f"write capability has no MCP scope policy: {capability_name}") from exc
 
 
 class CentralCapabilityService:
@@ -408,6 +501,33 @@ class CentralCapabilityService:
             "interaction": interaction,
         }
 
+    def interaction_required_scopes(
+        self,
+        *,
+        user_subject: str,
+        interaction_id: str,
+    ) -> frozenset[str]:
+        record = self.interactions.get(
+            interaction_id,
+            user_subject=user_subject,
+        )
+        resume_spec = record.get("resume_spec")
+        if not isinstance(resume_spec, dict) or resume_spec.get("kind") != "capability":
+            return frozenset({"oa:read"})
+        capability_name = str(resume_spec.get("capability") or "")
+        try:
+            spec = self.registry.get(capability_name)
+        except KeyError as exc:
+            raise InteractionIntegrityError(
+                "interaction resume capability is not registered"
+            ) from exc
+        if spec.effect == "read":
+            return frozenset({"oa:read"})
+        try:
+            return capability_required_scopes(capability_name)
+        except KeyError as exc:
+            raise InteractionIntegrityError(str(exc)) from exc
+
     def resume_interaction(
         self,
         *,
@@ -551,6 +671,7 @@ class CentralCapabilityService:
                 "kind": "capability",
                 "capability": submission["capability_name"],
                 "arguments": {
+                    **dict(schema.get("_agentbridge_resume_arguments") or {}),
                     "input_submission_id": submission["submission_id"],
                 },
             },
@@ -625,33 +746,38 @@ class CentralCapabilityService:
                     "Encrypted session state is missing.",
                 )
                 raise login_required_action(user_subject, expired_session)
-            business_trip_submission = None
+            prepare_definition = _TRUSTED_WRITE_DEFINITIONS.get(capability_name)
+            commit_definition = _TRUSTED_WRITE_COMMITS.get(capability_name)
+            field_submission = None
             effective_arguments = arguments
-            if capability_name == BUSINESS_TRIP_PREPARE_CAPABILITY:
-                business_trip_submission, effective_arguments = (
-                    self._resolve_business_trip_field_input(
-                        context=context,
-                        session=session,
-                        arguments=arguments,
-                    )
+            if prepare_definition is not None:
+                field_submission, effective_arguments = self._resolve_trusted_field_input(
+                    context=context,
+                    session=session,
+                    arguments=arguments,
+                    definition=prepare_definition,
                 )
             try:
                 with self.worker_factory(session, self.adapter) as worker:
                     worker.restore_session_state(state)
-                    if capability_name == BUSINESS_TRIP_PREPARE_CAPABILITY:
-                        result = self._prepare_business_trip(
+                    if prepare_definition is not None:
+                        result = self._prepare_trusted_write(
                             context=context,
                             session=session,
                             worker=worker,
                             arguments=effective_arguments,
-                            field_submission=business_trip_submission,
+                            field_submission=field_submission,
+                            definition=prepare_definition,
                         )
-                    elif capability_name == BUSINESS_TRIP_SAVE_CAPABILITY:
-                        result = self._save_business_trip(
+                    elif commit_definition is not None:
+                        prepare_capability, definition = commit_definition
+                        result = self._commit_trusted_write(
                             context=context,
                             session=session,
                             worker=worker,
                             arguments=arguments,
+                            prepare_capability=prepare_capability,
+                            definition=definition,
                         )
                     else:
                         result = self.adapter.invoke_capability(
@@ -675,7 +801,7 @@ class CentralCapabilityService:
                     diagnostics=str(exc),
                 ) from exc
 
-    def _prepare_business_trip(
+    def _prepare_trusted_write(
         self,
         *,
         context: CapabilityContext,
@@ -683,11 +809,21 @@ class CentralCapabilityService:
         worker: CentralBrowserWorker,
         arguments: dict,
         field_submission: dict,
+        definition: dict,
     ) -> dict:
-        prepared = prepare_business_trip_draft(self.adapter, worker, arguments)
+        prepare_function = globals().get(str(definition["prepare_function"]))
+        if not callable(prepare_function):
+            raise RuntimeError("trusted write prepare function is unavailable")
+        prepared = prepare_function(self.adapter, worker, arguments)
+        resume_arguments = dict(
+            field_submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
+            or {}
+        )
         plan = {
             **prepared["plan"],
             "user_subject": session["user_subject"],
+            "prepare_capability": context.spec.name,
+            "resume_arguments": resume_arguments,
             "session_binding": {
                 "session_id": session["session_id"],
                 "expected_principal_ref": session.get("expected_principal_ref"),
@@ -701,7 +837,7 @@ class CentralCapabilityService:
             or session.get("expected_principal_ref")
             or session["user_subject"],
         }
-        commit_spec = self.registry.get(BUSINESS_TRIP_SAVE_CAPABILITY)
+        commit_spec = self.registry.get(str(definition["commit_capability"]))
         authorization = self.write_authorizations.create(
             user_subject=session["user_subject"],
             system_id=session["system_id"],
@@ -712,7 +848,7 @@ class CentralCapabilityService:
             plan=plan,
             summary=summary,
             card_base_url=self.trusted_card_base_url,
-            ttl_seconds=BUSINESS_TRIP_INTERACTION_TTL_SECONDS,
+            ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
         )
         interaction = self._execution_authorization_interaction(authorization)
         try:
@@ -733,7 +869,7 @@ class CentralCapabilityService:
             raise ValueError(str(exc)) from exc
         raise RequiresUserAction(
             "WRITE_AUTHORIZATION_REQUIRED",
-            "The business-trip draft plan requires confirmation in the trusted action card.",
+            str(definition["authorization_message"]),
             next_action={
                 "type": "open_write_authorization_card",
                 "interactionId": interaction["interactionId"],
@@ -747,22 +883,34 @@ class CentralCapabilityService:
                     "fieldCount": len(summary.get("fields") or []),
                 },
                 "then": {
-                    "capability": BUSINESS_TRIP_SAVE_CAPABILITY,
+                    "capability": commit_spec.name,
                     "arguments": {"authorization_id": authorization["authorization_id"]},
                 },
                 "interaction": interaction,
             },
         )
 
-    def _resolve_business_trip_field_input(
+    def _resolve_trusted_field_input(
         self,
         *,
         context: CapabilityContext,
         session: dict,
         arguments: dict,
+        definition: dict,
     ) -> tuple[dict, dict]:
         submission_id = str(arguments.get("input_submission_id") or "").strip()
+        context_arguments = {
+            name: arguments[name]
+            for name in definition.get("context_fields") or ()
+            if name in arguments
+        }
+        if len(context_arguments) != len(definition.get("context_fields") or ()):
+            raise ValueError("trusted field input is missing its workflow target context")
         if not submission_id:
+            form_schema = {
+                **definition["field_schema"],
+                "_agentbridge_resume_arguments": context_arguments,
+            }
             submission = self.field_submissions.create(
                 user_subject=session["user_subject"],
                 system_id=session["system_id"],
@@ -770,15 +918,19 @@ class CentralCapabilityService:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 create_operation_id=context.operation_id,
-                form_schema=BUSINESS_TRIP_FIELD_CARD_SCHEMA,
+                form_schema=form_schema,
                 card_base_url=self.trusted_card_base_url,
-                ttl_seconds=BUSINESS_TRIP_INTERACTION_TTL_SECONDS,
+                ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
             )
-            raise self._field_input_required(submission)
+            raise self._field_input_required(submission, definition)
         try:
             submission = self.field_submissions.get(submission_id, include_values=True)
         except (FieldSubmissionNotFound, FieldSubmissionIntegrityError) as exc:
-            raise self._field_input_unavailable("not_found") from exc
+            raise self._field_input_unavailable(
+                "not_found",
+                context.spec.name,
+                context_arguments,
+            ) from exc
         bindings_match = all(
             (
                 submission["user_subject"] == session["user_subject"],
@@ -786,21 +938,38 @@ class CentralCapabilityService:
                 submission["session_id"] == session["session_id"],
                 submission["capability_name"] == context.spec.name,
                 submission["capability_version"] == context.spec.version,
+                submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
+                == context_arguments,
             )
         )
         if not bindings_match:
-            raise self._field_input_unavailable("binding_mismatch")
+            raise self._field_input_unavailable(
+                "binding_mismatch",
+                context.spec.name,
+                context_arguments,
+            )
         if submission["state"] == "pending":
-            raise self._field_input_required(submission)
+            raise self._field_input_required(submission, definition)
         if submission["state"] != "submitted" or not isinstance(submission.get("values"), dict):
-            raise self._field_input_unavailable(submission["state"])
-        return submission, submission["values"]
+            raise self._field_input_unavailable(
+                submission["state"],
+                context.spec.name,
+                context_arguments,
+            )
+        return submission, {**context_arguments, **submission["values"]}
 
-    def _field_input_required(self, submission: dict) -> RequiresUserAction:
+    def _field_input_required(self, submission: dict, definition: dict) -> RequiresUserAction:
         interaction = self._business_input_interaction(submission)
+        resume_arguments = {
+            **dict(
+                submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
+                or {}
+            ),
+            "input_submission_id": submission["submission_id"],
+        }
         return RequiresUserAction(
             "FIELD_INPUT_REQUIRED",
-            "Business-trip fields must be entered in the trusted field card.",
+            str(definition["field_message"]),
             next_action={
                 "type": "open_field_input_card",
                 "interactionId": interaction["interactionId"],
@@ -808,32 +977,38 @@ class CentralCapabilityService:
                 "cardUrl": submission["card_url"],
                 "expiresAt": submission["expires_at"],
                 "then": {
-                    "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
-                    "arguments": {"input_submission_id": submission["submission_id"]},
+                    "capability": submission["capability_name"],
+                    "arguments": resume_arguments,
                 },
                 "interaction": interaction,
             },
         )
 
     @staticmethod
-    def _field_input_unavailable(state: str) -> RequiresUserAction:
+    def _field_input_unavailable(
+        state: str,
+        prepare_capability: str,
+        resume_arguments: dict,
+    ) -> RequiresUserAction:
         return RequiresUserAction(
             "FIELD_INPUT_UNAVAILABLE",
             f"The trusted field submission is unavailable: {state}.",
             next_action={
                 "type": "prepare_again",
-                "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
-                "arguments": {},
+                "capability": prepare_capability,
+                "arguments": dict(resume_arguments),
             },
         )
 
-    def _save_business_trip(
+    def _commit_trusted_write(
         self,
         *,
         context: CapabilityContext,
         session: dict,
         worker: CentralBrowserWorker,
         arguments: dict,
+        prepare_capability: str,
+        definition: dict,
     ) -> dict:
         authorization_id = str(arguments.get("authorization_id") or "").strip()
         if not authorization_id:
@@ -862,18 +1037,19 @@ class CentralCapabilityService:
                     "interaction": interaction,
                 },
             )
+        plan = authorization["plan"]
         if authorization["state"] != "approved":
             raise RequiresUserAction(
                 "WRITE_AUTHORIZATION_UNAVAILABLE",
                 f"The write authorization is {authorization['state']}.",
                 next_action={
                     "type": "prepare_again",
-                    "capability": BUSINESS_TRIP_PREPARE_CAPABILITY,
+                    "capability": prepare_capability,
+                    "arguments": dict(plan.get("resume_arguments") or {}),
                 },
             )
-        plan = authorization["plan"]
-        if not self._business_trip_session_binding_matches(plan, session):
-            raise ValueError("the OA session changed after the business-trip plan was authorized")
+        if not self._trusted_write_session_binding_matches(plan, session):
+            raise ValueError("the OA session changed after the write plan was authorized")
 
         def enter_commit_boundary() -> None:
             self.write_authorizations.consume(
@@ -886,22 +1062,25 @@ class CentralCapabilityService:
                 commit_operation_id=context.operation_id,
             )
 
+        commit_function = globals().get(str(definition["commit_function"]))
+        if not callable(commit_function):
+            raise RuntimeError("trusted write commit function is unavailable")
         try:
-            return save_business_trip_draft(
+            return commit_function(
                 self.adapter,
                 worker,
                 plan,
                 enter_commit_boundary=enter_commit_boundary,
             )
-        except BusinessTripOutcomeUnknown as exc:
+        except definition["outcome_error"] as exc:
             raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
-        except BusinessTripContractMismatch as exc:
+        except definition["contract_error"] as exc:
             raise ValueError(str(exc)) from exc
         except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:
             raise ValueError(str(exc)) from exc
 
     @staticmethod
-    def _business_trip_session_binding_matches(plan: dict, session: dict) -> bool:
+    def _trusted_write_session_binding_matches(plan: dict, session: dict) -> bool:
         binding = plan.get("session_binding") if isinstance(plan.get("session_binding"), dict) else {}
         return all(
             (

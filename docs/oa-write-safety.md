@@ -13,6 +13,8 @@ authorization, deterministic execution, and server-backed readback.
 
 ## Safety Boundary
 
+### Current central controls
+
 - `oa.business_trip.prepare` and `oa.business_trip.save_draft` are the first
   central governed write pair. The initial `prepare {}` creates a trusted field
   card; dates, locations, reason, travel mode, supervisor choice, and optional
@@ -39,6 +41,37 @@ authorization, deterministic execution, and server-backed readback.
   request returned `reused=true` with the original draft IDs. The Chrome
   extension and localhost daemon were not used.
 
+- `oa.missed_punch.prepare` and `oa.missed_punch.save_draft` use the same
+  field-card -> live validation -> frozen plan -> authorization -> commit ->
+  readback state machine as business-trip drafts. The adapter accepts only the
+  registered CAP4 fields and reason values, never exposes calculated duration,
+  and cannot click the send control. Success requires wait-send reload plus
+  exact field readback and reports `workflow_submitted=false`.
+- `oa.missed_punch.approval.prepare` and `oa.missed_punch.approve` are a
+  process-specific received-workflow pair. The field card freezes the opaque
+  `affair_id` together with the opinion submission; changing the affair during
+  resume is rejected. The authorization summary identifies the item, sender,
+  date, and opinion. Commit revalidates the exact pending title, page affair,
+  approval action, opinion control, and submit entry before consuming the
+  authorization. Success requires pending disappearance. Any post-boundary
+  ambiguity is durable `RESULT_UNKNOWN`, never an automatic retry.
+- `oa.meeting.create.prepare` and `oa.meeting.create` form a controlled-write
+  pair. Prepare resolves one room and performs local overlap plus OA
+  `validateRoomApps` checks. Commit repeats both checks immediately before the
+  first mutation, consumes authorization before body save, sends only the
+  frozen subject/room/time plan, and verifies both room schedule and
+  `meetingView`. Chinese JSON is ASCII-escaped before URL encoding to preserve
+  the one-pass body binding validated in the historical live test.
+- MCP write scopes are independent: drafts require `oa:write:draft`, approvals
+  require `oa:write:approval`, and meeting creation requires
+  `oa:write:meeting`. Completing a trusted card does not widen the caller's
+  token; interaction resume resolves and checks the original capability scope.
+
+### Retired runtime reference
+
+The remaining command inventory in this section documents migration evidence
+from commit `2d6a06b`. It is not installed by the current CLI/MCP runtime and
+must not be restored as a fallback path.
 - `oa detail actions --url <url>` reads a rendered detail page and extracts
   candidate write actions from page scripts.
 - `oa pending actions --limit N` reads pending items, opens their detail pages,
@@ -178,11 +211,13 @@ authorization, deterministic execution, and server-backed readback.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Central business-trip `save_draft`, legacy launch-page `SaveDraft`,
-collaboration `ContinueSubmit`, meeting reply, and direct meeting creation are
-the executable actions at this stage. Central business-trip send/submit,
-reject, archive, delete, revoke, return, upload, generic send, and other write
-actions remain blocked until each has a dedicated mapping and tests.
+Current central executable capabilities are business-trip draft save,
+missed-punch draft save, missed-punch approval, and meeting creation. Each is
+available only through its workflow-specific trusted interaction pair. Business
+trip or missed-punch send/submit, other workflow approvals, meeting invitation
+reply, reject, archive, delete, revoke, return, upload, generic send, and other
+writes remain unavailable until they have a dedicated central mapping, tests,
+and a separately confirmed live acceptance case.
 
 `Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
 may call `oa write dry-run --affair-id <id> --action Archive` to prove the
