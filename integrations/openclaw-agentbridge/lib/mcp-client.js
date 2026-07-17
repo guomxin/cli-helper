@@ -100,10 +100,10 @@ export function parseMcpResponse(raw) {
 }
 
 export function extractToolPayload(result) {
+  let payload = result;
   if (result && typeof result.structuredContent === "object") {
-    return result.structuredContent;
-  }
-  if (Array.isArray(result?.content)) {
+    payload = result.structuredContent;
+  } else if (Array.isArray(result?.content)) {
     for (const block of result.content) {
       if (block?.type !== "text" || typeof block.text !== "string") {
         continue;
@@ -113,15 +113,25 @@ export function extractToolPayload(result) {
         continue;
       }
       try {
-        return JSON.parse(text);
+        payload = JSON.parse(text);
+        break;
       } catch {
         continue;
       }
     }
   }
-  return result;
+  if (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    result?._meta &&
+    typeof result._meta === "object" &&
+    !Array.isArray(result._meta)
+  ) {
+    return { ...payload, _meta: result._meta };
+  }
+  return payload;
 }
-
 function resolveHeader(headers, name, env) {
   const pair = Object.entries(headers).find(
     ([key]) => key.toLowerCase() === name.toLowerCase(),

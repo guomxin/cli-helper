@@ -185,6 +185,10 @@ runtime path is the installable native plugin under
 The plugin:
 
 - recognizes only `agentbridge.interaction.v1` and the three declared types;
+- consumes host-private MCP result metadata when the host preserves it; when
+  OpenClaw 2026.7.1 drops top-level result `_meta`, it accepts only a strictly
+  validated public reference from the configured AgentBridge MCP server and
+  retrieves the private envelope with its authenticated background client;
 - accepts card URLs only from explicitly configured exact origins;
 - removes the short-lived card URL before the MCP result reaches the model;
 - renders cards only in private OpenClaw sessions, never groups or channels;
@@ -247,7 +251,30 @@ inbound validation with the formal internal CA:
   tool call, zero failures, no new invalid-middleware warning, and no historical
   card capture.
 
-The formal HTTPS credential-card click remains intentionally deferred until
-the next natural login so the active OA session is not invalidated only for a
-test. The same card type and HTTPS Web App mapping remain covered by automated
-tests.
+At the 2026-07-16 checkpoint, the formal HTTPS credential-card click remained
+deferred until the next natural login so the active OA session was not
+invalidated only for a test. The same card type and HTTPS Web App mapping were
+covered by automated tests.
+
+On 2026-07-17, plugin 0.1.6 completed the first remote-MCP real-host
+acceptance against OpenClaw 2026.7.1 and Telegram Desktop:
+
+- the installed host was confirmed to discard top-level MCP result `_meta`;
+  the plugin hydrated the private envelope only after validating the public
+  reference, configured MCP server identity, interaction state, resource URI,
+  expiry, and trusted origin;
+- an HTTPS credential card completed OA login without placing credentials or
+  its capability URL in model-visible output;
+- `oa_business_trip_prepare` produced a nine-field card; because the synthetic
+  `openclaw agent --deliver` path delivered text without the normal inbound
+  presentation attachment, `/agentbridge pending` safely redrew the already
+  captured card in the same Telegram private conversation;
+- submitting the fields caused background resume to deliver the following
+  execution-authorization card directly, and cancelling it produced the fixed
+  `DECLINED` terminal notification;
+- the authoritative authorization row was `rejected`, with no commit operation
+  and no consumption; the operation ledger contained no new
+  `oa.business_trip.save_draft` entry for this acceptance run;
+- Node plugin tests passed 24/24, the Python 3.12 repository suite passed 197
+  with 3 expected skips, and the package dry run contained only 9 declared
+  files.

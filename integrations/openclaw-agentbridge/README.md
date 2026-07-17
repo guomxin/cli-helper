@@ -10,7 +10,12 @@ MCP Apps rendering, private-session binding, polling, and resume behavior; it
 is not a dependency of the central OA business implementation. The plugin can
 read the full envelope from host-private
 `CallToolResult._meta["io.agentbridge/interaction"]`, while the model-visible
-result contains only the redacted interaction status.
+result contains only the redacted interaction status. OpenClaw 2026.7.1 drops
+top-level MCP result `_meta` while materializing remote tools, so the adapter
+also recognizes a strictly validated public interaction reference and uses its
+authenticated background MCP client to retrieve the private envelope. This
+fallback is accepted only from the configured AgentBridge MCP server and never
+copies the trusted URL into model-visible content.
 
 Security behavior is intentionally fail closed:
 
@@ -44,7 +49,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.5, ...)
+AgentBridge interaction plugin registered (version=0.1.6, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -90,6 +95,14 @@ fallback.
 
 In a private conversation, `/agentbridge status` reports safe diagnostics and
 `/agentbridge pending` redraws the latest unexpired trusted interaction.
+
+For acceptance testing, use a real inbound message from the target private
+conversation. `openclaw agent --deliver` can execute the MCP tool and deliver
+the model's text while bypassing the normal inbound reply path that attaches a
+host presentation, so a text-only result from that command is not evidence that
+card rendering failed. If an interaction is already captured, use
+`/agentbridge pending` in the same private conversation to redraw it without
+creating a second operation.
 
 `oa_session_status` live-verifies an active OA session but never creates a card.
 Its `checkedAt` value is the current liveness-check time; `lastVerifiedAt`

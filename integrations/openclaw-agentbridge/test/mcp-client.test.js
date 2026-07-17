@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   createAgentBridgeMcpClient,
+  extractToolPayload,
   parseMcpResponse,
 } from "../lib/mcp-client.js";
 
@@ -66,6 +67,22 @@ test("does not create a polling client when the bearer environment value is abse
   assert.equal(client, null);
 });
 
+test("preserves host-private metadata beside the structured tool payload", () => {
+  const privateInteraction = {
+    interactionId: "interaction-private-123456",
+    presentation: { url: "https://cards.example.test/auth/opaque-token" },
+  };
+  const payload = extractToolPayload({
+    structuredContent: { status: "requires_user_action" },
+    _meta: { "io.agentbridge/interaction": privateInteraction },
+  });
+
+  assert.equal(payload.status, "requires_user_action");
+  assert.equal(
+    payload._meta["io.agentbridge/interaction"],
+    privateInteraction,
+  );
+});
 test("parses Streamable HTTP SSE data responses", () => {
   const parsed = parseMcpResponse(
     'event: message\ndata: {"jsonrpc":"2.0","id":"1","result":{"ok":true}}\n\n',

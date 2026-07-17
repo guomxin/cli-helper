@@ -591,7 +591,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - [x] 8780/8790 均使用私网 IP HTTPS，证书链通过校验且明文 HTTP 被拒绝；
 - [x] 根私钥仅以 Windows 当前用户 DPAPI 密文保存，Linux 只部署叶证书和叶私钥；
 - [x] 正式根 CA 已由用户确认导入 Windows 当前用户根证书库；Windows 原生 TLS、业务字段卡和执行授权卡的 Telegram WebView 已验收；
-- [ ] 正式 HTTPS 认证卡留待下一次自然 OA 登录时完成 Telegram WebView 点击验收；
+- [x] 正式 HTTPS 认证卡已于 2026-07-17 在 Telegram 私聊完成点击和登录验收；
 - [x] MCP 启动 JSON 中 URL 与实际 IP、端口完全一致；
 - [x] OpenClaw 能通过 Bearer Token 读取 MCP 工具列表；
 - [x] 原生 OpenClaw 插件已在 2026.7.1 本机运行时加载并注册安全中间件；
@@ -620,7 +620,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.5 已实现并链接安装；通过 `before_tool_call` 按 `toolCallId` 绑定私聊会话并记录可信投递路由，可信页面完成后优先通过原 Telegram 通道直接投递下一张卡或固定终态消息；审计历史中的旧卡片只脱敏、不捕获，HTTPS 来源白名单需显式配置 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.6 已实现并链接安装；除私聊绑定、可信直投和历史卡片隔离外，还兼容 OpenClaw 2026.7.1 丢弃顶层 MCP `_meta` 的行为：只从已配置 AgentBridge MCP 服务的严格校验引用中后台取回私有交互；URL 不进入模型上下文 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
@@ -690,10 +690,19 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - OpenClaw 随后真实只调用一次 `agentbridge_operation_list(limit=3)`，成功返回 3 条记录且工具失败数为 0；日志没有新增中间件结果无效警告，也没有误捕获历史卡片。目标 Ubuntu 全量测试仍为 `194 passed, 1 skipped`，`compileall`、`pip check` 和 systemd 单元校验均通过；
 - 正式根 CA、Windows 原生 TLS、业务字段卡和执行授权卡已完成验收。认证卡使用同一 HTTPS Web App 通路并有自动测试覆盖，但为避免主动注销当前 OA 会话，正式点击验收留到下一次自然登录。
 
+### 2026-07-17 远程 MCP 真实宿主验收一期
+
+- 运行时检查确认 OpenClaw 2026.7.1 会在远程工具物化时丢弃顶层 MCP 结果 `_meta`。插件 0.1.6 因此新增受限回取：只接受由已配置 AgentBridge MCP 服务产生、仍处于活动状态且声明宿主管理和 MCP App 资源的脱敏引用，再通过带原身份凭据的后台 MCP 客户端取得私有交互；交互 ID、类型、状态、有效期和 HTTPS 来源必须再次一致，否则失败关闭；
+- Gateway 完成真实进程重启后以 PID `27052` 监听 18789，深度 RPC、配置审计和插件运行时检查通过；启动日志确认 0.1.6 已加载，注册 5 个钩子和 `/agentbridge` 命令；
+- HTTPS 认证卡完成真实 OA 登录，后台记录认证交互成功，凭据和短期卡片 URL 均未进入模型可见结果；
+- `oa_business_trip_prepare` 生成 9 字段业务卡。合成的 `openclaw agent --deliver` 调用虽执行了工具并投递模型文本，但不等价于 Telegram 正常入站回复链路；同一私聊中的 `/agentbridge pending` 成功重绘已捕获卡片，且没有创建第二个业务操作；
+- 用户提交字段后，插件自动轮询并恢复交互，直接投递执行授权卡；用户选择取消后，Telegram 收到固定 `DECLINED` 终态通知。生产库只读核验显示最新授权为 `rejected`、`commit_operation_id` 为空、`consumed_at` 为空，操作表没有 2026-07-17 新增的 `oa.business_trip.save_draft`，本轮没有 OA 写入；
+- 本轮把“真实私聊入站或 `/agentbridge pending`”固定为卡片验收路径；CLI `--deliver` 只用于工具和文本投递诊断，不再作为宿主卡片渲染证据；
+- 自动回归基线为 Node 插件 `24/24`、Python 3.12 全量 `197 passed, 3 skipped`；`npm pack --dry-run` 只包含 9 个声明文件，差异格式检查通过。
+
 ## 16. 后续演进顺序
 
-1. 在下一次自然 OA 登录时完成正式 HTTPS 认证卡的 Telegram WebView 点击验收，不为测试主动注销当前会话；
-2. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
-3. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
-4. 再扩充工作流写能力，并逐流程完成真实回读验证；
-5. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。
+1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
+2. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
+3. 再扩充工作流写能力，并逐流程完成真实回读验证；
+4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。

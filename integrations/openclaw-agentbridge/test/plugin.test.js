@@ -6,6 +6,7 @@ import {
   CARD_ORIGIN,
   CARD_URL,
   interaction,
+  openClawPublicResult,
   operationAuditResult,
   toolResult,
 } from "./fixtures.js";
@@ -120,6 +121,85 @@ test("binds a real Telegram direct session before middleware and injects its car
   assert.deepEqual(harness.middlewareOptions, { runtimes: ["openclaw"] });
 });
 
+test("hydrates a trusted card when OpenClaw drops private MCP result metadata", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const calls = [];
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      return toolResult();
+    },
+  };
+  registerAgentBridgeInteractions(harness.api, { mcpClient: client });
+  bindToolCall(harness, {
+    toolCallId: "tool-hydrate",
+    runId: "run-hydrate",
+    sessionKey: "agent:main:telegram:direct:7052061588",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-hydrate",
+      toolName: "agentbridge__oa_session_login",
+      result: openClawPublicResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(replacement, undefined);
+  assert.deepEqual(calls, [
+    {
+      name: "agentbridge_interaction_get",
+      arguments_: { interaction_id: "interaction-1234567890" },
+    },
+  ]);
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "run-hydrate",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      channel: "telegram",
+      payload: { text: "complete login" },
+    },
+    {
+      channelId: "telegram",
+      sessionKey: "agent:main:telegram:direct:7052061588",
+      runId: "run-hydrate",
+    },
+  );
+  assert.equal(reply.payload.presentation.blocks.at(-1).buttons[0].url, CARD_URL);
+});
+
+test("does not hydrate a public interaction reference from another MCP server", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  let calls = 0;
+  const client = {
+    async callTool() {
+      calls += 1;
+      return toolResult();
+    },
+  };
+  registerAgentBridgeInteractions(harness.api, { mcpClient: client });
+  bindToolCall(harness, {
+    toolCallId: "tool-spoof",
+    runId: "run-spoof",
+    sessionKey: "agent:main:telegram:direct:7052061588",
+  });
+  const result = openClawPublicResult();
+  result.details.mcpServer = "untrusted-server";
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-spoof",
+      toolName: "untrusted__oa_session_login",
+      result,
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(replacement, undefined);
+  assert.equal(calls, 0);
+});
 test("never renders a captured card in a group session", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });

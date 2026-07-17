@@ -1,5 +1,7 @@
 export const CARD_ORIGIN = "http://10.10.50.213:8780";
 export const CARD_URL = `${CARD_ORIGIN}/auth/opaque-card-token`;
+export const SERVER_WITHHELD_URL =
+  "[trusted AgentBridge URL withheld from model context]";
 
 export function interaction(overrides = {}) {
   const base = {
@@ -53,6 +55,35 @@ export function toolResult(envelope = interaction()) {
   };
 }
 
+export function openClawPublicResult(envelope = interaction()) {
+  const publicEnvelope = structuredClone(envelope);
+  publicEnvelope.presentation = {
+    ...publicEnvelope.presentation,
+    preferred: "mcp_app",
+    fallback: "host_adapter",
+    url: SERVER_WITHHELD_URL,
+    uiResourceUri: "ui://agentbridge/trusted-interaction.html",
+    hostHandled: true,
+  };
+  const structuredContent = {
+    protocolVersion: "0.1",
+    status: "requires_user_action",
+    interaction: publicEnvelope,
+  };
+  return {
+    content: [
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+      },
+    ],
+    details: {
+      mcpServer: "agentbridge",
+      mcpTool: "oa_session_login",
+      structuredContent,
+    },
+  };
+}
 export function operationAuditResult(envelope = interaction()) {
   const payload = {
     protocolVersion: "0.1",

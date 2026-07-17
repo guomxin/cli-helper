@@ -2,6 +2,10 @@ import { normalizeHttpOrigin, isRecord } from "./config.js";
 
 export const INTERACTION_SCHEMA_VERSION = "agentbridge.interaction.v1";
 export const WITHHELD_URL = "[trusted AgentBridge card URL withheld by OpenClaw host]";
+export const SERVER_WITHHELD_URL =
+  "[trusted AgentBridge URL withheld from model context]";
+
+const MCP_APP_RESOURCE_URI = "ui://agentbridge/trusted-interaction.html";
 
 const INTERACTION_TYPES = new Set([
   "credential",
@@ -107,6 +111,72 @@ export function collectInteractions(value, allowedOrigins, options = {}) {
   return [...interactions.values()];
 }
 
+export function collectPublicInteractionReferences(value) {
+  const references = new Map();
+  const visited = new WeakSet();
+  let visitedNodes = 0;
+
+  function walk(current, depth) {
+    if (depth > MAX_WALK_DEPTH || visitedNodes >= MAX_WALK_NODES) {
+      return;
+    }
+    visitedNodes += 1;
+
+    if (typeof current === "string") {
+      const parsed = parseJsonText(current);
+      if (parsed !== null) {
+        walk(parsed, depth + 1);
+      }
+      return;
+    }
+    if (typeof current !== "object" || current === null || visited.has(current)) {
+      return;
+    }
+    visited.add(current);
+
+    const reference = normalizePublicInteractionReference(current);
+    if (reference) {
+      references.set(reference.interactionId, reference);
+      return;
+    }
+    const entries = Array.isArray(current)
+      ? current.entries()
+      : Object.entries(current);
+    for (const [key, child] of entries) {
+      if (HISTORICAL_INTERACTION_CONTAINERS.has(String(key))) {
+        continue;
+      }
+      walk(child, depth + 1);
+    }
+  }
+
+  walk(value, 0);
+  return [...references.values()];
+}
+
+function normalizePublicInteractionReference(value) {
+  if (!isRecord(value) || value.schemaVersion !== INTERACTION_SCHEMA_VERSION) {
+    return null;
+  }
+  const interactionId = safeString(value.interactionId, 128);
+  const type = safeString(value.type, 64);
+  const state = safeString(value.state, 64);
+  const presentation = value.presentation;
+  if (
+    interactionId.length < 16 ||
+    !INTERACTION_TYPES.has(type) ||
+    !["pending", "processing"].includes(state) ||
+    !isRecord(presentation) ||
+    presentation.owner !== "agentbridge" ||
+    presentation.modelMustNotCollectValues !== true ||
+    presentation.hostHandled !== true ||
+    presentation.url !== SERVER_WITHHELD_URL ||
+    presentation.uiResourceUri !== MCP_APP_RESOURCE_URI
+  ) {
+    return null;
+  }
+  return Object.freeze({ interactionId, type, state });
+}
 export function normalizeInteraction(value, allowedOrigins) {
   if (!isRecord(value) || value.schemaVersion !== INTERACTION_SCHEMA_VERSION) {
     return null;

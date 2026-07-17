@@ -1,5 +1,6 @@
 import {
   buildPresentation,
+  collectPublicInteractionReferences,
   isInteractionExpired,
   isPrivateSessionKey,
   processToolResult,
@@ -15,6 +16,7 @@ const MAX_INTERACTIONS = 100;
 const MAX_POLL_ERRORS = 5;
 const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
+const MAX_HYDRATION_REFERENCES = 3;
 
 export class InteractionCoordinator {
   constructor({ api, config, mcpClient = null, sleep = defaultSleep, now = Date.now }) {
@@ -67,14 +69,37 @@ export class InteractionCoordinator {
       event.result,
       this.config.allowedCardOrigins,
     );
-    if (!processed.sanitized) {
-      return undefined;
+    if (processed.sanitized) {
+      this.captureInteractions(processed.interactions, binding, context);
+      return { result: processed.result };
     }
 
+    const publicPayload = trustedAgentBridgeStructuredContent(
+      event.result,
+      this.config.mcpServerName,
+    );
+    if (!publicPayload) {
+      return undefined;
+    }
+    const references = collectPublicInteractionReferences(publicPayload).slice(
+      0,
+      MAX_HYDRATION_REFERENCES,
+    );
+    if (references.length === 0) {
+      return undefined;
+    }
+    return this.hydratePublicInteractionReferences(
+      references,
+      binding,
+      context,
+    );
+  }
+
+  captureInteractions(interactions, binding, context) {
     const sessionKey = binding?.sessionKey || context.sessionKey;
     const runId = binding?.runId || context.runId;
     const privateSession = isPrivateSessionKey(sessionKey);
-    for (const interaction of processed.interactions) {
+    for (const interaction of interactions) {
       if (!privateSession) {
         this.api.logger.warn(
           sessionKey
@@ -93,9 +118,63 @@ export class InteractionCoordinator {
       );
       this.startPolling(record);
     }
-    return { result: processed.result };
   }
 
+  async hydratePublicInteractionReferences(references, binding, context) {
+    const sessionKey = binding?.sessionKey || context.sessionKey;
+    if (!isPrivateSessionKey(sessionKey)) {
+      this.api.logger.warn(
+        sessionKey
+          ? "AgentBridge interaction reference withheld because the OpenClaw session is not private"
+          : "AgentBridge interaction reference withheld because no private session binding was available",
+      );
+      return undefined;
+    }
+    if (!this.mcpClient) {
+      this.api.logger.warn(
+        "AgentBridge interaction metadata recovery is unavailable because MCP endpoint authentication could not be resolved",
+      );
+      return undefined;
+    }
+
+    const interactions = [];
+    for (const reference of references) {
+      let response;
+      try {
+        response = await this.mcpClient.callTool(
+          "agentbridge_interaction_get",
+          { interaction_id: reference.interactionId },
+        );
+      } catch (error) {
+        this.api.logger.warn(
+          `AgentBridge interaction metadata recovery failed: ${safeErrorCode(error)}`,
+        );
+        continue;
+      }
+      const processed = processToolResult(
+        response,
+        this.config.allowedCardOrigins,
+      );
+      const interaction = processed.interactions.find(
+        (item) =>
+          item.interactionId === reference.interactionId &&
+          item.type === reference.type &&
+          ["pending", "processing"].includes(item.state) &&
+          !isInteractionExpired(item, this.now()),
+      );
+      if (interaction) {
+        interactions.push(interaction);
+      }
+    }
+    if (interactions.length === 0) {
+      this.api.logger.warn(
+        "AgentBridge interaction metadata recovery returned no active trusted interaction",
+      );
+      return undefined;
+    }
+    this.captureInteractions(interactions, binding, context);
+    return undefined;
+  }
   takeForDelivery({ runId, sessionKey }) {
     this.prune();
     if (!isPrivateSessionKey(sessionKey)) {
@@ -547,6 +626,22 @@ function interactionDeadline(interaction) {
   return Number.isFinite(value) ? value : null;
 }
 
+function trustedAgentBridgeStructuredContent(result, serverName) {
+  const details = result?.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    details.mcpServer !== serverName ||
+    typeof details.mcpTool !== "string" ||
+    !details.mcpTool.trim() ||
+    !details.structuredContent ||
+    typeof details.structuredContent !== "object"
+  ) {
+    return null;
+  }
+  return details.structuredContent;
+}
 function safeStatus(response) {
   const status = String(response?.status ?? "completed")
     .toLowerCase()
