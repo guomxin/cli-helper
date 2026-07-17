@@ -323,19 +323,24 @@ isolation.
 
 ## Validation
 
-~~~bash
-python -m unittest discover -s tests
-python -m compileall -q bscli
-python -m pip check
+On Windows, use the persistent layered validation entry points:
 
-cd integrations/mcp-app
-npm ci
-npm run check
-npm run build
+~~~powershell
+.\scripts\Invoke-AgentBridgeValidation.ps1 `
+  -Mode Targeted `
+  -PythonTests @('tests/test_auth_challenges.py', 'tests/test_central_service.py') `
+  -OpenClaw
 
-cd ../openclaw-agentbridge
-npm test
+.\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Full
+.\scripts\Test-AgentBridgeMcp.ps1 -Check SessionStatus
+.\scripts\Deploy-AgentBridge.ps1 -PlanOnly
 ~~~
+
+Targeted OpenClaw checks skip `npm pack` unless `-PackCheck` is supplied; full
+validation always includes it. The persistent Python 3.12 environment is
+fingerprinted from `pyproject.toml`, so unchanged dependencies are reused.
+See the [development validation and release workflow](docs/development-and-release-workflow.md)
+for MCP smoke-test safety boundaries and wheel deployment commands.
 
 The central path has completed single-user real-OA validation for trusted-card
 login, encrypted-session restoration, workflow reads, rendered details and
@@ -344,14 +349,17 @@ field readback, and idempotent replay. Every validated operation reported
 browser_bridge_used=false.
 
 Formal Windows current-user root trust, native TLS, and production Telegram
-WebView clicks for business-input and execution-authorization cards are now
-validated; the authorization was cancelled and produced no OA write. A second
-real OA user, the next natural credential-card login, real mobile CA distribution,
-and additional central write workflows remain open validation items. The current
-intranet server and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
+WebView clicks for credential, business-input, and execution-authorization cards
+are now validated. Login-card reuse and login-completion continuation are covered
+by central and host tests; a currently active real session also returned
+`reused=true` without a new interaction. A second real OA user, real mobile CA
+distribution, a natural-expiry end-to-end continuation observation, and additional
+central write workflows remain open validation items. The current intranet server
+and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
 
 ## Design Documents
 
+- [Development validation and release workflow](docs/development-and-release-workflow.md)
 - [Current Linux intranet PoC deployment plan](docs/current-deployment-plan.md)
 - [Target architecture](agent-oriented-legacy-bs-adaptation-design.md)
 - [PoC validation plan](poc-validation-plan.md)

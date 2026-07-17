@@ -710,6 +710,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 通过插件同款后台 MCP 客户端执行只读实机探针：`oa_session_status` 返回 active；`oa_session_login` 返回 `succeeded`、`reused=true`、无 interaction、无 next action，证明部署后当前有效 OA 会话不会重复发卡；
 - 为避免人为注销仍有效的 OA 会话，本轮没有强制制造过期。过期状态下的“同一卡复用 + 登录完成后自动重试原请求”已由中央服务和宿主自动测试固定，Telegram 真实端到端观察留到下一次自然过期时完成。
 
+## 15.1 2026-07-17 验证与发布提速基线
+
+- 新增 `scripts/Invoke-AgentBridgeValidation.ps1`，使用 `%LOCALAPPDATA%\AgentBridge\test-venv-py312` 持久 Python 3.12 环境，并按 Python 版本与 `pyproject.toml` 哈希更新依赖；定向 OpenClaw 验证默认不再执行 `npm pack`；
+- 新增 `scripts/Test-AgentBridgeMcp.ps1` 和最小 Node 客户端。脚本从本机 OpenClaw 配置及 `.env` 解析环境引用，不把 Bearer 放入命令行或输出。真实 `oa_session_status` 冒烟耗时 6.73 秒并返回 active；`oa_session_login` 耗时 8.96 秒并返回 `reused=true`、无 interaction；
+- 新增 `scripts/Deploy-AgentBridge.ps1`。它支持计划预览、脏工作区默认拒绝、标准 wheel、单次 SCP、单次 SSH、版本化留存、远端编译与依赖检查、systemd 重启和自动 MCP 冒烟。OpenClaw Gateway 仅在显式 `-RestartOpenClaw` 时重启；
+- 开发态真实部署在 `10.10.50.213` 完成：wheel 安装、`pip check`、systemd 重启、会话恢复及登录复用均成功，两次成功复验耗时 36.10-62.29 秒；未执行任何 OA 业务写入，也未重启 OpenClaw Gateway；
+- 当前全量基线为 Python `200 passed, 3 skipped, 19 subtests passed`、OpenClaw Node `25/25`、`compileall`、`pip check` 和 `npm pack --dry-run` 全部通过，两次墙钟时间为 69.17-91.22 秒；
+- 具体命令、故障解释和安全边界见 [开发验证与发布流程](development-and-release-workflow.md)。
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
