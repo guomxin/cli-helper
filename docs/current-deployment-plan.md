@@ -740,7 +740,16 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 发布冒烟新增 `Release` 模式：要求公开 `tools/list` 同时包含补签草稿、补签审批和会议创建 6 个工具，再检查 OA 会话。该守卫在修复前真实返回 `MCP_TOOL_CATALOG_INCOMPLETE`，能够复现并拦截本次问题；
 - 修复前全量回归为 Python `222 passed, 3 skipped, 19 subtests passed`，OpenClaw 插件 `26/26`。最终 Release `16c6b643c8e2` 部署成功，公开 MCP 为 21 个工具，6 个新增工具全部存在，OA 会话仍为 active；
 - 执行 `openclaw mcp reload` 后，Gateway 将在下一次智能体回合重建工具目录，无需耗时两分钟以上的完整重启。本轮没有填写表单、保存草稿、审批或创建会议；
-- OpenClaw 当前 Token 的会议写权限仍需单独、明确地开通。运行版本修复和工具可见性不等于权限自动扩大。
+- 运行版本修复完成时，OpenClaw Token 的审批和会议写权限仍未自动扩大；随后仅在用户明确确认后按 15.4 节完成独立权限轮换。
+
+## 15.4 2026-07-18 受治理写权限启用
+
+- 用户明确确认给当前 OpenClaw Token 同时增加补签审批和会议权限。新 Token 保留 `oa:read`、`oa:write:draft`，新增 `oa:write:approval`、`oa:write:meeting`，没有引入其他权限；
+- 新 Token 标签为 `openclaw-desktop-governed-writes`，有效期30天，至 2026-08-17 14:02（GMT+8）。一次性 Bearer 只写入本机 `%USERPROFILE%\.openclaw\.env` 的既有环境变量，没有写入聊天、仓库、命令输出、用户级或机器级环境变量；
+- 新 Token 先通过正式 MCP `Release` 验证，再撤销旧的 `openclaw-desktop-draft` Token。服务器最终只有一个活动 Token，权限集合与用户批准内容完全一致；
+- OpenClaw Gateway 因凭据变化执行一次托管重启，耗时约123秒。首轮深度 RPC 在启动收敛期超时，但进程、监听、配置审计和健康检查正常；等待现有进程20秒后复查成功，没有重复启动第二个 Gateway；
+- 撤销旧 Token 并执行 `openclaw mcp reload` 后，最终 `Release` 再次返回 21 个工具、6个新增工具完整、OA 会话 active。由于旧 Token 已失效，这次成功同时证明本机正在使用新 Token；
+- 权限启用本身没有审批补签、保存草稿或创建会议。每次真实写入仍必须经过可信字段卡、实时 OA 校验、独立执行授权卡、一次性消费和业务回读。
 
 ## 16. 后续演进顺序
 
