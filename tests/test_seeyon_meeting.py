@@ -91,7 +91,7 @@ class SeeyonMeetingTests(unittest.TestCase):
         )
         self.assertEqual(room_field["value"], "")
 
-    def test_card_preflight_blocks_an_occupied_requested_room_before_card(self):
+    def test_card_preflight_offers_alternatives_when_requested_room_is_occupied(self):
         worker = FakeMeetingWorker(
             conflict=True,
             rooms=[
@@ -100,7 +100,28 @@ class SeeyonMeetingTests(unittest.TestCase):
             ],
         )
 
-        with self.assertRaisesRegex(MeetingContractMismatch, "occupied"):
+        schema = build_meeting_field_card_schema(
+            FakeAdapter(),
+            worker,
+            _inputs(room="三号会议室"),
+        )
+
+        room_field = next(item for item in schema["fields"] if item["name"] == "room")
+        self.assertEqual(
+            room_field["options"],
+            [{"value": "4层2#会议室", "label": "4层2#会议室"}],
+        )
+        self.assertEqual(room_field["value"], "")
+        self.assertIn("已占用", schema["notice"])
+        self.assertEqual(worker.mutation_count, 0)
+
+    def test_card_preflight_blocks_before_card_when_every_room_is_occupied(self):
+        worker = FakeMeetingWorker(
+            conflict=True,
+            rooms=[_room(name="4层3#会议室")],
+        )
+
+        with self.assertRaisesRegex(MeetingContractMismatch, "No OA meeting rooms"):
             build_meeting_field_card_schema(
                 FakeAdapter(),
                 worker,

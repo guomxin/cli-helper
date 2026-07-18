@@ -121,8 +121,10 @@ def build_meeting_field_card_schema(adapter, worker, arguments: dict) -> dict:
                 start_ms=start_ms,
                 end_ms=end_ms,
             )
-            _assert_room_available(room_list, requested_app)
-            selected_room = requested_room
+            if _room_is_available(room_list, requested_app):
+                selected_room = requested_room
+            else:
+                room_match_note = "输入的会议室在该时段已占用，请选择其他空闲会议室。"
 
     schema = deepcopy(MEETING_FIELD_CARD_SCHEMA)
     fields = {item["name"]: item for item in schema["fields"]}
