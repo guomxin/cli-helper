@@ -209,6 +209,13 @@ class TrustedActionApplication:
 def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) -> str:
     summary = authorization.get("summary") if isinstance(authorization.get("summary"), dict) else {}
     fields = summary.get("fields") if isinstance(summary.get("fields"), list) else []
+    title = str(summary.get("title") or "确认执行计划")
+    effect = str(summary.get("effect") or "按上方冻结计划执行")
+    notice = str(
+        summary.get("authorization_notice")
+        or f"授权后，AgentBridge 将执行：{effect}。请确认操作内容和执行效果无误。"
+    )
+    authorize_label = str(summary.get("authorize_label") or "授权执行")
     rows = []
     for item in fields:
         if not isinstance(item, dict):
@@ -217,7 +224,7 @@ def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) ->
         value = escape(str(item.get("value") or "未填写"))
         rows.append(f"<div><dt>{label}</dt><dd>{value}</dd></div>")
     return _document(
-        title="确认保存出差申请草稿",
+        title=f"确认{title}",
         nonce=nonce,
         body=f"""
         <main class="shell">
@@ -226,21 +233,22 @@ def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) ->
               <div class="brand-mark" aria-hidden="true"><span></span></div>
               <div>
                 <p class="eyebrow">AGENTBRIDGE TRUSTED ACTION</p>
-                <h1 id="card-title">{escape(str(summary.get('title') or '保存出差申请草稿'))}</h1>
+                <h1 id="card-title">{escape(title)}</h1>
               </div>
             </header>
             <dl class="detail-list">
               <div><dt>执行身份</dt><dd>{escape(str(summary.get('principal') or '当前用户'))}</dd></div>
               <div><dt>目标系统</dt><dd>{escape(str(summary.get('system') or '致远 OA'))}</dd></div>
+              <div><dt>执行效果</dt><dd>{escape(effect)}</dd></div>
               {''.join(rows)}
               <div><dt>计划指纹</dt><dd class="hash">{escape(str(authorization.get('plan_hash') or ''))}</dd></div>
             </dl>
-            <p class="notice">本次只保存为待发草稿，不会发送、提交或进入审批流程。</p>
+            <p class="notice">{escape(notice)}</p>
             <form method="post" action="/authorize/{escape(authorization['authorization_id'])}" id="action-form">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
               <div class="actions">
                 <button type="submit" name="decision" value="reject" class="secondary">取消操作</button>
-                <button type="submit" name="decision" value="approve" class="primary">授权保存草稿</button>
+                <button type="submit" name="decision" value="approve" class="primary">{escape(authorize_label)}</button>
               </div>
             </form>
             <footer>授权将在 {_format_expiry(authorization['expires_at'])} 失效，且只能使用一次</footer>

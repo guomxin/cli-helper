@@ -403,6 +403,7 @@ export class InteractionCoordinator {
           response,
           nextInteractions,
         ),
+        response,
       },
     );
   }
@@ -412,7 +413,7 @@ export class InteractionCoordinator {
     status,
     errorCode,
     nextInteractions = [],
-    { resumeOriginalRequest = false } = {},
+    { resumeOriginalRequest = false, response = null } = {},
   ) {
     if (!record.sessionKey) {
       return;
@@ -428,7 +429,7 @@ export class InteractionCoordinator {
         return;
       }
       record.continuationQueued = true;
-      await this.deliverStatusDirect(record.sessionKey, status, errorCode);
+      await this.deliverStatusDirect(record.sessionKey, status, errorCode, response);
       this.api.runtime.system.enqueueSystemEvent(
         [
           "AgentBridge 登录已完成。",
@@ -452,7 +453,7 @@ export class InteractionCoordinator {
     }
     if (
       nextInteractions.length === 0 &&
-      (await this.deliverStatusDirect(record.sessionKey, status, errorCode))
+      (await this.deliverStatusDirect(record.sessionKey, status, errorCode, response))
     ) {
       return;
     }
@@ -513,7 +514,7 @@ export class InteractionCoordinator {
     }
   }
 
-  async deliverStatusDirect(sessionKey, status, errorCode) {
+  async deliverStatusDirect(sessionKey, status, errorCode, response = null) {
     const route = this.sessionRoutes.get(sessionKey);
     if (!route) {
       this.api.logger.warn(
@@ -521,7 +522,7 @@ export class InteractionCoordinator {
       );
       return false;
     }
-    const text = safeStatusMessage(status, errorCode);
+    const text = safeStatusMessage(status, errorCode, response);
     try {
       if (!(await this.sendRoutePayload(route, { text }))) {
         this.api.logger.warn(
@@ -716,11 +717,35 @@ function safeCode(value) {
     .slice(0, 80);
 }
 
-function safeStatusMessage(status, errorCode) {
+function safeSucceededMessage(response) {
+  const result = response?.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return "AgentBridge 已完成本次安全操作。";
+  }
+  const verified = result.verification?.confirmed === true;
+  if (result.meeting_created === true && result.meeting_sent === true) {
+    return verified
+      ? "OA 会议已创建并发送，并已通过回读确认。"
+      : "OA 会议已创建并发送。";
+  }
+  if (result.draft_saved === true && result.workflow_submitted === false) {
+    return verified
+      ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"
+      : "OA 待发草稿已保存，未提交审批。";
+  }
+  if (result.workflow_approved === true) {
+    return verified
+      ? "OA 补签申请已审批通过，并已通过待办回读确认。"
+      : "OA 补签申请已审批通过。";
+  }
+  return "AgentBridge 已完成本次安全操作。";
+}
+
+function safeStatusMessage(status, errorCode, response = null) {
   const code = errorCode ? `（错误码：${safeCode(errorCode)}）` : "";
   switch (safeStatus({ status })) {
     case "succeeded":
-      return "AgentBridge 已完成本次安全操作。";
+      return safeSucceededMessage(response);
     case "already_resumed":
       return "AgentBridge 已完成本次安全操作，无需重复处理。";
     case "declined":

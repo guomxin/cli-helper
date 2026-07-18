@@ -341,6 +341,8 @@ def meeting_summary(inputs: dict, room_name: str) -> dict:
         "title": "创建并发送会议",
         "system": "致远 OA",
         "effect": "预订会议室并向当前用户发送会议",
+        "authorization_notice": "授权后将立即预订上述会议室并发送会议，不会仅保存为草稿。",
+        "authorize_label": "授权创建并发送",
         "fields": [
             {"label": "会议主题", "value": inputs["subject"]},
             {"label": "会议室", "value": room_name},

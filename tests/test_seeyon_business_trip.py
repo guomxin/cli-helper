@@ -48,6 +48,8 @@ class SeeyonBusinessTripTests(unittest.TestCase):
         )
         self.assertEqual(plan["expected_effect"]["submitted_count"], 0)
         self.assertEqual(prepared["summary"]["effect"], "仅保存待发草稿")
+        self.assertEqual(prepared["summary"]["authorize_label"], "授权保存草稿")
+        self.assertIn("不会发送", prepared["summary"]["authorization_notice"])
         self.assertEqual(page.click_count, 0)
 
     def test_prepare_rejects_hidden_optional_note_before_authorization(self):

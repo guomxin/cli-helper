@@ -432,6 +432,8 @@ def missed_punch_draft_summary(inputs: dict) -> dict:
         "title": "保存补签申请草稿",
         "system": "致远 OA",
         "effect": "仅保存待发草稿",
+        "authorization_notice": "授权后仅保存为待发草稿，不会发送、提交或进入审批流程。",
+        "authorize_label": "授权保存草稿",
         "fields": [
             {"label": "开始时间", "value": inputs["start_time"]},
             {"label": "结束时间", "value": inputs["end_time"]},
@@ -448,6 +450,8 @@ def missed_punch_approval_summary(source: dict, opinion: str) -> dict:
         "title": "审批补签申请",
         "system": "致远 OA",
         "effect": "审批通过后该事项将离开待办列表",
+        "authorization_notice": "授权后将立即提交审批通过操作；不会只保存审批意见草稿。",
+        "authorize_label": "授权审批通过",
         "fields": [
             {"label": "事项", "value": str(source.get("title") or "")},
             {"label": "发起人", "value": str(source.get("sender") or "")},

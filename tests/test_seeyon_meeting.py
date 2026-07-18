@@ -135,6 +135,8 @@ class SeeyonMeetingTests(unittest.TestCase):
 
         self.assertEqual(prepared["plan"]["target"]["room_name"], "3号会议室")
         self.assertTrue(prepared["plan"]["preconditions"]["room_available"])
+        self.assertEqual(prepared["summary"]["authorize_label"], "授权创建并发送")
+        self.assertIn("不会仅保存为草稿", prepared["summary"]["authorization_notice"])
         self.assertEqual(worker.manager_methods, ["meetingInfo", "roomListInfo", "validateRoomApps"])
         self.assertEqual(worker.mutation_count, 0)
 

@@ -358,6 +358,8 @@ def business_trip_summary(inputs: dict) -> dict:
         "title": "保存出差申请草稿",
         "system": "致远 OA",
         "effect": "仅保存待发草稿",
+        "authorization_notice": "授权后仅保存为待发草稿，不会发送、提交或进入审批流程。",
+        "authorize_label": "授权保存草稿",
         "fields": fields,
         "submitted_count": 0,
     }

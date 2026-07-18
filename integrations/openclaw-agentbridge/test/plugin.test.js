@@ -529,6 +529,80 @@ test("proactively wakes the private agent and delivers the next trusted card", a
   await idle;
 });
 
+test("reports the verified meeting outcome after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-meeting-authorization-123456",
+    type: "execution_authorization",
+    title: "创建并发送会议",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const calls = [];
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          meeting_created: true,
+          meeting_sent: true,
+          submitted_count: 1,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-meeting-authorization",
+    runId: "run-meeting-authorization",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-meeting-authorization",
+      toolName: "oa_meeting_create_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["agentbridge_interaction_get", "agentbridge_interaction_resume"],
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA 会议已创建并发送，并已通过回读确认。",
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
+
 test("delivers a final trusted status directly without waking the model", async () => {
   const harness = fakeApi({
     autoPoll: false,

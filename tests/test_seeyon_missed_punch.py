@@ -44,6 +44,7 @@ class SeeyonMissedPunchTests(unittest.TestCase):
             missed_punch_draft_contract_fingerprint(),
         )
         self.assertEqual(prepared["plan"]["expected_effect"]["submitted_count"], 0)
+        self.assertEqual(prepared["summary"]["authorize_label"], "授权保存草稿")
         self.assertEqual(page.click_count, 0)
 
     def test_save_draft_consumes_once_and_never_submits(self):
@@ -92,6 +93,8 @@ class SeeyonMissedPunchTests(unittest.TestCase):
         )
         self.assertEqual(prepared["plan"]["target"]["affair_id"], "affair-1")
         self.assertEqual(prepared["plan"]["exact_input"]["opinion"], "同意")
+        self.assertEqual(prepared["summary"]["authorize_label"], "授权审批通过")
+        self.assertIn("立即提交审批通过", prepared["summary"]["authorization_notice"])
 
         boundary = []
         with patch("bscli.adapters.seeyon_missed_punch.time.sleep", return_value=None):
