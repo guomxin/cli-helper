@@ -724,13 +724,23 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 ## 15.2 2026-07-18 写能力扩展一期部署与只读实机预检
 
 - 发布提交和 Linux Release ID 均为 `f6d6274ec88a`。wheel 已安装到 `/home/guomao/agentbridge/releases/f6d6274ec88a/cli_helper-0.1.0-py3-none-any.whl`，SHA-256 为 `24706b611c070f6ee7b1b5c976fbb44d516a986926b651b1b5a7d9a825f973b3`；systemd 服务、`compileall` 和 `pip check` 均通过；
-- 新增 `oa.missed_punch.prepare`、`oa.missed_punch.save_draft`、`oa.missed_punch.approval.prepare`、`oa.missed_punch.approve`、`oa.meeting.create.prepare` 和 `oa.meeting.create`。目标服务器共注册 14 项 OA 能力，运行时未包含旧 Chrome 扩展或浏览器桥接；
+- 新增 `oa.missed_punch.prepare`、`oa.missed_punch.save_draft`、`oa.missed_punch.approval.prepare`、`oa.missed_punch.approve`、`oa.meeting.create.prepare` 和 `oa.meeting.create`。目标 wheel 的 registry 共注册 14 项 OA 能力，未包含旧 Chrome 扩展或浏览器桥接；该次检查没有覆盖 systemd 进程的实际模块来源和公开 MCP 工具目录，后续由 15.3 节补齐并纠正；
 - 补签草稿、补签审批和会议创建复用同一中心治理流程：可信字段卡、实时 OA 契约校验、冻结计划、会话身份绑定、独立执行授权、一次性消费、提交边界和业务回读。MCP 权限拆分为 `oa:write:draft`、`oa:write:approval` 和 `oa:write:meeting`；
 - 发布前全量验证为 `219 passed, 3 skipped, 19 subtests passed`，覆盖草稿不得发送、审批精确绑定 affair、会议冲突在写边界前拒绝、中文负载编码、登录页误分类、授权消费和 `RESULT_UNKNOWN` 等关键路径；
 - 用户重新登录后，正式 MCP `SessionStatus` 返回 active。服务器以同一加密会话执行真实 OA 无写入预检：补签模板 `-8494358180075582561` 与表单 `-3950641196724501449` 的字段、保存草稿按钮和禁止发送控制均通过校验；
 - 会议预检只调用 `meetingInfo`、`roomListInfo` 和 `validateRoomApps`。OA 首先真实返回“会议室只允许申请含今天 7 天内”的约束；调整到有效窗口后，“3号会议室”唯一解析为“4层3#会议室”，`2026-07-20 16:00-17:00` 通过可用性校验；
 - 两项预检的 `submitted_count` 均为 0，没有填写 OA 表单、保存草稿、审批、创建或发送会议。预检后正式 MCP 会话仍为 active；
 - 当前 OpenClaw Token 仍只有 `oa:read` 和 `oa:write:draft`。本次没有静默扩大既有 Token；补签审批和会议真实验收前，应由用户知情地换发包含 `oa:write:approval`、`oa:write:meeting` 的 Token，并分别确认具体业务写入。
+
+## 15.3 2026-07-18 systemd 旧源码遮蔽修复
+
+- 用户通过 Telegram 请求补签草稿时，智能体仍声称只开放出差申请工具。OpenClaw `mcp probe` 随后只发现 15 个旧工具，补签和会议工具均不存在，证明问题位于运行时工具目录，不是模板读取、OA 登录或 Telegram 理解错误；
+- Linux 只读核验确认：systemd 的 `WorkingDirectory` 仍是 `/home/guomao/agentbridge/app`，运行进程从该目录加载旧 `bscli`；与此同时，venv 的 site-packages 已安装包含新工具的 wheel。普通 `SessionStatus` 因旧新版本均具备该工具而错误通过；
+- systemd 现改为 root 管理的 `/home/guomao/agentbridge` 工作目录，并以 Python `-P` 启动，阻断当前目录优先导入。部署脚本每次同步受版本控制的 unit，执行 `systemd-analyze verify`、`daemon-reload`，等待新进程稳定，并核对 `-P` 与 site-packages 模块来源；
+- 发布冒烟新增 `Release` 模式：要求公开 `tools/list` 同时包含补签草稿、补签审批和会议创建 6 个工具，再检查 OA 会话。该守卫在修复前真实返回 `MCP_TOOL_CATALOG_INCOMPLETE`，能够复现并拦截本次问题；
+- 修复前全量回归为 Python `222 passed, 3 skipped, 19 subtests passed`，OpenClaw 插件 `26/26`。最终 Release `16c6b643c8e2` 部署成功，公开 MCP 为 21 个工具，6 个新增工具全部存在，OA 会话仍为 active；
+- 执行 `openclaw mcp reload` 后，Gateway 将在下一次智能体回合重建工具目录，无需耗时两分钟以上的完整重启。本轮没有填写表单、保存草稿、审批或创建会议；
+- OpenClaw 当前 Token 的会议写权限仍需单独、明确地开通。运行版本修复和工具可见性不等于权限自动扩大。
 
 ## 16. 后续演进顺序
 
