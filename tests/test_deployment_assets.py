@@ -19,7 +19,7 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             "systemd-analyze verify",
             "systemctl daemon-reload",
-            "unexpected service working directory",
+            "service did not stabilize on the release unit",
             "service resolves unexpected bscli module",
             "$smokeScript -Check Release",
         ):
