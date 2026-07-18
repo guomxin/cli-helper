@@ -48,6 +48,37 @@ test("calls the configured MCP server with an environment-resolved bearer header
   assert.equal(JSON.stringify(requests[0]).includes("AGENTBRIDGE_TEST_TOKEN"), false);
 });
 
+test("lists tools through the same authenticated MCP transport", async () => {
+  let requestBody;
+  const client = createAgentBridgeMcpClient({
+    hostConfig: {
+      mcp: {
+        servers: {
+          agentbridge: {
+            url: "http://10.10.50.213:8790/mcp",
+            headers: { Authorization: "Bearer test-token" },
+          },
+        },
+      },
+    },
+    serverName: "agentbridge",
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "response-id",
+          result: { tools: [{ name: "oa_missed_punch_prepare" }] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  assert.deepEqual(await client.listTools(), [{ name: "oa_missed_punch_prepare" }]);
+  assert.equal(requestBody.method, "tools/list");
+  assert.deepEqual(requestBody.params, {});
+});
 test("does not create a polling client when the bearer environment value is absent", () => {
   const client = createAgentBridgeMcpClient({
     hostConfig: {

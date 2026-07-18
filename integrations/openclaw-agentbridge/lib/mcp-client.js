@@ -26,52 +26,61 @@ export function createAgentBridgeMcpClient({
   }
 
   return {
+    async listTools({ signal } = {}) {
+      const result = await request("tools/list", {}, { signal });
+      return Array.isArray(result?.tools) ? result.tools : [];
+    },
     async callTool(name, arguments_, { signal } = {}) {
-      const timeoutSignal = AbortSignal.timeout(server.timeoutSeconds * 1000);
-      const requestSignal = signal
-        ? AbortSignal.any([signal, timeoutSignal])
-        : timeoutSignal;
-      let response;
-      try {
-        response = await fetchImpl(server.url, {
-          method: "POST",
-          headers: {
-            Authorization: authorization,
-            Accept: "application/json, text/event-stream",
-            "Content-Type": "application/json",
-            "MCP-Protocol-Version": "2025-06-18",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: randomUUID(),
-            method: "tools/call",
-            params: {
-              name,
-              arguments: arguments_,
-            },
-          }),
-          signal: requestSignal,
-        });
-      } catch (error) {
-        if (requestSignal.aborted) {
-          throw new McpCallError("MCP_TIMEOUT", "AgentBridge MCP request timed out");
-        }
-        throw new McpCallError("MCP_UNREACHABLE", "AgentBridge MCP is unreachable");
-      }
-      if (!response.ok) {
-        throw new McpCallError(`MCP_HTTP_${response.status}`);
-      }
-      const raw = await response.text();
-      const rpc = parseMcpResponse(raw);
-      if (rpc.error) {
-        throw new McpCallError(
-          normalizeErrorCode(rpc.error.code, "MCP_RPC_ERROR"),
-          "AgentBridge MCP returned an RPC error",
-        );
-      }
-      return extractToolPayload(rpc.result);
+      const result = await request(
+        "tools/call",
+        { name, arguments: arguments_ },
+        { signal },
+      );
+      return extractToolPayload(result);
     },
   };
+
+  async function request(method, params, { signal } = {}) {
+    const timeoutSignal = AbortSignal.timeout(server.timeoutSeconds * 1000);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+    let response;
+    try {
+      response = await fetchImpl(server.url, {
+        method: "POST",
+        headers: {
+          Authorization: authorization,
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2025-06-18",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: randomUUID(),
+          method,
+          params,
+        }),
+        signal: requestSignal,
+      });
+    } catch (error) {
+      if (requestSignal.aborted) {
+        throw new McpCallError("MCP_TIMEOUT", "AgentBridge MCP request timed out");
+      }
+      throw new McpCallError("MCP_UNREACHABLE", "AgentBridge MCP is unreachable");
+    }
+    if (!response.ok) {
+      throw new McpCallError(`MCP_HTTP_${response.status}`);
+    }
+    const rpc = parseMcpResponse(await response.text());
+    if (rpc.error) {
+      throw new McpCallError(
+        normalizeErrorCode(rpc.error.code, "MCP_RPC_ERROR"),
+        "AgentBridge MCP returned an RPC error",
+      );
+    }
+    return rpc.result;
+  }
 }
 
 export function parseMcpResponse(raw) {

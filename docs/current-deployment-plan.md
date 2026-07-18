@@ -398,12 +398,12 @@ Wants=network-online.target
 Type=simple
 User=agentbridge
 Group=agentbridge
-WorkingDirectory=/home/guomao/agentbridge/app
+WorkingDirectory=/home/guomao/agentbridge
 Environment=HOME=/home/guomao/agentbridge/data
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
 ExecStart=/home/guomao/agentbridge/venv/bin/python \
-  -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve \
+  -P -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve \
   --host 10.10.50.213 --port 8790 \
   --public-base-url https://10.10.50.213:8790 \
   --tls-cert /home/guomao/agentbridge/config/tls/server.crt \

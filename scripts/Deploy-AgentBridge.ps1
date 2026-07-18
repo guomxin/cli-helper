@@ -33,6 +33,10 @@ if ($ServiceName -notmatch '^[A-Za-z0-9_.@-]+$') {
 if ($RemoteRoot -notmatch '^/home/[A-Za-z0-9._/-]+$' -or $RemoteRoot.Contains("..")) {
     throw "RemoteRoot must be a fixed path below /home"
 }
+$systemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName.service"
+if (-not (Test-Path -LiteralPath $systemdUnit -PathType Leaf)) {
+    throw "Version-controlled systemd unit was not found: $systemdUnit"
+}
 
 if (-not $IdentityFile) {
     $IdentityFile = Join-Path $env:USERPROFILE ".ssh\id_ed25519_10_10_50_213"
@@ -73,6 +77,7 @@ $plan = [ordered]@{
     smoke = -not $SkipSmoke
     loginReuseSmoke = [bool]$IncludeLoginReuseSmoke
     restartOpenClaw = [bool]$RestartOpenClaw
+    systemdUnit = $systemdUnit
 }
 if ($PlanOnly) {
     $plan | ConvertTo-Json -Compress
@@ -124,6 +129,7 @@ $connectionArguments = @(
 $target = "$SshUser@$HostName"
 $remoteWheel = "/tmp/$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
+$systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
 
 & $scp.Source @connectionArguments $wheel.FullName $remoteDestination
 if ($LASTEXITCODE -ne 0) {
@@ -139,19 +145,33 @@ $remoteTemplate = @(
     'python="$root/venv/bin/python"',
     'release_dir="$root/releases/$release_id"',
     'release_wheel="$release_dir/__WHEEL_NAME__"',
-    'trap ''rm -f -- "$wheel"'' EXIT',
+    'unit_tmp="/tmp/$service-$release_id.service"',
+    'unit_path="/etc/systemd/system/$service.service"',
+    'unit_b64=''__SYSTEMD_UNIT_BASE64__''',
+    'trap ''rm -f -- "$wheel" "$unit_tmp"'' EXIT',
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
     '"$python" -m pip install --disable-pip-version-check --no-deps --force-reinstall "$release_wheel"',
-    'site_dir="$("$python" -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).parent)'')"',
+    'site_dir="$(cd / && "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).parent.resolve())'')"',
+    'case "$site_dir" in "$root"/venv/lib/python*/site-packages/bscli) ;; *) printf ''unexpected installed bscli path: %s\n'' "$site_dir" >&2; exit 1 ;; esac',
     '"$python" -m compileall -q "$site_dir"',
     '"$python" -m pip check',
+    'printf ''%s'' "$unit_b64" | base64 --decode > "$unit_tmp"',
+    'systemd-analyze verify "$unit_tmp"',
+    'install -m 0644 -o root -g root "$unit_tmp" "$unit_path"',
+    'systemctl daemon-reload',
     'systemctl restart "$service"',
     'systemctl is-active --quiet "$service"',
+    'main_pid="$(systemctl show "$service" -p MainPID --value)"',
+    'process_cwd="$(readlink "/proc/$main_pid/cwd")"',
+    'if [ "$process_cwd" != "$root" ]; then printf ''unexpected service working directory: %s\n'' "$process_cwd" >&2; exit 1; fi',
+    'if ! tr ''\0'' ''\n'' < "/proc/$main_pid/cmdline" | grep -Fx -- ''-P'' >/dev/null; then printf ''service Python safe-path flag is missing\n'' >&2; exit 1; fi',
+    'runtime_module="$(cd "$root" && runuser -u agentbridge -- env HOME="$root/data" AGENTBRIDGE_SESSION_KEY_FILE="$root/config/session.key" "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).resolve())'')"',
+    'case "$runtime_module" in "$site_dir"/*) ;; *) printf ''service resolves unexpected bscli module: %s\n'' "$runtime_module" >&2; exit 1 ;; esac',
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"
-$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name)
+$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64)
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"
@@ -167,7 +187,7 @@ if ($RestartOpenClaw) {
 }
 
 if (-not $SkipSmoke) {
-    & $smokeScript -Check SessionStatus
+    & $smokeScript -Check Release
     if ($IncludeLoginReuseSmoke) {
         & $smokeScript -Check LoginReuse
     }

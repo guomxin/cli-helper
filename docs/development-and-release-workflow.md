@@ -83,6 +83,14 @@ MCP App 改动：
 
 它通过正式内网 HTTPS MCP 调用 `oa_session_status`，不会创建认证卡，也不会执行 OA 业务写入。
 
+发布运行时联合探针：
+
+```powershell
+.\scripts\Test-AgentBridgeMcp.ps1 -Check Release
+```
+
+它先要求公开 MCP 工具目录包含当前补签和会议工具，再调用 `oa_session_status`。工具目录缺失时以 `MCP_TOOL_CATALOG_INCOMPLETE` 失败，防止“新 wheel 已安装、systemd 仍从旧源码启动”被普通会话探针掩盖。
+
 登录复用探针：
 
 ```powershell
@@ -113,8 +121,9 @@ MCP App 改动：
 2. 运行发布验证；
 3. 使用持久环境构建标准 wheel；
 4. 单次 SCP 上传；
-5. 单次 SSH 完成版本化留存、安装、`compileall`、`pip check` 和 systemd 重启；
-6. 通过正式 HTTPS MCP 自动执行 `SessionStatus` 冒烟。
+5. 单次 SSH 完成版本化留存、安装、`compileall`、`pip check`，并安装受版本控制的 systemd unit；
+6. 校验服务工作目录、Python `-P` 安全路径和 `bscli` 的 site-packages 来源后重启；
+7. 通过正式 HTTPS MCP 自动执行 `Release` 工具目录与会话联合冒烟。
 
 需要同时验证登录复用时：
 
@@ -168,7 +177,7 @@ Windows 托管 Gateway 重启实测可能超过两分钟。中央 Python 包、s
 ## 9. 推荐节奏
 
 1. 修改代码后跑最小相关定向验证。
-2. 涉及远程契约时补一次 `SessionStatus`；登录逻辑变化时再补 `LoginReuse`。
+2. 涉及远程发布或工具契约时补一次 `Release`；纯会话逻辑可用 `SessionStatus`，登录逻辑变化时再补 `LoginReuse`。
 3. 准备提交时跑全量验证。
 4. 先 `-PlanOnly`，再执行 wheel 部署。
 5. 仅当插件变化时重启一次 Gateway，并等待其完全收敛。

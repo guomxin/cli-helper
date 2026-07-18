@@ -5,6 +5,15 @@ const CHECKS = new Map([
   ["LoginReuse", { tool: "oa_session_login", arguments: {} }],
 ]);
 
+const REQUIRED_RELEASE_TOOLS = [
+  "oa_missed_punch_prepare",
+  "oa_missed_punch_save_draft",
+  "oa_missed_punch_approval_prepare",
+  "oa_missed_punch_approve",
+  "oa_meeting_create_prepare",
+  "oa_meeting_create",
+];
+
 function argument(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
@@ -31,7 +40,7 @@ try {
   const checkName = argument("--check", "SessionStatus");
   const serverName = argument("--server-name", "agentbridge");
   const check = CHECKS.get(checkName);
-  if (!check) {
+  if (!check && checkName !== "Release") {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
   }
 
@@ -56,7 +65,21 @@ try {
     });
   }
 
-  const payload = await client.callTool(check.tool, check.arguments);
+  let toolCount = null;
+  if (checkName === "Release") {
+    const tools = await client.listTools();
+    const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
+    const missing = REQUIRED_RELEASE_TOOLS.filter((name) => !names.has(name));
+    if (missing.length) {
+      throw Object.assign(new Error("Release MCP tool catalog is incomplete"), {
+        code: "MCP_TOOL_CATALOG_INCOMPLETE",
+      });
+    }
+    toolCount = tools.length;
+  }
+
+  const effectiveCheck = check ?? CHECKS.get("SessionStatus");
+  const payload = await client.callTool(effectiveCheck.tool, effectiveCheck.arguments);
   const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
   const summary =
     checkName === "LoginReuse"
@@ -74,6 +97,8 @@ try {
       : {
           status: "succeeded",
           check: checkName,
+          toolCount,
+          requiredReleaseToolsPresent: checkName === "Release" ? true : null,
           sessionStatus: String(
             payload?.result?.status ?? payload?.status ?? "unknown",
           ).slice(0, 80),
