@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-17
+> 文档日期：2026-07-18
 >
 > 适用阶段：单用户、受控公司内网、跨机器联调
 >
@@ -10,6 +10,7 @@
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
 > 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.7 已部署登录卡复用与登录后自动续办。
+> 中心写能力扩展一期已部署补签申请和新建会议能力，并完成真实 OA 无写入预检。
 
 ## 1. 方案结论
 
@@ -621,6 +622,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
 | 可安装 OpenClaw 插件与本机接线 | 0.1.7 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用和登录成功后一次性续办；URL 与可信值不进入模型上下文 |
+| 中心受治理写能力 | 已实现出差申请草稿、补签申请草稿、补签审批和新建会议；统一经过字段卡、实时校验、冻结计划、独立授权、一次性提交与业务回读 |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
@@ -718,6 +720,18 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 开发态真实部署在 `10.10.50.213` 完成：wheel 安装、`pip check`、systemd 重启、会话恢复及登录复用均成功，两次成功复验耗时 36.10-62.29 秒；未执行任何 OA 业务写入，也未重启 OpenClaw Gateway；
 - 当前全量基线为 Python `200 passed, 3 skipped, 19 subtests passed`、OpenClaw Node `25/25`、`compileall`、`pip check` 和 `npm pack --dry-run` 全部通过，两次墙钟时间为 69.17-91.22 秒；
 - 具体命令、故障解释和安全边界见 [开发验证与发布流程](development-and-release-workflow.md)。
+
+## 15.2 2026-07-18 写能力扩展一期部署与只读实机预检
+
+- 发布提交和 Linux Release ID 均为 `f6d6274ec88a`。wheel 已安装到 `/home/guomao/agentbridge/releases/f6d6274ec88a/cli_helper-0.1.0-py3-none-any.whl`，SHA-256 为 `24706b611c070f6ee7b1b5c976fbb44d516a986926b651b1b5a7d9a825f973b3`；systemd 服务、`compileall` 和 `pip check` 均通过；
+- 新增 `oa.missed_punch.prepare`、`oa.missed_punch.save_draft`、`oa.missed_punch.approval.prepare`、`oa.missed_punch.approve`、`oa.meeting.create.prepare` 和 `oa.meeting.create`。目标服务器共注册 14 项 OA 能力，运行时未包含旧 Chrome 扩展或浏览器桥接；
+- 补签草稿、补签审批和会议创建复用同一中心治理流程：可信字段卡、实时 OA 契约校验、冻结计划、会话身份绑定、独立执行授权、一次性消费、提交边界和业务回读。MCP 权限拆分为 `oa:write:draft`、`oa:write:approval` 和 `oa:write:meeting`；
+- 发布前全量验证为 `219 passed, 3 skipped, 19 subtests passed`，覆盖草稿不得发送、审批精确绑定 affair、会议冲突在写边界前拒绝、中文负载编码、登录页误分类、授权消费和 `RESULT_UNKNOWN` 等关键路径；
+- 用户重新登录后，正式 MCP `SessionStatus` 返回 active。服务器以同一加密会话执行真实 OA 无写入预检：补签模板 `-8494358180075582561` 与表单 `-3950641196724501449` 的字段、保存草稿按钮和禁止发送控制均通过校验；
+- 会议预检只调用 `meetingInfo`、`roomListInfo` 和 `validateRoomApps`。OA 首先真实返回“会议室只允许申请含今天 7 天内”的约束；调整到有效窗口后，“3号会议室”唯一解析为“4层3#会议室”，`2026-07-20 16:00-17:00` 通过可用性校验；
+- 两项预检的 `submitted_count` 均为 0，没有填写 OA 表单、保存草稿、审批、创建或发送会议。预检后正式 MCP 会话仍为 active；
+- 当前 OpenClaw Token 仍只有 `oa:read` 和 `oa:write:draft`。本次没有静默扩大既有 Token；补签审批和会议真实验收前，应由用户知情地换发包含 `oa:write:approval`、`oa:write:meeting` 的 Token，并分别确认具体业务写入。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
