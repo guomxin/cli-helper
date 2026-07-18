@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -14,7 +15,13 @@ MEETING_CONTRACT_VERSION = "seeyon-meeting-create-v1"
 
 MEETING_PREPARE_INPUT_SCHEMA = {
     "type": "object",
-    "properties": {"input_submission_id": {"type": "string"}},
+    "properties": {
+        "subject": {"type": "string", "maxLength": 255},
+        "room": {"type": "string", "maxLength": 100},
+        "start_time": {"type": "string", "maxLength": 32},
+        "end_time": {"type": "string", "maxLength": 32},
+        "input_submission_id": {"type": "string"},
+    },
     "additionalProperties": False,
 }
 
@@ -80,6 +87,74 @@ class MeetingContractMismatch(RuntimeError):
 
 class MeetingOutcomeUnknown(RuntimeError):
     pass
+
+
+def build_meeting_field_card_schema(adapter, worker, arguments: dict) -> dict:
+    """Build a prefilled card from one live, read-only room availability query."""
+    seed = _normalize_meeting_card_seed(arguments)
+    start_ms = _datetime_ms(seed["start_time"])
+    end_ms = _datetime_ms(seed["end_time"])
+    meeting_info = _ajax(worker, adapter, "meetingInfo", [{"meetingId": "", "templateId": ""}])
+    _validate_meeting_info(meeting_info)
+    room_list = _ajax(
+        worker,
+        adapter,
+        "roomListInfo",
+        [{"startDatetime": start_ms, "endDatetime": end_ms}],
+    )
+    available_rooms = _available_rooms(room_list, start_ms=start_ms, end_ms=end_ms)
+    if not available_rooms:
+        raise MeetingContractMismatch(
+            "No OA meeting rooms are available for the requested time range."
+        )
+
+    selected_room = None
+    room_match_note = ""
+    if seed["room"]:
+        try:
+            requested_room = _resolve_room(seed["room"], room_list)
+        except MeetingContractMismatch:
+            room_match_note = "未能精确匹配输入的会议室，请从 OA 当前空闲会议室中选择。"
+        else:
+            requested_app = _room_app(
+                requested_room,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+            _assert_room_available(room_list, requested_app)
+            selected_room = requested_room
+
+    schema = deepcopy(MEETING_FIELD_CARD_SCHEMA)
+    fields = {item["name"]: item for item in schema["fields"]}
+    fields["subject"]["value"] = seed["subject"]
+    fields["room"] = {
+        "name": "room",
+        "label": "会议室",
+        "control": "select",
+        "required": True,
+        "options": [
+            {"value": str(room["roomName"]), "label": str(room["roomName"])}
+            for room in available_rooms
+        ],
+        "value": str(selected_room["roomName"]) if selected_room else "",
+    }
+    fields["start_time"]["value"] = seed["start_time"]
+    fields["end_time"]["value"] = seed["end_time"]
+    schema["fields"] = [fields[item["name"]] for item in schema["fields"]]
+    checked_note = (
+        f"已按 {seed['start_time']} 至 {seed['end_time']} 查询 OA，"
+        f"当前有 {len(available_rooms)} 个空闲会议室。"
+    )
+    schema["notice"] = " ".join(
+        part
+        for part in (
+            checked_note,
+            room_match_note,
+            "提交字段后会再次校验；授权前不会预订会议室或发送会议。",
+        )
+        if part
+    )
+    return schema
 
 
 def prepare_meeting_create(adapter, worker, arguments: dict) -> dict:
@@ -237,6 +312,23 @@ def normalize_meeting_inputs(arguments: dict) -> dict:
     return {
         "subject": _bounded_text(arguments.get("subject"), "subject", 255),
         "room": _bounded_text(arguments.get("room"), "room", 100),
+        "start_time": start.strftime("%Y-%m-%d %H:%M"),
+        "end_time": end.strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def _normalize_meeting_card_seed(arguments: dict) -> dict:
+    if not isinstance(arguments, dict):
+        raise ValueError("meeting input must be an object")
+    start = _parse_datetime(arguments.get("start_time"), "start_time")
+    end = _parse_datetime(arguments.get("end_time"), "end_time")
+    if end <= start:
+        raise ValueError("end_time must be later than start_time")
+    if end - start > timedelta(days=7):
+        raise ValueError("meeting duration must not exceed 7 days")
+    return {
+        "subject": _optional_bounded_text(arguments.get("subject"), "subject", 255),
+        "room": _optional_bounded_text(arguments.get("room"), "room", 100),
         "start_time": start.strftime("%Y-%m-%d %H:%M"),
         "end_time": end.strftime("%Y-%m-%d %H:%M"),
     }
@@ -438,14 +530,15 @@ def _resolve_room(requested: str, room_list: Any) -> dict:
 
 
 def _normalize_room_name(value: str) -> str:
-    text = re.sub(r"\s+", "", str(value or "").lower())
+    text = _replace_chinese_numerals(str(value or "").lower())
+    text = re.sub(r"\s+", "", text)
     for token in ("会议室", "會議室", "号", "#", "層", "层", "樓", "楼"):
         text = text.replace(token, "")
     return text
 
 
 def _room_number(value: str, *, requested: bool) -> str:
-    text = str(value or "")
+    text = _replace_chinese_numerals(str(value or ""))
     if requested:
         match = re.search(r"(\d+)\s*(?:号|#)?\s*会议室", text)
         if match:
@@ -465,6 +558,46 @@ def _room_number(value: str, *, requested: bool) -> str:
     return ""
 
 
+_CHINESE_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_UNITS = {"十": 10, "百": 100}
+
+
+def _replace_chinese_numerals(value: str) -> str:
+    def replace(match: re.Match) -> str:
+        return str(_parse_chinese_numeral(match.group(0)))
+
+    return re.sub(r"[零〇一二两三四五六七八九十百]+", replace, value)
+
+
+def _parse_chinese_numeral(value: str) -> int:
+    if not any(character in _CHINESE_UNITS for character in value):
+        digits = "".join(str(_CHINESE_DIGITS[character]) for character in value)
+        return int(digits)
+    total = 0
+    current = 0
+    for character in value:
+        if character in _CHINESE_DIGITS:
+            current = _CHINESE_DIGITS[character]
+            continue
+        unit = _CHINESE_UNITS[character]
+        total += (current or 1) * unit
+        current = 0
+    return total + current
+
+
 def _room_app(room: dict, *, start_ms: int, end_ms: int) -> dict:
     room_id = str(room.get("roomId") or "")
     room_name = str(room.get("roomName") or "")
@@ -480,6 +613,14 @@ def _room_app(room: dict, *, start_ms: int, end_ms: int) -> dict:
 
 
 def _assert_room_available(room_list: Any, room_app: dict) -> None:
+    if _room_is_available(room_list, room_app):
+        return
+    raise MeetingContractMismatch(
+        "The requested OA meeting room is occupied for this time range."
+    )
+
+
+def _room_is_available(room_list: Any, room_app: dict) -> bool:
     apps = room_list.get("roomAppsInfo") if isinstance(room_list, dict) else []
     for app in apps if isinstance(apps, list) else []:
         if not isinstance(app, dict) or str(app.get("roomId") or "") != room_app["roomId"]:
@@ -489,9 +630,23 @@ def _assert_room_available(room_list: Any, room_app: dict) -> None:
         if app_start is None or app_end is None:
             continue
         if app_start < room_app["appEndDate"] and app_end > room_app["appBeginDate"]:
-            raise MeetingContractMismatch(
-                "The requested OA meeting room is occupied for this time range."
-            )
+            return False
+    return True
+
+
+def _available_rooms(room_list: Any, *, start_ms: int, end_ms: int) -> list[dict]:
+    rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
+    available = []
+    for room in rooms if isinstance(rooms, list) else []:
+        if not isinstance(room, dict):
+            continue
+        try:
+            room_app = _room_app(room, start_ms=start_ms, end_ms=end_ms)
+        except MeetingContractMismatch:
+            continue
+        if _room_is_available(room_list, room_app):
+            available.append(room)
+    return available
 
 
 def _validate_room_apps(worker, adapter, room_app: dict) -> None:
@@ -622,6 +777,17 @@ def _parse_datetime(value: Any, name: str) -> datetime:
 def _datetime_ms(value: str) -> int:
     parsed = _parse_datetime(value, "datetime")
     return int(parsed.replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+
+
+def _optional_bounded_text(value: Any, name: str, maximum: int) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    text = re.sub(r"[\r\n\t]+", " ", value).strip()
+    if len(text) > maximum:
+        raise ValueError(f"{name} must not exceed {maximum} characters")
+    return text
 
 
 def _bounded_text(value: Any, name: str, maximum: int) -> str:

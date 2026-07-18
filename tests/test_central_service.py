@@ -8,6 +8,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
+from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
 from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
     SeeyonSessionCheckUnavailable,
@@ -1000,11 +1001,23 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, FakeWorker())
             self._activate(service)
-            started = service.invoke(
-                user_subject="user-a",
-                capability_name="oa.meeting.create.prepare",
-                arguments={},
-            )
+            initial_arguments = {
+                "subject": "智能体测试",
+                "room": "三号会议室",
+                "start_time": "2026-07-20 14:00",
+                "end_time": "2026-07-20 16:00",
+            }
+            with patch(
+                "bscli.core.central_service.build_meeting_field_card_schema",
+                return_value=MEETING_FIELD_CARD_SCHEMA,
+            ) as build_schema:
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting.create.prepare",
+                    arguments=initial_arguments,
+                )
+            build_schema.assert_called_once()
+            self.assertEqual(build_schema.call_args.args[2], initial_arguments)
             submission_id = started["nextAction"]["inputSubmissionId"]
             self.assertEqual(
                 service.interaction_required_scopes(

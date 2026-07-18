@@ -27,6 +27,7 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_PREPARE_CAPABILITY,
     MeetingContractMismatch,
     MeetingOutcomeUnknown,
+    build_meeting_field_card_schema,
     create_meeting,
     prepare_meeting_create,
 )
@@ -120,6 +121,7 @@ _TRUSTED_WRITE_DEFINITIONS = {
     MEETING_PREPARE_CAPABILITY: {
         "commit_capability": MEETING_CREATE_CAPABILITY,
         "field_schema": MEETING_FIELD_CARD_SCHEMA,
+        "field_schema_function": "build_meeting_field_card_schema",
         "context_fields": (),
         "prepare_function": "prepare_meeting_create",
         "commit_function": "create_meeting",
@@ -750,14 +752,37 @@ class CentralCapabilityService:
             commit_definition = _TRUSTED_WRITE_COMMITS.get(capability_name)
             field_submission = None
             effective_arguments = arguments
-            if prepare_definition is not None:
-                field_submission, effective_arguments = self._resolve_trusted_field_input(
-                    context=context,
-                    session=session,
-                    arguments=arguments,
-                    definition=prepare_definition,
-                )
             try:
+                dynamic_field_schema = None
+                if (
+                    prepare_definition is not None
+                    and not str(arguments.get("input_submission_id") or "").strip()
+                    and prepare_definition.get("field_schema_function")
+                ):
+                    schema_function = globals().get(
+                        str(prepare_definition["field_schema_function"])
+                    )
+                    if not callable(schema_function):
+                        raise RuntimeError("trusted field schema function is unavailable")
+                    with self.worker_factory(session, self.adapter) as worker:
+                        worker.restore_session_state(state)
+                        dynamic_field_schema = schema_function(
+                            self.adapter,
+                            worker,
+                            arguments,
+                        )
+                        self.session_states.save(
+                            session["session_id"],
+                            worker.capture_session_state(),
+                        )
+                if prepare_definition is not None:
+                    field_submission, effective_arguments = self._resolve_trusted_field_input(
+                        context=context,
+                        session=session,
+                        arguments=arguments,
+                        definition=prepare_definition,
+                        form_schema=dynamic_field_schema,
+                    )
                 with self.worker_factory(session, self.adapter) as worker:
                     worker.restore_session_state(state)
                     if prepare_definition is not None:
@@ -897,6 +922,7 @@ class CentralCapabilityService:
         session: dict,
         arguments: dict,
         definition: dict,
+        form_schema: dict | None = None,
     ) -> tuple[dict, dict]:
         submission_id = str(arguments.get("input_submission_id") or "").strip()
         context_arguments = {
@@ -907,8 +933,11 @@ class CentralCapabilityService:
         if len(context_arguments) != len(definition.get("context_fields") or ()):
             raise ValueError("trusted field input is missing its workflow target context")
         if not submission_id:
-            form_schema = {
-                **definition["field_schema"],
+            selected_schema = (
+                form_schema if form_schema is not None else definition["field_schema"]
+            )
+            submission_schema = {
+                **selected_schema,
                 "_agentbridge_resume_arguments": context_arguments,
             }
             submission = self.field_submissions.create(
@@ -918,7 +947,7 @@ class CentralCapabilityService:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 create_operation_id=context.operation_id,
-                form_schema=form_schema,
+                form_schema=submission_schema,
                 card_base_url=self.trusted_card_base_url,
                 ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
             )

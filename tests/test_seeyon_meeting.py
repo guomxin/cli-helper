@@ -6,6 +6,7 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_CONTRACT_VERSION,
     MeetingContractMismatch,
     MeetingOutcomeUnknown,
+    build_meeting_field_card_schema,
     create_meeting,
     meeting_contract_fingerprint,
     normalize_meeting_inputs,
@@ -21,6 +22,91 @@ class SeeyonMeetingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "later than"):
             normalize_meeting_inputs(_inputs(end_time="2026-07-20 13:00"))
+
+    def test_card_preflight_prefills_user_values_and_real_room_option(self):
+        worker = FakeMeetingWorker(
+            rooms=[
+                _room(name="4层3#会议室"),
+                _room(room_id="room-2", name="4层2#会议室"),
+            ]
+        )
+
+        schema = build_meeting_field_card_schema(
+            FakeAdapter(),
+            worker,
+            _inputs(room="三号会议室"),
+        )
+
+        fields = {item["name"]: item for item in schema["fields"]}
+        self.assertEqual(fields["subject"]["value"], "智能体测试")
+        self.assertEqual(fields["start_time"]["value"], "2026-07-20 14:00")
+        self.assertEqual(fields["end_time"]["value"], "2026-07-20 16:00")
+        self.assertEqual(fields["room"]["control"], "select")
+        self.assertEqual(fields["room"]["value"], "4层3#会议室")
+        self.assertEqual(
+            [option["value"] for option in fields["room"]["options"]],
+            ["4层3#会议室", "4层2#会议室"],
+        )
+        self.assertEqual(worker.manager_methods, ["meetingInfo", "roomListInfo"])
+        self.assertEqual(worker.mutation_count, 0)
+
+    def test_card_preflight_falls_back_to_options_when_room_text_does_not_match(self):
+        worker = FakeMeetingWorker(
+            rooms=[
+                _room(name="4层3#会议室"),
+                _room(room_id="room-2", name="4层2#会议室"),
+            ]
+        )
+
+        schema = build_meeting_field_card_schema(
+            FakeAdapter(),
+            worker,
+            _inputs(room="行政会议室"),
+        )
+
+        room_field = next(item for item in schema["fields"] if item["name"] == "room")
+        self.assertEqual(room_field["value"], "")
+        self.assertEqual(len(room_field["options"]), 2)
+        self.assertIn("未能精确匹配", schema["notice"])
+
+    def test_card_preflight_only_lists_rooms_free_for_requested_time(self):
+        worker = FakeMeetingWorker(
+            conflict=True,
+            rooms=[
+                _room(name="4层3#会议室"),
+                _room(room_id="room-2", name="4层2#会议室"),
+            ],
+        )
+
+        schema = build_meeting_field_card_schema(
+            FakeAdapter(),
+            worker,
+            _inputs(room=""),
+        )
+
+        room_field = next(item for item in schema["fields"] if item["name"] == "room")
+        self.assertEqual(
+            room_field["options"],
+            [{"value": "4层2#会议室", "label": "4层2#会议室"}],
+        )
+        self.assertEqual(room_field["value"], "")
+
+    def test_card_preflight_blocks_an_occupied_requested_room_before_card(self):
+        worker = FakeMeetingWorker(
+            conflict=True,
+            rooms=[
+                _room(name="4层3#会议室"),
+                _room(room_id="room-2", name="4层2#会议室"),
+            ],
+        )
+
+        with self.assertRaisesRegex(MeetingContractMismatch, "occupied"):
+            build_meeting_field_card_schema(
+                FakeAdapter(),
+                worker,
+                _inputs(room="三号会议室"),
+            )
+        self.assertEqual(worker.mutation_count, 0)
 
     def test_prepare_only_runs_read_only_contract_checks(self):
         worker = FakeMeetingWorker()
@@ -117,7 +203,15 @@ class FakeAdapter:
 
 
 class FakeMeetingWorker:
-    def __init__(self, *, conflict=False, missing_readback=False, events=None, validation_data=...):
+    def __init__(
+        self,
+        *,
+        conflict=False,
+        missing_readback=False,
+        events=None,
+        validation_data=...,
+        rooms=None,
+    ):
         self.conflict = conflict
         self.missing_readback = missing_readback
         self.events = events if events is not None else []
@@ -126,6 +220,7 @@ class FakeMeetingWorker:
         self.content_save_bodies = []
         self.validation_data = [] if validation_data is ... else validation_data
         self.room_list_calls = 0
+        self.rooms = list(rooms) if rooms is not None else [_room()]
 
     def request(self, method, url, *, headers=None, body=None, timeout_seconds=30):
         del method, headers, timeout_seconds
@@ -161,7 +256,7 @@ class FakeMeetingWorker:
                 apps = [_room_booking("occupied")]
             elif self.room_list_calls > 1 and not self.missing_readback:
                 apps = [_room_booking("智能体测试", meeting_id="meeting-1")]
-            return _response({"roomsInfo": [_room()], "roomAppsInfo": apps}, url)
+            return _response({"roomsInfo": self.rooms, "roomAppsInfo": apps}, url)
         raise AssertionError(f"unexpected method: {manager_method} {arguments}")
 
 
@@ -181,8 +276,8 @@ def _meeting_info():
     }
 
 
-def _room():
-    return {"roomId": "room-3", "roomName": "3号会议室", "roomTypeId": "type-1"}
+def _room(*, room_id="room-3", name="3号会议室"):
+    return {"roomId": room_id, "roomName": name, "roomTypeId": "type-1"}
 
 
 def _room_booking(description, *, meeting_id="old-meeting"):

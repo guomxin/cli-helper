@@ -282,7 +282,10 @@ def create_central_mcp_server(
             "decisions in chat. When a result requires trusted interaction, let an MCP "
             "App or private host adapter render it. If no app appears, call "
             "agentbridge_interaction_get with the returned interaction ID. Resume only "
-            "after resume.ready is true. Writes remain prepare -> authorize -> commit -> verify."
+            "after resume.ready is true. For meeting preparation, forward scheduling values "
+            "already supplied by the user and never invent missing values; AgentBridge checks "
+            "live room availability before opening a prefilled card. Writes remain "
+            "prepare -> authorize -> commit -> verify."
         )
 
     async def invoke(
@@ -633,8 +636,10 @@ def create_central_mcp_server(
         title="Prepare OA Meeting Creation",
         meta=interaction_tool_meta(),
         description=(
-            "Collect meeting fields in a trusted card, resolve the room, check live "
-            "availability, and create a separate meeting-create confirmation."
+            "On the first call, pass any subject, requested room wording, start_time, and "
+            "end_time already supplied by the user. AgentBridge checks live OA room "
+            "availability before opening a prefilled card with real room options. After "
+            "field submission it rechecks availability and creates a separate confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -646,6 +651,10 @@ def create_central_mcp_server(
     )
     async def oa_meeting_create_prepare(
         ctx: Context,
+        subject: Annotated[str | None, Field(max_length=255)] = None,
+        room: Annotated[str | None, Field(max_length=100)] = None,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -653,8 +662,15 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
-        if input_submission_id is not None:
-            arguments["input_submission_id"] = input_submission_id
+        for name, value in (
+            ("subject", subject),
+            ("room", room),
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             MEETING_PREPARE_CAPABILITY,

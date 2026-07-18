@@ -378,7 +378,10 @@ def _render_form(
     error: str | None,
 ) -> str:
     schema = submission["form_schema"]
-    controls = "".join(_render_control(item, values.get(item["name"], "")) for item in _field_definitions(schema))
+    controls = "".join(
+        _render_control(item, _render_value(item, values))
+        for item in _field_definitions(schema)
+    )
     error_html = (
         f'<p class="form-error" role="alert">{escape(error)}</p>' if error else ""
     )
@@ -408,6 +411,16 @@ def _render_form(
         </main>
         """,
     )
+
+
+def _render_value(item: dict[str, Any], values: dict[str, str]) -> str:
+    name = item["name"]
+    if name in values:
+        return values[name]
+    value = item.get("value")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "" if value is None else str(value)
 
 
 def _render_control(item: dict[str, Any], value: str) -> str:

@@ -1,3 +1,4 @@
+from copy import deepcopy
 import re
 import unittest
 from pathlib import Path
@@ -5,6 +6,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import urlencode
 
 from bscli.adapters.seeyon_business_trip import BUSINESS_TRIP_FIELD_CARD_SCHEMA
+from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
 from bscli.auth.field_card import TrustedFieldApplication
 from bscli.core.field_submissions import FieldSubmissionStore
 
@@ -36,6 +38,50 @@ class TrustedFieldCardTests(unittest.TestCase):
             self.assertIn('postEvent("web_app_expand")', html)
             self.assertIn("if (false && (platform || canPost || canNotify))", html)
             self.assertNotIn("telegram.org", html)
+
+    def test_card_renders_prefilled_meeting_values_and_real_room_options(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            schema = deepcopy(MEETING_FIELD_CARD_SCHEMA)
+            fields = {item["name"]: item for item in schema["fields"]}
+            fields["subject"]["value"] = "智能体测试"
+            fields["room"] = {
+                "name": "room",
+                "label": "会议室",
+                "control": "select",
+                "required": True,
+                "options": [
+                    {"value": "4层2#会议室", "label": "4层2#会议室"},
+                    {"value": "4层3#会议室", "label": "4层3#会议室"},
+                ],
+                "value": "4层3#会议室",
+            }
+            fields["start_time"]["value"] = "2026-07-18 17:00"
+            fields["end_time"]["value"] = "2026-07-18 18:00"
+            schema["fields"] = [fields[item["name"]] for item in schema["fields"]]
+            submission = store.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.meeting.create.prepare",
+                capability_version="0.1.0",
+                create_operation_id="prepare-meeting-1",
+                form_schema=schema,
+                card_base_url="http://127.0.0.1:8780",
+            )
+            app = TrustedFieldApplication(submission_store=store)
+
+            response = app.get_card(submission["submission_id"], secure_cookie=False)
+
+            html = response.body.decode("utf-8")
+            self.assertIn('value="智能体测试"', html)
+            self.assertIn('value="2026-07-18T17:00"', html)
+            self.assertIn('value="2026-07-18T18:00"', html)
+            self.assertIn(
+                '<option value="4层3#会议室" selected>4层3#会议室</option>',
+                html,
+            )
+            self.assertIn('<option value="4层2#会议室">4层2#会议室</option>', html)
 
     def test_invalid_time_range_is_shown_without_consuming_card(self):
         with TemporaryDirectory() as tmp:

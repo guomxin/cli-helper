@@ -161,6 +161,9 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(save["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["destructiveHint"])
         approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
+        prepare_meeting = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
+        )
         create_meeting = next(tool for tool in tools if tool["name"] == "oa_meeting_create")
         self.assertTrue(approve["annotations"]["destructiveHint"])
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
@@ -170,6 +173,15 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("input_submission_id", prepare_schema)
         self.assertNotIn("reason", prepare_schema)
         self.assertNotIn("start_time", prepare_schema)
+        meeting_prepare_schema = prepare_meeting["inputSchema"]["properties"]
+        for field_name in (
+            "subject",
+            "room",
+            "start_time",
+            "end_time",
+            "input_submission_id",
+        ):
+            self.assertIn(field_name, meeting_prepare_schema)
         interaction_get = next(
             tool for tool in tools if tool["name"] == "agentbridge_interaction_get"
         )
