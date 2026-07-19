@@ -17,7 +17,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 18)
+        self.assertEqual(len(payload["capabilities"]), 20)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -38,6 +38,10 @@ class CentralCliTests(unittest.TestCase):
             "reversible_write",
         )
         self.assertEqual(
+            capabilities["oa.leave.submit"]["effect"],
+            "controlled_write",
+        )
+        self.assertEqual(
             capabilities["oa.missed_punch.save_draft"]["effect"],
             "reversible_write",
         )
@@ -52,7 +56,18 @@ class CentralCliTests(unittest.TestCase):
         prepare_schema = capabilities["oa.business_trip.prepare"]["input_schema"]
         self.assertEqual(
             set(prepare_schema["properties"]),
-            {"input_submission_id"},
+            {
+                "start_time",
+                "end_time",
+                "travel_mode",
+                "origin",
+                "destination",
+                "reason",
+                "has_direct_supervisor",
+                "trip_days",
+                "trip_hours",
+                "input_submission_id",
+            },
         )
 
     def test_session_status_returns_not_found_without_opening_browser(self):

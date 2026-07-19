@@ -32,6 +32,10 @@ from bscli.adapters.seeyon_leave import (
     LEAVE_PREPARE_CAPABILITY,
     LEAVE_SAVE_CAPABILITY,
 )
+from bscli.adapters.seeyon_leave_submit import (
+    LEAVE_SUBMIT_CAPABILITY,
+    LEAVE_SUBMIT_PREPARE_CAPABILITY,
+)
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_PREPARE_CAPABILITY,
@@ -451,8 +455,9 @@ def create_central_mcp_server(
         title="Prepare OA Business Trip Draft",
         meta=interaction_tool_meta(),
         description=(
-            "Start trusted business-trip field entry, or continue with its opaque submission "
-            "ID to validate the live OA form and create a separate confirmation card."
+            "On the first call, pass every business-trip field already supplied by the user. "
+            "AgentBridge opens a prefilled trusted card; omitted fields remain editable. After "
+            "field submission it validates the live OA form and creates draft confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -464,6 +469,15 @@ def create_central_mcp_server(
     )
     async def oa_business_trip_prepare(
         ctx: Context,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        travel_mode: Literal["大巴", "火车", "飞机", "轮渡", "自驾车"] | None = None,
+        origin: Annotated[str | None, Field(max_length=255)] = None,
+        destination: Annotated[str | None, Field(max_length=255)] = None,
+        reason: Annotated[str | None, Field(max_length=4000)] = None,
+        has_direct_supervisor: bool | None = None,
+        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
+        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -471,8 +485,20 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
-        if input_submission_id is not None:
-            arguments["input_submission_id"] = input_submission_id
+        for name, value in (
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("travel_mode", travel_mode),
+            ("origin", origin),
+            ("destination", destination),
+            ("reason", reason),
+            ("has_direct_supervisor", has_direct_supervisor),
+            ("trip_days", trip_days),
+            ("trip_hours", trip_hours),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             BUSINESS_TRIP_PREPARE_CAPABILITY,
@@ -515,8 +541,9 @@ def create_central_mcp_server(
         title="Prepare OA Business Trip Submission",
         meta=interaction_tool_meta(),
         description=(
-            "Collect business-trip fields in a trusted card, validate the live OA form "
-            "and sent-item baseline, then create a separate formal-submit authorization."
+            "On the first call, pass every business-trip field already supplied by the user. "
+            "AgentBridge opens a prefilled trusted card, validates the live OA form and sent "
+            "baseline after field submission, then creates formal-submit authorization."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -528,6 +555,15 @@ def create_central_mcp_server(
     )
     async def oa_business_trip_submit_prepare(
         ctx: Context,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        travel_mode: Literal["大巴", "火车", "飞机", "轮渡", "自驾车"] | None = None,
+        origin: Annotated[str | None, Field(max_length=255)] = None,
+        destination: Annotated[str | None, Field(max_length=255)] = None,
+        reason: Annotated[str | None, Field(max_length=4000)] = None,
+        has_direct_supervisor: bool | None = None,
+        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
+        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -535,8 +571,20 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
-        if input_submission_id is not None:
-            arguments["input_submission_id"] = input_submission_id
+        for name, value in (
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("travel_mode", travel_mode),
+            ("origin", origin),
+            ("destination", destination),
+            ("reason", reason),
+            ("has_direct_supervisor", has_direct_supervisor),
+            ("trip_days", trip_days),
+            ("trip_hours", trip_hours),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
@@ -579,8 +627,9 @@ def create_central_mcp_server(
         title="Prepare OA Leave Draft",
         meta=interaction_tool_meta(),
         description=(
-            "Start trusted leave-request field entry for the supported attachment-free "
-            "types, or resume with its opaque submission ID to create draft confirmation."
+            "On the first call, pass every supported leave field already supplied by the "
+            "user. AgentBridge opens a prefilled trusted card; omitted fields remain editable. "
+            "After field submission it validates OA and creates draft-save confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -592,6 +641,11 @@ def create_central_mcp_server(
     )
     async def oa_leave_prepare(
         ctx: Context,
+        leave_type: Literal["年休", "事假", "调休"] | None = None,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        reason: Annotated[str | None, Field(max_length=4000)] = None,
+        has_direct_supervisor: bool | None = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -599,8 +653,16 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
-        if input_submission_id is not None:
-            arguments["input_submission_id"] = input_submission_id
+        for name, value in (
+            ("leave_type", leave_type),
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("reason", reason),
+            ("has_direct_supervisor", has_direct_supervisor),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             LEAVE_PREPARE_CAPABILITY,
@@ -639,12 +701,91 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="oa_leave_submit_prepare",
+        title="Prepare OA Leave Submission",
+        meta=interaction_tool_meta(),
+        description=(
+            "On the first call, pass every supported leave field already supplied by the "
+            "user. AgentBridge opens a prefilled trusted card, validates OA and the sent "
+            "baseline after field submission, then creates formal-submit authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_leave_submit_prepare(
+        ctx: Context,
+        leave_type: Literal["年休", "事假", "调休"] | None = None,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        reason: Annotated[str | None, Field(max_length=4000)] = None,
+        has_direct_supervisor: bool | None = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        for name, value in (
+            ("leave_type", leave_type),
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("reason", reason),
+            ("has_direct_supervisor", has_direct_supervisor),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            LEAVE_SUBMIT_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:submit"},
+        )
+
+    @mcp.tool(
+        name="oa_leave_submit",
+        title="Submit Authorized OA Leave Request",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, formally send the frozen leave request "
+            "into OA approval, and verify one new readable sent item."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_leave_submit(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            LEAVE_SUBMIT_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:submit"},
+        )
+
+    @mcp.tool(
         name="oa_missed_punch_prepare",
         title="Prepare OA Missed-Punch Draft",
         meta=interaction_tool_meta(),
         description=(
-            "Start trusted missed-punch field entry, or continue with its opaque "
-            "submission ID to validate the live form and create a draft-save confirmation."
+            "On the first call, pass every missed-punch field already supplied by the user. "
+            "AgentBridge opens a prefilled trusted card; omitted fields remain editable. "
+            "After field submission it validates OA and creates draft-save confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -656,6 +797,11 @@ def create_central_mcp_server(
     )
     async def oa_missed_punch_prepare(
         ctx: Context,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        location: Annotated[str | None, Field(max_length=255)] = None,
+        reason_type: Literal["忘记打卡", "人脸识别有误", "其他"] | None = None,
+        explanation: Annotated[str | None, Field(max_length=4000)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -663,8 +809,16 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
-        if input_submission_id is not None:
-            arguments["input_submission_id"] = input_submission_id
+        for name, value in (
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("location", location),
+            ("reason_type", reason_type),
+            ("explanation", explanation),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             MISSED_PUNCH_PREPARE_CAPABILITY,
@@ -707,8 +861,9 @@ def create_central_mcp_server(
         title="Prepare OA Missed-Punch Approval",
         meta=interaction_tool_meta(),
         description=(
-            "Bind one opaque pending affair ID, collect the opinion in a trusted card, "
-            "validate the exact missed-punch target, and create an approval confirmation."
+            "Bind one opaque pending affair ID and pass any approval opinion already supplied "
+            "by the user. AgentBridge opens a prefilled trusted card, validates the exact "
+            "missed-punch target, and creates separate approval confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -721,6 +876,7 @@ def create_central_mcp_server(
     async def oa_missed_punch_approval_prepare(
         ctx: Context,
         affair_id: Annotated[str, Field(min_length=1, max_length=256)],
+        opinion: Annotated[str | None, Field(max_length=1000)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -728,6 +884,8 @@ def create_central_mcp_server(
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"affair_id": affair_id}
+        if opinion is not None:
+            arguments["opinion"] = opinion
         if input_submission_id is not None:
             arguments["input_submission_id"] = input_submission_id
         return await invoke(

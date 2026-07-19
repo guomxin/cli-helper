@@ -11,6 +11,7 @@ from bscli.adapters.seeyon_business_trip_submit import (
 )
 from bscli.adapters.seeyon_central import SeeyonCentralAdapter
 from bscli.adapters.seeyon_leave import prepare_leave_draft
+from bscli.adapters.seeyon_leave_submit import prepare_leave_submission
 from bscli.browser.central import CentralBrowserWorker
 from bscli.core.config import ConfigStore
 from bscli.core.session_secrets import SessionStateStore
@@ -29,12 +30,12 @@ def main() -> int:
     parser.add_argument(
         "--workflow",
         action="append",
-        choices=["business-trip-submit", "leave-draft"],
+        choices=["business-trip-submit", "leave-draft", "leave-submit"],
     )
     args = parser.parse_args()
 
     home = Path(args.home).resolve()
-    workflows = args.workflow or ["business-trip-submit", "leave-draft"]
+    workflows = args.workflow or ["business-trip-submit", "leave-draft", "leave-submit"]
     profile = ConfigStore(home).load_system("oa")
     registry = SessionRegistry(home / "agentbridge.db", home / "profiles")
     sessions = registry.list_active(system_id="oa")
@@ -148,6 +149,19 @@ def _prepare(workflow: str, adapter, worker) -> dict:
     if workflow == "leave-draft":
         leave_start = base + timedelta(days=1)
         return prepare_leave_draft(
+            adapter,
+            worker,
+            {
+                "leave_type": "事假",
+                "start_time": leave_start.strftime("%Y-%m-%d %H:%M"),
+                "end_time": leave_start.replace(hour=12).strftime("%Y-%m-%d %H:%M"),
+                "reason": "AgentBridge 非提交契约验证",
+                "has_direct_supervisor": False,
+            },
+        )
+    if workflow == "leave-submit":
+        leave_start = base + timedelta(days=1)
+        return prepare_leave_submission(
             adapter,
             worker,
             {

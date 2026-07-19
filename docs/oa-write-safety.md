@@ -16,15 +16,21 @@ authorization, deterministic execution, and server-backed readback.
 ### Current central controls
 
 - `oa.business_trip.prepare` and `oa.business_trip.save_draft` are the first
-  central governed write pair. The initial `prepare {}` creates a trusted field
-  card; dates, locations, reason, travel mode, supervisor choice, and optional
-  duration go directly from the user to a short-lived `FieldSubmission` and do
-  not enter CLI/MCP arguments. A second `prepare` with only the opaque
-  `input_submission_id` validates the exact live template and CAP4 contract
-  without filling or clicking, consumes the field submission once, freezes the
-  exact plan, and returns a separate trusted action-card URL. `save_draft`
-  accepts only that opaque authorization, consumes it at the final click
-  boundary, clicks only `saveDraft_a`, and refuses `sendId_a`.
+  central governed write pair. The initial prepare may carry optional prefill
+  seeds only for values the user already stated in the conversation; omitted or
+  corrected values are entered in the trusted card. Card submission is the
+  authoritative `FieldSubmission`, and its values are not echoed into
+  model-visible results. A second prepare with only the opaque
+  `input_submission_id` validates the exact live template and CAP4 contract,
+  consumes the field submission once, freezes the exact plan, and returns a
+  separate trusted action card. `save_draft` accepts only that opaque
+  authorization, consumes it at the final click boundary, clicks only
+  `saveDraft_a`, and refuses `sendId_a`.
+- The same prefill rule applies to business-trip draft/formal submit, leave
+  draft/formal submit, missed-punch draft/approval, and meeting creation. Static
+  card schemas copy only same-named, schema-validated prepare arguments. Dynamic
+  meeting defaults remain authoritative so a user room alias cannot overwrite a
+  resolved OA room option. A user edit in the card always wins over a seed.
 - Central business-trip success requires a server-backed wait-send redirect,
   stable `summary_id` and `affair_id`, and exact field readback after reload.
   The result must report `workflow_submitted=false` and `submitted_count=0`.
@@ -54,14 +60,17 @@ authorization, deterministic execution, and server-backed readback.
 - `oa.leave.prepare` and `oa.leave.save_draft` implement the
   `【HR】请假申请单` wait-send path. The first phase supports only attachment-free
   `年休`, `事假`, and `调休`. Commit clicks only `#saveDraft_a`, forbids
-  `#sendId_a`, reloads the wait-send item, and verifies requested fields plus
-  OA-computed days/hours. Missing computed duration after save is an unknown
-  outcome, not permission to retry or submit.
-- On 2026-07-19, both new prepare paths passed against the real encrypted central
-  OA session under a route guard: `write_controls_clicked=0`,
-  `collaboration_write_requests=0`, `drafts_saved=0`, and
-  `workflows_submitted=0`. Formal business-trip submit and leave draft save still
-  require separate, explicitly approved live acceptance cases.
+  `#sendId_a`, and requires stable `summary_id` / `affair_id` plus exact readback
+  of every requested field. OA-computed days/hours are advisory evidence: the
+  live system can leave both controls blank after a durable save.
+- The 2026-07-19 operation that returned `RESULT_UNKNOWN` was reconciled without
+  retry: OA `待发事项` contained the matching 11:36 leave draft. The verifier was
+  corrected; no duplicate draft was created during reconciliation.
+- `oa.leave.submit.prepare` and `oa.leave.submit` are a separate formal pair.
+  They use a new field submission, separate authorization, independent
+  `oa:write:submit` scope, a frozen sent baseline and subject marker, immediate
+  pre-send revalidation, and exactly-one sent-item/detail readback. Draft
+  authorization can never be consumed by formal submit.
 
 - `oa.missed_punch.prepare` and `oa.missed_punch.save_draft` use the same
   field-card -> live validation -> frozen plan -> authorization -> commit ->
@@ -234,12 +243,12 @@ must not be restored as a fallback path.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Current central executable mappings are business-trip draft save, business-trip
-formal submit, leave-request draft save, missed-punch draft save, missed-punch
+Current central executable mappings are business-trip draft save and formal
+submit, leave-request draft save and formal submit, missed-punch draft save and
 approval, and meeting creation. Each is available only through its
 workflow-specific trusted interaction pair and independently scoped token.
-Business-trip formal submit and leave draft currently have real-session
-zero-write prepare evidence but no live commit acceptance. Missed-punch send,
+Business-trip and leave formal submit have no live commit acceptance; the leave
+save path has one reconciled live draft. Missed-punch send,
 other workflow approvals or submissions, meeting invitation reply, reject,
 archive, delete, revoke, return, upload, generic send, and other writes remain
 unavailable until they have a dedicated central mapping, tests, and a separately

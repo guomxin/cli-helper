@@ -1,6 +1,6 @@
 {
   "name": "@guomxin/openclaw-agentbridge-interactions",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Trusted AgentBridge interaction cards for OpenClaw",
   "type": "module",
   "license": "MIT",

@@ -14,12 +14,19 @@ LEAVE_SAVE_CAPABILITY = "oa.leave.save_draft"
 LEAVE_TEMPLATE_TITLE = "【HR】请假申请单"
 LEAVE_TEMPLATE_ID = "-7765568933726502821"
 LEAVE_FORM_APP_ID = "6773919591095560889"
-LEAVE_CONTRACT_VERSION = "seeyon-leave-draft-v1"
+LEAVE_CONTRACT_VERSION = "seeyon-leave-draft-v2"
 LEAVE_SUPPORTED_TYPES = ("年休", "事假", "调休")
 
 LEAVE_PREPARE_INPUT_SCHEMA = {
     "type": "object",
-    "properties": {"input_submission_id": {"type": "string"}},
+    "properties": {
+        "leave_type": {"type": "string", "enum": list(LEAVE_SUPPORTED_TYPES)},
+        "start_time": {"type": "string", "maxLength": 32},
+        "end_time": {"type": "string", "maxLength": 32},
+        "reason": {"type": "string", "maxLength": 4000},
+        "has_direct_supervisor": {"type": "boolean"},
+        "input_submission_id": {"type": "string"},
+    },
     "additionalProperties": False,
 }
 
@@ -150,7 +157,7 @@ def prepare_leave_draft(adapter, worker, arguments: dict) -> dict:
                 "cap4_frame_loaded": True,
                 "supported_leave_type_present": True,
                 "form_fields_matched": True,
-                "computed_duration_deferred_to_save": True,
+                "computed_duration_advisory": True,
                 "save_draft_control_present": True,
                 "send_control_present_but_forbidden": True,
                 "page_title": str(page.title() or ""),
@@ -160,7 +167,7 @@ def prepare_leave_draft(adapter, worker, arguments: dict) -> dict:
                 "draft_saved": True,
                 "workflow_submitted": False,
                 "submitted_count": 0,
-                "verification": "wait_send_reload_and_field_readback",
+                "verification": "wait_send_identifiers_and_field_readback",
             },
         },
         "summary": leave_summary(inputs),
@@ -237,12 +244,12 @@ def save_leave_draft(
         _validate_form_controls(page, saved_frame)
         saved_readback = _read_leave_form(page, saved_frame)
         _assert_readback(inputs, saved_readback, stage="verification")
-        _assert_computed_duration(saved_readback, stage="verification")
         identifiers = _wait_send_identifiers(page.url)
         if not identifiers["summary_id"] or not identifiers["affair_id"]:
             raise LeaveOutcomeUnknown(
                 "OA reloaded the leave draft without stable summary and affair identifiers."
             )
+        duration_evidence = _duration_evidence(saved_readback)
         return {
             "schema_version": "agentbridge.oa_leave_save_result.v1",
             "business_intent": "save_leave_request_draft",
@@ -257,9 +264,10 @@ def save_leave_draft(
             },
             "verification": {
                 "confirmed": True,
-                "method": "wait_send_reload_and_field_readback",
+                "method": "wait_send_identifiers_and_field_readback",
                 "matched_fields": sorted(_expected_readback_fields()),
                 "server_reloaded": True,
+                "duration": duration_evidence,
             },
             "request_evidence": observed_requests,
             "transport": "central_browser_session",
@@ -529,13 +537,14 @@ def _assert_readback(expected: dict, actual: dict, *, stage: str) -> None:
         raise LeaveContractMismatch(message)
 
 
-def _assert_computed_duration(actual: dict, *, stage: str) -> None:
-    if any(str(actual.get(name) or "").strip() for name in ("leave_days", "leave_hours")):
-        return
-    message = f"OA leave {stage} did not calculate leave days or hours"
-    if stage == "verification":
-        raise LeaveOutcomeUnknown(message)
-    raise LeaveContractMismatch(message)
+def _duration_evidence(actual: dict) -> dict:
+    leave_days = str(actual.get("leave_days") or "").strip()
+    leave_hours = str(actual.get("leave_hours") or "").strip()
+    return {
+        "reported": bool(leave_days or leave_hours),
+        "leave_days": leave_days,
+        "leave_hours": leave_hours,
+    }
 
 
 def _expected_readback_fields() -> set[str]:

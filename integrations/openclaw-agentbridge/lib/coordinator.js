@@ -735,6 +735,13 @@ function safeSucceededMessage(response) {
     return verified
       ? "OA 出差申请已提交审批，并已通过已发事项回读确认。"
       : "OA 出差申请已提交审批。";
+  }  if (
+    result.business_intent === "submit_leave_request" &&
+    result.workflow_submitted === true
+  ) {
+    return verified
+      ? "OA 请假申请已提交审批，并已通过已发事项回读确认。"
+      : "OA 请假申请已提交审批。";
   }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return verified

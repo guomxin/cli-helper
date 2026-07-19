@@ -674,6 +674,76 @@ test("reports a verified business-trip submission after authorization resumes", 
   assert.equal(harness.heartbeatRuns.length, 0);
 });
 
+test("reports a verified leave submission after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-leave-submit-authorization-123456",
+    type: "execution_authorization",
+    title: "提交请假申请",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const calls = [];
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          business_intent: "submit_leave_request",
+          workflow_submitted: true,
+          submitted_count: 1,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-leave-submit-authorization",
+    runId: "run-leave-submit-authorization",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-leave-submit-authorization",
+      toolName: "oa_leave_submit_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["agentbridge_interaction_get", "agentbridge_interaction_resume"],
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA 请假申请已提交审批，并已通过已发事项回读确认。",
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
 test("delivers a final trusted status directly without waking the model", async () => {
   const harness = fakeApi({
     autoPoll: false,

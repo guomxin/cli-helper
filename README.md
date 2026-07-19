@@ -61,6 +61,8 @@ Published OA capabilities:
 - oa.business_trip.submit
 - oa.leave.prepare
 - oa.leave.save_draft
+- oa.leave.submit.prepare
+- oa.leave.submit
 - oa.missed_punch.prepare
 - oa.missed_punch.save_draft
 - oa.missed_punch.approval.prepare
@@ -177,6 +179,10 @@ renderer remains a host-adapter reference. See the
 Every published write is workflow-specific and follows trusted field collection,
 live prepare, separate authorization, deterministic commit, and authoritative
 readback. Draft, approval, meeting, and formal-submission scopes are independent.
+Prepare tools accept optional prefill seeds only for values the user already supplied
+in the conversation. Those defaults reduce duplicate entry but remain editable; the
+submitted trusted-card values are authoritative. Omitted values stay inside the card,
+and neither submitted values nor card URLs are echoed into model-visible results.
 
 ### Business-trip draft
 
@@ -233,17 +239,24 @@ Formal submission requires the independent `oa:write:submit` token scope. The
 real central OA session has passed the non-mutating prepare/preflight path; an
 actual submission remains pending a specifically approved live test.
 
-### Leave-request draft
+### Leave request
 
 `oa.leave.prepare` and `oa.leave.save_draft` implement the `【HR】请假申请单`
-draft path. The first phase supports attachment-free `年休`, `事假`, and `调休`
-only. OA-computed days and hours are verified after save/reload rather than
-trusted before the save boundary. Other leave types fail closed until their
-attachment and conditional-field contracts are promoted.
+wait-send path. The first phase supports attachment-free `年休`, `事假`, and
+`调休` only. Draft success requires stable wait-send identifiers plus exact
+readback of every user-entered field. OA-computed days and hours are retained as
+advisory evidence because the live OA can leave both display controls blank even
+after the draft is durably saved.
 
-The leave pair uses `oa:write:draft`. Its real-session, non-mutating prepare
-preflight has passed; an actual leave draft save remains pending a specifically
-approved live test.
+The 2026-07-19 live operation was reconciled read-only against OA: one matching
+11:36 draft existed in `待发事项`, so the former `RESULT_UNKNOWN` was a verifier
+false negative and was not retried. The draft pair remains under `oa:write:draft`.
+
+`oa.leave.submit.prepare` and `oa.leave.submit` are a separate formal-submission
+pair under `oa:write:submit`. They require a new field submission and a new action
+authorization, consume approval immediately before `#sendId_a`, and succeed only
+after exactly one new matching sent item and its detail can be read back. No live
+leave submission has been performed by this implementation change.
 
 ## Streamable HTTP MCP
 

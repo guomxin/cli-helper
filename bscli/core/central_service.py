@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
@@ -36,6 +37,13 @@ from bscli.adapters.seeyon_leave import (
     LeaveOutcomeUnknown,
     prepare_leave_draft,
     save_leave_draft,
+)
+from bscli.adapters.seeyon_leave_submit import (
+    LEAVE_SUBMIT_CAPABILITY,
+    LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
+    LEAVE_SUBMIT_PREPARE_CAPABILITY,
+    prepare_leave_submission,
+    submit_leave_request,
 )
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
@@ -134,6 +142,17 @@ _TRUSTED_WRITE_DEFINITIONS = {
         "field_message": "Leave-request fields must be entered in the trusted field card.",
         "authorization_message": "The leave draft plan requires confirmation in the trusted action card.",
     },
+    LEAVE_SUBMIT_PREPARE_CAPABILITY: {
+        "commit_capability": LEAVE_SUBMIT_CAPABILITY,
+        "field_schema": LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_leave_submission",
+        "commit_function": "submit_leave_request",
+        "contract_error": LeaveContractMismatch,
+        "outcome_error": LeaveOutcomeUnknown,
+        "field_message": "Leave-request fields must be entered in the trusted field card.",
+        "authorization_message": "The leave submission plan requires confirmation in the trusted action card.",
+    },
     MISSED_PUNCH_PREPARE_CAPABILITY: {
         "commit_capability": MISSED_PUNCH_SAVE_CAPABILITY,
         "field_schema": MISSED_PUNCH_FIELD_CARD_SCHEMA,
@@ -182,6 +201,8 @@ _CAPABILITY_SCOPES = {
     BUSINESS_TRIP_SUBMIT_CAPABILITY: frozenset({"oa:write:submit"}),
     LEAVE_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     LEAVE_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
+    LEAVE_SUBMIT_PREPARE_CAPABILITY: frozenset({"oa:write:submit"}),
+    LEAVE_SUBMIT_CAPABILITY: frozenset({"oa:write:submit"}),
     MISSED_PUNCH_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
@@ -189,6 +210,17 @@ _CAPABILITY_SCOPES = {
     MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
     MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
 }
+
+
+def _prefill_trusted_field_schema(schema: dict, arguments: dict) -> dict:
+    selected = deepcopy(schema)
+    for field in selected.get("fields") or []:
+        if not isinstance(field, dict) or "value" in field:
+            continue
+        name = str(field.get("name") or "")
+        if name and name in arguments and arguments[name] is not None:
+            field["value"] = arguments[name]
+    return selected
 
 
 def capability_required_scopes(capability_name: str) -> frozenset[str]:
@@ -979,7 +1011,7 @@ class CentralCapabilityService:
                 form_schema if form_schema is not None else definition["field_schema"]
             )
             submission_schema = {
-                **selected_schema,
+                **_prefill_trusted_field_schema(selected_schema, arguments),
                 "_agentbridge_resume_arguments": context_arguments,
             }
             submission = self.field_submissions.create(

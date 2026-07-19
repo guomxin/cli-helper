@@ -55,6 +55,13 @@ credentials, business-field values, or frozen plans.
 `display` contains only non-sensitive presentation metadata. Form schemas,
 submitted values, credentials, frozen plans, cookies, internal URLs, and
 browser details are not part of the envelope.
+A prepare tool may accept optional prefill seeds when the user already supplied
+those same values in the conversation. The host passes them directly to
+AgentBridge only as editable defaults in the trusted form schema. Omitted values
+must still be entered on the trusted surface, the submitted card values override
+all seeds, and neither defaults nor submitted values are copied into the public
+interaction envelope. Hosts must not ask the model to invent missing fields or
+recover completed field values from AgentBridge.
 
 `presentation.url` is a short-lived trusted-card capability URL. A production
 deployment must generate it from the central service's externally reachable

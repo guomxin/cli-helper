@@ -142,7 +142,7 @@ class SeeyonLeaveTests(unittest.TestCase):
 
         self.assertEqual(page.clicked_selector, "#saveDraft_a")
 
-    def test_missing_oa_computed_duration_after_save_is_outcome_unknown(self):
+    def test_missing_oa_computed_duration_is_advisory_after_stable_draft_readback(self):
         page = FakePage()
         frame = FakeFrame()
         expected = normalize_leave_inputs(_inputs())
@@ -166,16 +166,19 @@ class SeeyonLeaveTests(unittest.TestCase):
             patch("bscli.adapters.seeyon_leave._wait_for_cap4_frame", return_value=frame),
             patch("bscli.adapters.seeyon_leave._validate_form_controls"),
         ):
-            with self.assertRaisesRegex(LeaveOutcomeUnknown, "calculate"):
-                save_leave_draft(
-                    FakeAdapter(),
-                    object(),
-                    _plan(expected),
-                    enter_commit_boundary=lambda: None,
-                    timeout_seconds=5,
-                )
+            result = save_leave_draft(
+                FakeAdapter(),
+                object(),
+                _plan(expected),
+                enter_commit_boundary=lambda: None,
+                timeout_seconds=5,
+            )
 
         self.assertEqual(page.clicked_selector, "#saveDraft_a")
+        self.assertTrue(result["draft_saved"])
+        self.assertFalse(result["verification"]["duration"]["reported"])
+        self.assertEqual(result["draft"]["summary_id"], "leave-summary")
+        self.assertEqual(result["draft"]["affair_id"], "leave-affair")
 
     def test_stale_plan_is_rejected_before_authorization_consumption(self):
         plan = _plan(normalize_leave_inputs(_inputs()))

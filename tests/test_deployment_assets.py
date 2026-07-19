@@ -35,6 +35,8 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_business_trip_submit",
             "oa_leave_prepare",
             "oa_leave_save_draft",
+            "oa_leave_submit_prepare",
+            "oa_leave_submit",
             "oa_missed_punch_prepare",
             "oa_missed_punch_save_draft",
             "oa_missed_punch_approval_prepare",

@@ -151,6 +151,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_business_trip_submit", names)
         self.assertIn("oa_leave_prepare", names)
         self.assertIn("oa_leave_save_draft", names)
+        self.assertIn("oa_leave_submit_prepare", names)
+        self.assertIn("oa_leave_submit", names)
         self.assertIn("oa_missed_punch_prepare", names)
         self.assertIn("oa_missed_punch_save_draft", names)
         self.assertIn("oa_missed_punch_approval_prepare", names)
@@ -162,12 +164,15 @@ class CentralMcpTests(unittest.TestCase):
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
         submit = next(tool for tool in tools if tool["name"] == "oa_business_trip_submit")
         leave_save = next(tool for tool in tools if tool["name"] == "oa_leave_save_draft")
+        leave_prepare = next(tool for tool in tools if tool["name"] == "oa_leave_prepare")
+        leave_submit = next(tool for tool in tools if tool["name"] == "oa_leave_submit")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["destructiveHint"])
         self.assertTrue(submit["annotations"]["destructiveHint"])
         self.assertFalse(leave_save["annotations"]["destructiveHint"])
+        self.assertTrue(leave_submit["annotations"]["destructiveHint"])
         approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
         prepare_meeting = next(
             tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
@@ -178,9 +183,29 @@ class CentralMcpTests(unittest.TestCase):
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
         prepare_schema = prepare["inputSchema"]["properties"]
-        self.assertIn("input_submission_id", prepare_schema)
-        self.assertNotIn("reason", prepare_schema)
-        self.assertNotIn("start_time", prepare_schema)
+        for field_name in (
+            "start_time",
+            "end_time",
+            "travel_mode",
+            "origin",
+            "destination",
+            "reason",
+            "has_direct_supervisor",
+            "trip_days",
+            "trip_hours",
+            "input_submission_id",
+        ):
+            self.assertIn(field_name, prepare_schema)
+        leave_prepare_schema = leave_prepare["inputSchema"]["properties"]
+        for field_name in (
+            "leave_type",
+            "start_time",
+            "end_time",
+            "reason",
+            "has_direct_supervisor",
+            "input_submission_id",
+        ):
+            self.assertIn(field_name, leave_prepare_schema)
         meeting_prepare_schema = prepare_meeting["inputSchema"]["properties"]
         for field_name in (
             "subject",

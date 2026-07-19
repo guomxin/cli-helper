@@ -20,6 +20,15 @@ BUSINESS_TRIP_TRAVEL_MODES = ("大巴", "火车", "飞机", "轮渡", "自驾车
 BUSINESS_TRIP_PREPARE_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
+        "start_time": {"type": "string", "maxLength": 32},
+        "end_time": {"type": "string", "maxLength": 32},
+        "travel_mode": {"type": "string", "enum": list(BUSINESS_TRIP_TRAVEL_MODES)},
+        "origin": {"type": "string", "maxLength": 255},
+        "destination": {"type": "string", "maxLength": 255},
+        "reason": {"type": "string", "maxLength": 4000},
+        "has_direct_supervisor": {"type": "boolean"},
+        "trip_days": {"type": "number", "minimum": 0, "maximum": 366},
+        "trip_hours": {"type": "number", "minimum": 0, "maximum": 8784},
         "input_submission_id": {"type": "string"},
     },
     "additionalProperties": False,

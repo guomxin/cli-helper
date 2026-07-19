@@ -183,8 +183,8 @@ First launch-side expansion batch:
 
 ### Current Central Expansion (2026-07-19)
 
-The current registry contains 18 OA capabilities: six reads and twelve
-workflow-stage write capabilities. The central MCP surface contains 25 tools
+The current registry contains 20 OA capabilities: six reads and fourteen
+workflow-stage write capabilities. The central MCP surface contains 27 tools
 including session, operation, interaction, and profile tools.
 
 - `【HR】请假申请单` resolves to template id `-7765568933726502821` and
@@ -200,15 +200,23 @@ including session, operation, interaction, and profile tools.
 - `oa.leave.prepare` collects values through a trusted field card, settles known
   OA notice overlays, validates and reads the live form, then freezes a separate
   draft authorization without saving. `oa.leave.save_draft` clicks only
-  `#saveDraft_a`, refuses `#sendId_a`, reloads the wait-send item, and verifies
-  both requested fields and the OA-computed duration.
+  `#saveDraft_a`, refuses `#sendId_a`, reloads the wait-send item, and requires
+  stable summary/affair identifiers plus exact requested-field readback.
+  Calculated days/hours are advisory because the real OA left both blank after a
+  durable save.
+- The 2026-07-19 `RESULT_UNKNOWN` was reconciled read-only through the OA
+  `listWaitSend` page. A matching 11:36 leave draft existed, so no retry was
+  attempted. `oa.leave.submit.prepare` / `oa.leave.submit` now form a separate
+  `oa:write:submit` path with a new field submission, authorization, sent
+  baseline, pre-send revalidation and sent-detail readback.
+- Prepare tools for business trip, leave, missed punch and approval now accept
+  schema-validated values already supplied in conversation as editable card
+  defaults. The trusted-card submission remains authoritative and its completed
+  values stay out of model-visible interaction metadata.
 - `scripts/inspect_oa_template_contract.py` is the reusable read-only contract
   probe. `scripts/validate_oa_write_preflight.py` is the fail-closed real-session
-  preflight: it blocks collaboration POSTs and records any save/send control
-  click. The 2026-07-19 run passed business-trip formal-submit prepare and leave
-  draft prepare with `write_controls_clicked=0`,
-  `collaboration_write_requests=0`, `drafts_saved=0`, and
-  `workflows_submitted=0`. No live submit or leave draft save occurred.
+  preflight: it blocks collaboration POSTs, records any save/send control click,
+  and covers business-trip submit, leave draft, and leave submit prepare paths.
 
 ### Previous Central Expansion (2026-07-18)
 

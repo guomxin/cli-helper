@@ -31,6 +31,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.business_trip.submit.prepare",
                 "oa.leave.prepare",
                 "oa.leave.save_draft",
+                "oa.leave.submit",
+                "oa.leave.submit.prepare",
                 "oa.meeting.create",
                 "oa.meeting.create.prepare",
                 "oa.missed_punch.approval.prepare",
@@ -52,11 +54,24 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.business_trip.submit"], "controlled_write")
         self.assertEqual(effects["oa.leave.prepare"], "reversible_write")
         self.assertEqual(effects["oa.leave.save_draft"], "reversible_write")
+        self.assertEqual(effects["oa.leave.submit.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.leave.submit"], "controlled_write")
         prepare = registry.get("oa.business_trip.prepare")
-        self.assertEqual(prepare.version, "0.2.0")
+        self.assertEqual(prepare.version, "0.3.0")
         self.assertEqual(
             set(prepare.input_schema["properties"]),
-            {"input_submission_id"},
+            {
+                "start_time",
+                "end_time",
+                "travel_mode",
+                "origin",
+                "destination",
+                "reason",
+                "has_direct_supervisor",
+                "trip_days",
+                "trip_hours",
+                "input_submission_id",
+            },
         )
         self.assertEqual(effects["oa.missed_punch.prepare"], "reversible_write")
         self.assertEqual(effects["oa.missed_punch.save_draft"], "reversible_write")

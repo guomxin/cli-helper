@@ -22,7 +22,14 @@ MISSED_PUNCH_REASONS = ("忘记打卡", "人脸识别有误", "其他")
 
 MISSED_PUNCH_PREPARE_INPUT_SCHEMA = {
     "type": "object",
-    "properties": {"input_submission_id": {"type": "string"}},
+    "properties": {
+        "start_time": {"type": "string", "maxLength": 32},
+        "end_time": {"type": "string", "maxLength": 32},
+        "location": {"type": "string", "maxLength": 255},
+        "reason_type": {"type": "string", "enum": list(MISSED_PUNCH_REASONS)},
+        "explanation": {"type": "string", "maxLength": 4000},
+        "input_submission_id": {"type": "string"},
+    },
     "additionalProperties": False,
 }
 
@@ -95,6 +102,7 @@ MISSED_PUNCH_APPROVAL_PREPARE_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "affair_id": {"type": "string"},
+        "opinion": {"type": "string", "maxLength": 1000},
         "input_submission_id": {"type": "string"},
     },
     "required": ["affair_id"],

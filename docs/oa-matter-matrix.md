@@ -34,13 +34,13 @@ python -m bscli.cli.main --home .bscli oa matter matrix --kind all --keyword 报
 
 旧 `oa matter matrix` 是退役桥接时期的只读发现产物，继续作为模板匹配和
 迁移线索，但不再是当前执行入口。当前智能体应以中心 Capability Registry
-和 MCP 工具目录为准：共 18 个 OA 能力，其中 6 个只读、12 个受治理写阶段；
-中心 MCP 总计 25 个工具。
+和 MCP 工具目录为准：共 20 个 OA 能力，其中 6 个只读、14 个受治理写阶段；
+中心 MCP 总计 27 个工具。
 
 | 事项 | 发起处理 | 接收处理 | 当前证据与限制 |
 |---|---|---|---|
 | 出差申请单 | `oa.business_trip.prepare` / `save_draft`；独立的 `submit.prepare` / `submit` | 暂无专用接收能力 | 草稿已做真实保存回读；正式提交已通过真实会话零写入 prepare，尚未做真实 submit；正式提交要求独立 `oa:write:submit` |
-| 请假申请单 | `oa.leave.prepare` / `save_draft` | 暂无专用接收能力 | 仅开放 `年休`、`事假`、`调休`；真实会话零写入 prepare 已通过，真实保存待验证 |
+| 请假申请单 | `oa.leave.prepare` / `save_draft`；独立的 `submit.prepare` / `submit` | 暂无专用接收能力 | 仅开放 `年休`、`事假`、`调休`；真实草稿已保存并从待发只读核账；正式提交要求独立 `oa:write:submit`，尚未做真实 submit |
 | 补签申请单 | `oa.missed_punch.prepare` / `save_draft` | `oa.missed_punch.approval.prepare` / `approve` | 已形成独立的发起草稿和接收审批状态机；不暴露通用 `ContinueSubmit` |
 | 新建会议 | `oa.meeting.create.prepare` / `create` | 当前中心端未开放会议邀请回复 | 已完成真实创建发送与会议室列表、详情双回读；会议室由实时空闲选项选择 |
 | 其他历史事项 | 仅保留模板/历史发现证据 | 仅保留只读预检证据 | 未形成工作流专用中心能力前不得借用相似表单的底层提交动作 |

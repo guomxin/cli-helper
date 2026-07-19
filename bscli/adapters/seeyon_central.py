@@ -26,6 +26,12 @@ from bscli.adapters.seeyon_leave import (
     LEAVE_SAVE_CAPABILITY,
     LEAVE_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_leave_submit import (
+    LEAVE_SUBMIT_CAPABILITY,
+    LEAVE_SUBMIT_INPUT_SCHEMA,
+    LEAVE_SUBMIT_PREPARE_CAPABILITY,
+    LEAVE_SUBMIT_PREPARE_INPUT_SCHEMA,
+)
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_CREATE_INPUT_SCHEMA,
@@ -198,7 +204,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_PREPARE_CAPABILITY,
-            version="0.2.0",
+            version="0.3.0",
             description=(
                 "Collect business-trip fields through a trusted card, validate the live "
                 "OA form, and create a separate one-time confirmation card."
@@ -228,7 +234,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Collect business-trip fields through a trusted card, validate the live "
                 "OA form and sent-item baseline, and create a separate submit authorization."
@@ -258,7 +264,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
     registry.register(
         CapabilitySpec(
             name=LEAVE_PREPARE_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Collect supported leave-request fields through a trusted card, validate "
                 "the live OA form, and create a separate draft-save authorization."
@@ -285,10 +291,40 @@ def build_central_capability_registry() -> CapabilityRegistry:
             workflow="leave-draft-save-v1",
         )
     )
+    registry.register(
+        CapabilitySpec(
+            name=LEAVE_SUBMIT_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect supported leave-request fields through a trusted card, validate "
+                "the live OA form and sent-item baseline, and create a submit authorization."
+            ),
+            input_schema=LEAVE_SUBMIT_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="leave-submit-prepare-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=LEAVE_SUBMIT_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, submit the frozen leave request, "
+                "and verify one new readable item in the OA sent collection."
+            ),
+            input_schema=LEAVE_SUBMIT_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="leave-submit-commit-v1",
+        )
+    )
     for spec in (
         CapabilitySpec(
             name=MISSED_PUNCH_PREPARE_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Collect missed-punch fields in a trusted card, validate the live OA "
                 "form, and create a separate draft-save authorization."
@@ -314,7 +350,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Collect an approval opinion in a trusted card, validate one exact "
                 "pending missed-punch item, and create a separate approval authorization."

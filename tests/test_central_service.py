@@ -42,6 +42,14 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             capability_required_scopes("oa.leave.save_draft"),
             frozenset({"oa:write:draft"}),
         )
+        self.assertEqual(
+            capability_required_scopes("oa.leave.submit.prepare"),
+            frozenset({"oa:write:submit"}),
+        )
+        self.assertEqual(
+            capability_required_scopes("oa.leave.submit"),
+            frozenset({"oa:write:submit"}),
+        )
 
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:
@@ -569,6 +577,79 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         self.assertEqual(maximum_active, 1)
         self.assertTrue(all(response["status"] == "succeeded" for response in responses))
 
+    def test_static_business_cards_prefill_all_supplied_fields(self):
+        cases = [
+            (
+                "oa.business_trip.prepare",
+                {
+                    "start_time": "2026-07-21 09:00",
+                    "end_time": "2026-07-21 18:00",
+                    "travel_mode": "火车",
+                    "origin": "济南",
+                    "destination": "青岛",
+                    "reason": "客户交流",
+                    "has_direct_supervisor": False,
+                    "trip_days": 1.0,
+                    "trip_hours": 8.0,
+                },
+                {},
+            ),
+            (
+                "oa.leave.submit.prepare",
+                {
+                    "leave_type": "年休",
+                    "start_time": "2026-07-22 09:00",
+                    "end_time": "2026-07-22 18:00",
+                    "reason": "个人事务",
+                    "has_direct_supervisor": True,
+                },
+                {},
+            ),
+            (
+                "oa.missed_punch.prepare",
+                {
+                    "start_time": "2026-07-20 08:30",
+                    "end_time": "2026-07-20 09:00",
+                    "location": "公司园区",
+                    "reason_type": "忘记打卡",
+                    "explanation": "早间漏打卡",
+                },
+                {},
+            ),
+            (
+                "oa.missed_punch.approval.prepare",
+                {"affair_id": "affair-1", "opinion": "同意"},
+                {"affair_id": "affair-1"},
+            ),
+        ]
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            for index, (capability, arguments, resume_arguments) in enumerate(cases):
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name=capability,
+                    arguments=arguments,
+                    idempotency_key=f"prefill-{index}",
+                )
+                self.assertEqual(started["error"]["code"], "FIELD_INPUT_REQUIRED")
+                submission = service.field_submissions.get(
+                    started["nextAction"]["inputSubmissionId"]
+                )
+                fields = {
+                    item["name"]: item
+                    for item in submission["form_schema"]["fields"]
+                }
+                for name, value in arguments.items():
+                    if name != "affair_id":
+                        self.assertEqual(fields[name]["value"], value)
+                self.assertEqual(
+                    submission["form_schema"]["_agentbridge_resume_arguments"],
+                    resume_arguments,
+                )
+                for value in arguments.values():
+                    if isinstance(value, str) and value not in resume_arguments.values():
+                        self.assertNotIn(value, str(started["nextAction"]))
     def test_business_trip_prepare_requires_trusted_card_then_consumes_it_once(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
