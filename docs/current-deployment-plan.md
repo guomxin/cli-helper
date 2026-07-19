@@ -623,7 +623,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.7 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用和登录成功后一次性续办；URL 与可信值不进入模型上下文 |
+| 可安装 OpenClaw 插件与本机接线 | 0.1.9 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用、登录后一次性续办及出差正式提交回读反馈；URL 与可信值不进入模型上下文 |
 | 中心受治理写能力 | 已实现出差申请草稿与独立正式提交、请假申请草稿、补签申请草稿与审批、新建会议；统一经过流程专用字段卡、实时校验、冻结计划、独立授权、一次性 commit 与业务回读。出差正式提交和请假草稿仅完成零写入真实预检，尚未做真实 commit |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
@@ -796,6 +796,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 本轮没有保存请假草稿，也没有正式提交出差申请。现有 OpenClaw Token
   未增加 `oa:write:submit`；新增能力不会自动扩大既有 Token。实际 commit
   仍分别等待具体业务数据和用户明确确认。
+- 提交 `22e217b` 推送 GitHub 后，中心端已切换到干净 Release
+  `22e217bf2acc`；部署后 Release 冒烟再次确认 25 个工具完整、OA 会话
+  `active`；
+- Windows 托管 `openclaw gateway restart` 本次约 546 秒返回，只执行一次。
+  最终新 PID `14980` 单实例监听 `127.0.0.1:18789`，深度 RPC 和配置审计
+  通过；运行时插件检查显示源码路径仍链接本仓库、版本 `0.1.9`、状态
+  `loaded`、诊断为空；`openclaw mcp probe` 发现 25 个 AgentBridge 工具，
+  resources/prompts 均可用且诊断为空。
 
 ## 16. 后续演进顺序
 
