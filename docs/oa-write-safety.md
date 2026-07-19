@@ -40,6 +40,28 @@ authorization, deterministic execution, and server-backed readback.
   `submitted_count=0`, and `browser_bridge_used=false`. Replaying the same save
   request returned `reused=true` with the original draft IDs. The Chrome
   extension and localhost daemon were not used.
+- `oa.business_trip.submit.prepare` and `oa.business_trip.submit` are a separate
+  formal-submission pair. They cannot consume a draft plan or authorization.
+  Prepare validates the exact template/form/subject, records an adapter-internal
+  sent-item baseline, freezes the plan, and creates an action card whose text
+  explicitly says that approval will be submitted. Commit revalidates the live
+  contract, consumes authorization immediately before `#sendId_a`, and succeeds
+  only when exactly one new matching sent item and its detail can be read back.
+  A crossed send boundary without proof is `RESULT_UNKNOWN`, never retried.
+- The sent collection exists only for adapter verification. It is allowed by
+  internal list/detail helpers but remains rejected by public collection inputs;
+  no raw sent-list command or general sent-detail surface is published.
+- `oa.leave.prepare` and `oa.leave.save_draft` implement the
+  `【HR】请假申请单` wait-send path. The first phase supports only attachment-free
+  `年休`, `事假`, and `调休`. Commit clicks only `#saveDraft_a`, forbids
+  `#sendId_a`, reloads the wait-send item, and verifies requested fields plus
+  OA-computed days/hours. Missing computed duration after save is an unknown
+  outcome, not permission to retry or submit.
+- On 2026-07-19, both new prepare paths passed against the real encrypted central
+  OA session under a route guard: `write_controls_clicked=0`,
+  `collaboration_write_requests=0`, `drafts_saved=0`, and
+  `workflows_submitted=0`. Formal business-trip submit and leave draft save still
+  require separate, explicitly approved live acceptance cases.
 
 - `oa.missed_punch.prepare` and `oa.missed_punch.save_draft` use the same
   field-card -> live validation -> frozen plan -> authorization -> commit ->
@@ -63,9 +85,10 @@ authorization, deterministic execution, and server-backed readback.
   `meetingView`. Chinese JSON is ASCII-escaped before URL encoding to preserve
   the one-pass body binding validated in the historical live test.
 - MCP write scopes are independent: drafts require `oa:write:draft`, approvals
-  require `oa:write:approval`, and meeting creation requires
-  `oa:write:meeting`. Completing a trusted card does not widen the caller's
-  token; interaction resume resolves and checks the original capability scope.
+  require `oa:write:approval`, meeting creation requires `oa:write:meeting`, and
+  formal workflow submission requires `oa:write:submit`. Completing a trusted
+  card, deploying a capability, or resuming an interaction does not widen the
+  caller's token; resume resolves and checks the original capability scope.
 
 ### Retired runtime reference
 
@@ -211,13 +234,16 @@ must not be restored as a fallback path.
   It reads pending items first and refuses to run a confirmed no-op validation
   if the default no-match keyword is present.
 
-Current central executable capabilities are business-trip draft save,
-missed-punch draft save, missed-punch approval, and meeting creation. Each is
-available only through its workflow-specific trusted interaction pair. Business
-trip or missed-punch send/submit, other workflow approvals, meeting invitation
-reply, reject, archive, delete, revoke, return, upload, generic send, and other
-writes remain unavailable until they have a dedicated central mapping, tests,
-and a separately confirmed live acceptance case.
+Current central executable mappings are business-trip draft save, business-trip
+formal submit, leave-request draft save, missed-punch draft save, missed-punch
+approval, and meeting creation. Each is available only through its
+workflow-specific trusted interaction pair and independently scoped token.
+Business-trip formal submit and leave draft currently have real-session
+zero-write prepare evidence but no live commit acceptance. Missed-punch send,
+other workflow approvals or submissions, meeting invitation reply, reject,
+archive, delete, revoke, return, upload, generic send, and other writes remain
+unavailable until they have a dedicated central mapping, tests, and a separately
+confirmed live acceptance case.
 
 `Archive` / `处理后归档` is intentionally promoted only to dry-run-only. Agents
 may call `oa write dry-run --affair-id <id> --action Archive` to prove the

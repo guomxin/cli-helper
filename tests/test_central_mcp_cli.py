@@ -34,6 +34,8 @@ class CentralMcpCliTests(unittest.TestCase):
                         "oa:write:approval",
                         "--scope",
                         "oa:write:meeting",
+                        "--scope",
+                        "oa:write:submit",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -56,6 +58,7 @@ class CentralMcpCliTests(unittest.TestCase):
                 "oa:write:approval",
                 "oa:write:draft",
                 "oa:write:meeting",
+                "oa:write:submit",
             ],
         )
         self.assertEqual(listed["count"], 1)

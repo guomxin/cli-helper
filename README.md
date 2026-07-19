@@ -10,7 +10,7 @@ The active runtime is central AgentBridge:
 - Trusted authentication, business-field, and write-authorization cards
 - A Credential Broker that keeps credentials outside model-visible channels
 - A durable operation ledger with idempotency and explicit outcome states
-- Seeyon OA support with six read capabilities and one governed draft workflow
+- Seeyon OA support with six read capabilities and twelve governed workflow-stage capabilities
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
@@ -57,6 +57,16 @@ Published OA capabilities:
 - oa.workflow.opinions.list
 - oa.business_trip.prepare
 - oa.business_trip.save_draft
+- oa.business_trip.submit.prepare
+- oa.business_trip.submit
+- oa.leave.prepare
+- oa.leave.save_draft
+- oa.missed_punch.prepare
+- oa.missed_punch.save_draft
+- oa.missed_punch.approval.prepare
+- oa.missed_punch.approve
+- oa.meeting.create.prepare
+- oa.meeting.create
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
@@ -162,7 +172,13 @@ renderer remains a host-adapter reference. See the
 [agent interaction protocol](docs/agent-interaction-protocol.md) and the
 [remote MCP low-install onboarding guide](docs/remote-mcp-onboarding.md).
 
-## Governed Business-Trip Draft
+## Governed OA Writes
+
+Every published write is workflow-specific and follows trusted field collection,
+live prepare, separate authorization, deterministic commit, and authoritative
+readback. Draft, approval, meeting, and formal-submission scopes are independent.
+
+### Business-trip draft
 
 The first write vertical slice saves a Seeyon business-trip application as a
 wait-send draft. It never sends or submits the workflow.
@@ -200,8 +216,34 @@ python -m bscli.cli.main --home .bscli interaction resume \
 ~~~
 
 A successful commit reloads the server-backed wait-send item, reads its fields
-back, and reports workflow_submitted=false and submitted_count=0. Uncertain
+back, and reports `workflow_submitted=false` and `submitted_count=0`. Uncertain
 post-click outcomes are recorded as unknown and are not retried automatically.
+
+### Business-trip formal submission
+
+`oa.business_trip.submit.prepare` and `oa.business_trip.submit` are a separate
+controlled-write pair. They require a new field submission and a new action
+authorization; a draft authorization cannot be reused. Commit consumes approval
+immediately before the OA send control and succeeds only after exactly one new
+matching item is found in the adapter-internal sent collection and its detail can
+be read back. That sent collection is verification-only and is not a public list
+or detail surface.
+
+Formal submission requires the independent `oa:write:submit` token scope. The
+real central OA session has passed the non-mutating prepare/preflight path; an
+actual submission remains pending a specifically approved live test.
+
+### Leave-request draft
+
+`oa.leave.prepare` and `oa.leave.save_draft` implement the `【HR】请假申请单`
+draft path. The first phase supports attachment-free `年休`, `事假`, and `调休`
+only. OA-computed days and hours are verified after save/reload rather than
+trusted before the save boundary. Other leave types fail closed until their
+attachment and conditional-field contracts are promoted.
+
+The leave pair uses `oa:write:draft`. Its real-session, non-mutating prepare
+preflight has passed; an actual leave draft save remains pending a specifically
+approved live test.
 
 ## Streamable HTTP MCP
 
@@ -214,6 +256,11 @@ python -m bscli.cli.main --home .bscli mcp token issue \
   --scope oa:write:draft \
   --ttl-hours 24
 ~~~
+
+Choose only the scopes required by that client: `oa:write:draft`,
+`oa:write:approval`, `oa:write:meeting`, and `oa:write:submit` are independent.
+Completing a trusted card or deploying a new capability never widens an already
+issued token.
 
 Start the central MCP endpoint and trusted-card service in the same process:
 

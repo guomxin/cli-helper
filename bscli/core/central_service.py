@@ -21,6 +21,22 @@ from bscli.adapters.seeyon_business_trip import (
     prepare_business_trip_draft,
     save_business_trip_draft,
 )
+from bscli.adapters.seeyon_business_trip_submit import (
+    BUSINESS_TRIP_SUBMIT_CAPABILITY,
+    BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA,
+    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
+    prepare_business_trip_submission,
+    submit_business_trip_request,
+)
+from bscli.adapters.seeyon_leave import (
+    LEAVE_FIELD_CARD_SCHEMA,
+    LEAVE_PREPARE_CAPABILITY,
+    LEAVE_SAVE_CAPABILITY,
+    LeaveContractMismatch,
+    LeaveOutcomeUnknown,
+    prepare_leave_draft,
+    save_leave_draft,
+)
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_FIELD_CARD_SCHEMA,
@@ -96,6 +112,28 @@ _TRUSTED_WRITE_DEFINITIONS = {
         "field_message": "Business-trip fields must be entered in the trusted field card.",
         "authorization_message": "The business-trip draft plan requires confirmation in the trusted action card.",
     },
+    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY: {
+        "commit_capability": BUSINESS_TRIP_SUBMIT_CAPABILITY,
+        "field_schema": BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_business_trip_submission",
+        "commit_function": "submit_business_trip_request",
+        "contract_error": BusinessTripContractMismatch,
+        "outcome_error": BusinessTripOutcomeUnknown,
+        "field_message": "Business-trip fields must be entered in the trusted field card.",
+        "authorization_message": "The business-trip submission plan requires confirmation in the trusted action card.",
+    },
+    LEAVE_PREPARE_CAPABILITY: {
+        "commit_capability": LEAVE_SAVE_CAPABILITY,
+        "field_schema": LEAVE_FIELD_CARD_SCHEMA,
+        "context_fields": (),
+        "prepare_function": "prepare_leave_draft",
+        "commit_function": "save_leave_draft",
+        "contract_error": LeaveContractMismatch,
+        "outcome_error": LeaveOutcomeUnknown,
+        "field_message": "Leave-request fields must be entered in the trusted field card.",
+        "authorization_message": "The leave draft plan requires confirmation in the trusted action card.",
+    },
     MISSED_PUNCH_PREPARE_CAPABILITY: {
         "commit_capability": MISSED_PUNCH_SAVE_CAPABILITY,
         "field_schema": MISSED_PUNCH_FIELD_CARD_SCHEMA,
@@ -140,6 +178,10 @@ _TRUSTED_WRITE_COMMITS = {
 _CAPABILITY_SCOPES = {
     BUSINESS_TRIP_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     BUSINESS_TRIP_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
+    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY: frozenset({"oa:write:submit"}),
+    BUSINESS_TRIP_SUBMIT_CAPABILITY: frozenset({"oa:write:submit"}),
+    LEAVE_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
+    LEAVE_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),

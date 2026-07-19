@@ -1,7 +1,7 @@
 # 面向智能体的 B/S 遗留系统非侵入式适配设计方案
 
-> 文档状态：Draft v0.10
-> 更新日期：2026-07-13
+> 文档状态：Draft v0.11
+> 更新日期：2026-07-19
 > 适用范围：只面向智能体的系统适配；必须支持不同用户以各自在遗留系统中的身份并发使用，并支持通过手机端智能体安全使用；不建设面向人的新业务操作界面，不要求对外提供通用业务 API
 
 > **文档定位：目标架构与后续参考，不是首期实现清单。** 快速可行性验证按 [PoC 验证方案](./poc-validation-plan.md) 实施；暂缓事项统一记录在 [后续增强事项](./deferred-considerations.md)。
@@ -30,6 +30,27 @@
 可信认证卡片与 Credential Broker 的单用户 PoC 已完成真实 OA 验证：用户在模型不可见的系统浏览器卡片中填写凭据，Broker 核验下游身份为“辛国茂”并保存完整的 `/seeyon` 会话 Cookie；全新的 headless CLI 进程可从 DPAPI 密文恢复会话并读取 118 个模板。扩展后的中心只读包又真实读取了 3 条待办、9 条已办和 9 条跟踪事项，并从一条已办事项的中心渲染页及同源 iframe 中提取 8 个业务字段和 1 条结构化意见；所有结果均为 `browser_bridge_used=false`，列表使用 `central_http_session`，详情和意见使用 `central_browser_session`，并生成独立持久化 `operationId`。登录过期会明确返回 `LOGIN_REQUIRED`，不会把登录页误报为业务空数据。Windows DPAPI 已验证跨用户解密失败关闭；Linux AES-256-GCM 又在目标 Ubuntu 24.04 机器通过错密钥、错上下文、篡改、权限、重启恢复及全量 170 项测试。生产部署仍应使用固定服务身份并迁移到 Vault/KMS。卡片已完成桌面与移动尺寸视觉检查，但尚未通过手机真实网络访问。
 
 最小远程 MCP 已通过独立服务进程与官方 MCP 客户端烟测：Bearer 鉴权后可发现中心工具并读取令牌绑定用户的会话状态；无令牌、吊销令牌和跨用户操作读取会失败关闭，CLI 与 MCP 使用同一幂等键时返回同一 `operationId`。随后又完成单用户真实 OA 闭环：官方 MCP 客户端调用 `oa_session_login` 生成可信认证卡，用户完成真实登录后，客户端调用 `oa_workflow_pending_list` 读取 3 条待办，返回 `central_http_session`、`browserBridgeUsed=false` 和持久化操作记录；一次性身份令牌随后自动吊销，MCP 与认证卡监听端口均关闭。首个中心 W1 草稿能力现已完成“认证卡 → 字段卡 → 授权卡 → 保存待发 → 回读”的单用户真实 OA 验证：7 个业务字段由用户直接提交中心 `FieldSubmission`，CLI/MCP 和模型只持有不透明 ID；第二次 prepare 校验真实 CAP4 表单并冻结计划，独立授权在保存边界消费一次。OA 返回待发草稿和稳定业务 ID，服务端重载后 7 个字段全部匹配，结果明确为 `workflow_submitted=false`、`submitted_count=0` 和 `browser_bridge_used=false`；相同幂等键重放返回原操作与原草稿 ID，未生成第二份草稿。字段卡还通过桌面与 390×844 视口检查，测试中发现的隐藏 radio 横向溢出已修复。这仍不是生产远程接入验收：预签发 Bearer 令牌只用于 PoC 引导，真实 OAuth/OIDC、两个 Worker OS 安全主体的多用户隔离、生产证书与反向代理信任、限流、设备绑定、真实手机网络和更多中心写动作尚未完成；旧桥接公开运行时已完成退役一期。由于暂时没有第二个真实 OA 用户，本轮不把代码级绑定和合成身份测试表述为多用户隔离验收。
+
+### 0.1 2026-07-19 实现增量
+
+- 当前中心目录已扩展为 18 个 OA 能力：6 个只读能力，以及按具体流程组织的
+  12 个写阶段能力；远程 MCP 共发布 25 个工具。CLI、MCP 和 OpenClaw
+  继续共享同一 `CentralCapabilityService`，没有恢复浏览器扩展或旧 Daemon；
+- 出差申请在原“保存待发”之外，新增独立的
+  `oa.business_trip.submit.prepare` / `oa.business_trip.submit` 正式提交对。
+  它使用新的字段提交和授权，要求独立 `oa:write:submit` scope，并以内建
+  “已发事项新增且详情可回读”作为成功判据；内部已发集合不对智能体开放；
+- 新增 `oa.leave.prepare` / `oa.leave.save_draft` 请假申请草稿对。首期只支持
+  无附件的 `年休`、`事假`、`调休`，OA 计算的天数和小时只在保存后回读核验；
+  其他假别在条件字段和附件契约明确前失败关闭；
+- 新增可复用的真实模板契约探针和零写入预检脚本。2026-07-19 在中央加密
+  OA 会话中完成出差正式提交 prepare 与请假草稿 prepare；路由守卫确认
+  `write_controls_clicked=0`、`collaboration_write_requests=0`、
+  `drafts_saved=0`、`workflows_submitted=0`。这证明表单契约可用，但不等于
+  已完成真实正式提交或请假保存；
+- 写权限继续按草稿、审批、会议、正式提交分离。部署新能力不会自动扩大令牌；
+  当前 OpenClaw Token 未增加 `oa:write:submit`，真实业务写入仍需具体数据和
+  明确确认。
 
 ## 1. 摘要
 

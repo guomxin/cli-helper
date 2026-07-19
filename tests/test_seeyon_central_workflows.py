@@ -27,6 +27,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             [
                 "oa.business_trip.prepare",
                 "oa.business_trip.save_draft",
+                "oa.business_trip.submit",
+                "oa.business_trip.submit.prepare",
+                "oa.leave.prepare",
+                "oa.leave.save_draft",
                 "oa.meeting.create",
                 "oa.meeting.create.prepare",
                 "oa.missed_punch.approval.prepare",
@@ -44,6 +48,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         effects = {spec.name: spec.effect for spec in registry.list(system="oa")}
         self.assertEqual(effects["oa.business_trip.prepare"], "reversible_write")
         self.assertEqual(effects["oa.business_trip.save_draft"], "reversible_write")
+        self.assertEqual(effects["oa.business_trip.submit.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.business_trip.submit"], "controlled_write")
+        self.assertEqual(effects["oa.leave.prepare"], "reversible_write")
+        self.assertEqual(effects["oa.leave.save_draft"], "reversible_write")
         prepare = registry.get("oa.business_trip.prepare")
         self.assertEqual(prepare.version, "0.2.0")
         self.assertEqual(

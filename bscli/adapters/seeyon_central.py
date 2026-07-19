@@ -14,6 +14,18 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_SAVE_CAPABILITY,
     BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_business_trip_submit import (
+    BUSINESS_TRIP_SUBMIT_CAPABILITY,
+    BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA,
+    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
+    BUSINESS_TRIP_SUBMIT_PREPARE_INPUT_SCHEMA,
+)
+from bscli.adapters.seeyon_leave import (
+    LEAVE_PREPARE_CAPABILITY,
+    LEAVE_PREPARE_INPUT_SCHEMA,
+    LEAVE_SAVE_CAPABILITY,
+    LEAVE_SAVE_INPUT_SCHEMA,
+)
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_CREATE_INPUT_SCHEMA,
@@ -135,6 +147,7 @@ _WORKFLOW_LIST_CAPABILITIES = {
 }
 
 _WORKFLOW_COLLECTIONS = frozenset(_WORKFLOW_LIST_CAPABILITIES.values())
+_INTERNAL_WORKFLOW_COLLECTIONS = frozenset((*_WORKFLOW_COLLECTIONS, "sent"))
 
 _WORKFLOW_LIST_INPUT_SCHEMA = {
     "type": "object",
@@ -210,6 +223,66 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="reversible_write",
             adapter="seeyon-central",
             workflow="business-trip-draft-save-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect business-trip fields through a trusted card, validate the live "
+                "OA form and sent-item baseline, and create a separate submit authorization."
+            ),
+            input_schema=BUSINESS_TRIP_SUBMIT_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="business-trip-submit-prepare-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=BUSINESS_TRIP_SUBMIT_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, submit the frozen business-trip "
+                "request, and verify one new readable item in the OA sent collection."
+            ),
+            input_schema=BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="business-trip-submit-commit-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=LEAVE_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect supported leave-request fields through a trusted card, validate "
+                "the live OA form, and create a separate draft-save authorization."
+            ),
+            input_schema=LEAVE_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="leave-draft-prepare-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=LEAVE_SAVE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, save the frozen leave request as an "
+                "OA wait-send draft, and verify it by server readback without submission."
+            ),
+            input_schema=LEAVE_SAVE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter="seeyon-central",
+            workflow="leave-draft-save-v1",
         )
     )
     for spec in (
@@ -493,7 +566,7 @@ class SeeyonCentralAdapter:
         raise KeyError(f"unsupported Seeyon central capability: {capability_name}")
 
     def list_workflows(self, worker, *, collection: str, arguments: dict | None = None) -> dict:
-        collection = _validated_collection(collection)
+        collection = _validated_internal_collection(collection)
         arguments = arguments or {}
         keyword = _validated_optional_string(arguments.get("keyword"), "keyword", maximum=200)
         limit = _validated_integer(arguments.get("limit"), "limit", default=50, minimum=1, maximum=100)
@@ -601,7 +674,7 @@ class SeeyonCentralAdapter:
         """Resolve one workflow for a process adapter without exposing its URL."""
         return self._render_workflow_detail(
             worker,
-            collection=_validated_collection(collection),
+            collection=_validated_internal_collection(collection),
             affair_id=_validated_identifier(affair_id, "affair_id"),
         )
 
@@ -772,6 +845,13 @@ def _validated_collection(value) -> str:
     if not isinstance(value, str) or value not in _WORKFLOW_COLLECTIONS:
         choices = ", ".join(sorted(_WORKFLOW_COLLECTIONS))
         raise ValueError(f"collection must be one of: {choices}")
+    return value
+
+
+def _validated_internal_collection(value) -> str:
+    if not isinstance(value, str) or value not in _INTERNAL_WORKFLOW_COLLECTIONS:
+        choices = ", ".join(sorted(_INTERNAL_WORKFLOW_COLLECTIONS))
+        raise ValueError(f"internal collection must be one of: {choices}")
     return value
 
 

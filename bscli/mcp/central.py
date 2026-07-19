@@ -24,6 +24,14 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_SAVE_CAPABILITY,
 )
+from bscli.adapters.seeyon_business_trip_submit import (
+    BUSINESS_TRIP_SUBMIT_CAPABILITY,
+    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
+)
+from bscli.adapters.seeyon_leave import (
+    LEAVE_PREPARE_CAPABILITY,
+    LEAVE_SAVE_CAPABILITY,
+)
 from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_PREPARE_CAPABILITY,
@@ -497,6 +505,134 @@ def create_central_mcp_server(
         return await invoke(
             ctx,
             BUSINESS_TRIP_SAVE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
+        name="oa_business_trip_submit_prepare",
+        title="Prepare OA Business Trip Submission",
+        meta=interaction_tool_meta(),
+        description=(
+            "Collect business-trip fields in a trusted card, validate the live OA form "
+            "and sent-item baseline, then create a separate formal-submit authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_business_trip_submit_prepare(
+        ctx: Context,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:submit"},
+        )
+
+    @mcp.tool(
+        name="oa_business_trip_submit",
+        title="Submit Authorized OA Business Trip Request",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, formally send the frozen business-trip "
+            "request into OA approval, and verify one new sent item."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_business_trip_submit(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            BUSINESS_TRIP_SUBMIT_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:submit"},
+        )
+
+    @mcp.tool(
+        name="oa_leave_prepare",
+        title="Prepare OA Leave Draft",
+        meta=interaction_tool_meta(),
+        description=(
+            "Start trusted leave-request field entry for the supported attachment-free "
+            "types, or resume with its opaque submission ID to create draft confirmation."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_leave_prepare(
+        ctx: Context,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            LEAVE_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:draft"},
+        )
+
+    @mcp.tool(
+        name="oa_leave_save_draft",
+        title="Save Authorized OA Leave Draft",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, save a wait-send leave draft, and "
+            "verify it by server reload. It never submits the workflow."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_leave_save_draft(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            LEAVE_SAVE_CAPABILITY,
             {"authorization_id": authorization_id},
             idempotency_key,
             {"oa:write:draft"},

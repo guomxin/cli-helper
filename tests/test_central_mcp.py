@@ -147,6 +147,10 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_server_profile", names)
         self.assertIn("oa_business_trip_prepare", names)
         self.assertIn("oa_business_trip_save_draft", names)
+        self.assertIn("oa_business_trip_submit_prepare", names)
+        self.assertIn("oa_business_trip_submit", names)
+        self.assertIn("oa_leave_prepare", names)
+        self.assertIn("oa_leave_save_draft", names)
         self.assertIn("oa_missed_punch_prepare", names)
         self.assertIn("oa_missed_punch_save_draft", names)
         self.assertIn("oa_missed_punch_approval_prepare", names)
@@ -156,10 +160,14 @@ class CentralMcpTests(unittest.TestCase):
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
         prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
+        submit = next(tool for tool in tools if tool["name"] == "oa_business_trip_submit")
+        leave_save = next(tool for tool in tools if tool["name"] == "oa_leave_save_draft")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["destructiveHint"])
+        self.assertTrue(submit["annotations"]["destructiveHint"])
+        self.assertFalse(leave_save["annotations"]["destructiveHint"])
         approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
         prepare_meeting = next(
             tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
@@ -316,7 +324,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
         self.assertEqual(call["arguments"], {})
 
-    def test_approval_and_meeting_tools_enforce_separate_scopes(self):
+    def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):
         with self._server() as (service, store, read_token, client):
             approval_identity = store.issue(
                 user_subject="user-a",
@@ -328,6 +336,12 @@ class CentralMcpTests(unittest.TestCase):
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:meeting"],
+                ttl_seconds=3600,
+            )
+            submit_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:submit"],
                 ttl_seconds=3600,
             )
             service.invoke.return_value = {
@@ -382,15 +396,42 @@ class CentralMcpTests(unittest.TestCase):
                     "arguments": {"authorization_id": authorization_id},
                 },
             )
+            approval_submit_denied = self._request(
+                client,
+                "tools/call",
+                request_id=35,
+                token=approval_identity["token"],
+                params={
+                    "name": "oa_business_trip_submit",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+            submit_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=36,
+                token=submit_identity["token"],
+                params={
+                    "name": "oa_business_trip_submit",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
 
         self.assertTrue(read_denied.json()["result"]["isError"])
         self.assertFalse(approval_allowed.json()["result"]["isError"])
         self.assertTrue(approval_meeting_denied.json()["result"]["isError"])
         self.assertFalse(meeting_allowed.json()["result"]["isError"])
+        self.assertTrue(approval_submit_denied.json()["result"]["isError"])
+        self.assertFalse(submit_allowed.json()["result"]["isError"])
         self.assertEqual(
             [call.kwargs["capability_name"] for call in service.invoke.call_args_list],
-            ["oa.missed_punch.approve", "oa.meeting.create"],
+            [
+                "oa.missed_punch.approve",
+                "oa.meeting.create",
+                "oa.business_trip.submit",
+            ],
         )
+
     def test_authenticated_tool_uses_server_bound_identity_and_shared_service(self):
         with self._server() as (service, _store, token, client):
             service.invoke.return_value = {

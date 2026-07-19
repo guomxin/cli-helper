@@ -549,7 +549,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   -> OA 服务器状态回读验证
 ```
 
-当前正式纵切是“出差申请单保存待发草稿”，不提交工作流。必须由用户明确同意测试，且不能因为跨机部署成功就自动扩大写操作范围。
+当前中心写纵切包括出差草稿、出差正式提交、请假草稿、补签草稿与审批以及新建会议。能力已实现不等于已经获得真实写入许可：出差正式提交和请假草稿目前只完成真实会话零写入 prepare，实际 commit 仍必须由用户针对具体数据明确确认；跨机部署成功不会自动扩大 Token scope 或写操作范围。
 
 ## 12. 会话所有权
 
@@ -624,7 +624,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
 | 可安装 OpenClaw 插件与本机接线 | 0.1.7 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用和登录成功后一次性续办；URL 与可信值不进入模型上下文 |
-| 中心受治理写能力 | 已实现出差申请草稿、补签申请草稿、补签审批和新建会议；统一经过字段卡、实时校验、冻结计划、独立授权、一次性提交与业务回读 |
+| 中心受治理写能力 | 已实现出差申请草稿与独立正式提交、请假申请草稿、补签申请草稿与审批、新建会议；统一经过流程专用字段卡、实时校验、冻结计划、独立授权、一次性 commit 与业务回读。出差正式提交和请假草稿仅完成零写入真实预检，尚未做真实 commit |
 | 第二个真实 OA 用户隔离验证 | 待执行 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
@@ -771,6 +771,31 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - OpenClaw AgentBridge 插件升级为 `0.1.8`，可信交互完成后会根据服务端回读结果直接反馈“会议已创建并发送”“草稿已保存且未提交”或“补签已审批通过”，不再只发送无法辨认副作用的通用成功文本；
 - 发布验证通过 Python `229 passed, 3 skipped, 19 subtests passed`、`pip check`、插件 `27/27` 与 npm pack dry-run。中心端 Release 冒烟显示 21 个工具完整、OA 会话 active；本机 Gateway 单次重启后以新 PID `9932` 监听 `127.0.0.1:18789`，深度 RPC 成功，启动日志确认插件 `0.1.8`，OpenClaw MCP 探测返回 21 个工具且诊断为空；
 - 本轮修复与部署未创建第二个会议，也未执行其他 OA 写动作。补签审批仍等待出现合适待办后做真实验收。
+
+## 15.7 2026-07-19 出差正式提交与请假草稿扩展一期
+
+- 中心 Capability Registry 扩展为 18 个 OA 能力，远程 MCP 扩展为 25 个
+  工具。新增 `oa.business_trip.submit.prepare` / `submit` 和
+  `oa.leave.prepare` / `save_draft`；原有出差草稿、补签草稿与审批、会议
+  创建能力保持不变；
+- 出差正式提交使用独立字段卡、独立执行授权和独立 `oa:write:submit` scope。
+  commit 在发送前重新校验模板、表单和冻结主题，授权在 `#sendId_a` 前消费，
+  只有内部已发集合恰好新增一项且详情可读才成功。已发集合只供 Adapter
+  核验，不通过公共事项列表/详情工具开放；
+- 请假草稿一期只接受无附件的 `年休`、`事假`、`调休`。prepare 校验真实
+  模板和 CAP4 字段；commit 只允许 `#saveDraft_a`，禁止 `#sendId_a`，
+  保存后必须回读用户字段及 OA 计算的天数/小时。单选回读采用三态语义，
+  “未选择”不会再被误判为“否”；
+- 本地最终验证通过 Python `242 passed, 3 skipped, 19 subtests passed`、
+  OpenClaw 插件 `28/28`、`pip check` 和 9 文件 npm pack dry-run；
+- 候选版部署后 Release 冒烟发现 25 个工具且 OA 会话为 `active`。随后按
+  `agentbridge` 服务身份、同一会话密钥和加密 Profile 运行真实预检；出差
+  正式提交 prepare 与请假草稿 prepare 均通过。路由与点击守卫确认
+  `write_controls_clicked=0`、`collaboration_write_requests=0`、
+  `drafts_saved=0`、`workflows_submitted=0`，输出不含 Cookie 或精确输入；
+- 本轮没有保存请假草稿，也没有正式提交出差申请。现有 OpenClaw Token
+  未增加 `oa:write:submit`；新增能力不会自动扩大既有 Token。实际 commit
+  仍分别等待具体业务数据和用户明确确认。
 
 ## 16. 后续演进顺序
 

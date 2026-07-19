@@ -527,10 +527,13 @@ def _read_business_trip_form(page, frame) -> dict:
             trip_days: editableValue('field0029'),
             trip_hours: editableValue('field0022'),
             reason: editableValue('field0009'),
-            has_direct_supervisor: selectedRadio('field0010') === '是',
+            supervisor_selection: selectedRadio('field0010'),
           };
         }
         """
+    )
+    values["has_direct_supervisor"] = _supervisor_choice_to_bool(
+        values.pop("supervisor_selection", "")
     )
     values["note"] = page.locator("#content_coll").input_value()
     values["subject"] = page.locator("#subject").input_value()
@@ -570,6 +573,15 @@ def _expected_readback_fields(inputs: dict) -> set[str]:
     }
     fields.update(name for name in ("trip_days", "trip_hours", "note") if name in inputs)
     return fields
+
+
+def _supervisor_choice_to_bool(value: Any) -> bool | None:
+    choice = str(value or "").strip()
+    if choice == "是":
+        return True
+    if choice == "否":
+        return False
+    return None
 
 
 def _validate_frozen_plan(plan: dict) -> None:

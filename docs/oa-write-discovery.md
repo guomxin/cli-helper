@@ -170,14 +170,47 @@ First launch-side expansion batch:
   python -m bscli.cli.main --home .bscli capability invoke oa.business_trip.save_draft --user-subject <user> --idempotency-key <save-key> --json '{"authorization_id":"<authorization-id>"}'
   ```
 
-  This path uses the managed central browser session and reports
-  `browser_bridge_used=false`. It allows only save draft; send/submit is not a
-  registered capability. The live template keeps the outer `content_coll`
-  note control hidden, so the trusted field schema does not expose it. The legacy
-  `oa matter launch-*` sequence remains a migration oracle, not the target
-  production protocol.
+  This draft path uses the managed central browser session and reports
+  `browser_bridge_used=false`. The live template keeps the outer `content_coll`
+  note control hidden, so the trusted field schema does not expose it. Formal
+  submission is now a separate controlled pair:
+  `oa.business_trip.submit.prepare` plus `oa.business_trip.submit`. It requires
+  a new field submission, a separate submit authorization, the independent
+  `oa:write:submit` scope, and adapter-internal sent-item/detail readback. A draft
+  authorization cannot be reused, and the internal sent collection is not
+  exposed through public collection inputs. The legacy `oa matter launch-*`
+  sequence remains a migration oracle, not the target production protocol.
 
-### Current Central Expansion (2026-07-18)
+### Current Central Expansion (2026-07-19)
+
+The current registry contains 18 OA capabilities: six reads and twelve
+workflow-stage write capabilities. The central MCP surface contains 25 tools
+including session, operation, interaction, and profile tools.
+
+- `【HR】请假申请单` resolves to template id `-7765568933726502821` and
+  CAP4 form app id `6773919591095560889`. The reusable central-session probe
+  confirmed `field0008` leave type, `field0006` start, `field0007` end,
+  OA-computed `field0022` days, OA-computed `field0023` hours, `field0009`
+  reason, and `field0010` direct supervisor.
+- Live options are `年休`, `婚假`, `事假`, `调休`, `病假`, `陪产假`, `丧假`,
+  `产假`, `工伤`, `学习`, `出差`, `外出`, `补签`, `育儿假`, and
+  `父母护理假`. The first promoted draft contract deliberately accepts only
+  attachment-free `年休`, `事假`, and `调休`; all other options fail before
+  browser work until their conditional fields and attachment rules are known.
+- `oa.leave.prepare` collects values through a trusted field card, settles known
+  OA notice overlays, validates and reads the live form, then freezes a separate
+  draft authorization without saving. `oa.leave.save_draft` clicks only
+  `#saveDraft_a`, refuses `#sendId_a`, reloads the wait-send item, and verifies
+  both requested fields and the OA-computed duration.
+- `scripts/inspect_oa_template_contract.py` is the reusable read-only contract
+  probe. `scripts/validate_oa_write_preflight.py` is the fail-closed real-session
+  preflight: it blocks collaboration POSTs and records any save/send control
+  click. The 2026-07-19 run passed business-trip formal-submit prepare and leave
+  draft prepare with `write_controls_clicked=0`,
+  `collaboration_write_requests=0`, `drafts_saved=0`, and
+  `workflows_submitted=0`. No live submit or leave draft save occurred.
+
+### Previous Central Expansion (2026-07-18)
 
 The second central expansion promotes two additional workflow families without
 restoring the retired bridge:

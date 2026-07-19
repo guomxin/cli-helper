@@ -8,6 +8,7 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_TEMPLATE_TITLE,
     BusinessTripContractMismatch,
     BusinessTripOutcomeUnknown,
+    _supervisor_choice_to_bool,
     business_trip_contract_fingerprint,
     normalize_business_trip_inputs,
     prepare_business_trip_draft,
@@ -16,6 +17,11 @@ from bscli.adapters.seeyon_business_trip import (
 
 
 class SeeyonBusinessTripTests(unittest.TestCase):
+    def test_supervisor_readback_requires_an_explicit_choice(self):
+        self.assertTrue(_supervisor_choice_to_bool("是"))
+        self.assertFalse(_supervisor_choice_to_bool("否"))
+        self.assertIsNone(_supervisor_choice_to_bool(""))
+
     def test_normalization_exposes_business_fields_and_rejects_invalid_ranges(self):
         normalized = normalize_business_trip_inputs(_inputs())
 

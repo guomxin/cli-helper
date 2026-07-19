@@ -12,7 +12,13 @@ from uuid import uuid4
 
 
 _ALLOWED_SCOPES = frozenset(
-    {"oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting"}
+    {
+        "oa:read",
+        "oa:write:draft",
+        "oa:write:approval",
+        "oa:write:meeting",
+        "oa:write:submit",
+    }
 )
 
 

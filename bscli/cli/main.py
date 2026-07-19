@@ -237,6 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
             "oa:write:draft",
             "oa:write:approval",
             "oa:write:meeting",
+            "oa:write:submit",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")

@@ -29,6 +29,12 @@ class DeploymentAssetTests(unittest.TestCase):
         smoke = (ROOT / "scripts/agentbridge-mcp-smoke.mjs").read_text(encoding="utf-8")
 
         for tool in (
+            "oa_business_trip_prepare",
+            "oa_business_trip_save_draft",
+            "oa_business_trip_submit_prepare",
+            "oa_business_trip_submit",
+            "oa_leave_prepare",
+            "oa_leave_save_draft",
             "oa_missed_punch_prepare",
             "oa_missed_punch_save_draft",
             "oa_missed_punch_approval_prepare",

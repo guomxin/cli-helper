@@ -728,6 +728,14 @@ function safeSucceededMessage(response) {
       ? "OA 会议已创建并发送，并已通过回读确认。"
       : "OA 会议已创建并发送。";
   }
+  if (
+    result.business_intent === "submit_business_trip_request" &&
+    result.workflow_submitted === true
+  ) {
+    return verified
+      ? "OA 出差申请已提交审批，并已通过已发事项回读确认。"
+      : "OA 出差申请已提交审批。";
+  }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return verified
       ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"

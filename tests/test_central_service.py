@@ -28,6 +28,21 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_unmapped_write_scope_policy_fails_closed(self):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
             capability_required_scopes("oa.future.unmapped_write")
+
+    def test_submit_and_leave_capabilities_have_separate_scope_policies(self):
+        self.assertEqual(
+            capability_required_scopes("oa.business_trip.submit"),
+            frozenset({"oa:write:submit"}),
+        )
+        self.assertEqual(
+            capability_required_scopes("oa.business_trip.submit.prepare"),
+            frozenset({"oa:write:submit"}),
+        )
+        self.assertEqual(
+            capability_required_scopes("oa.leave.save_draft"),
+            frozenset({"oa:write:draft"}),
+        )
+
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
