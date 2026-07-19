@@ -13,6 +13,7 @@
 > 中心端当前注册 20 个 OA 能力并发布 27 个 MCP 工具。静态业务字段卡统一支持
 > 对话已知值预填；请假申请同时具备待发草稿和独立正式提交路径。补签申请草稿、
 > 新建会议真实写入已验收，补签审批与请假正式提交仍等待合适业务数据和用户明确确认。
+> 当前 OpenClaw Token 已经用户明确授权增加 `oa:write:submit`；权限启用本身没有执行 OA 写操作。
 
 ## 1. 方案结论
 
@@ -833,9 +834,26 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   Gateway 只重启一次，约 198 秒完成，最终 PID `9220` 单实例监听
   `127.0.0.1:18789`，深度 RPC 正常。运行时插件版本为 `0.1.10`、5 个钩子、
   无诊断；`openclaw mcp probe` 发现 27 个工具且 resources/prompts 可用；
-- 当前 OpenClaw Token 仍只有 `oa:read`、`oa:write:draft`、
+- 截至该次能力发布，OpenClaw Token 仍只有 `oa:read`、`oa:write:draft`、
   `oa:write:approval`、`oa:write:meeting`，本轮没有静默增加
   `oa:write:submit`。没有正式提交请假、保存新的请假草稿或执行其他 OA 写操作。
+
+## 15.9 2026-07-19 正式提交权限启用
+
+- 用户明确确认给当前 OpenClaw Token 增加 `oa:write:submit`。新 Token 保留
+  `oa:read`、`oa:write:draft`、`oa:write:approval`、`oa:write:meeting`，只新增
+  `oa:write:submit`，没有引入其他权限；
+- 新 Token 标签为 `openclaw-desktop-governed-writes-submit`，有效期 30 天，至
+  2026-08-18 22:26（GMT+8）。一次性 Bearer 直接写入本机
+  `%USERPROFILE%\.openclaw\.env` 的既有 `AGENTBRIDGE_MCP_TOKEN`，未打印到命令输出、
+  聊天、仓库、用户级或机器级环境变量；
+- OpenClaw Gateway 只重启一次，约 53 秒完成，最终 PID `9892` 单实例监听
+  `127.0.0.1:18789`，深度 RPC 和配置审计均通过。`openclaw mcp probe` 继续发现
+  27 个 AgentBridge 工具，resources/prompts 可用且诊断为空；
+- 服务器端最近使用时间确认 Gateway 已实际使用新 Token。随后撤销旧的
+  `openclaw-desktop-governed-writes` Token；最终 `guomao` 只有一个活动 Token，
+  五项 scope 完整；
+- 本次只完成权限轮换，没有提交请假或出差申请，也没有执行其他 OA 业务写操作。
 
 ## 16. 后续演进顺序
 
