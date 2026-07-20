@@ -893,7 +893,10 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   和后续提交请求可能在 Playwright 同步事件循环没有继续泵送时悬住；
 - 请假和出差正式提交现于每轮已发回读之间驱动 250 毫秒页面事件。已发详情回读仍是唯一
   成功标准，授权消费、未知结果和禁止自动重试边界均未放松。针对性测试 `11/11`、全量
-  Python `250 passed, 3 skipped, 19 subtests passed`。
+  Python `250 passed, 3 skipped, 19 subtests passed`；
+- 代码提交 `61de3ea` 已推送 GitHub，Linux Release `61de3ea5f6ca` 已部署。首次只读
+  Release 探针在 Uvicorn 启动窗口返回 `MCP_UNREACHABLE`，部署脚本按新规则自动重试后
+  成功；27 工具、OA 会话 `active` 和登录复用冒烟均通过，OpenClaw 无需重启。
 
 ## 16. 后续演进顺序
 
