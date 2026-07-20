@@ -43,6 +43,7 @@ Security behavior is intentionally fail closed:
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "mcp.servers.agentbridge.timeout" 150
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
@@ -55,7 +56,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.8, ...)
+AgentBridge interaction plugin registered (version=0.1.11, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -79,7 +80,11 @@ openclaw gateway status --deep --require-rpc --json
 
 The plugin reuses the configured `mcp.servers.agentbridge` endpoint and its
 environment-backed Authorization header for background polling. It never stores
-or prints that header.
+or prints that header. Governed OA submissions can include browser setup, the
+multi-stage CAP4 send chain, and server-side readback, so the endpoint timeout
+must remain at least 150 seconds. A host timeout is not proof that OA rejected or
+accepted a write; reconcile the AgentBridge operation ledger and OA collections
+before any retry.
 
 Telegram receives a native Web App button when the trusted card uses HTTPS.
 Credential, business-input, and execution-authorization cards all use this

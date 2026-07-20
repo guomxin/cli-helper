@@ -66,7 +66,7 @@ export function resolveMcpServer(hostConfig, serverName) {
   return {
     url: parsed.toString(),
     headers: isRecord(server.headers) ? { ...server.headers } : {},
-    timeoutSeconds: boundedInteger(server.timeout, 60, 1, 300),
+    timeoutSeconds: boundedInteger(server.timeout, 150, 1, 300),
   };
 }
 

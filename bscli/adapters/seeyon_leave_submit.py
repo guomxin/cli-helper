@@ -4,8 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 import time
-from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
+from typing import Callable
 
 from bscli.adapters.seeyon_leave import (
     LEAVE_FIELD_CARD_SCHEMA,
@@ -26,11 +25,12 @@ from bscli.adapters.seeyon_leave import (
     leave_summary,
     normalize_leave_inputs,
 )
+from bscli.adapters.seeyon_submit_phases import SubmissionPhaseTracker
 
 
 LEAVE_SUBMIT_PREPARE_CAPABILITY = "oa.leave.submit.prepare"
 LEAVE_SUBMIT_CAPABILITY = "oa.leave.submit"
-LEAVE_SUBMIT_CONTRACT_VERSION = "seeyon-leave-submit-v1"
+LEAVE_SUBMIT_CONTRACT_VERSION = "seeyon-leave-submit-v2"
 LEAVE_SUBMIT_PREPARE_INPUT_SCHEMA = LEAVE_PREPARE_INPUT_SCHEMA
 LEAVE_SUBMIT_INPUT_SCHEMA = LEAVE_SAVE_INPUT_SCHEMA
 
@@ -90,7 +90,11 @@ def prepare_leave_submission(adapter, worker, arguments: dict) -> dict:
             "expected_effect": {
                 "workflow_submitted": True,
                 "submitted_count": 1,
-                "verification": ["sent_collection_delta", "sent_detail_readback"],
+                "verification": [
+                    "oa_submission_phase_observation",
+                    "sent_collection_delta",
+                    "sent_detail_readback",
+                ],
             },
         },
         "summary": leave_submit_summary(inputs),
@@ -130,30 +134,10 @@ def submit_leave_request(
             "The OA leave subject changed after submission authorization."
         )
 
-    request_evidence: list[dict[str, Any]] = []
+    phase_tracker = SubmissionPhaseTracker()
     boundary_crossed = False
 
-    def observe_response(response) -> None:
-        url = str(getattr(response, "url", "") or "")
-        parsed = urlparse(url)
-        if not parsed.path.endswith("/collaboration/collaboration.do"):
-            return
-        request = getattr(response, "request", None)
-        method = getattr(request, "method", "") if request is not None else ""
-        if callable(method):
-            method = method()
-        if str(method or "").upper() != "POST":
-            return
-        request_evidence.append(
-            {
-                "method": "POST",
-                "endpoint": "/seeyon/collaboration/collaboration.do",
-                "operation": str(parse_qs(parsed.query).get("method", [""])[0] or ""),
-                "status": int(getattr(response, "status", 0) or 0),
-            }
-        )
-
-    page.on("response", observe_response)
+    page.on("response", phase_tracker.observe_response)
     page.on("dialog", lambda dialog: dialog.accept())
     enter_commit_boundary()
     boundary_crossed = True
@@ -174,18 +158,25 @@ def submit_leave_request(
             "submitted": submitted,
             "verification": {
                 "confirmed": True,
-                "methods": ["sent_collection_delta", "sent_detail_readback"],
+                "methods": [
+                    "oa_submission_phase_observation",
+                    "sent_collection_delta",
+                    "sent_detail_readback",
+                ],
             },
-            "request_evidence": request_evidence,
+            "request_evidence": phase_tracker.evidence,
             "transport": "central_browser_session",
             "browser_bridge_used": False,
         }
-    except LeaveOutcomeUnknown:
-        raise
+    except LeaveOutcomeUnknown as exc:
+        raise LeaveOutcomeUnknown(
+            f"{exc} {phase_tracker.unknown_outcome_detail()}"
+        ) from exc
     except BaseException as exc:
         if boundary_crossed:
             raise LeaveOutcomeUnknown(
-                "The OA leave send boundary was crossed, but verification failed."
+                "The OA leave send boundary was crossed, but verification failed. "
+                f"{phase_tracker.unknown_outcome_detail()}"
             ) from exc
         raise
 
@@ -212,7 +203,11 @@ def leave_submit_contract_fingerprint() -> str:
         "base_form_fingerprint": leave_contract_fingerprint(),
         "send_control": "sendId_a",
         "forbidden_controls": ["saveDraft_a"],
-        "verification": ["sent_collection_delta", "sent_detail_readback"],
+        "verification": [
+            "oa_submission_phase_observation",
+            "sent_collection_delta",
+            "sent_detail_readback",
+        ],
     }
     canonical = json.dumps(contract, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
