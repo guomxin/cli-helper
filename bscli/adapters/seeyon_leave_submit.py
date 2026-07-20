@@ -166,7 +166,7 @@ def submit_leave_request(
             subject_marker=str(target.get("sent_subject_marker") or "").strip(),
             timeout_seconds=timeout_seconds,
             phase_tracker=phase_tracker,
-            validation_override=plan.get("business_validation_override"),
+            validation_overrides=_validation_overrides(plan),
         )
         return {
             "schema_version": "agentbridge.oa_leave_submit_result.v1",
@@ -254,17 +254,18 @@ def _wait_for_sent_readback(
     subject_marker: str,
     timeout_seconds: float,
     phase_tracker: SubmissionPhaseTracker,
-    validation_override: dict[str, Any] | None,
+    validation_overrides: list[dict[str, Any]],
 ) -> dict:
     if not subject_marker:
         raise LeaveContractMismatch("The frozen leave subject marker is missing.")
     deadline = time.monotonic() + max(timeout_seconds, 5)
     last_error: BaseException | None = None
     while time.monotonic() < deadline:
+        phase_tracker.observe_page_confirmation(page)
         _handle_business_validation(
             page,
             phase_tracker,
-            validation_override=validation_override,
+            validation_overrides=validation_overrides,
         )
         try:
             result = adapter.list_workflows(worker, collection="sent", arguments={"limit": 100})
@@ -304,10 +305,11 @@ def _wait_for_sent_readback(
         except BaseException as exc:
             last_error = exc
         pump_browser_events(page)
+        phase_tracker.observe_page_confirmation(page)
         _handle_business_validation(
             page,
             phase_tracker,
-            validation_override=validation_override,
+            validation_overrides=validation_overrides,
         )
     message = "The submitted leave request was not confirmed in the OA sent collection."
     if last_error is not None:
@@ -315,11 +317,19 @@ def _wait_for_sent_readback(
     raise LeaveOutcomeUnknown(message)
 
 
+def _validation_overrides(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    overrides = plan.get("business_validation_overrides")
+    if isinstance(overrides, list):
+        return [dict(item) for item in overrides if isinstance(item, dict)]
+    legacy = plan.get("business_validation_override")
+    return [dict(legacy)] if isinstance(legacy, dict) else []
+
+
 def _handle_business_validation(
     page,
     phase_tracker: SubmissionPhaseTracker,
     *,
-    validation_override: dict[str, Any] | None,
+    validation_overrides: list[dict[str, Any]],
 ) -> None:
     validation = phase_tracker.pending_business_validation
     if validation is None:
@@ -327,18 +337,39 @@ def _handle_business_validation(
     message = str(validation.get("message") or "OA business validation failed")
     if not validation.get("can_continue"):
         raise LeaveSubmissionBlocked(message)
-    if not isinstance(validation_override, dict):
+    authorized_fingerprints = {
+        str(item.get("fingerprint") or "")
+        for item in validation_overrides
+        if isinstance(item, dict)
+    }
+    if validation.get("fingerprint") not in authorized_fingerprints:
         raise LeaveBusinessValidationRequired(validation)
-    if validation_override.get("fingerprint") != validation.get("fingerprint"):
-        raise LeaveSubmissionBlocked(
-            "The OA business validation changed after explicit confirmation."
-        )
     if phase_tracker.business_validation_was_continued(validation["fingerprint"]):
         raise LeaveSubmissionBlocked(
             "The same OA business validation reappeared after its authorized Continue action."
         )
 
-    candidates = page.get_by_text("继续", exact=True)
+    control_selector = str(validation.get("control_selector") or "").strip()
+    control_scope = page
+    control_frame_url = str(validation.get("control_frame_url") or "").strip()
+    if control_frame_url:
+        frames = getattr(page, "frames", [])
+        frames = frames() if callable(frames) else frames
+        matching_frames = [
+            frame
+            for frame in list(frames or [])
+            if str(getattr(frame, "url", "") or "") == control_frame_url
+        ]
+        if len(matching_frames) != 1:
+            raise LeaveOutcomeUnknown(
+                "The authorized OA confirmation frame could not be identified uniquely."
+            )
+        control_scope = matching_frames[0]
+    candidates = (
+        control_scope.locator(f"{control_selector}:visible")
+        if control_selector
+        else control_scope.get_by_text("继续", exact=True)
+    )
     try:
         candidates.last.wait_for(state="visible", timeout=10000)
     except Exception as exc:

@@ -988,6 +988,13 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             service = self._service(tmp, FakeWorker())
             session = self._activate(service)
             spec = service.registry.get("oa.leave.submit")
+            previous_validation = {
+                "code": "PRE_SUBMIT_CONFIRMATION",
+                "message": "提交前提示",
+                "force_check": False,
+                "can_continue": True,
+                "fingerprint": "sha256:previous",
+            }
             plan = {
                 "business_intent": "submit_leave_request",
                 "user_subject": "user-a",
@@ -997,6 +1004,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "downstream_principal_ref": session["downstream_principal_ref"],
                     "last_verified_at": session["last_verified_at"],
                 },
+                "business_validation_overrides": [previous_validation],
             }
             authorization = service.write_authorizations.create(
                 user_subject="user-a",
@@ -1055,8 +1063,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 include_plan=True,
             )
             self.assertEqual(
-                continued["plan"]["business_validation_override"],
-                validation,
+                continued["plan"]["business_validation_overrides"],
+                [previous_validation, validation],
             )
             self.assertIn("请假时长需要确认", str(continued["summary"]))
             self.assertEqual(
@@ -1081,8 +1089,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 enter_commit_boundary,
             ):
                 self.assertEqual(
-                    resumed_plan["business_validation_override"],
-                    validation,
+                    resumed_plan["business_validation_overrides"],
+                    [previous_validation, validation],
                 )
                 enter_commit_boundary()
                 return {"workflow_submitted": True}

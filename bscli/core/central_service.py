@@ -1179,22 +1179,43 @@ class CentralCapabilityService:
         except LeaveBusinessValidationRequired as exc:
             validation = exc.validation
             continued_plan = deepcopy(plan)
-            continued_plan["business_validation_override"] = dict(validation)
+            existing_validations = continued_plan.get("business_validation_overrides")
+            if not isinstance(existing_validations, list):
+                legacy_validation = continued_plan.get("business_validation_override")
+                existing_validations = (
+                    [dict(legacy_validation)]
+                    if isinstance(legacy_validation, dict)
+                    else []
+                )
+            existing_validations = [
+                dict(item) for item in existing_validations if isinstance(item, dict)
+            ]
+            if validation["fingerprint"] in {
+                item.get("fingerprint") for item in existing_validations
+            }:
+                raise ValueError("the OA confirmation was already authorized") from exc
+            if len(existing_validations) >= 5:
+                raise ValueError("too many chained OA confirmations") from exc
+            continued_plan.pop("business_validation_override", None)
+            continued_plan["business_validation_overrides"] = [
+                *existing_validations,
+                dict(validation),
+            ]
             continued_summary = deepcopy(authorization["summary"])
             continued_summary.update(
                 {
-                    "title": "确认 OA 校验并继续提交请假申请",
-                    "effect": "仅在再次出现同一 OA 智能校验警告时继续正式提交",
+                    "title": "确认 OA 提示并继续提交请假申请",
+                    "effect": "仅在再次出现同一 OA 提示时继续正式提交",
                     "authorization_notice": (
-                        "OA 返回了一条可继续的智能校验警告。授权后，AgentBridge "
-                        "仅在再次出现完全相同的警告时点击“继续”并完成正式提交。"
+                        "OA 返回了一条可继续的提交提示。授权后，AgentBridge "
+                        "仅在再次出现完全相同的提示时点击“继续”并完成正式提交。"
                     ),
                     "authorize_label": "确认警告并继续提交",
                 }
             )
             continued_summary["fields"] = [
                 *list(continued_summary.get("fields") or []),
-                {"label": "OA 智能校验", "value": validation["message"]},
+                {"label": "OA 提交提示", "value": validation["message"]},
             ]
             continued_authorization = self.write_authorizations.create(
                 user_subject=session["user_subject"],

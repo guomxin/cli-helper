@@ -168,18 +168,19 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
             "force_check": False,
             "can_continue": True,
             "fingerprint": "sha256:validation",
+            "control_selector": "#verifySure",
         }
         page = ValidationPage()
         tracker = ValidationTracker(validation)
         with self.assertRaises(LeaveBusinessValidationRequired):
-            _handle_business_validation(page, tracker, validation_override=None)
+            _handle_business_validation(page, tracker, validation_overrides=[])
         self.assertEqual(page.continue_clicks, 0)
 
-        with self.assertRaises(LeaveSubmissionBlocked):
+        with self.assertRaises(LeaveBusinessValidationRequired):
             _handle_business_validation(
                 page,
                 ValidationTracker(validation),
-                validation_override={"fingerprint": "sha256:changed"},
+                validation_overrides=[{"fingerprint": "sha256:changed"}],
             )
         self.assertEqual(page.continue_clicks, 0)
 
@@ -187,10 +188,32 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
         _handle_business_validation(
             page,
             tracker,
-            validation_override={"fingerprint": validation["fingerprint"]},
+            validation_overrides=[{"fingerprint": validation["fingerprint"]}],
         )
         self.assertEqual(page.continue_clicks, 1)
         self.assertIsNone(tracker.pending_business_validation)
+
+        frame = ValidationFrame()
+        framed_validation = {
+            **validation,
+            "control_frame_url": frame.url,
+        }
+        framed_tracker = ValidationTracker(framed_validation)
+        _handle_business_validation(
+            ValidationFramedPage(frame),
+            framed_tracker,
+            validation_overrides=[{"fingerprint": validation["fingerprint"]}],
+        )
+        self.assertEqual(frame.continue_clicks, 1)
+        self.assertIsNone(framed_tracker.pending_business_validation)
+
+        blocked = {**validation, "can_continue": False}
+        with self.assertRaises(LeaveSubmissionBlocked):
+            _handle_business_validation(
+                page,
+                ValidationTracker(blocked),
+                validation_overrides=[],
+            )
 
 
 class FakeAdapter:
@@ -278,6 +301,20 @@ class ValidationPage:
         if text != "继续" or not exact:
             raise AssertionError("unexpected validation control lookup")
         return ValidationLocatorCollection(self)
+
+    def locator(self, selector):
+        if selector != "#verifySure:visible":
+            raise AssertionError("unexpected validation selector")
+        return ValidationLocatorCollection(self)
+
+
+class ValidationFrame(ValidationPage):
+    url = "http://oa.example.test/cap4/form"
+
+
+class ValidationFramedPage:
+    def __init__(self, frame):
+        self.frames = [frame]
 
 
 class ValidationLocatorCollection:

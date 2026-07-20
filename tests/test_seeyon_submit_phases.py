@@ -104,6 +104,32 @@ class SubmissionPhaseTrackerTests(unittest.TestCase):
             "validation_required",
         )
 
+    def test_detects_page_continue_prompt_as_a_separate_confirmation(self):
+        tracker = SubmissionPhaseTracker()
+        page = FakeConfirmationPage()
+
+        tracker.observe_page_confirmation(page)
+        tracker.observe_page_confirmation(page)
+
+        validation = tracker.pending_business_validation
+        self.assertEqual(validation["code"], "PRE_SUBMIT_CONFIRMATION")
+        self.assertEqual(validation["message"], "请确认 自动汇总提示")
+        self.assertEqual(validation["control_selector"], "#verifySure")
+        self.assertEqual(len(tracker.evidence), 1)
+        self.assertEqual(tracker.evidence[0]["phase"], "pre_submit_confirmation")
+        self.assertNotIn(validation["message"], str(tracker.evidence))
+
+    def test_detects_confirmation_inside_child_frame(self):
+        tracker = SubmissionPhaseTracker()
+        frame = FakeConfirmationFrame()
+        page = FakeFramedConfirmationPage(frame)
+
+        tracker.observe_page_confirmation(page)
+
+        validation = tracker.pending_business_validation
+        self.assertEqual(validation["control_frame_url"], frame.url)
+        self.assertEqual(validation["message"], "请确认 自动汇总提示")
+
 
 class FakeWaitPage:
     def __init__(self):
@@ -111,6 +137,28 @@ class FakeWaitPage:
 
     def wait_for_timeout(self, milliseconds):
         self.waits.append(milliseconds)
+
+
+class FakeConfirmationPage:
+    def evaluate(self, _script):
+        return {
+            "confirmText": "\u7ee7\u7eed",
+            "cancelText": "\u53d6\u6d88",
+            "message": "\u8bf7\u786e\u8ba4\n  \u81ea\u52a8\u6c47\u603b\u63d0\u793a",
+        }
+
+
+class FakeConfirmationFrame(FakeConfirmationPage):
+    url = "http://oa.example.test/cap4/form"
+
+
+class FakeFramedConfirmationPage:
+    def __init__(self, frame):
+        self.frames = [frame]
+        self.main_frame = None
+
+    def evaluate(self, _script):
+        return None
 
 
 class FakeRequest:

@@ -59,6 +59,37 @@ class SubmissionPhaseTracker:
                 self._pending_business_validation = outcome.get("validation")
         self.evidence.append(entry)
 
+    def observe_page_confirmation(self, page) -> None:
+        validation = _read_page_confirmation(page)
+        if validation is None:
+            return
+        if (
+            self._pending_business_validation is not None
+            and self._pending_business_validation.get("fingerprint")
+            == validation["fingerprint"]
+        ):
+            return
+        self._pending_business_validation = validation
+        already_observed = any(
+            item.get("validationFingerprint") == validation["fingerprint"]
+            for item in self.evidence
+        )
+        if already_observed or len(self.evidence) >= _MAX_EVIDENCE_ITEMS:
+            return
+        self.evidence.append(
+            {
+                "sequence": len(self.evidence) + 1,
+                "phase": "pre_submit_confirmation",
+                "method": "DOM",
+                "endpoint": "page",
+                "status": 0,
+                "businessStatus": "validation_required",
+                "validationCode": validation["code"],
+                "validationCanContinue": True,
+                "validationFingerprint": validation["fingerprint"],
+            }
+        )
+
     @property
     def pending_business_validation(self) -> dict[str, Any] | None:
         if self._pending_business_validation is None:
@@ -177,6 +208,89 @@ def _read_cap4_outcome(response) -> dict[str, Any] | None:
     )
     return {"evidence": evidence, "validation": validation}
 
+
+def _read_page_confirmation(page) -> dict[str, Any] | None:
+    targets = [(page, "")]
+    try:
+        frames = getattr(page, "frames", [])
+        frames = frames() if callable(frames) else frames
+        main_frame = getattr(page, "main_frame", None)
+        main_frame = main_frame() if callable(main_frame) else main_frame
+        targets.extend(
+            (frame, str(getattr(frame, "url", "") or ""))
+            for frame in list(frames or [])
+            if frame is not main_frame
+        )
+    except Exception:
+        pass
+
+    for target, frame_url in targets:
+        observed = _evaluate_page_confirmation(target)
+        if not isinstance(observed, dict):
+            continue
+        if observed.get("confirmText") != "\u7ee7\u7eed" or observed.get(
+            "cancelText"
+        ) != "\u53d6\u6d88":
+            continue
+        validation = {
+            "code": "PRE_SUBMIT_CONFIRMATION",
+            "message": _clean_validation_message(observed.get("message"))
+            or "OA requested confirmation before saving the form.",
+            "force_check": False,
+            "can_continue": True,
+            "control_selector": "#verifySure",
+        }
+        if frame_url:
+            validation["control_frame_url"] = frame_url
+        validation["fingerprint"] = business_validation_fingerprint(validation)
+        return validation
+    return None
+
+
+def _evaluate_page_confirmation(target) -> dict[str, Any] | None:
+    try:
+        return target.evaluate(
+            r"""
+            () => {
+              const visible = (element) => {
+                if (!element) return false;
+                const style = getComputedStyle(element);
+                const box = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden'
+                  && box.width > 0 && box.height > 0;
+              };
+              const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+              const sureButtons = [...document.querySelectorAll('[id="verifySure"]')]
+                .filter(visible);
+              const cancelButtons = [...document.querySelectorAll('[id="verifyCancel"]')]
+                .filter(visible);
+              for (const sure of sureButtons) {
+                for (const cancel of cancelButtons) {
+                  const confirmText = clean(sure.innerText || sure.textContent);
+                  const cancelText = clean(cancel.innerText || cancel.textContent);
+                  let message = '';
+                  let node = sure.parentElement;
+                  while (node && node !== document.body) {
+                    if (node.contains(cancel)) {
+                      let candidate = clean(node.innerText || node.textContent);
+                      candidate = clean(candidate.split(confirmText).join(' '));
+                      candidate = clean(candidate.split(cancelText).join(' '));
+                      if (candidate) {
+                        message = candidate;
+                        break;
+                      }
+                    }
+                    node = node.parentElement;
+                  }
+                  if (node) return {confirmText, cancelText, message};
+                }
+              }
+              return null;
+            }
+            """
+        )
+    except Exception:
+        return None
 
 def _find_cap4_result(payload: Any) -> dict[str, Any] | None:
     candidates = [payload]
