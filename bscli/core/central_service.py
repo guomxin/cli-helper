@@ -42,6 +42,7 @@ from bscli.adapters.seeyon_leave_submit import (
     LEAVE_SUBMIT_CAPABILITY,
     LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
     LEAVE_SUBMIT_PREPARE_CAPABILITY,
+    LeaveBusinessValidationRequired,
     prepare_leave_submission,
     submit_leave_request,
 )
@@ -1175,6 +1176,68 @@ class CentralCapabilityService:
                 plan,
                 enter_commit_boundary=enter_commit_boundary,
             )
+        except LeaveBusinessValidationRequired as exc:
+            validation = exc.validation
+            continued_plan = deepcopy(plan)
+            continued_plan["business_validation_override"] = dict(validation)
+            continued_summary = deepcopy(authorization["summary"])
+            continued_summary.update(
+                {
+                    "title": "确认 OA 校验并继续提交请假申请",
+                    "effect": "仅在再次出现同一 OA 智能校验警告时继续正式提交",
+                    "authorization_notice": (
+                        "OA 返回了一条可继续的智能校验警告。授权后，AgentBridge "
+                        "仅在再次出现完全相同的警告时点击“继续”并完成正式提交。"
+                    ),
+                    "authorize_label": "确认警告并继续提交",
+                }
+            )
+            continued_summary["fields"] = [
+                *list(continued_summary.get("fields") or []),
+                {"label": "OA 智能校验", "value": validation["message"]},
+            ]
+            continued_authorization = self.write_authorizations.create(
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                session_id=session["session_id"],
+                capability_name=context.spec.name,
+                capability_version=context.spec.version,
+                prepare_operation_id=context.operation_id,
+                plan=continued_plan,
+                summary=continued_summary,
+                card_base_url=self.trusted_card_base_url,
+                ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
+            )
+            interaction = self._execution_authorization_interaction(
+                continued_authorization
+            )
+            raise RequiresUserAction(
+                "OA_BUSINESS_VALIDATION_CONFIRMATION_REQUIRED",
+                "OA returned a continuable business-validation warning.",
+                next_action={
+                    "type": "open_write_authorization_card",
+                    "interactionId": interaction["interactionId"],
+                    "authorizationId": continued_authorization["authorization_id"],
+                    "cardUrl": continued_authorization["card_url"],
+                    "planHash": continued_authorization["plan_hash"],
+                    "expiresAt": continued_authorization["expires_at"],
+                    "display": {
+                        "title": continued_summary["title"],
+                        "effect": continued_summary["effect"],
+                        "fieldCount": len(continued_summary["fields"]),
+                        "validationCode": validation["code"],
+                    },
+                    "then": {
+                        "capability": context.spec.name,
+                        "arguments": {
+                            "authorization_id": continued_authorization[
+                                "authorization_id"
+                            ]
+                        },
+                    },
+                    "interaction": interaction,
+                },
+            ) from exc
         except definition["outcome_error"] as exc:
             raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
         except definition["contract_error"] as exc:

@@ -495,6 +495,10 @@ def _read_leave_form(page, frame) -> dict:
           const calculatedValue = (fieldId) => {
             const wrapper = document.querySelector(`#${fieldId}_id`);
             if (!wrapper) return '';
+            const browseValue = String(
+              wrapper.querySelector('.cap4-number__browse')?.textContent || ''
+            ).trim();
+            if (browseValue) return browseValue;
             const values = Array.from(wrapper.querySelectorAll('input,textarea'))
               .map((element) => String(element.value || '').trim())
               .filter(Boolean);

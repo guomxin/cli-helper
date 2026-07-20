@@ -8,6 +8,7 @@ from bscli.adapters.seeyon_leave import (
     LEAVE_TEMPLATE_TITLE,
     LeaveContractMismatch,
     LeaveOutcomeUnknown,
+    _read_leave_form,
     _supervisor_choice_to_bool,
     leave_contract_fingerprint,
     normalize_leave_inputs,
@@ -33,6 +34,15 @@ class SeeyonLeaveTests(unittest.TestCase):
             normalize_leave_inputs(
                 _inputs(start_time="2026-07-22 18:00", end_time="2026-07-22 09:00")
             )
+
+    def test_readback_uses_cap4_browse_node_for_calculated_duration(self):
+        frame = ReadbackFrame()
+
+        readback = _read_leave_form(ReadbackPage(), frame)
+
+        self.assertIn(".cap4-number__browse", frame.script)
+        self.assertEqual(readback["leave_days"], "0.43")
+        self.assertEqual(readback["leave_hours"], "3.00")
 
     def test_prepare_freezes_live_contract_without_clicking_save_or_send(self):
         page = FakePage()
@@ -263,6 +273,35 @@ class FakeFrame:
         "http://oa.example.test/seeyon/common/cap4/index.html?"
         f"moduleId={LEAVE_TEMPLATE_ID}"
     )
+
+
+class ReadbackFrame:
+    def __init__(self):
+        self.script = ""
+
+    def evaluate(self, script):
+        self.script = script
+        return {
+            "leave_type": "年休",
+            "start_time": "2026-07-22 09:00",
+            "end_time": "2026-07-22 12:00",
+            "leave_days": "0.43",
+            "leave_hours": "3.00",
+            "reason": "个人事务",
+            "supervisor_selection": "否",
+        }
+
+
+class ReadbackPage:
+    def locator(self, selector):
+        if selector != "#subject":
+            raise AssertionError(f"unexpected selector: {selector}")
+        return ReadbackSubject()
+
+
+class ReadbackSubject:
+    def input_value(self):
+        return "【HR】请假申请单"
 
 
 def _inputs(**updates):

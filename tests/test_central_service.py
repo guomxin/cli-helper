@@ -8,6 +8,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
+from bscli.adapters.seeyon_leave_submit import LeaveBusinessValidationRequired
 from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
 from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
@@ -980,6 +981,127 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(
                 service.operations.get(unknown["operationId"])["status"],
                 "unknown",
+            )
+
+    def test_leave_commit_turns_continuable_oa_validation_into_second_authorization(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            spec = service.registry.get("oa.leave.submit")
+            plan = {
+                "business_intent": "submit_leave_request",
+                "user_subject": "user-a",
+                "session_binding": {
+                    "session_id": session["session_id"],
+                    "expected_principal_ref": session["expected_principal_ref"],
+                    "downstream_principal_ref": session["downstream_principal_ref"],
+                    "last_verified_at": session["last_verified_at"],
+                },
+            }
+            authorization = service.write_authorizations.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id=session["session_id"],
+                capability_name=spec.name,
+                capability_version=spec.version,
+                prepare_operation_id="prepare-leave",
+                plan=plan,
+                summary={
+                    "title": "提交请假申请",
+                    "system": "致远 OA",
+                    "fields": [{"label": "请假事由", "value": "个人事务"}],
+                },
+                card_base_url=service.trusted_card_base_url,
+            )
+            csrf = service.write_authorizations.issue_csrf(
+                authorization["authorization_id"]
+            )
+            service.write_authorizations.decide(
+                authorization["authorization_id"],
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            validation = {
+                "code": "3003",
+                "message": "请假时长需要确认",
+                "force_check": False,
+                "can_continue": True,
+                "fingerprint": "sha256:validation",
+            }
+
+            def needs_confirmation(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                raise LeaveBusinessValidationRequired(validation)
+
+            with patch(
+                "bscli.core.central_service.submit_leave_request",
+                side_effect=needs_confirmation,
+            ):
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.leave.submit",
+                    arguments={"authorization_id": authorization["authorization_id"]},
+                )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(
+                response["error"]["code"],
+                "OA_BUSINESS_VALIDATION_CONFIRMATION_REQUIRED",
+            )
+            continued_id = response["nextAction"]["authorizationId"]
+            continued = service.write_authorizations.get(
+                continued_id,
+                include_plan=True,
+            )
+            self.assertEqual(
+                continued["plan"]["business_validation_override"],
+                validation,
+            )
+            self.assertIn("请假时长需要确认", str(continued["summary"]))
+            self.assertEqual(
+                service.write_authorizations.get(
+                    authorization["authorization_id"]
+                )["state"],
+                "consumed",
+            )
+            continued_csrf = service.write_authorizations.issue_csrf(continued_id)
+            service.write_authorizations.decide(
+                continued_id,
+                decision="approve",
+                csrf_token=continued_csrf,
+                csrf_cookie=continued_csrf,
+            )
+
+            def completes_after_confirmation(
+                _adapter,
+                _worker,
+                resumed_plan,
+                *,
+                enter_commit_boundary,
+            ):
+                self.assertEqual(
+                    resumed_plan["business_validation_override"],
+                    validation,
+                )
+                enter_commit_boundary()
+                return {"workflow_submitted": True}
+
+            with patch(
+                "bscli.core.central_service.submit_leave_request",
+                side_effect=completes_after_confirmation,
+            ):
+                resumed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.leave.submit",
+                    arguments={"authorization_id": continued_id},
+                )
+
+            self.assertEqual(resumed["status"], "succeeded")
+            self.assertTrue(resumed["result"]["workflow_submitted"])
+            self.assertEqual(
+                service.write_authorizations.get(continued_id)["state"],
+                "consumed",
             )
 
     def test_business_trip_field_submission_cannot_cross_users(self):

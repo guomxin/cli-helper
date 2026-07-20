@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from bscli.adapters.seeyon_submit_phases import (
@@ -68,6 +69,41 @@ class SubmissionPhaseTrackerTests(unittest.TestCase):
         self.assertEqual(tracker.evidence[0]["phase"], "cap4_form_save")
         self.assertIn("final workflow send was not observed", tracker.unknown_outcome_detail())
 
+    def test_extracts_only_sanitized_continuable_cap4_validation(self):
+        tracker = SubmissionPhaseTracker()
+        tracker.observe_response(
+            FakeResponse(
+                "http://oa.example.test/seeyon/rest/cap4/form/saveOrUpdate",
+                payload={
+                    "data": {
+                        "success": 0,
+                        "code": "3003",
+                        "data": {
+                            "validateResult": json.dumps(
+                                {
+                                    "ruleError": "<b>请假时长</b>\n  需要确认",
+                                    "forceCheck": 0,
+                                    "fields": [{"private": "must-not-leak"}],
+                                },
+                                ensure_ascii=False,
+                            )
+                        },
+                    }
+                },
+            )
+        )
+
+        validation = tracker.pending_business_validation
+        self.assertEqual(validation["code"], "3003")
+        self.assertEqual(validation["message"], "请假时长 需要确认")
+        self.assertTrue(validation["can_continue"])
+        self.assertTrue(validation["fingerprint"].startswith("sha256:"))
+        self.assertNotIn("must-not-leak", str(tracker.evidence))
+        self.assertEqual(
+            tracker.evidence[-1]["businessStatus"],
+            "validation_required",
+        )
+
 
 class FakeWaitPage:
     def __init__(self):
@@ -84,10 +120,14 @@ class FakeRequest:
 
 
 class FakeResponse:
-    def __init__(self, url, *, status=200, post_data=""):
+    def __init__(self, url, *, status=200, post_data="", payload=None):
         self.url = url
         self.status = status
         self.request = FakeRequest(post_data=post_data)
+        self.payload = payload
+
+    def json(self):
+        return self.payload
 
 
 if __name__ == "__main__":

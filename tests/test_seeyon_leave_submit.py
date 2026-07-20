@@ -11,6 +11,9 @@ from bscli.adapters.seeyon_leave import (
 )
 from bscli.adapters.seeyon_leave_submit import (
     LEAVE_SUBMIT_CONTRACT_VERSION,
+    LeaveBusinessValidationRequired,
+    LeaveSubmissionBlocked,
+    _handle_business_validation,
     leave_submit_contract_fingerprint,
     prepare_leave_submission,
     submit_leave_request,
@@ -158,6 +161,37 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
 
         self.assertEqual(boundary, [])
 
+    def test_continuable_validation_requires_matching_explicit_override(self):
+        validation = {
+            "code": "3003",
+            "message": "请假时长需要确认",
+            "force_check": False,
+            "can_continue": True,
+            "fingerprint": "sha256:validation",
+        }
+        page = ValidationPage()
+        tracker = ValidationTracker(validation)
+        with self.assertRaises(LeaveBusinessValidationRequired):
+            _handle_business_validation(page, tracker, validation_override=None)
+        self.assertEqual(page.continue_clicks, 0)
+
+        with self.assertRaises(LeaveSubmissionBlocked):
+            _handle_business_validation(
+                page,
+                ValidationTracker(validation),
+                validation_override={"fingerprint": "sha256:changed"},
+            )
+        self.assertEqual(page.continue_clicks, 0)
+
+        tracker = ValidationTracker(validation)
+        _handle_business_validation(
+            page,
+            tracker,
+            validation_override={"fingerprint": validation["fingerprint"]},
+        )
+        self.assertEqual(page.continue_clicks, 1)
+        self.assertIsNone(tracker.pending_business_validation)
+
 
 class FakeAdapter:
     def __init__(self, sent_items=None):
@@ -221,6 +255,60 @@ class FakeResponse:
 
 class FakeFrame:
     pass
+
+
+class ValidationTracker:
+    def __init__(self, validation):
+        self.pending_business_validation = dict(validation)
+        self.continued = set()
+
+    def mark_business_validation_continued(self):
+        self.continued.add(self.pending_business_validation["fingerprint"])
+        self.pending_business_validation = None
+
+    def business_validation_was_continued(self, fingerprint):
+        return fingerprint in self.continued
+
+
+class ValidationPage:
+    def __init__(self):
+        self.continue_clicks = 0
+
+    def get_by_text(self, text, *, exact):
+        if text != "继续" or not exact:
+            raise AssertionError("unexpected validation control lookup")
+        return ValidationLocatorCollection(self)
+
+
+class ValidationLocatorCollection:
+    def __init__(self, page):
+        self.page = page
+
+    def count(self):
+        return 1
+
+    @property
+    def last(self):
+        return self.nth(0)
+
+    def nth(self, index):
+        if index != 0:
+            raise AssertionError("unexpected validation control index")
+        return ValidationLocator(self.page)
+
+
+class ValidationLocator:
+    def __init__(self, page):
+        self.page = page
+
+    def is_visible(self):
+        return True
+
+    def wait_for(self, **_kwargs):
+        return None
+
+    def click(self, **_kwargs):
+        self.page.continue_clicks += 1
 
 
 def _inputs():

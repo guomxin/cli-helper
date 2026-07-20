@@ -4,7 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from bscli.adapters.seeyon_leave import (
     LEAVE_FIELD_CARD_SCHEMA,
@@ -46,6 +46,18 @@ LEAVE_SUBMIT_FIELD_CARD_SCHEMA.update(
         "notice": "字段提交后还需单独授权；授权后会正式发送并进入 OA 审批流程。",
     }
 )
+
+
+class LeaveBusinessValidationRequired(RuntimeError):
+    def __init__(self, validation: dict[str, Any]) -> None:
+        super().__init__(
+            str(validation.get("message") or "OA business validation required")
+        )
+        self.validation = dict(validation)
+
+
+class LeaveSubmissionBlocked(LeaveContractMismatch):
+    pass
 
 
 def prepare_leave_submission(adapter, worker, arguments: dict) -> dict:
@@ -153,6 +165,8 @@ def submit_leave_request(
             baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
             subject_marker=str(target.get("sent_subject_marker") or "").strip(),
             timeout_seconds=timeout_seconds,
+            phase_tracker=phase_tracker,
+            validation_override=plan.get("business_validation_override"),
         )
         return {
             "schema_version": "agentbridge.oa_leave_submit_result.v1",
@@ -172,6 +186,8 @@ def submit_leave_request(
             "transport": "central_browser_session",
             "browser_bridge_used": False,
         }
+    except (LeaveBusinessValidationRequired, LeaveSubmissionBlocked):
+        raise
     except LeaveOutcomeUnknown as exc:
         raise LeaveOutcomeUnknown(
             f"{exc} {phase_tracker.unknown_outcome_detail()}"
@@ -237,12 +253,19 @@ def _wait_for_sent_readback(
     baseline_affair_ids: set[str],
     subject_marker: str,
     timeout_seconds: float,
+    phase_tracker: SubmissionPhaseTracker,
+    validation_override: dict[str, Any] | None,
 ) -> dict:
     if not subject_marker:
         raise LeaveContractMismatch("The frozen leave subject marker is missing.")
     deadline = time.monotonic() + max(timeout_seconds, 5)
     last_error: BaseException | None = None
     while time.monotonic() < deadline:
+        _handle_business_validation(
+            page,
+            phase_tracker,
+            validation_override=validation_override,
+        )
         try:
             result = adapter.list_workflows(worker, collection="sent", arguments={"limit": 100})
             candidates = [
@@ -276,15 +299,68 @@ def _wait_for_sent_readback(
                 raise LeaveOutcomeUnknown(
                     "Multiple new sent OA leave items matched the authorized form."
                 )
-        except LeaveOutcomeUnknown:
+        except (LeaveBusinessValidationRequired, LeaveSubmissionBlocked, LeaveOutcomeUnknown):
             raise
         except BaseException as exc:
             last_error = exc
         pump_browser_events(page)
+        _handle_business_validation(
+            page,
+            phase_tracker,
+            validation_override=validation_override,
+        )
     message = "The submitted leave request was not confirmed in the OA sent collection."
     if last_error is not None:
         message += f" Last readback error: {type(last_error).__name__}."
     raise LeaveOutcomeUnknown(message)
+
+
+def _handle_business_validation(
+    page,
+    phase_tracker: SubmissionPhaseTracker,
+    *,
+    validation_override: dict[str, Any] | None,
+) -> None:
+    validation = phase_tracker.pending_business_validation
+    if validation is None:
+        return
+    message = str(validation.get("message") or "OA business validation failed")
+    if not validation.get("can_continue"):
+        raise LeaveSubmissionBlocked(message)
+    if not isinstance(validation_override, dict):
+        raise LeaveBusinessValidationRequired(validation)
+    if validation_override.get("fingerprint") != validation.get("fingerprint"):
+        raise LeaveSubmissionBlocked(
+            "The OA business validation changed after explicit confirmation."
+        )
+    if phase_tracker.business_validation_was_continued(validation["fingerprint"]):
+        raise LeaveSubmissionBlocked(
+            "The same OA business validation reappeared after its authorized Continue action."
+        )
+
+    candidates = page.get_by_text("继续", exact=True)
+    try:
+        candidates.last.wait_for(state="visible", timeout=10000)
+    except Exception as exc:
+        raise LeaveOutcomeUnknown(
+            "The authorized OA validation appeared, but its Continue control did not load."
+        ) from exc
+    visible = [
+        candidates.nth(index)
+        for index in range(candidates.count())
+        if candidates.nth(index).is_visible()
+    ]
+    if len(visible) != 1:
+        raise LeaveOutcomeUnknown(
+            "The authorized OA validation appeared, but its Continue control was not unique."
+        )
+    try:
+        visible[0].click(timeout=10000)
+    except Exception as exc:
+        raise LeaveOutcomeUnknown(
+            "The authorized OA validation Continue control could not be activated."
+        ) from exc
+    phase_tracker.mark_business_validation_continued()
 
 
 def _validate_frozen_submit_plan(plan: dict) -> None:
