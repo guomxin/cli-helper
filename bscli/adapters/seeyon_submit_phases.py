@@ -26,10 +26,21 @@ def pump_browser_events(page, milliseconds: int = 250) -> None:
 class SubmissionPhaseTracker:
     """Collect sanitized evidence for Seeyon CAP4 submission phases."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        authorized_validation_fingerprints: set[str] | None = None,
+    ) -> None:
         self.evidence: list[dict[str, Any]] = []
         self._pending_business_validation: dict[str, Any] | None = None
         self._continued_validation_fingerprints: set[str] = set()
+        self._authorized_validation_fingerprints = set(
+            authorized_validation_fingerprints or set()
+        )
+        self._runtime_errors: list[str] = []
+
+    def install_page_observers(self, page) -> None:
+        for target, _frame_url in _page_targets(page):
+            _install_prompt_hooks(target)
 
     def observe_response(self, response) -> None:
         request = getattr(response, "request", None)
@@ -54,22 +65,107 @@ class SubmissionPhaseTracker:
             entry["operation"] = phase["operation"]
         if phase["phase"] == "cap4_form_save":
             outcome = _read_cap4_outcome(response)
-            if outcome is not None:
+            if outcome is None:
+                entry["businessStatus"] = "unparsed"
+            else:
                 entry.update(outcome["evidence"])
-                self._pending_business_validation = outcome.get("validation")
+                if outcome.get("validation") is not None:
+                    self._pending_business_validation = outcome["validation"]
         self.evidence.append(entry)
+
+    def observe_dialog(self, dialog) -> None:
+        dialog_type = str(_attribute_value(dialog, "type") or "unknown").lower()
+        message = _clean_validation_message(_attribute_value(dialog, "message"))
+        if dialog_type == "beforeunload":
+            try:
+                dialog.accept()
+            except Exception:
+                pass
+            return
+
+        final_send_observed = any(
+            item.get("phase") == "workflow_send" for item in self.evidence
+        )
+        if dialog_type == "alert" and final_send_observed:
+            try:
+                dialog.accept()
+            except Exception as exc:
+                self.observe_page_error(exc)
+            if len(self.evidence) < _MAX_EVIDENCE_ITEMS:
+                self.evidence.append(
+                    {
+                        "sequence": len(self.evidence) + 1,
+                        "phase": "post_submit_dialog",
+                        "method": "DIALOG",
+                        "endpoint": "alert",
+                        "status": 0,
+                    }
+                )
+            return
+
+        validation = {
+            "code": (
+                "NATIVE_CONFIRMATION"
+                if dialog_type == "confirm"
+                else "NATIVE_PAGE_BLOCKER"
+            ),
+            "message": message or f"OA opened a {dialog_type} dialog before submission.",
+            "force_check": dialog_type != "confirm",
+            "can_continue": dialog_type == "confirm",
+            "control_kind": "native_dialog",
+        }
+        validation["fingerprint"] = business_validation_fingerprint(validation)
+        authorized = (
+            validation["can_continue"]
+            and validation["fingerprint"] in self._authorized_validation_fingerprints
+        )
+        try:
+            if authorized or dialog_type == "alert":
+                dialog.accept()
+            else:
+                dialog.dismiss()
+        except Exception as exc:
+            self.observe_page_error(exc)
+        if authorized:
+            validation["control_already_activated"] = True
+        self._record_validation(
+            validation,
+            phase="native_confirmation",
+            method="DIALOG",
+            endpoint=dialog_type,
+        )
 
     def observe_page_confirmation(self, page) -> None:
         validation = _read_page_confirmation(page)
         if validation is None:
             return
+        self._record_validation(
+            validation,
+            phase="pre_submit_confirmation",
+            method="DOM",
+            endpoint="page",
+        )
+
+    def observe_page_error(self, error) -> None:
+        message = _clean_validation_message(str(error or ""))
+        if message and message not in self._runtime_errors:
+            self._runtime_errors.append(message[:300])
+
+    def _record_validation(
+        self,
+        validation: dict[str, Any],
+        *,
+        phase: str,
+        method: str,
+        endpoint: str,
+    ) -> None:
         if (
             self._pending_business_validation is not None
             and self._pending_business_validation.get("fingerprint")
             == validation["fingerprint"]
         ):
             return
-        self._pending_business_validation = validation
+        self._pending_business_validation = dict(validation)
         already_observed = any(
             item.get("validationFingerprint") == validation["fingerprint"]
             for item in self.evidence
@@ -79,13 +175,13 @@ class SubmissionPhaseTracker:
         self.evidence.append(
             {
                 "sequence": len(self.evidence) + 1,
-                "phase": "pre_submit_confirmation",
-                "method": "DOM",
-                "endpoint": "page",
+                "phase": phase,
+                "method": method,
+                "endpoint": endpoint,
                 "status": 0,
                 "businessStatus": "validation_required",
                 "validationCode": validation["code"],
-                "validationCanContinue": True,
+                "validationCanContinue": bool(validation.get("can_continue")),
                 "validationFingerprint": validation["fingerprint"],
             }
         )
@@ -108,17 +204,32 @@ class SubmissionPhaseTracker:
 
     def unknown_outcome_detail(self) -> str:
         if not self.evidence:
-            return "No recognized OA submission response was observed after the send click."
-        last = self.evidence[-1]
-        final_send_observed = any(
-            item.get("phase") == "workflow_send" for item in self.evidence
-        )
-        final_state = "observed" if final_send_observed else "not observed"
-        return (
-            f"Last observed OA submission phase: {last['phase']} "
-            f"(HTTP {last['status']}); final workflow send was {final_state}."
-        )
-
+            detail = "No recognized OA submission response was observed after the send click."
+        else:
+            last = self.evidence[-1]
+            final_send_observed = any(
+                item.get("phase") == "workflow_send" for item in self.evidence
+            )
+            final_state = "observed" if final_send_observed else "not observed"
+            detail = (
+                f"Last observed OA submission phase: {last['phase']} "
+                f"(HTTP {last['status']}); final workflow send was {final_state}."
+            )
+            cap4_entries = [
+                item for item in self.evidence if item.get("phase") == "cap4_form_save"
+            ]
+            if cap4_entries:
+                cap4 = cap4_entries[-1]
+                detail += (
+                    f" CAP4 save count: {len(cap4_entries)}; last CAP4 business status: "
+                    f"{cap4.get('businessStatus', 'unparsed')}"
+                )
+                if cap4.get("businessCode"):
+                    detail += f" (code {cap4['businessCode']})"
+                detail += "."
+        if self._runtime_errors:
+            detail += f" Page runtime error: {self._runtime_errors[0]}"
+        return detail
 
 def business_validation_fingerprint(validation: dict[str, Any]) -> str:
     frozen = {
@@ -178,10 +289,17 @@ def _attribute_value(value, name: str):
 
 
 def _read_cap4_outcome(response) -> dict[str, Any] | None:
+    payload: Any = None
     try:
         payload = _attribute_value(response, "json")
     except Exception:
-        return None
+        pass
+    if payload is None:
+        try:
+            raw_text = _attribute_value(response, "text")
+            payload = json.loads(raw_text) if isinstance(raw_text, str) else None
+        except Exception:
+            return None
     outcome = _find_cap4_result(payload)
     if outcome is None:
         return None
@@ -208,9 +326,8 @@ def _read_cap4_outcome(response) -> dict[str, Any] | None:
     )
     return {"evidence": evidence, "validation": validation}
 
-
-def _read_page_confirmation(page) -> dict[str, Any] | None:
-    targets = [(page, "")]
+def _page_targets(page) -> list[tuple[Any, str]]:
+    targets: list[tuple[Any, str]] = [(page, "")]
     try:
         frames = getattr(page, "frames", [])
         frames = frames() if callable(frames) else frames
@@ -223,8 +340,63 @@ def _read_page_confirmation(page) -> dict[str, Any] | None:
         )
     except Exception:
         pass
+    return targets
 
-    for target, frame_url in targets:
+
+def _install_prompt_hooks(target) -> None:
+    try:
+        target.evaluate(
+            r"""
+            () => {
+              const queueName = '__agentbridgePromptEvents';
+              if (!Array.isArray(window[queueName])) window[queueName] = [];
+              const jq = window.$;
+              if (!jq) return false;
+              const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+              const capture = (kind, args) => {
+                try {
+                  const first = args[0];
+                  const options = first && typeof first === 'object' ? first : {};
+                  const message = clean(
+                    typeof first === 'string'
+                      ? first
+                      : options.msg || options.message || options.title
+                  ).slice(0, 1000);
+                  const buttons = Array.isArray(options.buttons)
+                    ? options.buttons.map((button) => ({
+                        id: clean(button && button.id).slice(0, 80),
+                        text: clean(button && button.text).slice(0, 80),
+                      }))
+                    : [];
+                  window[queueName].push({kind, message, buttons});
+                  if (window[queueName].length > 20) window[queueName].shift();
+                } catch (_) {}
+              };
+              for (const name of ['alert', 'messageBox', 'confirm']) {
+                const original = jq[name];
+                if (typeof original !== 'function' || original.__agentbridgeWrapped) continue;
+                const wrapped = function(...args) {
+                  capture(name, args);
+                  return original.apply(this, args);
+                };
+                try { Object.assign(wrapped, original); } catch (_) {}
+                wrapped.__agentbridgeWrapped = true;
+                jq[name] = wrapped;
+              }
+              return true;
+            }
+            """
+        )
+    except Exception:
+        return
+
+
+def _read_page_confirmation(page) -> dict[str, Any] | None:
+    for target, frame_url in _page_targets(page):
+        observed_hook = _read_hooked_prompt(target)
+        if observed_hook is not None:
+            return _hooked_prompt_validation(observed_hook, frame_url)
+
         observed = _evaluate_page_confirmation(target)
         if not isinstance(observed, dict):
             continue
@@ -245,6 +417,66 @@ def _read_page_confirmation(page) -> dict[str, Any] | None:
         validation["fingerprint"] = business_validation_fingerprint(validation)
         return validation
     return None
+
+
+def _read_hooked_prompt(target) -> dict[str, Any] | None:
+    try:
+        observed = target.evaluate(
+            """
+            () => {
+              const queue = window.__agentbridgePromptEvents;
+              return Array.isArray(queue) && queue.length ? queue.shift() : null;
+            }
+            """
+        )
+    except Exception:
+        return None
+    if not isinstance(observed, dict):
+        return None
+    if observed.get("kind") not in {"alert", "messageBox", "confirm"}:
+        return None
+    return observed
+
+
+def _hooked_prompt_validation(
+    observed: dict[str, Any],
+    frame_url: str,
+) -> dict[str, Any]:
+    kind = str(observed.get("kind") or "")
+    buttons = [
+        item for item in observed.get("buttons") or [] if isinstance(item, dict)
+    ]
+    continue_button = next(
+        (
+            item
+            for item in buttons
+            if item.get("id") == "verifySure"
+            or str(item.get("text") or "").strip() == "\u7ee7\u7eed"
+        ),
+        None,
+    )
+    can_continue = kind == "confirm" or continue_button is not None
+    validation = {
+        "code": (
+            "PRE_SUBMIT_CONFIRMATION"
+            if can_continue
+            else "OA_PAGE_BLOCKER"
+        ),
+        "message": _clean_validation_message(observed.get("message"))
+        or "OA stopped the submission with a page message.",
+        "force_check": not can_continue,
+        "can_continue": can_continue,
+    }
+    if continue_button is not None and continue_button.get("id") == "verifySure":
+        validation["control_selector"] = "#verifySure"
+    elif continue_button is not None:
+        validation["control_text"] = "\u7ee7\u7eed"
+    elif kind == "confirm":
+        validation["control_text"] = "\u786e\u5b9a"
+    if frame_url:
+        validation["control_frame_url"] = frame_url
+    validation["fingerprint"] = business_validation_fingerprint(validation)
+    return validation
 
 
 def _evaluate_page_confirmation(target) -> dict[str, Any] | None:
@@ -293,23 +525,36 @@ def _evaluate_page_confirmation(target) -> dict[str, Any] | None:
         return None
 
 def _find_cap4_result(payload: Any) -> dict[str, Any] | None:
-    candidates = [payload]
+    queue: list[tuple[Any, int]] = [(payload, 0)]
     visited: set[int] = set()
-    for _ in range(4):
-        next_candidates: list[Any] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict) or id(candidate) in visited:
-                continue
-            visited.add(id(candidate))
+    while queue and len(visited) < 100:
+        candidate, depth = queue.pop(0)
+        if depth > 6:
+            continue
+        if isinstance(candidate, str):
+            stripped = candidate.strip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    queue.append((json.loads(stripped), depth + 1))
+                except (TypeError, ValueError):
+                    pass
+            continue
+        if not isinstance(candidate, (dict, list)):
+            continue
+        if id(candidate) in visited:
+            continue
+        visited.add(id(candidate))
+        if isinstance(candidate, dict):
             if "success" in candidate and "code" in candidate:
                 return candidate
-            for key in ("data", "result", "resultdata"):
-                nested = candidate.get(key)
-                if isinstance(nested, dict):
-                    next_candidates.append(nested)
-        candidates = next_candidates
+            queue.extend(
+                (value, depth + 1)
+                for value in candidate.values()
+                if isinstance(value, (dict, list, str))
+            )
+        else:
+            queue.extend((value, depth + 1) for value in candidate)
     return None
-
 
 def _sanitize_business_validation(
     outcome: dict[str, Any],

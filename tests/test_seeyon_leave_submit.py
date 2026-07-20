@@ -207,6 +207,18 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
         self.assertEqual(frame.continue_clicks, 1)
         self.assertIsNone(framed_tracker.pending_business_validation)
 
+        activated_validation = {
+            **validation,
+            "control_already_activated": True,
+        }
+        activated_tracker = ValidationTracker(activated_validation)
+        _handle_business_validation(
+            object(),
+            activated_tracker,
+            validation_overrides=[{"fingerprint": validation["fingerprint"]}],
+        )
+        self.assertIsNone(activated_tracker.pending_business_validation)
+
         blocked = {**validation, "can_continue": False}
         with self.assertRaises(LeaveSubmissionBlocked):
             _handle_business_validation(

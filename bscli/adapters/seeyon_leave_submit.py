@@ -149,11 +149,20 @@ def submit_leave_request(
             "The OA leave subject changed after submission authorization."
         )
 
-    phase_tracker = SubmissionPhaseTracker()
+    validation_overrides = _validation_overrides(plan)
+    phase_tracker = SubmissionPhaseTracker(
+        {
+            str(item.get("fingerprint") or "")
+            for item in validation_overrides
+            if isinstance(item, dict)
+        }
+    )
     boundary_crossed = False
 
+    phase_tracker.install_page_observers(page)
     page.on("response", phase_tracker.observe_response)
-    page.on("dialog", lambda dialog: dialog.accept())
+    page.on("dialog", phase_tracker.observe_dialog)
+    page.on("pageerror", phase_tracker.observe_page_error)
     enter_commit_boundary()
     boundary_crossed = True
     try:
@@ -166,7 +175,7 @@ def submit_leave_request(
             subject_marker=str(target.get("sent_subject_marker") or "").strip(),
             timeout_seconds=timeout_seconds,
             phase_tracker=phase_tracker,
-            validation_overrides=_validation_overrides(plan),
+            validation_overrides=validation_overrides,
         )
         return {
             "schema_version": "agentbridge.oa_leave_submit_result.v1",
@@ -348,8 +357,12 @@ def _handle_business_validation(
         raise LeaveSubmissionBlocked(
             "The same OA business validation reappeared after its authorized Continue action."
         )
+    if validation.get("control_already_activated"):
+        phase_tracker.mark_business_validation_continued()
+        return
 
     control_selector = str(validation.get("control_selector") or "").strip()
+    control_text = str(validation.get("control_text") or "继续").strip()
     control_scope = page
     control_frame_url = str(validation.get("control_frame_url") or "").strip()
     if control_frame_url:
@@ -368,7 +381,7 @@ def _handle_business_validation(
     candidates = (
         control_scope.locator(f"{control_selector}:visible")
         if control_selector
-        else control_scope.get_by_text("继续", exact=True)
+        else control_scope.get_by_text(control_text, exact=True)
     )
     try:
         candidates.last.wait_for(state="visible", timeout=10000)
