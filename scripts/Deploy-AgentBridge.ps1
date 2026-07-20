@@ -194,7 +194,18 @@ if ($RestartOpenClaw) {
 }
 
 if (-not $SkipSmoke) {
-    & $smokeScript -Check Release
+    $releaseSmokeAttempts = 6
+    for ($attempt = 1; $attempt -le $releaseSmokeAttempts; $attempt++) {
+        try {
+            & $smokeScript -Check Release
+            break
+        } catch {
+            if ($attempt -eq $releaseSmokeAttempts) {
+                throw
+            }
+            Start-Sleep -Seconds 5
+        }
+    }
     if ($IncludeLoginReuseSmoke) {
         & $smokeScript -Check LoginReuse
     }

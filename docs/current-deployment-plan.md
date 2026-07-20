@@ -872,7 +872,15 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `mcp.servers.agentbridge.timeout` 同步显式设置为 150。任何 `MCP_TIMEOUT` 仍必须先核对
   操作账本和 OA 集合，不能把超时当作失败证明并直接重试；
 - 本轮修复验证通过 Python `249 passed, 3 skipped, 19 subtests passed`、OpenClaw
-  插件 `31/31` 和 npm pack dry-run。诊断和验证未执行新的 OA 业务写入。
+  插件 `31/31` 和 npm pack dry-run。代码提交 `21fd273` 已推送 GitHub，Linux Release
+  `21fd273edc92` 已安装；27 工具、OA 会话 `active` 和登录复用冒烟均通过；
+- 本机 OpenClaw Gateway 只完成一次真实重启，最终 PID `23004` 单实例监听，深度 RPC
+  与配置审计通过；运行时插件为 `0.1.11`、5 个钩子、无诊断，MCP 探针确认 27 个工具、
+  resources/prompts 可用且 `requestTimeoutMs=150000`。诊断和验证未执行新的 OA 业务写入；
+- 部署时发现 systemd 进程已启动但 Uvicorn 尚未监听时，首次 Release 冒烟会抢跑并产生
+  `MCP_UNREACHABLE` 假失败。部署脚本现对只读 Release 冒烟以 5 秒间隔最多重试 6 次，
+  登录复用检查仍只执行一次。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；

@@ -123,7 +123,8 @@ MCP App 改动：
 4. 单次 SCP 上传；
 5. 单次 SSH 完成版本化留存、安装、`compileall`、`pip check`，并安装受版本控制的 systemd unit；
 6. 校验服务工作目录、Python `-P` 安全路径和 `bscli` 的 site-packages 来源后重启；
-7. 通过正式 HTTPS MCP 自动执行 `Release` 工具目录与会话联合冒烟。
+7. 通过正式 HTTPS MCP 自动执行 `Release` 工具目录与会话联合冒烟；
+   服务重启后若首次探针抢在 Uvicorn 就绪前失败，会以 5 秒间隔最多重试 6 次，仍失败才终止发布。
 
 需要同时验证登录复用时：
 
