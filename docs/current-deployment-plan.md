@@ -881,6 +881,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `MCP_UNREACHABLE` 假失败。部署脚本现对只读 Release 冒烟以 5 秒间隔最多重试 6 次，
   登录复用检查仍只执行一次。
 
+### 15.10.1 第二次实测与 Playwright 事件泵修复
+
+- 超时修复后的第二次请假正式提交完整返回 `RESULT_UNKNOWN`，不再由 OpenClaw 提前
+  报 `MCP_TIMEOUT`。操作账本显示最后收到 `template_check (HTTP 200)`，未观察到 CAP4
+  表单保存和最终协同发送；
+- 再次按歧义规则只读核对：已发基线与当前均为 9 条，没有新增匹配请假；待发页面为
+  0 条且不含请假标记，确认此次仍未提交、未留草稿，因此没有自动重试；
+- 根因收敛到正式提交的浏览器事件驱动：点击 `#sendId_a` 后立即进入独立 HTTP 已发轮询，
+  没有像现有草稿流程那样持续调用 `page.wait_for_timeout(250)`。OA 的异步模板校验、确认框
+  和后续提交请求可能在 Playwright 同步事件循环没有继续泵送时悬住；
+- 请假和出差正式提交现于每轮已发回读之间驱动 250 毫秒页面事件。已发详情回读仍是唯一
+  成功标准，授权消费、未知结果和禁止自动重试边界均未放松。针对性测试 `11/11`、全量
+  Python `250 passed, 3 skipped, 19 subtests passed`。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；

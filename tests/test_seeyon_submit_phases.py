@@ -1,6 +1,9 @@
 import unittest
 
-from bscli.adapters.seeyon_submit_phases import SubmissionPhaseTracker
+from bscli.adapters.seeyon_submit_phases import (
+    SubmissionPhaseTracker,
+    pump_browser_events,
+)
 
 
 class SubmissionPhaseTrackerTests(unittest.TestCase):
@@ -47,6 +50,13 @@ class SubmissionPhaseTrackerTests(unittest.TestCase):
         self.assertNotIn("private-value", str(tracker.evidence))
         self.assertIn("final workflow send was observed", tracker.unknown_outcome_detail())
 
+    def test_pumps_playwright_events_during_server_readback(self):
+        page = FakeWaitPage()
+
+        pump_browser_events(page)
+
+        self.assertEqual(page.waits, [250])
+
     def test_ignores_unrelated_requests_and_reports_last_safe_phase(self):
         tracker = SubmissionPhaseTracker()
         tracker.observe_response(FakeResponse("http://oa.example.test/seeyon/rest/track/log"))
@@ -57,6 +67,14 @@ class SubmissionPhaseTrackerTests(unittest.TestCase):
         self.assertEqual(len(tracker.evidence), 1)
         self.assertEqual(tracker.evidence[0]["phase"], "cap4_form_save")
         self.assertIn("final workflow send was not observed", tracker.unknown_outcome_detail())
+
+
+class FakeWaitPage:
+    def __init__(self):
+        self.waits = []
+
+    def wait_for_timeout(self, milliseconds):
+        self.waits.append(milliseconds)
 
 
 class FakeRequest:

@@ -25,7 +25,10 @@ from bscli.adapters.seeyon_leave import (
     leave_summary,
     normalize_leave_inputs,
 )
-from bscli.adapters.seeyon_submit_phases import SubmissionPhaseTracker
+from bscli.adapters.seeyon_submit_phases import (
+    SubmissionPhaseTracker,
+    pump_browser_events,
+)
 
 
 LEAVE_SUBMIT_PREPARE_CAPABILITY = "oa.leave.submit.prepare"
@@ -146,6 +149,7 @@ def submit_leave_request(
         submitted = _wait_for_sent_readback(
             adapter,
             worker,
+            page=page,
             baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
             subject_marker=str(target.get("sent_subject_marker") or "").strip(),
             timeout_seconds=timeout_seconds,
@@ -229,6 +233,7 @@ def _wait_for_sent_readback(
     adapter,
     worker,
     *,
+    page,
     baseline_affair_ids: set[str],
     subject_marker: str,
     timeout_seconds: float,
@@ -275,7 +280,7 @@ def _wait_for_sent_readback(
             raise
         except BaseException as exc:
             last_error = exc
-        time.sleep(0.5)
+        pump_browser_events(page)
     message = "The submitted leave request was not confirmed in the OA sent collection."
     if last_error is not None:
         message += f" Last readback error: {type(last_error).__name__}."

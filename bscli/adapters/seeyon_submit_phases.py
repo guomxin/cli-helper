@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 
 _MAX_EVIDENCE_ITEMS = 20
+
+
+def pump_browser_events(page, milliseconds: int = 250) -> None:
+    wait_for_timeout = getattr(page, "wait_for_timeout", None)
+    if callable(wait_for_timeout):
+        try:
+            wait_for_timeout(milliseconds)
+            return
+        except Exception:
+            pass
+    time.sleep(milliseconds / 1000)
 
 
 class SubmissionPhaseTracker:
