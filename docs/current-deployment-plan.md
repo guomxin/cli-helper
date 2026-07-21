@@ -9,11 +9,11 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.10 已部署登录卡复用、登录后自动续办和准确的写操作结果回执。
-> 中心端当前注册 20 个 OA 能力并发布 27 个 MCP 工具。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.13 已部署登录卡复用、登录后自动续办和独立撤销结果回执。
+> 中心端当前注册 22 个 OA 能力并发布 29 个 MCP 工具。静态业务字段卡统一支持
 > 对话已知值预填；请假申请同时具备待发草稿和独立正式提交路径。补签申请草稿、
-> 新建会议真实写入已验收，补签审批与请假正式提交仍等待合适业务数据和用户明确确认。
-> 当前 OpenClaw Token 已经用户明确授权增加 `oa:write:submit`；权限启用本身没有执行 OA 写操作。
+> 新建会议真实写入和请假正式提交已验收，补签审批仍等待合适业务数据和用户明确确认。
+> 当前 OpenClaw Token 已经用户明确授权包含 `oa:write:submit` 和 `oa:write:revoke`；权限启用没有执行 OA 提交或撤销。
 
 ## 1. 方案结论
 
@@ -914,6 +914,25 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   用户明确批准换发后，OpenClaw 才能看到并执行这两个工具；
 - 撤销不会作为提交测试后的自动清理步骤。即使流程回到待发，OA 仍可能留下审计、
   通知当前处理人或触发表单业务逻辑。本轮只实现和测试代码，没有执行真实 OA 撤销。
+
+## 15.12 2026-07-21 撤销权限启用
+
+- 用户明确同意给当前 OpenClaw Token 增加 `oa:write:revoke`。新 Token 保留
+  `oa:read`、`oa:write:draft`、`oa:write:approval`、`oa:write:meeting` 和
+  `oa:write:submit`，只新增撤销权限，没有引入其他 scope；
+- 新 Token 标签为 `openclaw-desktop-governed-writes-revoke`，有效期 30 天，至
+  2026-08-20 16:06（GMT+8）。一次性 Bearer 原子写入本机
+  `%USERPROFILE%\.openclaw\.env` 的 `AGENTBRIDGE_MCP_TOKEN`，没有打印到聊天、
+  仓库、普通日志、用户级或机器级环境变量；
+- 新 Token 首次 `Release` 冒烟返回 29 个工具且撤销工具完整，服务器
+  `lastUsedAt` 随后更新。执行 `openclaw mcp reload` 后撤销旧的五权限 Token，
+  再次冒烟仍成功，证明当前配置使用的是新 Token；
+- 服务器最终只有一个 `guomao` 活动 Token，权限集合恰好为上述六项。OpenClaw
+  Gateway 未做完整重启，仍由 PID `32192` 单实例监听 `127.0.0.1:18789`，深度
+  RPC 和配置审计通过；
+- OA 会话当时为 `expired`。本次只完成权限轮换和只读验证，没有打开登录卡，
+  没有填写撤销字段卡，也没有执行提交、撤销或其他 OA 业务写操作。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
