@@ -56,7 +56,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.13, ...)
+AgentBridge interaction plugin registered (version=0.1.14, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -134,3 +134,9 @@ exercise the authentication-card path, ask OpenClaw to log in to OA so it calls
 tool-result middleware context, so version 0.1.1 binds the private session
 during `before_tool_call` and consumes that binding by `toolCallId`. Missing or
 non-private bindings still fail closed.
+
+After credential login completes, the plugin checks for pending trusted cards
+before the status reply, after that reply, and again after the original-request
+continuation heartbeat. A field or confirmation card created by that heartbeat
+is delivered directly even when the continuation has a new run id; a card
+already delivered through the normal reply path is not sent twice.

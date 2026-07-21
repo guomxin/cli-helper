@@ -473,6 +473,18 @@ export class InteractionCoordinator {
         record.sessionKey,
         "hook:agentbridge-login-completed",
       );
+      const pendingAfterContinuation = this.undeliveredPendingFor(record, {
+        allowLaterRun: true,
+      });
+      if (
+        pendingAfterContinuation.length > 0 &&
+        (await this.deliverInteractionsDirect(
+          record.sessionKey,
+          pendingAfterContinuation,
+        ))
+      ) {
+        return;
+      }
       this.api.logger.info(
         "AgentBridge original request continuation queued after login",
       );
@@ -621,7 +633,7 @@ export class InteractionCoordinator {
     }
   }
 
-  undeliveredPendingFor(record) {
+  undeliveredPendingFor(record, { allowLaterRun = false } = {}) {
     this.prune();
     return [...this.records.values()]
       .filter(
@@ -630,9 +642,11 @@ export class InteractionCoordinator {
           candidate.sessionKey === record.sessionKey &&
           candidate.delivered === false &&
           ["pending", "processing"].includes(candidate.interaction.state) &&
-          (record.runId && candidate.runId
-            ? candidate.runId === record.runId
-            : candidate.capturedAt >= record.capturedAt),
+          (allowLaterRun
+            ? candidate.capturedAt >= record.capturedAt
+            : record.runId && candidate.runId
+              ? candidate.runId === record.runId
+              : candidate.capturedAt >= record.capturedAt),
       )
       .sort((left, right) => left.capturedAt - right.capturedAt)
       .slice(0, 3)

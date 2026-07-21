@@ -446,6 +446,86 @@ test("continues the original request once after credential login succeeds", asyn
   assert.equal(harness.heartbeatRuns.length, 1);
 });
 
+test("delivers a field card captured during the login continuation heartbeat", async () => {
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const fieldUrl = CARD_ORIGIN + "/fields/continuation-field-token";
+  const fieldInteraction = normalizeInteraction(
+    interaction({
+      interactionId: "interaction-field-during-continuation-123456",
+      type: "business_input",
+      title: "填写并提交请假申请",
+      presentation: { url: fieldUrl },
+    }),
+    new Set([CARD_ORIGIN]),
+  );
+  let coordinator;
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+    async __heartbeatHandler() {
+      coordinator.upsert({
+        interaction: fieldInteraction,
+        sessionKey,
+        runId: "run-login-continuation-next-card",
+      });
+      return { status: "ran", durationMs: 1 };
+    },
+  });
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: { authenticated: true },
+        nextAction: { type: "retry_original_request" },
+      };
+    },
+  };
+  coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-login-continuation-next-card",
+    runId: "run-login-original",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-continuation-next-card",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 2);
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[0].payload).includes(fieldUrl),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[1].payload).includes(fieldUrl),
+    true,
+  );
+  assert.equal(
+    coordinator.records.get(fieldInteraction.interactionId).delivered,
+    true,
+  );
+});
 test("delivers an already captured field card instead of waking login continuation", async () => {
   const harness = fakeApi({
     autoPoll: true,
@@ -1172,6 +1252,9 @@ function fakeApi(pluginConfig) {
         },
         async runHeartbeatOnce(options) {
           heartbeatRuns.push(options);
+          if (typeof pluginConfig.__heartbeatHandler === "function") {
+            return pluginConfig.__heartbeatHandler(options);
+          }
           return pluginConfig.__heartbeatResult || {
             status: "ran",
             durationMs: 1,
