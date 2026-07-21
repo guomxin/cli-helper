@@ -67,6 +67,7 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
             "leave_hours": "",
         }
         boundary = []
+        worker = FakeForkingWorker()
         with (
             patch(
                 "bscli.adapters.seeyon_leave_submit._open_and_validate_form",
@@ -87,11 +88,11 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
                     "detail_readable": True,
                     "field_count": 7,
                 },
-            ),
+            ) as wait_for_sent,
         ):
             result = submit_leave_request(
                 FakeAdapter(),
-                object(),
+                worker,
                 _plan(expected, subject),
                 enter_commit_boundary=lambda: boundary.append(page.click_count),
                 timeout_seconds=5,
@@ -104,6 +105,8 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
         self.assertEqual(result["submitted_count"], 1)
         self.assertEqual(result["submitted"]["affair_id"], "sent-new")
         self.assertEqual(result["request_evidence"][0]["method"], "POST")
+        self.assertIs(wait_for_sent.call_args.args[1], worker.readback_worker)
+        self.assertTrue(worker.readback_closed)
 
     def test_post_send_readback_failure_is_outcome_unknown(self):
         page = FakePage()
@@ -248,6 +251,26 @@ class FakeAdapter:
         if collection != "sent" or arguments != {"limit": 100}:
             raise AssertionError("unexpected sent-list lookup")
         return {"items": self.sent_items}
+
+
+class FakeForkingWorker:
+    def __init__(self):
+        self.readback_worker = object()
+        self.readback_closed = False
+
+    def fork_page(self):
+        return FakeForkedWorkerContext(self)
+
+
+class FakeForkedWorkerContext:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def __enter__(self):
+        return self.owner.readback_worker
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.owner.readback_closed = True
 
 
 class FakePage:

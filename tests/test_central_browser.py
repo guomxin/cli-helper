@@ -135,6 +135,34 @@ class CentralBrowserTests(unittest.TestCase):
             self.assertEqual(page.waits, [25])
             self.assertNotIn("external", str(snapshot))
 
+    def test_forked_page_preserves_primary_page_and_closes_independently(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with worker:
+                primary_page = worker.goto("http://oa.example.test/seeyon/leave")
+                with worker.fork_page() as readback_worker:
+                    readback_page = readback_worker.goto(
+                        "http://oa.example.test/seeyon/home"
+                    )
+                    self.assertIs(worker.page, primary_page)
+                    self.assertEqual(
+                        primary_page.url,
+                        "http://oa.example.test/seeyon/leave",
+                    )
+                    self.assertEqual(
+                        readback_page.url,
+                        "http://oa.example.test/seeyon/home",
+                    )
+
+                self.assertTrue(readback_page.closed)
+                self.assertFalse(primary_page.closed)
+
     def test_worker_prevents_concurrent_use_of_the_same_profile(self):
         with TemporaryDirectory() as tmp:
             profile_path = Path(tmp) / "profile"
@@ -468,6 +496,7 @@ class FakePage:
         self.main_frame = self
         self.frames = [self]
         self.waits = []
+        self.closed = False
 
     def goto(self, url, **_kwargs):
         self.url = url
@@ -483,6 +512,9 @@ class FakePage:
 
     def wait_for_timeout(self, milliseconds):
         self.waits.append(milliseconds)
+
+    def close(self):
+        self.closed = True
 
 
 class FakeFrame:

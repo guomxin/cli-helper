@@ -129,6 +129,11 @@ class CentralBrowserWorker:
         self._validate_url(page.url)
         return page
 
+    def fork_page(self) -> CentralBrowserPageWorker:
+        """Create an isolated page that shares this worker's authenticated context."""
+        self._require_started()
+        return CentralBrowserPageWorker(self, self._context.new_page())
+
     def resource_urls(self) -> list[str]:
         self._require_started()
         values = self.page.evaluate(
@@ -244,6 +249,127 @@ class CentralBrowserWorker:
             return False
         allowed_hosts = {urlparse(origin).hostname or "" for origin in self.allowed_origins}
         return any(host == domain or host.endswith(f".{domain}") for host in allowed_hosts)
+
+
+class CentralBrowserPageWorker:
+    """A worker-shaped view bound to one page in a central browser context."""
+
+    def __init__(self, owner: CentralBrowserWorker, page: Any) -> None:
+        self._owner = owner
+        self._page = page
+        self._closed = False
+
+    def __enter__(self) -> CentralBrowserPageWorker:
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        close = getattr(self._page, "close", None)
+        if callable(close):
+            close()
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        return self._owner.request(
+            method,
+            url,
+            headers=headers,
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def goto(self, url: str, *, timeout_seconds: float = 30):
+        self._owner._require_started()
+        self._owner._validate_url(url)
+        self._page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=max(timeout_seconds, 0.1) * 1000,
+        )
+        self._owner._validate_url(self._page.url)
+        return self._page
+
+    def resource_urls(self) -> list[str]:
+        self._owner._require_started()
+        values = self._page.evaluate(
+            "() => performance.getEntriesByType('resource').map((entry) => entry.name)"
+        )
+        if not isinstance(values, list):
+            return []
+        urls = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, str) or value in seen:
+                continue
+            try:
+                self._owner._validate_url(value)
+            except ValueError:
+                continue
+            seen.add(value)
+            urls.append(value)
+        return urls
+
+    def rendered_snapshot(
+        self,
+        url: str,
+        *,
+        settle_ms: int = 1500,
+        include_frames: bool = True,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        page = self.goto(url, timeout_seconds=timeout_seconds)
+        if settle_ms > 0:
+            page.wait_for_timeout(settle_ms)
+        snapshot = {
+            "url": page.url,
+            "title": page.title(),
+            "html": page.content(),
+            "frames": [],
+        }
+        if not include_frames:
+            return snapshot
+        main_frame = getattr(page, "main_frame", None)
+        for frame in list(getattr(page, "frames", []) or []):
+            if frame is main_frame:
+                continue
+            frame_url = str(getattr(frame, "url", "") or "")
+            if frame_url and frame_url != "about:blank":
+                try:
+                    self._owner._validate_url(frame_url)
+                except ValueError:
+                    continue
+            try:
+                frame_html = frame.content()
+            except Exception:
+                continue
+            if frame_html:
+                snapshot["frames"].append({"url": frame_url, "html": frame_html})
+        return snapshot
+
+    @property
+    def page(self):
+        self._owner._require_started()
+        return self._page
+
+    @property
+    def page_title(self) -> str:
+        return self.page.title()
+
+    @property
+    def page_url(self) -> str:
+        return self.page.url
 
 
 def _start_playwright():

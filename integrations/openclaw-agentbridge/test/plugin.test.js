@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { normalizeInteraction } from "../lib/interaction.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import {
   CARD_ORIGIN,
@@ -445,6 +446,160 @@ test("continues the original request once after credential login succeeds", asyn
   assert.equal(harness.heartbeatRuns.length, 1);
 });
 
+test("delivers an already captured field card instead of waking login continuation", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  let releasePoll;
+  const pollGate = new Promise((resolve) => {
+    releasePoll = resolve;
+  });
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: { authenticated: true },
+        nextAction: { type: "retry_original_request" },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => pollGate,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-login-with-field-card",
+    runId: "run-login-with-field-card",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-with-field-card",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  const fieldUrl = CARD_ORIGIN + "/fields/opaque-field-token";
+  const fieldInteraction = normalizeInteraction(
+    interaction({
+      interactionId: "interaction-field-after-login-123456",
+      type: "business_input",
+      title: "填写并提交请假申请",
+      presentation: { url: fieldUrl },
+    }),
+    new Set([CARD_ORIGIN]),
+  );
+  coordinator.upsert({
+    interaction: fieldInteraction,
+    sessionKey,
+    runId: "run-login-with-field-card",
+  });
+
+  releasePoll();
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[0].payload).includes(fieldUrl),
+    true,
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+  assert.equal(harness.heartbeats.length, 0);
+});
+
+test("direct host status delivery cannot consume an undelivered field card", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  const fieldUrl = CARD_ORIGIN + "/fields/reentrant-field-token";
+  const fieldInteraction = normalizeInteraction(
+    interaction({
+      interactionId: "interaction-reentrant-field-123456",
+      type: "business_input",
+      title: "填写并提交请假申请",
+      presentation: { url: fieldUrl },
+    }),
+    new Set([CARD_ORIGIN]),
+  );
+  const record = coordinator.upsert({
+    interaction: fieldInteraction,
+    sessionKey,
+    runId: "run-reentrant-card",
+  });
+
+  let nestedReply;
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    renderPresentation({ payload }) {
+      return payload;
+    },
+    async sendPayload(context) {
+      nestedReply = harness.hooks.reply_payload_sending(
+        {
+          kind: "block",
+          sessionKey,
+          channel: "telegram",
+          payload: context.payload,
+        },
+        { sessionKey, channelId: "telegram" },
+      );
+      harness.sentPayloads.push(context);
+      return { channel: "telegram", messageId: "status-message" };
+    },
+  });
+
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "succeeded",
+    null,
+    { result: { authenticated: true } },
+  );
+
+  assert.equal(nestedReply, undefined);
+  assert.equal(record.delivered, false);
+
+  const normalReply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "run-reentrant-card",
+      sessionKey,
+      channel: "telegram",
+      payload: { text: "请填写请假信息" },
+    },
+    { sessionKey, channelId: "telegram" },
+  );
+  assert.equal(JSON.stringify(normalReply).includes(fieldUrl), true);
+  assert.equal(record.delivered, true);
+});
+
 test("proactively wakes the private agent and delivers the next trusted card", async () => {
   const harness = fakeApi({
     autoPoll: true,
@@ -776,6 +931,33 @@ test("delivers a final trusted status directly without waking the model", async 
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
   assert.equal(harness.heartbeats.length, 0);
+});
+
+test("explains an unknown OA write result without implying an automatic retry", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "unknown",
+    "RESULT_UNKNOWN",
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  const text = harness.sentPayloads[0].payload.text;
+  assert.equal(text.includes("最终结果未能确认"), true);
+  assert.equal(text.includes("不会自动重试"), true);
+  assert.equal(text.includes("RESULT_UNKNOWN"), true);
 });
 
 test("uses an opaque heartbeat only when direct status delivery is unavailable", async () => {

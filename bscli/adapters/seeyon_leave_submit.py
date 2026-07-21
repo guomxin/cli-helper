@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -163,51 +164,52 @@ def submit_leave_request(
     page.on("response", phase_tracker.observe_response)
     page.on("dialog", phase_tracker.observe_dialog)
     page.on("pageerror", phase_tracker.observe_page_error)
-    enter_commit_boundary()
-    boundary_crossed = True
-    try:
-        page.locator("#sendId_a").click(timeout=10000)
-        submitted = _wait_for_sent_readback(
-            adapter,
-            worker,
-            page=page,
-            baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
-            subject_marker=str(target.get("sent_subject_marker") or "").strip(),
-            timeout_seconds=timeout_seconds,
-            phase_tracker=phase_tracker,
-            validation_overrides=validation_overrides,
-        )
-        return {
-            "schema_version": "agentbridge.oa_leave_submit_result.v1",
-            "business_intent": "submit_leave_request",
-            "workflow_submitted": True,
-            "submitted_count": 1,
-            "submitted": submitted,
-            "verification": {
-                "confirmed": True,
-                "methods": [
-                    "oa_submission_phase_observation",
-                    "sent_collection_delta",
-                    "sent_detail_readback",
-                ],
-            },
-            "request_evidence": phase_tracker.evidence,
-            "transport": "central_browser_session",
-            "browser_bridge_used": False,
-        }
-    except (LeaveBusinessValidationRequired, LeaveSubmissionBlocked):
-        raise
-    except LeaveOutcomeUnknown as exc:
-        raise LeaveOutcomeUnknown(
-            f"{exc} {phase_tracker.unknown_outcome_detail()}"
-        ) from exc
-    except BaseException as exc:
-        if boundary_crossed:
+    with _sent_readback_worker(worker) as readback_worker:
+        enter_commit_boundary()
+        boundary_crossed = True
+        try:
+            page.locator("#sendId_a").click(timeout=10000)
+            submitted = _wait_for_sent_readback(
+                adapter,
+                readback_worker,
+                page=page,
+                baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
+                subject_marker=str(target.get("sent_subject_marker") or "").strip(),
+                timeout_seconds=timeout_seconds,
+                phase_tracker=phase_tracker,
+                validation_overrides=validation_overrides,
+            )
+            return {
+                "schema_version": "agentbridge.oa_leave_submit_result.v1",
+                "business_intent": "submit_leave_request",
+                "workflow_submitted": True,
+                "submitted_count": 1,
+                "submitted": submitted,
+                "verification": {
+                    "confirmed": True,
+                    "methods": [
+                        "oa_submission_phase_observation",
+                        "sent_collection_delta",
+                        "sent_detail_readback",
+                    ],
+                },
+                "request_evidence": phase_tracker.evidence,
+                "transport": "central_browser_session",
+                "browser_bridge_used": False,
+            }
+        except (LeaveBusinessValidationRequired, LeaveSubmissionBlocked):
+            raise
+        except LeaveOutcomeUnknown as exc:
             raise LeaveOutcomeUnknown(
-                "The OA leave send boundary was crossed, but verification failed. "
-                f"{phase_tracker.unknown_outcome_detail()}"
+                f"{exc} {phase_tracker.unknown_outcome_detail()}"
             ) from exc
-        raise
+        except BaseException as exc:
+            if boundary_crossed:
+                raise LeaveOutcomeUnknown(
+                    "The OA leave send boundary was crossed, but verification failed. "
+                    f"{phase_tracker.unknown_outcome_detail()}"
+                ) from exc
+            raise
 
 
 def leave_submit_summary(inputs: dict) -> dict:
@@ -252,6 +254,17 @@ def _sent_snapshot(adapter, worker) -> dict:
             if str(item.get("affair_id") or "")
         )
     }
+
+
+@contextmanager
+def _sent_readback_worker(worker):
+    fork_page = getattr(worker, "fork_page", None)
+    if not callable(fork_page):
+        # Lightweight test workers do not own a browser page.
+        yield worker
+        return
+    with fork_page() as readback_worker:
+        yield readback_worker
 
 
 def _wait_for_sent_readback(

@@ -3,7 +3,7 @@ import { InteractionCoordinator, presentationForRecords } from "./coordinator.js
 import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 
-const PLUGIN_VERSION = "0.1.11";
+const PLUGIN_VERSION = "0.1.12";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -51,9 +51,13 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       return undefined;
     }
     bindTrustedDeliveryRoute(coordinator, event, context);
+    const sessionKey = event.sessionKey || context.sessionKey;
+    if (coordinator.isDirectDeliveryActive(sessionKey)) {
+      return undefined;
+    }
     const interactions = coordinator.takeForDelivery({
       runId: event.runId || context.runId,
-      sessionKey: event.sessionKey || context.sessionKey,
+      sessionKey,
     });
     const presentation = presentationForRecords(
       interactions,

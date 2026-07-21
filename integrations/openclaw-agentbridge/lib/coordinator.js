@@ -30,6 +30,7 @@ export class InteractionCoordinator {
     this.abortControllers = new Map();
     this.toolBindings = new Map();
     this.sessionRoutes = new Map();
+    this.directDeliveries = new Map();
   }
 
   bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
@@ -226,6 +227,10 @@ export class InteractionCoordinator {
     };
   }
 
+  isDirectDeliveryActive(sessionKey) {
+    return (this.directDeliveries.get(sessionKey) || 0) > 0;
+  }
+
   removeSession(sessionKey) {
     for (const [interactionId, record] of this.records) {
       if (record.sessionKey === sessionKey) {
@@ -239,6 +244,7 @@ export class InteractionCoordinator {
       }
     }
     this.sessionRoutes.delete(sessionKey);
+    this.directDeliveries.delete(sessionKey);
   }
 
   stopAll() {
@@ -249,6 +255,7 @@ export class InteractionCoordinator {
     this.polls.clear();
     this.toolBindings.clear();
     this.sessionRoutes.clear();
+    this.directDeliveries.clear();
   }
 
   async waitForIdle() {
@@ -429,7 +436,27 @@ export class InteractionCoordinator {
         return;
       }
       record.continuationQueued = true;
+      const pendingBeforeStatus = this.undeliveredPendingFor(record);
+      if (
+        pendingBeforeStatus.length > 0 &&
+        (await this.deliverInteractionsDirect(
+          record.sessionKey,
+          pendingBeforeStatus,
+        ))
+      ) {
+        return;
+      }
       await this.deliverStatusDirect(record.sessionKey, status, errorCode, response);
+      const pendingAfterStatus = this.undeliveredPendingFor(record);
+      if (
+        pendingAfterStatus.length > 0 &&
+        (await this.deliverInteractionsDirect(
+          record.sessionKey,
+          pendingAfterStatus,
+        ))
+      ) {
+        return;
+      }
       this.api.runtime.system.enqueueSystemEvent(
         [
           "AgentBridge 登录已完成。",
@@ -485,7 +512,14 @@ export class InteractionCoordinator {
       }
       const text = "AgentBridge 已收到你提交的信息，请继续完成下面的安全操作。";
       const initialPayload = { text, presentation };
-      if (!(await this.sendRoutePayload(route, initialPayload, presentation))) {
+      if (
+        !(await this.sendRoutePayload(
+          sessionKey,
+          route,
+          initialPayload,
+          presentation,
+        ))
+      ) {
         this.api.logger.warn(
           `AgentBridge direct card delivery unavailable for channel ${route.channel}`,
         );
@@ -524,7 +558,7 @@ export class InteractionCoordinator {
     }
     const text = safeStatusMessage(status, errorCode, response);
     try {
-      if (!(await this.sendRoutePayload(route, { text }))) {
+      if (!(await this.sendRoutePayload(sessionKey, route, { text }))) {
         this.api.logger.warn(
           `AgentBridge direct status delivery unavailable for channel ${route.channel}`,
         );
@@ -542,39 +576,67 @@ export class InteractionCoordinator {
     }
   }
 
-  async sendRoutePayload(route, initialPayload, presentation = null) {
-    const adapter = await this.api.runtime.channel.outbound.loadAdapter(
-      route.channel,
-    );
-    if (!adapter?.sendPayload) {
-      return false;
+  async sendRoutePayload(sessionKey, route, initialPayload, presentation = null) {
+    const depth = this.directDeliveries.get(sessionKey) || 0;
+    this.directDeliveries.set(sessionKey, depth + 1);
+    try {
+      const adapter = await this.api.runtime.channel.outbound.loadAdapter(
+        route.channel,
+      );
+      if (!adapter?.sendPayload) {
+        return false;
+      }
+      const text =
+        typeof initialPayload.text === "string" ? initialPayload.text : "";
+      const baseContext = {
+        cfg: this.api.config,
+        to: route.to,
+        text,
+        ...(route.accountId ? { accountId: route.accountId } : {}),
+        ...(route.threadId !== null ? { threadId: route.threadId } : {}),
+      };
+      const payload =
+        presentation && adapter.renderPresentation
+          ? await adapter.renderPresentation({
+              payload: initialPayload,
+              presentation,
+              ctx: { ...baseContext, payload: initialPayload },
+            })
+          : initialPayload;
+      if (!payload) {
+        return false;
+      }
+      await adapter.sendPayload({
+        ...baseContext,
+        text: typeof payload.text === "string" ? payload.text : text,
+        payload,
+      });
+      return true;
+    } finally {
+      if (depth === 0) {
+        this.directDeliveries.delete(sessionKey);
+      } else {
+        this.directDeliveries.set(sessionKey, depth);
+      }
     }
-    const text =
-      typeof initialPayload.text === "string" ? initialPayload.text : "";
-    const baseContext = {
-      cfg: this.api.config,
-      to: route.to,
-      text,
-      ...(route.accountId ? { accountId: route.accountId } : {}),
-      ...(route.threadId !== null ? { threadId: route.threadId } : {}),
-    };
-    const payload =
-      presentation && adapter.renderPresentation
-        ? await adapter.renderPresentation({
-            payload: initialPayload,
-            presentation,
-            ctx: { ...baseContext, payload: initialPayload },
-          })
-        : initialPayload;
-    if (!payload) {
-      return false;
-    }
-    await adapter.sendPayload({
-      ...baseContext,
-      text: typeof payload.text === "string" ? payload.text : text,
-      payload,
-    });
-    return true;
+  }
+
+  undeliveredPendingFor(record) {
+    this.prune();
+    return [...this.records.values()]
+      .filter(
+        (candidate) =>
+          candidate !== record &&
+          candidate.sessionKey === record.sessionKey &&
+          candidate.delivered === false &&
+          ["pending", "processing"].includes(candidate.interaction.state) &&
+          (record.runId && candidate.runId
+            ? candidate.runId === record.runId
+            : candidate.capturedAt >= record.capturedAt),
+      )
+      .sort((left, right) => left.capturedAt - right.capturedAt)
+      .slice(0, 3)
+      .map((candidate) => candidate.interaction);
   }
 
   async wakeAgent(sessionKey, reason = "hook:agentbridge-interaction-updated") {
@@ -777,6 +839,11 @@ function safeStatusMessage(status, errorCode, response = null) {
       return `AgentBridge 暂时无法查询安全交互状态${code}。`;
     case "resume_failed":
       return `AgentBridge 未能继续执行本次安全操作${code}。`;
+    case "unknown":
+      if (safeCode(errorCode) === "RESULT_UNKNOWN") {
+        return "OA 写操作的最终结果未能确认。AgentBridge 已停止且不会自动重试，请先到 OA 中核对实际结果后再决定下一步（错误码：RESULT_UNKNOWN）。";
+      }
+      return "AgentBridge 无法确认本次安全操作的最终状态" + code + "。";
     case "failed":
       return `AgentBridge 未能完成本次安全操作${code}。`;
     default:
