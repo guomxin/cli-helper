@@ -255,9 +255,27 @@ false negative and was not retried. The draft pair remains under `oa:write:draft
 `oa.leave.submit.prepare` and `oa.leave.submit` are a separate formal-submission
 pair under `oa:write:submit`. They require a new field submission and a new action
 authorization, consume approval immediately before `#sendId_a`, and succeed only
-after exactly one new matching sent item and its detail can be read back. No live
-leave submission has been performed by this implementation change.
+after exactly one new matching sent item and its detail can be read back. A live
+leave submission has completed this path; the user later cancelled that test item manually.
 
+### Sent workflow revoke
+
+`oa.workflow.revoke.prepare` and `oa.workflow.revoke` expose revocation as an
+independent cross-workflow controlled write. The agent first obtains an opaque
+`affair_id` from `oa_workflow_list_sent`; the trusted field card collects or
+prefills the mandatory revoke comment, and a separate action card freezes the
+sent item's affair, summary, process, title, and form identity.
+
+Commit uses OA's native revoke action for exactly one row. Authorization is
+consumed immediately before the final confirmation, and success requires both
+sent-list disappearance and the same identity returning to wait-send with the
+registered revoked state. Any uncertain post-confirmation result is reported as
+unknown and is never retried automatically. This is not an automatic test-data
+cleanup hook because OA may notify participants or retain audit and business
+side effects.
+
+The pair requires the independent `oa:write:revoke` scope. Existing identity
+tokens are not widened when the capability is deployed.
 ## Streamable HTTP MCP
 
 Issue a short-lived identity token from a trusted administrator terminal:
@@ -271,7 +289,8 @@ python -m bscli.cli.main --home .bscli mcp token issue \
 ~~~
 
 Choose only the scopes required by that client: `oa:write:draft`,
-`oa:write:approval`, `oa:write:meeting`, and `oa:write:submit` are independent.
+`oa:write:approval`, `oa:write:meeting`, `oa:write:submit`, and
+`oa:write:revoke` are independent.
 Completing a trusted card or deploying a new capability never widens an already
 issued token.
 

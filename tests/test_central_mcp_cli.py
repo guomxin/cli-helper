@@ -36,6 +36,8 @@ class CentralMcpCliTests(unittest.TestCase):
                         "oa:write:meeting",
                         "--scope",
                         "oa:write:submit",
+                        "--scope",
+                        "oa:write:revoke",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -58,6 +60,7 @@ class CentralMcpCliTests(unittest.TestCase):
                 "oa:write:approval",
                 "oa:write:draft",
                 "oa:write:meeting",
+                "oa:write:revoke",
                 "oa:write:submit",
             ],
         )

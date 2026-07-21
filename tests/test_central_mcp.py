@@ -153,6 +153,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_leave_save_draft", names)
         self.assertIn("oa_leave_submit_prepare", names)
         self.assertIn("oa_leave_submit", names)
+        self.assertIn("oa_workflow_revoke_prepare", names)
+        self.assertIn("oa_workflow_revoke", names)
         self.assertIn("oa_missed_punch_prepare", names)
         self.assertIn("oa_missed_punch_save_draft", names)
         self.assertIn("oa_missed_punch_approval_prepare", names)
@@ -166,6 +168,8 @@ class CentralMcpTests(unittest.TestCase):
         leave_save = next(tool for tool in tools if tool["name"] == "oa_leave_save_draft")
         leave_prepare = next(tool for tool in tools if tool["name"] == "oa_leave_prepare")
         leave_submit = next(tool for tool in tools if tool["name"] == "oa_leave_submit")
+        revoke_prepare = next(tool for tool in tools if tool["name"] == "oa_workflow_revoke_prepare")
+        revoke = next(tool for tool in tools if tool["name"] == "oa_workflow_revoke")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["readOnlyHint"])
@@ -173,6 +177,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(submit["annotations"]["destructiveHint"])
         self.assertFalse(leave_save["annotations"]["destructiveHint"])
         self.assertTrue(leave_submit["annotations"]["destructiveHint"])
+        self.assertFalse(revoke_prepare["annotations"]["destructiveHint"])
+        self.assertTrue(revoke["annotations"]["destructiveHint"])
         approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
         prepare_meeting = next(
             tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
@@ -206,6 +212,10 @@ class CentralMcpTests(unittest.TestCase):
             "input_submission_id",
         ):
             self.assertIn(field_name, leave_prepare_schema)
+        revoke_prepare_schema = revoke_prepare["inputSchema"]["properties"]
+        self.assertIn("affair_id", revoke_prepare_schema)
+        self.assertIn("repeal_comment", revoke_prepare_schema)
+        self.assertIn("input_submission_id", revoke_prepare_schema)
         meeting_prepare_schema = prepare_meeting["inputSchema"]["properties"]
         for field_name in (
             "subject",
@@ -369,6 +379,12 @@ class CentralMcpTests(unittest.TestCase):
                 scopes=["oa:read", "oa:write:submit"],
                 ttl_seconds=3600,
             )
+            revoke_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:revoke"],
+                ttl_seconds=3600,
+            )
             service.invoke.return_value = {
                 "protocolVersion": "0.1",
                 "requestId": "mcp-write",
@@ -441,6 +457,26 @@ class CentralMcpTests(unittest.TestCase):
                     "arguments": {"authorization_id": authorization_id},
                 },
             )
+            submit_revoke_denied = self._request(
+                client,
+                "tools/call",
+                request_id=37,
+                token=submit_identity["token"],
+                params={
+                    "name": "oa_workflow_revoke",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
+            revoke_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=38,
+                token=revoke_identity["token"],
+                params={
+                    "name": "oa_workflow_revoke",
+                    "arguments": {"authorization_id": authorization_id},
+                },
+            )
 
         self.assertTrue(read_denied.json()["result"]["isError"])
         self.assertFalse(approval_allowed.json()["result"]["isError"])
@@ -448,12 +484,15 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(meeting_allowed.json()["result"]["isError"])
         self.assertTrue(approval_submit_denied.json()["result"]["isError"])
         self.assertFalse(submit_allowed.json()["result"]["isError"])
+        self.assertTrue(submit_revoke_denied.json()["result"]["isError"])
+        self.assertFalse(revoke_allowed.json()["result"]["isError"])
         self.assertEqual(
             [call.kwargs["capability_name"] for call in service.invoke.call_args_list],
             [
                 "oa.missed_punch.approve",
                 "oa.meeting.create",
                 "oa.business_trip.submit",
+                "oa.workflow.revoke",
             ],
         )
 

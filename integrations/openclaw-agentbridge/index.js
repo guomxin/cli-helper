@@ -6,7 +6,7 @@ export default definePluginEntry({
   id: "agentbridge-interactions",
   name: "AgentBridge Interactions",
   description: "Trusted AgentBridge interaction cards for private OpenClaw chats",
-  version: "0.1.12",
+  version: "0.1.13",
   register(api) {
     registerAgentBridgeInteractions(api);
   },

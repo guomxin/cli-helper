@@ -342,3 +342,24 @@ The next discovery step is to install the network probe, manually perform a
 non-destructive page interaction only when safe, and inspect captured requests.
 Any interaction that might submit, approve, reject, archive, delete, revoke,
 send, or upload must wait for explicit user confirmation.
+## Sent-Workflow Revoke Contract (2026-07-21)
+
+Read-only exploration of the real sent-items page established a dedicated
+revoke contract rather than a generic collaboration submit action:
+
+1. The page action is `cancelWorkFlow()` and permits exactly one selected row.
+2. OA checks user secret level, repeal eligibility, and current affair validity
+   before opening `showRepealCommentDialog`.
+3. The dialog requires a non-empty comment with a 100-character limit.
+4. The final native manager operation is `colManager.transRepal`; it remains an
+   adapter-internal implementation detail and is never agent-callable.
+5. A successfully revoked item leaves sent and returns to wait-send with the
+   same affair, summary, and process identity and the revoked sub-state.
+
+This evidence is promoted as the independent governed pair
+`oa.workflow.revoke.prepare` / `oa.workflow.revoke`, protected by
+`oa:write:revoke`. The implementation resolves all sent pages before freezing a
+target, rechecks the exact row immediately before commit, drives the original
+Playwright page while performing readback, and treats every post-confirmation
+ambiguity as non-retryable unknown. No real OA revoke was executed while adding
+this capability.

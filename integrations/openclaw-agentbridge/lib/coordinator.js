@@ -805,6 +805,14 @@ function safeSucceededMessage(response) {
       ? "OA 请假申请已提交审批，并已通过已发事项回读确认。"
       : "OA 请假申请已提交审批。";
   }
+  if (
+    result.business_intent === "revoke_sent_workflow" &&
+    result.workflow_revoked === true
+  ) {
+    return verified
+      ? "OA 已发流程已撤销，并已通过已发消失及待发撤销状态回读确认。"
+      : "OA 已发流程已撤销。";
+  }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return verified
       ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"

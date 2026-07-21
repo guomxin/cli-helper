@@ -822,7 +822,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   使用独立字段卡、执行授权和 `oa:write:submit` scope；commit 在 `#sendId_a`
   前消费授权，绝不点击保存草稿，并且只有内部已发集合恰好新增一个匹配事项且
   详情可读才返回成功。发送边界后的超时或歧义保持 `RESULT_UNKNOWN` 且不自动重试；
-- 中心 Capability Registry 现为 20 个 OA 能力，远程 MCP 为 27 个工具。
+- 当时中心 Capability Registry 为 20 个 OA 能力，远程 MCP 为 27 个工具。
   全量回归通过 Python `247 passed, 3 skipped, 19 subtests passed`、OpenClaw
   插件 `29/29`、`pip check` 和 9 文件 npm pack dry-run；
 - 候选版本先以 `080264cc4cbf-dirty` 部署并执行真实 OA 零写入预检。出差正式
@@ -898,6 +898,22 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   Release 探针在 Uvicorn 启动窗口返回 `MCP_UNREACHABLE`，部署脚本按新规则自动重试后
   成功；27 工具、OA 会话 `active` 和登录复用冒烟均通过，OpenClaw 无需重启。
 
+## 15.11 2026-07-21 独立已发流程撤销能力
+
+- 新增 `oa.workflow.revoke.prepare` / `oa.workflow.revoke` 两阶段能力和远程 MCP
+  工具 `oa_workflow_revoke_prepare` / `oa_workflow_revoke`。撤销不是请假、出差等
+  某个表单的内部原子动作，而是接收已发列表精确 `affair_id` 的跨事项独立能力；
+- 可信字段卡强制收集最多 100 字的撤销附言，允许智能体已知值预填；随后独立
+  授权卡冻结事项标题、发起时间、当前待办人、附言及 affair/summary/process/form
+  身份。prepare 只执行 OA 原生资格预检，不跨越写边界；
+- commit 重新解析并唯一选中目标，只在 OA 原生最终“确定”之前消费一次性授权。
+  原操作页在回读期间持续驱动 Playwright 事件；成功必须同时满足已发列表消失、
+  同一身份回到待发且呈现撤销状态。确认后的任何歧义统一记为 `RESULT_UNKNOWN`，
+  禁止自动重试；
+- 新增独立最小权限 `oa:write:revoke`。部署能力不会扩大当前 OpenClaw Token，只有
+  用户明确批准换发后，OpenClaw 才能看到并执行这两个工具；
+- 撤销不会作为提交测试后的自动清理步骤。即使流程回到待发，OA 仍可能留下审计、
+  通知当前处理人或触发表单业务逻辑。本轮只实现和测试代码，没有执行真实 OA 撤销。
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；

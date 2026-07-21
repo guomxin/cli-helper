@@ -46,6 +46,10 @@ from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_SAVE_CAPABILITY,
 )
+from bscli.adapters.seeyon_workflow_revoke import (
+    WORKFLOW_REVOKE_CAPABILITY,
+    WORKFLOW_REVOKE_PREPARE_CAPABILITY,
+)
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
@@ -450,6 +454,76 @@ def create_central_mcp_server(
             idempotency_key,
         )
 
+    @mcp.tool(
+        name="oa_workflow_revoke_prepare",
+        title="Prepare OA Workflow Revoke",
+        meta=interaction_tool_meta(),
+        description=(
+            "Bind one opaque affair ID from a prior sent-workflow result and pass any "
+            "revoke comment already supplied by the user. AgentBridge opens a prefilled "
+            "trusted card, validates the exact active target, and creates separate revoke "
+            "authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_workflow_revoke_prepare(
+        ctx: Context,
+        affair_id: Annotated[str, Field(min_length=1, max_length=256)],
+        repeal_comment: Annotated[str | None, Field(max_length=100)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"affair_id": affair_id}
+        if repeal_comment is not None:
+            arguments["repeal_comment"] = repeal_comment
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            WORKFLOW_REVOKE_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:revoke"},
+        )
+
+    @mcp.tool(
+        name="oa_workflow_revoke",
+        title="Revoke Authorized OA Workflow",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, revoke exactly one frozen sent workflow "
+            "through OA's native action, and verify that the same workflow returned to "
+            "wait-send with revoked state."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_workflow_revoke(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            WORKFLOW_REVOKE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:revoke"},
+        )
     @mcp.tool(
         name="oa_business_trip_prepare",
         title="Prepare OA Business Trip Draft",

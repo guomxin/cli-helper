@@ -70,6 +70,15 @@ from bscli.adapters.seeyon_missed_punch import (
     prepare_missed_punch_draft,
     save_missed_punch_draft,
 )
+from bscli.adapters.seeyon_workflow_revoke import (
+    WORKFLOW_REVOKE_CAPABILITY,
+    WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
+    WORKFLOW_REVOKE_PREPARE_CAPABILITY,
+    WorkflowRevokeContractMismatch,
+    WorkflowRevokeOutcomeUnknown,
+    prepare_workflow_revoke,
+    revoke_workflow,
+)
 from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
@@ -188,9 +197,21 @@ _TRUSTED_WRITE_DEFINITIONS = {
         "field_message": "Meeting fields must be entered in the trusted field card.",
         "authorization_message": "The meeting-create plan requires confirmation in the trusted action card.",
     },
+    WORKFLOW_REVOKE_PREPARE_CAPABILITY: {
+        "commit_capability": WORKFLOW_REVOKE_CAPABILITY,
+        "field_schema": WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
+        "context_fields": ("affair_id",),
+        "prepare_function": "prepare_workflow_revoke",
+        "commit_function": "revoke_workflow",
+        "contract_error": WorkflowRevokeContractMismatch,
+        "outcome_error": WorkflowRevokeOutcomeUnknown,
+        "field_message": "The workflow revoke comment must be entered in the trusted field card.",
+        "authorization_message": "The workflow revoke plan requires confirmation in the trusted action card.",
+    },
 }
 
 _TRUSTED_WRITE_COMMITS = {
+
     definition["commit_capability"]: (prepare_capability, definition)
     for prepare_capability, definition in _TRUSTED_WRITE_DEFINITIONS.items()
 }
@@ -210,6 +231,8 @@ _CAPABILITY_SCOPES = {
     MISSED_PUNCH_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
     MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
+    WORKFLOW_REVOKE_PREPARE_CAPABILITY: frozenset({"oa:write:revoke"}),
+    WORKFLOW_REVOKE_CAPABILITY: frozenset({"oa:write:revoke"}),
 }
 
 

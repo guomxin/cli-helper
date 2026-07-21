@@ -17,7 +17,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 20)
+        self.assertEqual(len(payload["capabilities"]), 22)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -51,6 +51,14 @@ class CentralCliTests(unittest.TestCase):
         )
         self.assertEqual(
             capabilities["oa.meeting.create"]["effect"],
+            "controlled_write",
+        )
+        self.assertEqual(
+            capabilities["oa.workflow.revoke.prepare"]["effect"],
+            "controlled_write",
+        )
+        self.assertEqual(
+            capabilities["oa.workflow.revoke"]["effect"],
             "controlled_write",
         )
         prepare_schema = capabilities["oa.business_trip.prepare"]["input_schema"]

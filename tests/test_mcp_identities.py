@@ -87,7 +87,7 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             self.assertEqual(verified["scopes"], ["oa:read", "oa:write:draft"])
             self.assertIsNotNone(store.verify(issued["token"], required_scopes={"oa:read"}))
 
-    def test_approval_meeting_and_submit_scopes_are_independent(self):
+    def test_approval_meeting_submit_and_revoke_scopes_are_independent(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
             approval = store.issue(
@@ -104,6 +104,11 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:submit"],
+            )
+            revoke = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:write:revoke"],
             )
 
             self.assertIsNotNone(
@@ -140,6 +145,24 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
                 store.verify(
                     submit["token"],
                     required_scopes={"oa:write:draft"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(
+                    submit["token"],
+                    required_scopes={"oa:write:revoke"},
+                )
+            )
+            self.assertIsNotNone(
+                store.verify(
+                    revoke["token"],
+                    required_scopes={"oa:write:revoke"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(
+                    revoke["token"],
+                    required_scopes={"oa:write:submit"},
                 )
             )
 

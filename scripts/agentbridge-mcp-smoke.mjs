@@ -14,6 +14,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_leave_save_draft",
   "oa_leave_submit_prepare",
   "oa_leave_submit",
+  "oa_workflow_revoke_prepare",
+  "oa_workflow_revoke",
   "oa_missed_punch_prepare",
   "oa_missed_punch_save_draft",
   "oa_missed_punch_approval_prepare",

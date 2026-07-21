@@ -3,7 +3,7 @@ import { InteractionCoordinator, presentationForRecords } from "./coordinator.js
 import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 
-const PLUGIN_VERSION = "0.1.12";
+const PLUGIN_VERSION = "0.1.13";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);

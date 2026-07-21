@@ -18,6 +18,7 @@ _ALLOWED_SCOPES = frozenset(
         "oa:write:approval",
         "oa:write:meeting",
         "oa:write:submit",
+        "oa:write:revoke",
     }
 )
 

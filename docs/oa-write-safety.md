@@ -478,3 +478,28 @@ Use `after_submit_wait_ms` for slow pages before the daemon performs pending
 disappearance verification. `Archive` / post-processing archive remains
 dry-run-only because the OA page can require a document archive destination
 before it can submit safely.
+## Governed Sent-Workflow Revoke
+
+The central stack exposes sent-workflow revocation only through
+`oa.workflow.revoke.prepare` followed by `oa.workflow.revoke`. It is a separate
+business capability, not an implicit cleanup step after draft or submit tests.
+
+- The caller supplies one opaque `affair_id` obtained from the governed sent list.
+- A trusted field card requires a revoke comment of at most 100 characters; a
+  separate action card shows the resolved title, start time, current nodes, and
+  exact comment.
+- Prepare runs only read-side OA eligibility checks and freezes the affair,
+  summary, process, title, template, form-app, and form-record identity.
+- Commit re-resolves and selects exactly one row, consumes authorization
+  immediately before OA's native final confirmation, and never exposes the
+  underlying manager method to the agent.
+- Success requires two observations: the frozen item disappears from sent and
+  the same affair/summary/process/title identity appears in wait-send with
+  `state=2, subState=3` or the explicit revoked label.
+- Any failure after the confirmation boundary is `RESULT_UNKNOWN`; automatic
+  retry is forbidden until read-only reconciliation proves the outcome.
+
+The pair requires `oa:write:revoke`. Deploying it does not add that scope to an
+existing MCP identity token. Real revocation remains a business write because
+OA may retain audit records, notify participants, or trigger form-specific
+logic even when the item returns to wait-send.

@@ -51,6 +51,14 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             capability_required_scopes("oa.leave.submit"),
             frozenset({"oa:write:submit"}),
         )
+        self.assertEqual(
+            capability_required_scopes("oa.workflow.revoke.prepare"),
+            frozenset({"oa:write:revoke"}),
+        )
+        self.assertEqual(
+            capability_required_scopes("oa.workflow.revoke"),
+            frozenset({"oa:write:revoke"}),
+        )
 
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:
@@ -1223,6 +1231,74 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 {"affair_id": "affair-1", "opinion": "同意"},
             )
 
+    def test_workflow_revoke_card_prefills_comment_and_freezes_affair_context(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.workflow.revoke.prepare",
+                arguments={
+                    "affair_id": "affair-1",
+                    "repeal_comment": "自动化测试结束",
+                },
+            )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=started["interaction"]["interactionId"],
+                ),
+                frozenset({"oa:write:revoke"}),
+            )
+            submission = service.field_submissions.get(submission_id)
+            self.assertEqual(
+                submission["form_schema"]["_agentbridge_resume_arguments"],
+                {"affair_id": "affair-1"},
+            )
+            self.assertEqual(
+                submission["form_schema"]["fields"][0]["value"],
+                "自动化测试结束",
+            )
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values={"repeal_comment": "自动化测试结束"},
+            )
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "revoke_sent_workflow",
+                    "target": {"affair_id": "affair-1", "title": "请假申请"},
+                    "action_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": {"repeal_comment": "自动化测试结束"},
+                },
+                "summary": {"title": "撤销已发流程", "system": "致远 OA", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_workflow_revoke",
+                return_value=prepared_payload,
+            ) as prepare:
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.workflow.revoke.prepare",
+                    arguments={
+                        "affair_id": "affair-1",
+                        "input_submission_id": submission_id,
+                    },
+                )
+
+            self.assertEqual(prepared["status"], "requires_user_action")
+            self.assertEqual(prepared["error"]["code"], "WRITE_AUTHORIZATION_REQUIRED")
+            self.assertEqual(
+                prepared["nextAction"]["then"]["capability"],
+                "oa.workflow.revoke",
+            )
+            self.assertEqual(
+                prepare.call_args.args[2],
+                {"affair_id": "affair-1", "repeal_comment": "自动化测试结束"},
+            )
     def test_meeting_interaction_uses_meeting_scope_and_generic_commit(self):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, FakeWorker())

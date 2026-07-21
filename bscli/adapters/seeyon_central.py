@@ -48,6 +48,12 @@ from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_SAVE_CAPABILITY,
     MISSED_PUNCH_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_workflow_revoke import (
+    WORKFLOW_REVOKE_CAPABILITY,
+    WORKFLOW_REVOKE_INPUT_SCHEMA,
+    WORKFLOW_REVOKE_PREPARE_CAPABILITY,
+    WORKFLOW_REVOKE_PREPARE_INPUT_SCHEMA,
+)
 from bscli.adapters.seeyon_system import SEEYON_OA_URL
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
@@ -402,6 +408,37 @@ def build_central_capability_registry() -> CapabilityRegistry:
         ),
     ):
         registry.register(spec)
+    registry.register(
+        CapabilitySpec(
+            name=WORKFLOW_REVOKE_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Collect a revoke comment in a trusted card, resolve one exact active "
+                "sent workflow, run non-destructive OA eligibility checks, and create "
+                "a separate revoke authorization."
+            ),
+            input_schema=WORKFLOW_REVOKE_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="workflow-revoke-prepare-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=WORKFLOW_REVOKE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one trusted authorization, revoke the frozen sent workflow "
+                "through OA's native action, and verify its revoked wait-send state."
+            ),
+            input_schema=WORKFLOW_REVOKE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="workflow-revoke-commit-v1",
+        )
+    )
     for capability_name, collection in _WORKFLOW_LIST_CAPABILITIES.items():
         registry.register(
             CapabilitySpec(
