@@ -925,13 +925,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `%USERPROFILE%\.openclaw\.env` 的 `AGENTBRIDGE_MCP_TOKEN`，没有打印到聊天、
   仓库、普通日志、用户级或机器级环境变量；
 - 新 Token 首次 `Release` 冒烟返回 29 个工具且撤销工具完整，服务器
-  `lastUsedAt` 随后更新。执行 `openclaw mcp reload` 后撤销旧的五权限 Token，
-  再次冒烟仍成功，证明当前配置使用的是新 Token；
-- 服务器最终只有一个 `guomao` 活动 Token，权限集合恰好为上述六项。OpenClaw
-  Gateway 未做完整重启，仍由 PID `32192` 单实例监听 `127.0.0.1:18789`，深度
-  RPC 和配置审计通过；
-- OA 会话当时为 `expired`。本次只完成权限轮换和只读验证，没有打开登录卡，
-  没有填写撤销字段卡，也没有执行提交、撤销或其他 OA 业务写操作。
+  `lastUsedAt` 随后更新。随后错误地只执行了 `openclaw mcp reload` 就撤销旧 Token；
+  该命令只清理 MCP 运行时缓存，不能刷新长驻 Gateway 已读取的 `.env`；
+- 17:28 的真实 Telegram 回合因此在启动 `agentbridge` 时收到 `invalid_token`，模型
+  才误判为当前会话没有 OA 执行入口，并尝试投递到不存在的 `XinClaw-Win` 会话。
+  独立 Release 冒烟当时仍成功，因为它直接读取新版 `.env`，不能证明 Gateway 已换
+  用新凭据；
+- 随后只执行一次完整 `openclaw gateway restart`，耗时 181 秒。新 PID `23540`
+  单实例监听 `127.0.0.1:18789`，深度 RPC、配置审计和插件 `0.1.13` 均通过；
+  `openclaw mcp probe agentbridge --json` 返回 29 个工具、resources/prompts 可用、
+  诊断为空，两个撤销工具完整；
+- 服务器最终只有一个 `guomao` 活动 Token，权限集合恰好为上述六项。今后 Token
+  轮换必须先完整重启并从真实宿主确认新 Token，再撤销旧 Token；
+- OA 会话当时为 `expired`。本次只完成权限轮换和只读验证，没有填写撤销字段卡，
+  也没有执行提交、撤销或其他 OA 业务写操作。
 
 ## 16. 后续演进顺序
 

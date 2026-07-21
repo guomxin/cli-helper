@@ -151,6 +151,21 @@ MCP App 改动：
 
 Windows 托管 Gateway 重启实测可能超过两分钟。中央 Python 包、systemd 配置或 OA 适配代码变化，不应顺带重启 Gateway。
 
+当 `%USERPROFILE%\.openclaw\.env`、`openclaw.json` 中 MCP Header 引用或其他
+Gateway 进程环境发生变化时，必须完整重启 Gateway；`openclaw mcp reload` 只清理
+MCP 工具运行时缓存，不能替换长驻进程已经读取的环境变量。Bearer Token 的安全轮换
+顺序固定为：
+
+1. 服务端签发新 Token，但暂不撤销旧 Token；
+2. 原子更新本机 `.openclaw\.env`，用 `Test-AgentBridgeMcp.ps1 -Check Release`
+   直接验证新 Token；
+3. 只执行一次 `openclaw gateway restart`，耐心等待托管重启完成；
+4. 通过 Gateway 深度 RPC、插件版本日志和真实宿主 MCP 调用确认新 Token 已生效；
+5. 最后撤销旧 Token，再执行一次 Release 冒烟和活动 Token 核账。
+
+不得把独立冒烟成功等同于 Gateway 已换用新凭据；前者直接读取当前 `.env`，后者
+可能仍持有启动时的旧环境值。
+
 ## 7. 安全边界
 
 - 自动冒烟只包含 `oa_session_status`；可选登录复用只包含 `oa_session_login`。
