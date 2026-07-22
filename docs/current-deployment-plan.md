@@ -940,6 +940,30 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - OA 会话当时为 `expired`。本次只完成权限轮换和只读验证，没有填写撤销字段卡，
   也没有执行提交、撤销或其他 OA 业务写操作。
 
+## 15.13 2026-07-22 出差正式提交确认链路修复
+
+- Telegram 出差正式提交操作 `09699d30-72f1-47d5-8f5b-bc71edb97e23` 在最终授权后
+  返回 `RESULT_UNKNOWN`。操作证据只观察到一次 `cap4_form_save (HTTP 200)`，没有
+  观察到 `workflow_send`；随后只读核对内部已发和待发集合，均未发现本次新增流程或
+  草稿，因此确认没有产生实际业务结果，也没有自动重试；
+- 根因是出差提交仍使用旧的单段发送实现：点击发送后会直接接受浏览器原生对话框，
+  但没有捕获 OA 的业务确认或校验提示，也在同一页面等待已发回读。请假流程已有的
+  提示观察、精确确认和独立回读机制尚未复用到出差流程；
+- 出差提交契约升级为 `seeyon-business-trip-submit-v3`。现在会观察页面确认、原生对话框
+  和业务校验；首次发现 OA 提示时停止执行并生成第二张独立授权卡，冻结规范化提示
+  指纹。只有用户授权的提示与现场提示完全一致时才点击“继续”，其他提示一律停止；
+- 已发核验改用独立 `fork_page`，避免提交页导航、弹窗和轮询互相干扰。成功标准保持为
+  OA 发送阶段可观测、内部已发集合恰好新增一项且详情可读；发送边界后的歧义仍返回
+  `RESULT_UNKNOWN`，且禁止自动重试；
+- 本地 `unittest` 回归为 `273 passed, 3 skipped`，OpenClaw 插件既有回归为 `36/36`。
+  提交 `b47037c` 已推送 GitHub，Linux Release `b47037c782f9` 已部署；发布验证返回
+  `270 passed, 3 skipped, 19 subtests passed`，MCP Release 冒烟确认 29 个工具完整、
+  OA 会话 `active`；
+- 中心端随后以同一加密 OA 会话运行出差正式提交零写入预检，确认模板、CAP4 表单、
+  发送控件和已发集合均可读，线上契约为 v3。守卫记录 `write_controls_clicked=0`、
+  `collaboration_write_requests=0`、`drafts_saved=0`、`workflows_submitted=0`。本轮没有
+  替用户重试出差申请，也没有执行其他 OA 业务写操作。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
