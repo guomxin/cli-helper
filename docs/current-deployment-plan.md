@@ -964,6 +964,38 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `collaboration_write_requests=0`、`drafts_saved=0`、`workflows_submitted=0`。本轮没有
   替用户重试出差申请，也没有执行其他 OA 业务写操作。
 
+## 15.14 2026-07-22 提交成功误报修复与真实撤销闭环
+
+- 出差提交操作 `c0e70af3-33b5-40dd-8aa6-568d0f2136e8` 返回 `RESULT_UNKNOWN`，
+  但阶段证据已观察到最终 `workflow_send (HTTP 200)`。按禁止自动重试规则只读核对
+  OA 完整已发列表，确认流程实际提交成功：标题为
+  `【HR】出差申请单-辛国茂-2026-07-23 13:30-2026-07-23 17:30`，
+  `affair_id=-7860823650325868700`；
+- 用户明确授权对测试流程执行完整的“提交后撤销”闭环。该流程随后通过独立撤销能力
+  成功撤销，操作 `d24d5b8e-ca5b-4d82-9482-308bc481f60e` 同时验证了已发列表消失、
+  同一身份回到待发以及 `state=2`、`subState=3`、`subStateName=撤销`。当前没有遗留
+  活跃测试流程；
+- 误报包含两个叠加根因。第一，提交验收读取的是 OA 首页“已发事项”摘要投影，该投影
+  在发送后可能缓存或延迟；完整“已发事项”页面的 `getSentList` 网格已经能立即看到
+  新流程。第二，授权阶段冻结的主题仍是
+  `【HR】出差申请单-{申请人}-{出差开始时间}-{出差结束时间}`，OA 发送后才展开为
+  具体姓名和时间，旧代码把模板字符串当最终标题匹配，因此必然漏报；
+- 新增共享权威已发回读助手。准备阶段基线和提交后候选都读取完整网格；候选必须同时满足
+  新 `affair_id`、精确 `template_id`、精确 `form_app_id` 和流程特定标题标记，随后通过
+  `openFrom=listSent` 直接打开该行详情并再次核验。出差标记包含流程名及已授权起止时间，
+  请假标记包含流程名及已授权请假类型；成功标准没有放宽为“看到一条新记录”；
+- 出差提交契约升级为 `seeyon-business-trip-submit-v4`，请假提交契约升级为
+  `seeyon-leave-submit-v3`。旧授权卡因版本和指纹变化会被拒绝，必须重新准备和授权；
+- 本地 Full 发布校验通过 Python `273 passed, 3 skipped, 19 subtests passed`、
+  OpenClaw 插件 `36/36`、`compileall`、`pip check` 和 npm pack dry-run。提交
+  `a3bd831` 已推送 GitHub，Linux Release `a3bd831a4408` 已部署；MCP 冒烟确认
+  29 个工具完整、OA 会话 `active`，本机 OpenClaw 无需重启；
+- 部署后在中央真实 OA 会话运行出差与请假零写入预检，线上契约分别为 v4/v3，
+  权威已发基线、模板、CAP4 表单和发送控件均可读。守卫确认
+  `write_controls_clicked=0`、`collaboration_write_requests=0`、`drafts_saved=0`、
+  `workflows_submitted=0`。新版本下的真实“提交成功即时识别，再撤销”仍需新一轮字段卡和
+  授权卡，不把本次零写入预检冒充为真实提交验收。
+
 ## 16. 后续演进顺序
 
 1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
