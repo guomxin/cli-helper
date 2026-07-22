@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-19
+> 文档日期：2026-07-22
 >
 > 适用阶段：单用户、受控公司内网、跨机器联调
 >
@@ -8,12 +8,13 @@
 
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
-> 只读链路已通过验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.13 已部署登录卡复用、登录后自动续办和独立撤销结果回执。
-> 中心端当前注册 22 个 OA 能力并发布 29 个 MCP 工具。静态业务字段卡统一支持
-> 对话已知值预填；请假申请同时具备待发草稿和独立正式提交路径。补签申请草稿、
-> 新建会议真实写入和请假正式提交已验收，补签审批仍等待合适业务数据和用户明确确认。
-> 当前 OpenClaw Token 已经用户明确授权包含 `oa:write:submit` 和 `oa:write:revoke`；权限启用没有执行 OA 提交或撤销。
+> 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
+> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.15 已加载。
+> 中心端当前注册 30 个 OA 能力并发布 37 个 MCP 工具。静态业务字段卡统一支持
+> 对话已知值预填；出差和请假正式提交及撤销已闭环，补签审批仍等待合适业务数据。
+> 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
+> `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
+> 权限本身不代表自动执行，所有 OA 业务写入仍要求针对精确事项的独立可信授权。
 
 ## 1. 方案结论
 
@@ -995,6 +996,29 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `write_controls_clicked=0`、`collaboration_write_requests=0`、`drafts_saved=0`、
   `workflows_submitted=0`。新版本下的真实“提交成功即时识别，再撤销”仍需新一轮字段卡和
   授权卡，不把本次零写入预检冒充为真实提交验收。
+
+## 15.15 2026-07-22 接收处理扩展一期
+
+- 新增四个独立接收处理画像及八个受治理能力：效能数据审批、差旅费审批报销、
+  周报知会阅办和普通协同审批。四类入口共享可信字段卡、精确事项授权、冻结指纹、
+  单次执行和待办消失回读，但分别约束标题族、字段集合、模板、表单和节点策略；
+- 周报流程明确使用 `acknowledgement` 语义，不伪造“同意”态度。差旅费授权摘要显示
+  金额、业务归属和附件数量，但不展示收款账号。普通协同仅允许无模板、无专业表单的
+  事项，并排除 HR、报销、采购、用印、效能数据和周报等已注册专业标题族；
+- 新增只读实机预检脚本。它监听写控件、阻断
+  `/seeyon/collaboration/collaboration.do` 的 POST 请求，不创建授权，也不回写共享
+  会话状态。部署后对当前五条待办逐项验证：两个效能数据、一个差旅费报销、一个周报
+  和一个普通协同均命中各自 v1 契约；守卫记录 `write_controls_clicked=0`、
+  `collaboration_write_requests=0`、`authorizations_created=0`；
+- Full 发布验证通过 Python `282 passed, 3 skipped, 19 subtests passed`、
+  OpenClaw 插件 `37/37`、`pip check` 和 npm pack dry-run。提交
+  `4bada2c` 已推送 GitHub，Linux Release `4bada2cfe6e4` 已部署；Release 冒烟确认
+  37 个服务端工具完整、OA 会话 `active` 且登录复用成功；
+- 本机 OpenClaw Gateway 仅重启一次，耗时约 116 秒。深度 RPC 正常，插件
+  `0.1.15` 已加载；宿主探针无诊断并显示 41 个入口，其中 37 个是 AgentBridge 工具，
+  另 4 个是 OpenClaw 对 MCP resources/prompts 的辅助映射。本轮八个新工具均可见；
+- 本轮没有审批、阅办或以其他方式处理任何真实 OA 待办。每条事项仍需用户在
+  Telegram 可信字段卡和独立授权卡中逐条确认，未知结果禁止自动重试。
 
 ## 16. 后续演进顺序
 
