@@ -9,7 +9,7 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.15 已加载。
+> 执行授权三类卡片均已在 Telegram WebView 实测；插件 0.1.16 已加载。
 > 中心端当前注册 30 个 OA 能力并发布 37 个 MCP 工具。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假正式提交及撤销已闭环，补签审批仍等待合适业务数据。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
@@ -1019,6 +1019,22 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   另 4 个是 OpenClaw 对 MCP resources/prompts 的辅助映射。本轮八个新工具均可见；
 - 本轮没有审批、阅办或以其他方式处理任何真实 OA 待办。每条事项仍需用户在
   Telegram 可信字段卡和独立授权卡中逐条确认，未知结果禁止自动重试。
+
+## 15.16 2026-07-22 Android Telegram 浏览器回退
+
+- Android 手机正确安装内部 CA 后，Chrome 已能信任 `https://10.10.50.213:8780`，
+  但 Telegram Android 的内嵌 Web App 仍显示空白。该现象限定在 Telegram WebView，
+  不是 AgentBridge 网络、叶证书 SAN 或手机系统浏览器的 TLS 故障；
+- OpenClaw 插件升级为 `0.1.16`。Telegram HTTPS 可信交互现在同时提供原生 Web App
+  主按钮和“浏览器打开”普通 URL 按钮；用户可从普通链接的浏览器菜单切换到系统
+  Chrome。两者使用同一个短期可信 URL，URL 只存在于宿主展示元数据，仍不进入模型
+  可见结果或聊天正文；
+- Full 发布验证通过 Python `282 passed, 3 skipped, 19 subtests passed`、
+  OpenClaw 插件 `37/37`、`pip check` 和 npm pack dry-run。提交 `450b9fb` 已推送
+  GitHub；本机 Gateway 单次重启后深度 RPC 正常，插件 `0.1.16` 状态为 `loaded`，
+  MCP 探针仍显示 41 个入口且诊断为 0；
+- 本轮没有创建、审批或提交 OA 业务数据。Android 手机上的真实备用按钮打开与卡片
+  完成回调等待用户下一张可信卡验收。
 
 ## 16. 后续演进顺序
 
