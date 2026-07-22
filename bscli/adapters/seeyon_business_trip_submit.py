@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_FIELD_CARD_SCHEMA,
@@ -26,6 +27,7 @@ from bscli.adapters.seeyon_business_trip import (
     normalize_business_trip_inputs,
 )
 from bscli.adapters.seeyon_submit_phases import (
+    SeeyonBusinessValidationRequired,
     SubmissionPhaseTracker,
     pump_browser_events,
 )
@@ -33,7 +35,7 @@ from bscli.adapters.seeyon_submit_phases import (
 
 BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY = "oa.business_trip.submit.prepare"
 BUSINESS_TRIP_SUBMIT_CAPABILITY = "oa.business_trip.submit"
-BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v2"
+BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v3"
 BUSINESS_TRIP_SUBMIT_PREPARE_INPUT_SCHEMA = BUSINESS_TRIP_PREPARE_INPUT_SCHEMA
 BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA = BUSINESS_TRIP_SAVE_INPUT_SCHEMA
 
@@ -46,6 +48,14 @@ BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA.update(
         "notice": "字段提交后还需单独授权；授权后会正式发送并进入 OA 审批流程。",
     }
 )
+
+
+class BusinessTripBusinessValidationRequired(SeeyonBusinessValidationRequired):
+    pass
+
+
+class BusinessTripSubmissionBlocked(BusinessTripContractMismatch):
+    pass
 
 
 def prepare_business_trip_submission(adapter, worker, arguments: dict) -> dict:
@@ -135,52 +145,69 @@ def submit_business_trip_request(
             "The OA business-trip subject changed after submission authorization."
         )
 
-    phase_tracker = SubmissionPhaseTracker()
+    validation_overrides = _validation_overrides(plan)
+    phase_tracker = SubmissionPhaseTracker(
+        {
+            str(item.get("fingerprint") or "")
+            for item in validation_overrides
+            if isinstance(item, dict)
+        }
+    )
     boundary_crossed = False
 
+    phase_tracker.install_page_observers(page)
     page.on("response", phase_tracker.observe_response)
-    page.on("dialog", lambda dialog: dialog.accept())
-    enter_commit_boundary()
-    boundary_crossed = True
-    try:
-        page.locator("#sendId_a").click(timeout=10000)
-        submitted = _wait_for_sent_readback(
-            adapter,
-            worker,
-            page=page,
-            baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
-            expected_subject=expected_subject,
-            timeout_seconds=timeout_seconds,
-        )
-        return {
-            "schema_version": "agentbridge.oa_business_trip_submit_result.v1",
-            "business_intent": "submit_business_trip_request",
-            "workflow_submitted": True,
-            "submitted_count": 1,
-            "submitted": submitted,
-            "verification": {
-                "confirmed": True,
-                "methods": [
-                    "oa_submission_phase_observation",
-                    "sent_collection_delta",
-                    "sent_detail_readback",
-                ],
-            },
-            "request_evidence": phase_tracker.evidence,
-            "transport": "central_browser_session",
-            "browser_bridge_used": False,
-        }
-    except BusinessTripOutcomeUnknown as exc:
-        raise BusinessTripOutcomeUnknown(
-            f"{exc} {phase_tracker.unknown_outcome_detail()}"
-        ) from exc
-    except BaseException as exc:
-        if boundary_crossed:
+    page.on("dialog", phase_tracker.observe_dialog)
+    page.on("pageerror", phase_tracker.observe_page_error)
+    with _sent_readback_worker(worker) as readback_worker:
+        enter_commit_boundary()
+        boundary_crossed = True
+        try:
+            page.locator("#sendId_a").click(timeout=10000)
+            submitted = _wait_for_sent_readback(
+                adapter,
+                readback_worker,
+                page=page,
+                baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
+                expected_subject=expected_subject,
+                timeout_seconds=timeout_seconds,
+                phase_tracker=phase_tracker,
+                validation_overrides=validation_overrides,
+            )
+            return {
+                "schema_version": "agentbridge.oa_business_trip_submit_result.v1",
+                "business_intent": "submit_business_trip_request",
+                "workflow_submitted": True,
+                "submitted_count": 1,
+                "submitted": submitted,
+                "verification": {
+                    "confirmed": True,
+                    "methods": [
+                        "oa_submission_phase_observation",
+                        "sent_collection_delta",
+                        "sent_detail_readback",
+                    ],
+                },
+                "request_evidence": phase_tracker.evidence,
+                "transport": "central_browser_session",
+                "browser_bridge_used": False,
+            }
+        except (
+            BusinessTripBusinessValidationRequired,
+            BusinessTripSubmissionBlocked,
+        ):
+            raise
+        except BusinessTripOutcomeUnknown as exc:
             raise BusinessTripOutcomeUnknown(
-                "The OA business-trip send boundary was crossed, but verification failed. "
-                f"{phase_tracker.unknown_outcome_detail()}"
+                f"{exc} {phase_tracker.unknown_outcome_detail()}"
             ) from exc
-        raise
+        except BaseException as exc:
+            if boundary_crossed:
+                raise BusinessTripOutcomeUnknown(
+                    "The OA business-trip send boundary was crossed, but verification failed. "
+                    f"{phase_tracker.unknown_outcome_detail()}"
+                ) from exc
+            raise
 
 
 def business_trip_submit_summary(inputs: dict) -> dict:
@@ -227,6 +254,17 @@ def _sent_snapshot(adapter, worker) -> dict:
     }
 
 
+@contextmanager
+def _sent_readback_worker(worker):
+    fork_page = getattr(worker, "fork_page", None)
+    if not callable(fork_page):
+        # Lightweight test workers do not own a browser page.
+        yield worker
+        return
+    with fork_page() as readback_worker:
+        yield readback_worker
+
+
 def _wait_for_sent_readback(
     adapter,
     worker,
@@ -235,10 +273,18 @@ def _wait_for_sent_readback(
     baseline_affair_ids: set[str],
     expected_subject: str,
     timeout_seconds: float,
+    phase_tracker: SubmissionPhaseTracker,
+    validation_overrides: list[dict[str, Any]],
 ) -> dict:
     deadline = time.monotonic() + max(timeout_seconds, 5)
     last_error: BaseException | None = None
     while time.monotonic() < deadline:
+        phase_tracker.observe_page_confirmation(page)
+        _handle_business_validation(
+            page,
+            phase_tracker,
+            validation_overrides=validation_overrides,
+        )
         try:
             result = adapter.list_workflows(worker, collection="sent", arguments={"limit": 100})
             candidates = [
@@ -272,15 +318,106 @@ def _wait_for_sent_readback(
                 raise BusinessTripOutcomeUnknown(
                     "Multiple new sent OA items matched the authorized subject."
                 )
-        except BusinessTripOutcomeUnknown:
+        except (
+            BusinessTripBusinessValidationRequired,
+            BusinessTripSubmissionBlocked,
+            BusinessTripOutcomeUnknown,
+        ):
             raise
         except BaseException as exc:
             last_error = exc
         pump_browser_events(page)
+        phase_tracker.observe_page_confirmation(page)
+        _handle_business_validation(
+            page,
+            phase_tracker,
+            validation_overrides=validation_overrides,
+        )
     message = "The submitted business-trip request was not confirmed in the OA sent collection."
     if last_error is not None:
         message += f" Last readback error: {type(last_error).__name__}."
     raise BusinessTripOutcomeUnknown(message)
+
+
+def _validation_overrides(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    overrides = plan.get("business_validation_overrides")
+    if isinstance(overrides, list):
+        return [dict(item) for item in overrides if isinstance(item, dict)]
+    legacy = plan.get("business_validation_override")
+    return [dict(legacy)] if isinstance(legacy, dict) else []
+
+
+def _handle_business_validation(
+    page,
+    phase_tracker: SubmissionPhaseTracker,
+    *,
+    validation_overrides: list[dict[str, Any]],
+) -> None:
+    validation = phase_tracker.pending_business_validation
+    if validation is None:
+        return
+    message = str(validation.get("message") or "OA business validation failed")
+    if not validation.get("can_continue"):
+        raise BusinessTripSubmissionBlocked(message)
+    authorized_fingerprints = {
+        str(item.get("fingerprint") or "")
+        for item in validation_overrides
+        if isinstance(item, dict)
+    }
+    if validation.get("fingerprint") not in authorized_fingerprints:
+        raise BusinessTripBusinessValidationRequired(validation)
+    if phase_tracker.business_validation_was_continued(validation["fingerprint"]):
+        raise BusinessTripSubmissionBlocked(
+            "The same OA business validation reappeared after its authorized Continue action."
+        )
+    if validation.get("control_already_activated"):
+        phase_tracker.mark_business_validation_continued()
+        return
+
+    control_selector = str(validation.get("control_selector") or "").strip()
+    control_text = str(validation.get("control_text") or "\u7ee7\u7eed").strip()
+    control_scope = page
+    control_frame_url = str(validation.get("control_frame_url") or "").strip()
+    if control_frame_url:
+        frames = getattr(page, "frames", [])
+        frames = frames() if callable(frames) else frames
+        matching_frames = [
+            frame
+            for frame in list(frames or [])
+            if str(getattr(frame, "url", "") or "") == control_frame_url
+        ]
+        if len(matching_frames) != 1:
+            raise BusinessTripOutcomeUnknown(
+                "The authorized OA confirmation frame could not be identified uniquely."
+            )
+        control_scope = matching_frames[0]
+    candidates = (
+        control_scope.locator(f"{control_selector}:visible")
+        if control_selector
+        else control_scope.get_by_text(control_text, exact=True)
+    )
+    try:
+        candidates.last.wait_for(state="visible", timeout=10000)
+    except Exception as exc:
+        raise BusinessTripOutcomeUnknown(
+            "The authorized OA validation appeared, but its Continue control did not load."
+        ) from exc
+    visible = [
+        candidates.nth(index)
+        for index in range(candidates.count())
+        if candidates.nth(index).is_visible()
+    ]
+    if len(visible) != 1:
+        raise BusinessTripOutcomeUnknown(
+            "The authorized OA validation appeared, but its Continue control was not unique."
+        )
+    try:
+        visible[0].click(timeout=10000)
+    except Exception as exc:
+        raise BusinessTripOutcomeUnknown(
+            "The authorized OA validation Continue control could not be activated."
+        ) from exc
+    phase_tracker.mark_business_validation_continued()
 
 
 def _validate_frozen_submit_plan(plan: dict) -> None:

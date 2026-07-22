@@ -11,6 +11,7 @@ from bscli.adapters.seeyon_business_trip import (
 )
 from bscli.adapters.seeyon_business_trip_submit import (
     BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION,
+    BusinessTripBusinessValidationRequired,
     business_trip_submit_contract_fingerprint,
     prepare_business_trip_submission,
     submit_business_trip_request,
@@ -125,6 +126,83 @@ class SeeyonBusinessTripSubmitTests(unittest.TestCase):
         self.assertEqual(boundary, ["consumed"])
         self.assertEqual(page.click_count, 1)
 
+    def test_native_confirmation_requires_separate_matching_authorization(self):
+        expected = normalize_business_trip_inputs(_inputs())
+        subject = "Business trip subject"
+        readback = {**expected, "note": "", "subject": subject}
+        boundary = []
+        first_dialog = FakeDialog("Confirm business trip submission")
+        first_page = DialogPage(first_dialog)
+        patches = (
+            patch(
+                "bscli.adapters.seeyon_business_trip_submit._open_and_validate_form",
+                return_value=(first_page, FakeFrame()),
+            ),
+            patch("bscli.adapters.seeyon_business_trip_submit._validate_optional_inputs"),
+            patch("bscli.adapters.seeyon_business_trip_submit._fill_business_trip_form"),
+            patch(
+                "bscli.adapters.seeyon_business_trip_submit._read_business_trip_form",
+                return_value=readback,
+            ),
+        )
+        with patches[0], patches[1], patches[2], patches[3]:
+            with self.assertRaises(
+                BusinessTripBusinessValidationRequired
+            ) as captured:
+                submit_business_trip_request(
+                    FakeAdapter(),
+                    object(),
+                    _plan(expected, subject),
+                    enter_commit_boundary=lambda: boundary.append("first"),
+                    timeout_seconds=5,
+                )
+
+        self.assertEqual(boundary, ["first"])
+        self.assertTrue(first_dialog.dismissed)
+        self.assertFalse(first_dialog.accepted)
+        validation = captured.exception.validation
+        self.assertEqual(validation["code"], "NATIVE_CONFIRMATION")
+        self.assertTrue(validation["can_continue"])
+
+        resumed_plan = _plan(expected, subject)
+        resumed_plan["business_validation_overrides"] = [validation]
+        second_dialog = FakeDialog("Confirm business trip submission")
+        second_page = DialogPage(second_dialog)
+        with (
+            patch(
+                "bscli.adapters.seeyon_business_trip_submit._open_and_validate_form",
+                return_value=(second_page, FakeFrame()),
+            ),
+            patch("bscli.adapters.seeyon_business_trip_submit._validate_optional_inputs"),
+            patch("bscli.adapters.seeyon_business_trip_submit._fill_business_trip_form"),
+            patch(
+                "bscli.adapters.seeyon_business_trip_submit._read_business_trip_form",
+                return_value=readback,
+            ),
+            patch(
+                "bscli.adapters.seeyon_business_trip_submit._wait_for_sent_readback",
+                return_value={
+                    "affair_id": "sent-new",
+                    "title": subject,
+                    "state": "sent",
+                    "detail_readable": True,
+                    "field_count": 8,
+                },
+            ),
+        ):
+            result = submit_business_trip_request(
+                FakeAdapter(),
+                object(),
+                resumed_plan,
+                enter_commit_boundary=lambda: boundary.append("second"),
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(boundary, ["first", "second"])
+        self.assertTrue(second_dialog.accepted)
+        self.assertFalse(second_dialog.dismissed)
+        self.assertTrue(result["workflow_submitted"])
+
     def test_stale_submit_plan_is_rejected_before_authorization_consumption(self):
         expected = normalize_business_trip_inputs(_inputs())
         plan = _plan(expected, "Subject")
@@ -198,6 +276,38 @@ class FakeResponse:
     url = "http://oa.example.test/seeyon/collaboration/collaboration.do?method=send"
     status = 200
     request = FakeRequest()
+
+
+class FakeDialog:
+    type = "confirm"
+
+    def __init__(self, message):
+        self.message = message
+        self.accepted = False
+        self.dismissed = False
+
+    def accept(self):
+        self.accepted = True
+
+    def dismiss(self):
+        self.dismissed = True
+
+
+class DialogPage(FakePage):
+    def __init__(self, dialog):
+        super().__init__()
+        self.dialog = dialog
+
+    def locator(self, selector):
+        return DialogLocator(self, selector)
+
+
+class DialogLocator(FakeLocator):
+    def click(self, **_kwargs):
+        if self.selector != "#sendId_a":
+            raise AssertionError(f"unexpected click: {self.selector}")
+        self.page.click_count += 1
+        self.page.handlers["dialog"](self.page.dialog)
 
 
 class FakeFrame:

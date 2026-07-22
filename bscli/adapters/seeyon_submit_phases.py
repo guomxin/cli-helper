@@ -12,6 +12,14 @@ from urllib.parse import parse_qs, urlparse
 _MAX_EVIDENCE_ITEMS = 20
 
 
+class SeeyonBusinessValidationRequired(RuntimeError):
+    def __init__(self, validation: dict[str, Any]) -> None:
+        super().__init__(
+            str(validation.get("message") or "OA business validation required")
+        )
+        self.validation = dict(validation)
+
+
 def pump_browser_events(page, milliseconds: int = 250) -> None:
     wait_for_timeout = getattr(page, "wait_for_timeout", None)
     if callable(wait_for_timeout):

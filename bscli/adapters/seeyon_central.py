@@ -240,7 +240,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
-            version="0.2.0",
+            version="0.3.0",
             description=(
                 "Collect business-trip fields through a trusted card, validate the live "
                 "OA form and sent-item baseline, and create a separate submit authorization."
@@ -249,13 +249,13 @@ def build_central_capability_registry() -> CapabilityRegistry:
             output_schema={"type": "object"},
             effect="controlled_write",
             adapter="seeyon-central",
-            workflow="business-trip-submit-prepare-v1",
+            workflow="business-trip-submit-prepare-v2",
         )
     )
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_SUBMIT_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Consume one trusted authorization, submit the frozen business-trip "
                 "request, and verify one new readable item in the OA sent collection."
@@ -264,7 +264,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
             output_schema={"type": "object"},
             effect="controlled_write",
             adapter="seeyon-central",
-            workflow="business-trip-submit-commit-v1",
+            workflow="business-trip-submit-commit-v2",
         )
     )
     registry.register(

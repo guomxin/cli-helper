@@ -27,6 +27,7 @@ from bscli.adapters.seeyon_leave import (
     normalize_leave_inputs,
 )
 from bscli.adapters.seeyon_submit_phases import (
+    SeeyonBusinessValidationRequired,
     SubmissionPhaseTracker,
     pump_browser_events,
 )
@@ -49,12 +50,8 @@ LEAVE_SUBMIT_FIELD_CARD_SCHEMA.update(
 )
 
 
-class LeaveBusinessValidationRequired(RuntimeError):
-    def __init__(self, validation: dict[str, Any]) -> None:
-        super().__init__(
-            str(validation.get("message") or "OA business validation required")
-        )
-        self.validation = dict(validation)
+class LeaveBusinessValidationRequired(SeeyonBusinessValidationRequired):
+    pass
 
 
 class LeaveSubmissionBlocked(LeaveContractMismatch):

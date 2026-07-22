@@ -42,7 +42,6 @@ from bscli.adapters.seeyon_leave_submit import (
     LEAVE_SUBMIT_CAPABILITY,
     LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
     LEAVE_SUBMIT_PREPARE_CAPABILITY,
-    LeaveBusinessValidationRequired,
     prepare_leave_submission,
     submit_leave_request,
 )
@@ -70,6 +69,7 @@ from bscli.adapters.seeyon_missed_punch import (
     prepare_missed_punch_draft,
     save_missed_punch_draft,
 )
+from bscli.adapters.seeyon_submit_phases import SeeyonBusinessValidationRequired
 from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
     WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
@@ -1199,7 +1199,7 @@ class CentralCapabilityService:
                 plan,
                 enter_commit_boundary=enter_commit_boundary,
             )
-        except LeaveBusinessValidationRequired as exc:
+        except SeeyonBusinessValidationRequired as exc:
             validation = exc.validation
             continued_plan = deepcopy(plan)
             existing_validations = continued_plan.get("business_validation_overrides")
@@ -1225,10 +1225,13 @@ class CentralCapabilityService:
                 dict(validation),
             ]
             continued_summary = deepcopy(authorization["summary"])
+            original_title = str(
+                continued_summary.get("title") or "OA 写操作"
+            ).strip()
             continued_summary.update(
                 {
-                    "title": "确认 OA 提示并继续提交请假申请",
-                    "effect": "仅在再次出现同一 OA 提示时继续正式提交",
+                    "title": f"确认 OA 提示并继续{original_title}",
+                    "effect": "仅在再次出现完全相同的 OA 提示时继续执行已授权操作",
                     "authorization_notice": (
                         "OA 返回了一条可继续的提交提示。授权后，AgentBridge "
                         "仅在再次出现完全相同的提示时点击“继续”并完成正式提交。"

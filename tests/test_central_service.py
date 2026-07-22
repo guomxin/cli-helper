@@ -8,6 +8,9 @@ import time
 from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
+from bscli.adapters.seeyon_business_trip_submit import (
+    BusinessTripBusinessValidationRequired,
+)
 from bscli.adapters.seeyon_leave_submit import LeaveBusinessValidationRequired
 from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
 from bscli.adapters.seeyon_central import (
@@ -1117,6 +1120,90 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertTrue(resumed["result"]["workflow_submitted"])
             self.assertEqual(
                 service.write_authorizations.get(continued_id)["state"],
+                "consumed",
+            )
+
+    def test_business_trip_commit_turns_oa_confirmation_into_second_authorization(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            spec = service.registry.get("oa.business_trip.submit")
+            plan = {
+                "business_intent": "submit_business_trip_request",
+                "user_subject": "user-a",
+                "session_binding": {
+                    "session_id": session["session_id"],
+                    "expected_principal_ref": session["expected_principal_ref"],
+                    "downstream_principal_ref": session["downstream_principal_ref"],
+                    "last_verified_at": session["last_verified_at"],
+                },
+            }
+            authorization = service.write_authorizations.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id=session["session_id"],
+                capability_name=spec.name,
+                capability_version=spec.version,
+                prepare_operation_id="prepare-business-trip",
+                plan=plan,
+                summary={
+                    "title": "Submit business trip",
+                    "system": "OA",
+                    "fields": [{"label": "Destination", "value": "Qingdao"}],
+                },
+                card_base_url=service.trusted_card_base_url,
+            )
+            csrf = service.write_authorizations.issue_csrf(
+                authorization["authorization_id"]
+            )
+            service.write_authorizations.decide(
+                authorization["authorization_id"],
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            validation = {
+                "code": "NATIVE_CONFIRMATION",
+                "message": "Confirm business trip submission",
+                "force_check": False,
+                "can_continue": True,
+                "fingerprint": "sha256:business-trip-confirmation",
+            }
+
+            def needs_confirmation(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                raise BusinessTripBusinessValidationRequired(validation)
+
+            with patch(
+                "bscli.core.central_service.submit_business_trip_request",
+                side_effect=needs_confirmation,
+            ):
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.submit",
+                    arguments={"authorization_id": authorization["authorization_id"]},
+                )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(
+                response["error"]["code"],
+                "OA_BUSINESS_VALIDATION_CONFIRMATION_REQUIRED",
+            )
+            continued_id = response["nextAction"]["authorizationId"]
+            continued = service.write_authorizations.get(
+                continued_id,
+                include_plan=True,
+            )
+            self.assertEqual(
+                continued["plan"]["business_validation_overrides"],
+                [validation],
+            )
+            self.assertIn("Submit business trip", continued["summary"]["title"])
+            self.assertIn(validation["message"], str(continued["summary"]))
+            self.assertEqual(
+                service.write_authorizations.get(
+                    authorization["authorization_id"]
+                )["state"],
                 "consumed",
             )
 
