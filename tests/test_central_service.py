@@ -62,6 +62,20 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             capability_required_scopes("oa.workflow.revoke"),
             frozenset({"oa:write:revoke"}),
         )
+        for capability_name in (
+            "oa.efficiency_data.approval.prepare",
+            "oa.efficiency_data.approve",
+            "oa.travel_expense.approval.prepare",
+            "oa.travel_expense.approve",
+            "oa.weekly_report.acknowledgement.prepare",
+            "oa.weekly_report.acknowledge",
+            "oa.standard_collaboration.approval.prepare",
+            "oa.standard_collaboration.approve",
+        ):
+            self.assertEqual(
+                capability_required_scopes(capability_name),
+                frozenset({"oa:write:approval"}),
+            )
 
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:

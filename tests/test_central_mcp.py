@@ -161,6 +161,17 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_missed_punch_approve", names)
         self.assertIn("oa_meeting_create_prepare", names)
         self.assertIn("oa_meeting_create", names)
+        for tool_name in (
+            "oa_efficiency_data_approval_prepare",
+            "oa_efficiency_data_approve",
+            "oa_travel_expense_approval_prepare",
+            "oa_travel_expense_approve",
+            "oa_weekly_report_acknowledgement_prepare",
+            "oa_weekly_report_acknowledge",
+            "oa_standard_collaboration_approval_prepare",
+            "oa_standard_collaboration_approve",
+        ):
+            self.assertIn(tool_name, names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
         prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")

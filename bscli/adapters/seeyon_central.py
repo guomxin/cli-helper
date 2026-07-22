@@ -48,6 +48,19 @@ from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_SAVE_CAPABILITY,
     MISSED_PUNCH_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_pending_actions import (
+    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
+    EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    PENDING_ACTION_CAPABILITY_DEFINITIONS,
+    PENDING_ACTION_COMMIT_INPUT_SCHEMA,
+    PENDING_ACTION_PREPARE_INPUT_SCHEMA,
+    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
+    STANDARD_COLLABORATION_APPROVE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
+)
 from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
     WORKFLOW_REVOKE_INPUT_SCHEMA,
@@ -409,6 +422,40 @@ def build_central_capability_registry() -> CapabilityRegistry:
         ),
     ):
         registry.register(spec)
+    for definition in PENDING_ACTION_CAPABILITY_DEFINITIONS:
+        profile_name = definition["profile"].replace("_", " ")
+        workflow_prefix = definition["workflow_prefix"]
+        action_kind = definition["action_kind"]
+        registry.register(
+            CapabilitySpec(
+                name=definition["prepare_capability"],
+                version="0.1.0",
+                description=(
+                    f"Collect a trusted opinion, validate one exact pending "
+                    f"{profile_name} item, and create separate {action_kind} confirmation."
+                ),
+                input_schema=PENDING_ACTION_PREPARE_INPUT_SCHEMA,
+                output_schema={"type": "object"},
+                effect="controlled_write",
+                adapter="seeyon-central",
+                workflow=f"{workflow_prefix}-prepare-v1",
+            )
+        )
+        registry.register(
+            CapabilitySpec(
+                name=definition["commit_capability"],
+                version="0.1.0",
+                description=(
+                    f"Consume one trusted authorization, process the frozen "
+                    f"{profile_name} item, and verify pending disappearance."
+                ),
+                input_schema=PENDING_ACTION_COMMIT_INPUT_SCHEMA,
+                output_schema={"type": "object"},
+                effect="controlled_write",
+                adapter="seeyon-central",
+                workflow=f"{workflow_prefix}-commit-v1",
+            )
+        )
     registry.register(
         CapabilitySpec(
             name=WORKFLOW_REVOKE_PREPARE_CAPABILITY,

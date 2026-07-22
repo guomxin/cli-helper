@@ -67,8 +67,18 @@ Published OA capabilities:
 - oa.missed_punch.save_draft
 - oa.missed_punch.approval.prepare
 - oa.missed_punch.approve
+- oa.efficiency_data.approval.prepare
+- oa.efficiency_data.approve
+- oa.travel_expense.approval.prepare
+- oa.travel_expense.approve
+- oa.weekly_report.acknowledgement.prepare
+- oa.weekly_report.acknowledge
+- oa.standard_collaboration.approval.prepare
+- oa.standard_collaboration.approve
 - oa.meeting.create.prepare
 - oa.meeting.create
+- oa.workflow.revoke.prepare
+- oa.workflow.revoke
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden

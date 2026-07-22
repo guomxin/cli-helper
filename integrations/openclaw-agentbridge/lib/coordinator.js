@@ -827,6 +827,20 @@ function safeSucceededMessage(response) {
       ? "OA 已发流程已撤销，并已通过已发消失及待发撤销状态回读确认。"
       : "OA 已发流程已撤销。";
   }
+  if (result.pending_action_processed === true) {
+    const subjects = {
+      efficiency_data: "OA \u6548\u80fd\u6570\u636e\u6d41\u7a0b",
+      travel_expense: "OA \u5dee\u65c5\u8d39\u5ba1\u6279\u62a5\u9500\u5355",
+      weekly_report: "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b",
+      standard_collaboration: "OA \u666e\u901a\u534f\u540c\u4e8b\u9879",
+    };
+    const subject = subjects[result.workflow_profile] || "OA \u5f85\u529e\u4e8b\u9879";
+    const action =
+      result.action_kind === "acknowledgement" ? "\u5df2\u9605\u529e" : "\u5df2\u5ba1\u6279\u901a\u8fc7";
+    return verified
+      ? `${subject}${action}\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002`
+      : `${subject}${action}\u3002`;
+  }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return verified
       ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"

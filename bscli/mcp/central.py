@@ -46,6 +46,16 @@ from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_SAVE_CAPABILITY,
 )
+from bscli.adapters.seeyon_pending_actions import (
+    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
+    EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
+    STANDARD_COLLABORATION_APPROVE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
+)
 from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
     WORKFLOW_REVOKE_PREPARE_CAPABILITY,
@@ -222,6 +232,81 @@ def validate_central_mcp_server_config(
     )
 
 
+def _register_pending_action_tools(
+    mcp: FastMCP,
+    invoke,
+    *,
+    prepare_tool_name: str,
+    prepare_title: str,
+    prepare_description: str,
+    prepare_capability: str,
+    commit_tool_name: str,
+    commit_title: str,
+    commit_description: str,
+    commit_capability: str,
+) -> None:
+    @mcp.tool(
+        name=prepare_tool_name,
+        title=prepare_title,
+        meta=interaction_tool_meta(),
+        description=prepare_description,
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def prepare_pending_action(
+        ctx: Context,
+        affair_id: Annotated[str, Field(min_length=1, max_length=256)],
+        opinion: Annotated[str | None, Field(max_length=1000)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"affair_id": affair_id}
+        if opinion is not None:
+            arguments["opinion"] = opinion
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            prepare_capability,
+            arguments,
+            idempotency_key,
+            {"oa:write:approval"},
+        )
+
+    @mcp.tool(
+        name=commit_tool_name,
+        title=commit_title,
+        meta=interaction_tool_meta(),
+        description=commit_description,
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def commit_pending_action(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            commit_capability,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:approval"},
+        )
+
 def create_central_mcp_server(
     *,
     service: CentralCapabilityService,
@@ -324,6 +409,75 @@ def create_central_mcp_server(
             request_id=str(ctx.request_id),
         )
         return package_interaction_result(response)
+
+    pending_action_tools = (
+        {
+            "prepare_tool_name": "oa_efficiency_data_approval_prepare",
+            "prepare_title": "Prepare OA Efficiency-Data Approval",
+            "prepare_description": (
+                "Bind one exact pending efficiency-data affair. Pass any opinion already "
+                "supplied by the user; omitted opinion stays editable in the trusted card."
+            ),
+            "prepare_capability": EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_efficiency_data_approve",
+            "commit_title": "Approve Authorized OA Efficiency Data",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "efficiency-data item leaves the pending collection."
+            ),
+            "commit_capability": EFFICIENCY_DATA_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_travel_expense_approval_prepare",
+            "prepare_title": "Prepare OA Travel-Expense Approval",
+            "prepare_description": (
+                "Bind one exact pending travel-expense reimbursement. Pass any opinion "
+                "already supplied; AgentBridge shows amount, key fields, and attachment count."
+            ),
+            "prepare_capability": TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_travel_expense_approve",
+            "commit_title": "Approve Authorized OA Travel Expense",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "travel-expense reimbursement leaves the pending collection."
+            ),
+            "commit_capability": TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_weekly_report_acknowledgement_prepare",
+            "prepare_title": "Prepare OA Weekly-Report Acknowledgement",
+            "prepare_description": (
+                "Bind one exact pending weekly-report inform item. This is acknowledgement, "
+                "not approval; pass any review opinion already supplied by the user."
+            ),
+            "prepare_capability": WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_weekly_report_acknowledge",
+            "commit_title": "Acknowledge Authorized OA Weekly Report",
+            "commit_description": (
+                "Consume one approved authorization, acknowledge the exact weekly-report "
+                "inform item, and verify pending disappearance."
+            ),
+            "commit_capability": WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_standard_collaboration_approval_prepare",
+            "prepare_title": "Prepare OA Standard-Collaboration Approval",
+            "prepare_description": (
+                "Bind one exact ordinary collaboration affair outside registered HR, "
+                "expense, procurement, seal, efficiency-data, and weekly-report profiles."
+            ),
+            "prepare_capability": STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_standard_collaboration_approve",
+            "commit_title": "Approve Authorized OA Standard Collaboration",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact ordinary "
+                "collaboration item leaves the pending collection."
+            ),
+            "commit_capability": STANDARD_COLLABORATION_APPROVE_CAPABILITY,
+        },
+    )
+    for tool_definition in pending_action_tools:
+        _register_pending_action_tools(mcp, invoke, **tool_definition)
 
     @mcp.tool(
         name="agentbridge_server_profile",

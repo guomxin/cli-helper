@@ -838,6 +838,74 @@ test("reports the verified meeting outcome after authorization resumes", async (
   assert.equal(harness.heartbeatRuns.length, 0);
 });
 
+test("reports a verified weekly-report acknowledgement after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-weekly-report-authorization-123456",
+    type: "execution_authorization",
+    title: "Acknowledge weekly report",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          pending_action_processed: true,
+          action_kind: "acknowledgement",
+          workflow_profile: "weekly_report",
+          workflow_acknowledged: true,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-weekly-report-authorization",
+    runId: "run-weekly-report-authorization",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-weekly-report-authorization",
+      toolName: "oa_weekly_report_acknowledgement_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b\u5df2\u9605\u529e\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002",
+  );
+});
+
+
 test("reports a verified business-trip submission after authorization resumes", async () => {
   const harness = fakeApi({
     autoPoll: true,

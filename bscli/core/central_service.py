@@ -69,6 +69,30 @@ from bscli.adapters.seeyon_missed_punch import (
     prepare_missed_punch_draft,
     save_missed_punch_draft,
 )
+from bscli.adapters.seeyon_pending_actions import (
+    EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
+    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
+    EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    STANDARD_COLLABORATION_APPROVAL_FIELD_CARD_SCHEMA,
+    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
+    STANDARD_COLLABORATION_APPROVE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA,
+    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
+    TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA,
+    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
+    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
+    PendingActionContractMismatch,
+    PendingActionOutcomeUnknown,
+    acknowledge_weekly_report,
+    approve_efficiency_data,
+    approve_standard_collaboration,
+    approve_travel_expense,
+    prepare_efficiency_data_approval,
+    prepare_standard_collaboration_approval,
+    prepare_travel_expense_approval,
+    prepare_weekly_report_acknowledgement,
+)
 from bscli.adapters.seeyon_submit_phases import SeeyonBusinessValidationRequired
 from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
@@ -210,6 +234,55 @@ _TRUSTED_WRITE_DEFINITIONS = {
     },
 }
 
+_TRUSTED_WRITE_DEFINITIONS.update(
+    {
+        EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY: {
+            "commit_capability": EFFICIENCY_DATA_APPROVE_CAPABILITY,
+            "field_schema": EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_efficiency_data_approval",
+            "commit_function": "approve_efficiency_data",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": "The efficiency-data opinion must be entered in the trusted field card.",
+            "authorization_message": "The efficiency-data approval requires trusted confirmation.",
+        },
+        TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY: {
+            "commit_capability": TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+            "field_schema": TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_travel_expense_approval",
+            "commit_function": "approve_travel_expense",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": "The travel-expense opinion must be entered in the trusted field card.",
+            "authorization_message": "The travel-expense approval requires trusted confirmation.",
+        },
+        WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: {
+            "commit_capability": WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
+            "field_schema": WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_weekly_report_acknowledgement",
+            "commit_function": "acknowledge_weekly_report",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": "The weekly-report opinion must be entered in the trusted field card.",
+            "authorization_message": "The weekly-report acknowledgement requires trusted confirmation.",
+        },
+        STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY: {
+            "commit_capability": STANDARD_COLLABORATION_APPROVE_CAPABILITY,
+            "field_schema": STANDARD_COLLABORATION_APPROVAL_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_standard_collaboration_approval",
+            "commit_function": "approve_standard_collaboration",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": "The collaboration opinion must be entered in the trusted field card.",
+            "authorization_message": "The collaboration approval requires trusted confirmation.",
+        },
+    }
+)
+
 _TRUSTED_WRITE_COMMITS = {
 
     definition["commit_capability"]: (prepare_capability, definition)
@@ -231,6 +304,14 @@ _CAPABILITY_SCOPES = {
     MISSED_PUNCH_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
     MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
+    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    EFFICIENCY_DATA_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    TRAVEL_EXPENSE_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY: frozenset({"oa:write:approval"}),
+    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    STANDARD_COLLABORATION_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     WORKFLOW_REVOKE_PREPARE_CAPABILITY: frozenset({"oa:write:revoke"}),
     WORKFLOW_REVOKE_CAPABILITY: frozenset({"oa:write:revoke"}),
 }

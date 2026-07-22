@@ -43,10 +43,41 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_missed_punch_save_draft",
             "oa_missed_punch_approval_prepare",
             "oa_missed_punch_approve",
+            "oa_efficiency_data_approval_prepare",
+            "oa_efficiency_data_approve",
+            "oa_travel_expense_approval_prepare",
+            "oa_travel_expense_approve",
+            "oa_weekly_report_acknowledgement_prepare",
+            "oa_weekly_report_acknowledge",
+            "oa_standard_collaboration_approval_prepare",
+            "oa_standard_collaboration_approve",
             "oa_meeting_create_prepare",
             "oa_meeting_create",
         ):
             self.assertIn(tool, smoke)
+
+
+    def test_pending_action_preflight_is_read_only_by_construction(self) -> None:
+        script = (
+            ROOT / "scripts/validate_oa_pending_actions_preflight.py"
+        ).read_text(encoding="utf-8")
+
+        for prepare_function in (
+            "prepare_efficiency_data_approval",
+            "prepare_travel_expense_approval",
+            "prepare_weekly_report_acknowledgement",
+            "prepare_standard_collaboration_approval",
+        ):
+            self.assertIn(prepare_function, script)
+        for forbidden_function in (
+            "approve_efficiency_data",
+            "approve_travel_expense",
+            "acknowledge_weekly_report",
+            "approve_standard_collaboration",
+        ):
+            self.assertNotIn(forbidden_function, script)
+        self.assertIn('"write_controls_clicked": 0', script)
+        self.assertIn('"authorizations_created": 0', script)
 
 
 if __name__ == "__main__":
