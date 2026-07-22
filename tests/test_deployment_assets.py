@@ -77,7 +77,9 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden_function, script)
         self.assertIn('"write_controls_clicked": 0', script)
+        self.assertIn('"collaboration_write_requests": 0', script)
         self.assertIn('"authorizations_created": 0', script)
+        self.assertNotIn("state_store.save", script)
 
 
 if __name__ == "__main__":

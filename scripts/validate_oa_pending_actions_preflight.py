@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from bscli.adapters.seeyon_central import SeeyonCentralAdapter
 from bscli.adapters.seeyon_pending_actions import (
@@ -52,25 +53,59 @@ def main() -> int:
         raise RuntimeError("exactly one matching active OA session is required")
 
     session = sessions[0]
-    state_store = SessionStateStore(home / "session-secrets")
-    state = state_store.load(session["session_id"])
+    state = SessionStateStore(home / "session-secrets").load(session["session_id"])
     if state is None:
         raise RuntimeError("the active OA session has no encrypted browser state")
 
     adapter = SeeyonCentralAdapter(base_url=profile.base_url)
     results = []
+    blocked_writes: list[dict] = []
     with CentralBrowserWorker(
         profile_path=session["profile_path"],
         allowed_origins={adapter.origin},
         headless=True,
     ) as worker:
         worker.restore_session_state(state)
+        page = worker.page
+        page.add_init_script(
+            r"""
+            window.__agentbridgeWriteControlClicks = [];
+            document.addEventListener('click', (event) => {
+              const control = event.target?.closest?.(
+                '#submit_a,#dealSubmit_a,#saveDraft_a,#sendId_a'
+              );
+              if (control) window.__agentbridgeWriteControlClicks.push(control.id);
+            }, true);
+            """
+        )
+
+        def guard_route(route) -> None:
+            request = route.request
+            parsed = urlparse(str(request.url or ""))
+            if (
+                str(request.method or "").upper() == "POST"
+                and parsed.path.endswith("/collaboration/collaboration.do")
+            ):
+                blocked_writes.append(
+                    {
+                        "method": "POST",
+                        "endpoint": "/seeyon/collaboration/collaboration.do",
+                    }
+                )
+                route.abort()
+                return
+            route.continue_()
+
+        worker._context.route("**/*", guard_route)
         for profile_name, affair_id in targets:
             prepared = _PREPARE_FUNCTIONS[profile_name](
                 adapter,
                 worker,
                 {"affair_id": affair_id, "opinion": "preflight-only"},
             )
+            clicks = page.evaluate("() => window.__agentbridgeWriteControlClicks || []")
+            if clicks:
+                raise RuntimeError(f"write control was clicked during preflight: {clicks}")
             plan = prepared["plan"]
             results.append(
                 {
@@ -82,7 +117,10 @@ def main() -> int:
                     "matched": True,
                 }
             )
-        state_store.save(session["session_id"], worker.capture_session_state())
+    if blocked_writes:
+        raise RuntimeError(
+            "an OA collaboration write request was attempted and blocked during preflight"
+        )
 
     print(
         json.dumps(
@@ -92,6 +130,7 @@ def main() -> int:
                 "items": results,
                 "safety": {
                     "write_controls_clicked": 0,
+                    "collaboration_write_requests": 0,
                     "authorizations_created": 0,
                     "business_values_included": False,
                 },
