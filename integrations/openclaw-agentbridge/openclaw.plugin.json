@@ -30,6 +30,58 @@
         "maxLength": 100,
         "default": "agentbridge"
       },
+      "mcpUrl": {
+        "type": "string",
+        "description": "AgentBridge MCP endpoint used by identity-routed native tools. Configure this separately from mcp.servers so one global Bearer token is never shared across users.",
+        "pattern": "^https?://[^/]+/.*$"
+      },
+      "mcpTimeoutSeconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 300,
+        "default": 150
+      },
+      "identityBindings": {
+        "type": "array",
+        "description": "Trusted OpenClaw sender identities mapped to environment-backed AgentBridge MCP tokens.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "channel",
+            "senderId",
+            "tokenEnv"
+          ],
+          "properties": {
+            "channel": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "senderId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "tokenEnv": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "maxLength": 128
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 120
+            }
+          }
+        },
+        "uniqueItems": true,
+        "default": []
+      },
       "autoPoll": {
         "type": "boolean",
         "default": true

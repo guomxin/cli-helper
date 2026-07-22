@@ -1,32 +1,62 @@
 import { resolvePluginConfig } from "./config.js";
 import { InteractionCoordinator, presentationForRecords } from "./coordinator.js";
+import { AgentBridgeIdentityRouter } from "./identity-router.js";
 import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
+import {
+  AGENTBRIDGE_PROXY_TOOL_NAMES,
+  createAgentBridgeProxyTools,
+} from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.1.16";
+const PLUGIN_VERSION = "0.2.0";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
-  const mcpClient = Object.hasOwn(dependencies, "mcpClient")
-    ? dependencies.mcpClient
-    : createAgentBridgeMcpClient({
-        hostConfig: api.config,
-        serverName: config.mcpServerName,
-      });
+  const identityRouter =
+    dependencies.identityRouter ||
+    new AgentBridgeIdentityRouter({
+      config,
+      hostConfig: api.config,
+      env: dependencies.env,
+      fetchImpl: dependencies.fetchImpl,
+    });
+  const mcpClient = identityRouter.enabled
+    ? null
+    : Object.hasOwn(dependencies, "mcpClient")
+      ? dependencies.mcpClient
+      : createAgentBridgeMcpClient({
+          hostConfig: api.config,
+          serverName: config.mcpServerName,
+        });
   const coordinator = new InteractionCoordinator({
     api,
     config,
     mcpClient,
+    mcpClientResolver: identityRouter.enabled
+      ? (sessionKey) => identityRouter.clientForSession(sessionKey)
+      : null,
     sleep: dependencies.sleep,
     now: dependencies.now,
   });
+
+  if (identityRouter.enabled) {
+    api.registerTool(
+      (context) =>
+        createAgentBridgeProxyTools({
+          context,
+          identityRouter,
+          serverName: config.mcpServerName,
+        }),
+      { names: AGENTBRIDGE_PROXY_TOOL_NAMES },
+    );
+  }
 
   if (config.allowedCardOrigins.length === 0) {
     api.logger.warn(
       "AgentBridge interaction cards are disabled until allowedCardOrigins is configured",
     );
   }
-  if (config.autoPoll && !mcpClient) {
+  if (config.autoPoll && !mcpClient && !identityRouter.enabled) {
     api.logger.warn(
       "AgentBridge background polling is unavailable because MCP endpoint authentication could not be resolved",
     );
@@ -40,17 +70,26 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   // OpenClaw 2026.7.1 omits session context from result middleware.
   api.on("before_tool_call", (event, context) => {
     coordinator.bindToolCall(event, context);
+    if (
+      identityRouter.enabled &&
+      String(event.toolName || "").startsWith(`${config.mcpServerName}__`)
+    ) {
+      return {
+        block: true,
+        blockReason: "Use the identity-routed native AgentBridge tool instead of the legacy global MCP server.",
+      };
+    }
   });
 
   api.on("message_received", (event, context) => {
-    bindTrustedDeliveryRoute(coordinator, event, context);
+    bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
   });
 
   api.on("reply_payload_sending", (event, context) => {
     if (!["final", "block"].includes(event.kind)) {
       return undefined;
     }
-    bindTrustedDeliveryRoute(coordinator, event, context);
+    bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
     const sessionKey = event.sessionKey || context.sessionKey;
     if (coordinator.isDirectDeliveryActive(sessionKey)) {
       return undefined;
@@ -79,7 +118,9 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
 
   api.on("session_end", (event, context) => {
     if (["reset", "deleted"].includes(event.reason)) {
-      coordinator.removeSession(context.sessionKey || event.sessionKey);
+      const sessionKey = context.sessionKey || event.sessionKey;
+      coordinator.removeSession(sessionKey);
+      identityRouter.removeSession(sessionKey);
     }
   });
 
@@ -133,22 +174,32 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   });
 
   api.logger.info(
-    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, origins=${config.allowedCardOrigins.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
+    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
 }
 
-function bindTrustedDeliveryRoute(coordinator, event, context) {
+function bindTrustedDeliveryRoute(coordinator, identityRouter, event, context) {
+  const sessionKey = event.sessionKey || context.sessionKey;
+  const channel = event.channel || context.channelId;
+  const senderId = event.senderId || context.senderId || event.from;
+  const accountId = event.accountId || context.accountId;
+  if (senderId) {
+    identityRouter.bindSession({
+      sessionKey,
+      channel,
+      senderId,
+      accountId,
+    });
+  }
   coordinator.bindDeliveryRoute({
-    sessionKey: event.sessionKey || context.sessionKey,
-    channel: event.channel || context.channelId,
+    sessionKey,
+    channel,
     to:
       context.conversationId ||
       event.conversationId ||
-      event.senderId ||
-      context.senderId ||
-      event.from,
-    accountId: event.accountId || context.accountId,
+      senderId,
+    accountId,
     threadId: event.threadId || context.threadId,
   });
 }

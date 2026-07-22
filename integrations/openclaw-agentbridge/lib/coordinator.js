@@ -19,10 +19,18 @@ const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
 
 export class InteractionCoordinator {
-  constructor({ api, config, mcpClient = null, sleep = defaultSleep, now = Date.now }) {
+  constructor({
+    api,
+    config,
+    mcpClient = null,
+    mcpClientResolver = null,
+    sleep = defaultSleep,
+    now = Date.now,
+  }) {
     this.api = api;
     this.config = config;
     this.mcpClient = mcpClient;
+    this.mcpClientResolver = mcpClientResolver;
     this.sleep = sleep;
     this.now = now;
     this.records = new Map();
@@ -131,7 +139,8 @@ export class InteractionCoordinator {
       );
       return undefined;
     }
-    if (!this.mcpClient) {
+    const mcpClient = this.clientForSession(sessionKey);
+    if (!mcpClient) {
       this.api.logger.warn(
         "AgentBridge interaction metadata recovery is unavailable because MCP endpoint authentication could not be resolved",
       );
@@ -142,7 +151,7 @@ export class InteractionCoordinator {
     for (const reference of references) {
       let response;
       try {
-        response = await this.mcpClient.callTool(
+        response = await mcpClient.callTool(
           "agentbridge_interaction_get",
           { interaction_id: reference.interactionId },
         );
@@ -218,13 +227,19 @@ export class InteractionCoordinator {
     return {
       privateSession,
       allowedOriginCount: this.config.allowedCardOrigins.length,
-      mcpPollingConfigured: Boolean(this.mcpClient && this.config.autoPoll),
+      mcpPollingConfigured: Boolean(
+        this.clientForSession(sessionKey) && this.config.autoPoll,
+      ),
       pendingCount: records.filter((record) =>
         ["pending", "processing"].includes(record.interaction.state),
       ).length,
       activePollCount: records.filter((record) => this.polls.has(record.interaction.interactionId)).length,
       wakeAgentOnComplete: this.config.wakeAgentOnComplete,
     };
+  }
+
+  clientForSession(sessionKey) {
+    return this.mcpClientResolver?.(sessionKey) || this.mcpClient;
   }
 
   isDirectDeliveryActive(sessionKey) {
@@ -268,12 +283,14 @@ export class InteractionCoordinator {
       existing.interaction = interaction;
       existing.sessionKey = sessionKey || existing.sessionKey;
       existing.runId = runId || existing.runId;
+      existing.mcpClient ||= this.clientForSession(existing.sessionKey);
       return existing;
     }
     const record = {
       interaction,
       sessionKey,
       runId,
+      mcpClient: this.clientForSession(sessionKey),
       delivered: false,
       continuationQueued: false,
       capturedAt: this.now(),
@@ -286,7 +303,7 @@ export class InteractionCoordinator {
   startPolling(record) {
     if (
       !this.config.autoPoll ||
-      !this.mcpClient ||
+      !record.mcpClient ||
       !["pending", "processing"].includes(record.interaction.state) ||
       this.polls.has(record.interaction.interactionId)
     ) {
@@ -323,7 +340,7 @@ export class InteractionCoordinator {
       }
       let response;
       try {
-        response = await this.mcpClient.callTool(
+        response = await record.mcpClient.callTool(
           "agentbridge_interaction_get",
           { interaction_id: record.interaction.interactionId },
           { signal },
@@ -371,7 +388,7 @@ export class InteractionCoordinator {
   async resume(record, signal) {
     let response;
     try {
-      response = await this.mcpClient.callTool(
+      response = await record.mcpClient.callTool(
         "agentbridge_interaction_resume",
         {
           interaction_id: record.interaction.interactionId,

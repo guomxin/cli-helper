@@ -13,22 +13,33 @@ export class McpCallError extends Error {
 export function createAgentBridgeMcpClient({
   hostConfig,
   serverName,
+  endpoint = null,
+  tokenEnv = null,
   fetchImpl = globalThis.fetch,
   env = process.env,
 }) {
-  const server = resolveMcpServer(hostConfig, serverName);
-  if (!server || typeof fetchImpl !== "function") {
-    return null;
-  }
-  const authorization = resolveHeader(server.headers, "Authorization", env);
-  if (!authorization) {
+  const connection = resolveConnection({
+    hostConfig,
+    serverName,
+    endpoint,
+    tokenEnv,
+    env,
+  });
+  if (!connection || typeof fetchImpl !== "function") {
     return null;
   }
 
-  return {
+  return Object.freeze({
     async listTools({ signal } = {}) {
       const result = await request("tools/list", {}, { signal });
       return Array.isArray(result?.tools) ? result.tools : [];
+    },
+    async callToolResult(name, arguments_, { signal } = {}) {
+      return request(
+        "tools/call",
+        { name, arguments: arguments_ },
+        { signal },
+      );
     },
     async callTool(name, arguments_, { signal } = {}) {
       const result = await request(
@@ -38,19 +49,21 @@ export function createAgentBridgeMcpClient({
       );
       return extractToolPayload(result);
     },
-  };
+  });
 
   async function request(method, params, { signal } = {}) {
-    const timeoutSignal = AbortSignal.timeout(server.timeoutSeconds * 1000);
+    const timeoutSignal = AbortSignal.timeout(
+      connection.timeoutSeconds * 1000,
+    );
     const requestSignal = signal
       ? AbortSignal.any([signal, timeoutSignal])
       : timeoutSignal;
     let response;
     try {
-      response = await fetchImpl(server.url, {
+      response = await fetchImpl(connection.url, {
         method: "POST",
         headers: {
-          Authorization: authorization,
+          Authorization: connection.authorization,
           Accept: "application/json, text/event-stream",
           "Content-Type": "application/json",
           "MCP-Protocol-Version": "2025-06-18",
@@ -81,6 +94,37 @@ export function createAgentBridgeMcpClient({
     }
     return rpc.result;
   }
+}
+
+function resolveConnection({ hostConfig, serverName, endpoint, tokenEnv, env }) {
+  if (endpoint) {
+    const token =
+      typeof tokenEnv === "string" && typeof env[tokenEnv] === "string"
+        ? env[tokenEnv].trim()
+        : "";
+    if (!token) {
+      return null;
+    }
+    return {
+      url: endpoint.url,
+      timeoutSeconds: endpoint.timeoutSeconds,
+      authorization: `Bearer ${token}`,
+    };
+  }
+
+  const server = resolveMcpServer(hostConfig, serverName);
+  if (!server) {
+    return null;
+  }
+  const authorization = resolveHeader(server.headers, "Authorization", env);
+  if (!authorization) {
+    return null;
+  }
+  return {
+    url: server.url,
+    timeoutSeconds: server.timeoutSeconds,
+    authorization,
+  };
 }
 
 export function parseMcpResponse(raw) {
@@ -141,6 +185,7 @@ export function extractToolPayload(result) {
   }
   return payload;
 }
+
 function resolveHeader(headers, name, env) {
   const pair = Object.entries(headers).find(
     ([key]) => key.toLowerCase() === name.toLowerCase(),

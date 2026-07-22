@@ -4,6 +4,13 @@ This native OpenClaw plugin recognizes `agentbridge.interaction.v1` envelopes
 returned by AgentBridge MCP tools and renders trusted card buttons in private
 conversations.
 
+Version 0.2 also supports multiple Telegram users in one OpenClaw Gateway. It
+registers the complete AgentBridge MCP catalog as native OpenClaw tools and
+selects an environment-backed Bearer token from trusted runtime sender context,
+never from model tool arguments. See
+[`docs/openclaw-multi-user-identity-routing.md`](../../docs/openclaw-multi-user-identity-routing.md)
+for provisioning, migration, and the remaining real second-user acceptance.
+
 AgentBridge also publishes a standard MCP Apps resource. This plugin is the
 compatibility adapter for OpenClaw versions that do not yet provide equivalent
 MCP Apps rendering, private-session binding, polling, and resume behavior; it
@@ -23,6 +30,10 @@ Security behavior is intentionally fail closed:
 - card URLs are removed before tool results are returned to the model;
 - interactions nested in operation audit history are sanitized but never
   captured, polled, or delivered as the current card;
+- identity-routed tools are available only to configured trusted sender IDs;
+- one OpenClaw session cannot switch to another sender identity;
+- polling and resume use the same per-user client that captured the interaction;
+- legacy global `agentbridge__...` tools are blocked in identity-routing mode;
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
@@ -38,6 +49,11 @@ Security behavior is intentionally fail closed:
   only as a delivery fallback.
 
 ## Local installation
+
+The commands below retain the legacy single-user MCP configuration for existing
+installations. Do not use one global `mcp.servers.agentbridge` Bearer token for
+multiple Telegram users. Multi-user deployments configure plugin `mcpUrl` plus
+`identityBindings`, then remove the global MCP server entry.
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
@@ -56,7 +72,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.16, ...)
+AgentBridge interaction plugin registered (version=0.2.0, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -78,9 +94,14 @@ openclaw gateway install --force --json
 openclaw gateway status --deep --require-rpc --json
 ```
 
-The plugin reuses the configured `mcp.servers.agentbridge` endpoint and its
-environment-backed Authorization header for background polling. It never stores
-or prints that header. Governed OA submissions can include browser setup, the
+In legacy single-user mode the plugin reuses the configured
+`mcp.servers.agentbridge` endpoint and its environment-backed Authorization
+header. In multi-user mode it uses plugin `mcpUrl` only as an address and chooses
+the Authorization header from the bound sender's `tokenEnv`; it never stores or
+prints token values. The interaction record pins that client for background
+polling and resume.
+
+Governed OA submissions can include browser setup, the
 multi-stage CAP4 send chain, and server-side readback, so the endpoint timeout
 must remain at least 150 seconds. A host timeout is not proof that OA rejected or
 accepted a write; reconcile the AgentBridge operation ledger and OA collections

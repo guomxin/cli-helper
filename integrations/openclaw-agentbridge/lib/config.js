@@ -1,5 +1,7 @@
 const DEFAULTS = Object.freeze({
   mcpServerName: "agentbridge",
+  mcpUrl: null,
+  mcpTimeoutSeconds: 150,
   autoPoll: true,
   pollIntervalSeconds: 2,
   maxPollSeconds: 1800,
@@ -8,6 +10,11 @@ const DEFAULTS = Object.freeze({
 
 export function resolvePluginConfig(raw) {
   const source = isRecord(raw) ? raw : {};
+  const identityBindings = normalizeIdentityBindings(source.identityBindings);
+  const mcpUrl = normalizeMcpUrl(source.mcpUrl) || DEFAULTS.mcpUrl;
+  if (identityBindings.length > 0 && !mcpUrl) {
+    throw new Error("mcpUrl is required for AgentBridge identity bindings");
+  }
   const allowedCardOrigins = [];
   for (const value of Array.isArray(source.allowedCardOrigins)
     ? source.allowedCardOrigins
@@ -21,6 +28,14 @@ export function resolvePluginConfig(raw) {
   return Object.freeze({
     allowedCardOrigins: Object.freeze(allowedCardOrigins),
     mcpServerName: boundedString(source.mcpServerName, DEFAULTS.mcpServerName, 100),
+    mcpUrl,
+    mcpTimeoutSeconds: boundedInteger(
+      source.mcpTimeoutSeconds,
+      DEFAULTS.mcpTimeoutSeconds,
+      1,
+      300,
+    ),
+    identityBindings: Object.freeze(identityBindings),
     autoPoll: booleanValue(source.autoPoll, DEFAULTS.autoPoll),
     pollIntervalSeconds: boundedInteger(
       source.pollIntervalSeconds,
@@ -60,7 +75,7 @@ export function resolveMcpServer(hostConfig, serverName) {
   } catch {
     return null;
   }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
+  if (!["http:", "https:"].includes(parsed.protocol)) {
     return null;
   }
   return {
@@ -70,19 +85,133 @@ export function resolveMcpServer(hostConfig, serverName) {
   };
 }
 
+export function resolveMcpEndpoint(pluginConfig, hostConfig) {
+  if (pluginConfig.mcpUrl) {
+    return Object.freeze({
+      url: pluginConfig.mcpUrl,
+      timeoutSeconds: pluginConfig.mcpTimeoutSeconds,
+    });
+  }
+  const legacy = resolveMcpServer(hostConfig, pluginConfig.mcpServerName);
+  if (!legacy) {
+    return null;
+  }
+  return Object.freeze({
+    url: legacy.url,
+    timeoutSeconds: legacy.timeoutSeconds,
+  });
+}
+
+export function matchIdentityBinding(bindings, context) {
+  const channel = normalizeIdentityPart(context.channel, true);
+  const senderId = normalizeIdentityPart(context.senderId, false);
+  const accountId = normalizeIdentityPart(context.accountId, false);
+  if (!channel || !senderId) {
+    return null;
+  }
+  const candidates = bindings.filter(
+    (binding) =>
+      binding.channel === channel &&
+      binding.senderId === senderId &&
+      (binding.accountId === null || binding.accountId === accountId),
+  );
+  return (
+    candidates.find(
+      (binding) => binding.accountId !== null && binding.accountId === accountId,
+    ) ||
+    candidates.find((binding) => binding.accountId === null) ||
+    null
+  );
+}
+
+function normalizeIdentityBindings(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const channel = normalizeIdentityPart(item.channel, true);
+    const senderId = normalizeIdentityPart(item.senderId, false);
+    const accountId = normalizeIdentityPart(item.accountId, false);
+    const tokenEnv = boundedString(item.tokenEnv, "", 128);
+    if (
+      !channel ||
+      !senderId ||
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tokenEnv)
+    ) {
+      continue;
+    }
+    const key = `${channel}:${accountId || "*"}:${senderId}`;
+    if (seen.has(key)) {
+      throw new Error(`duplicate AgentBridge identity binding: ${key}`);
+    }
+    seen.add(key);
+    result.push(
+      Object.freeze({
+        key,
+        channel,
+        senderId,
+        accountId,
+        tokenEnv,
+        label: boundedString(item.label, "", 120) || null,
+      }),
+    );
+  }
+  return result;
+}
+
+function normalizeIdentityPart(value, lowercase) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value).trim().slice(0, 512);
+  return normalized ? (lowercase ? normalized.toLowerCase() : normalized) : null;
+}
+
 export function normalizeHttpOrigin(value) {
   if (typeof value !== "string" || !value.trim()) {
     return null;
   }
   try {
     const parsed = new URL(value.trim());
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
+    if (!["http:", "https:"].includes(parsed.protocol)) {
       return null;
     }
-    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
       return null;
     }
     return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMcpUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value.trim());
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hash ||
+      !parsed.pathname
+    ) {
+      return null;
+    }
+    return parsed.toString();
   } catch {
     return null;
   }

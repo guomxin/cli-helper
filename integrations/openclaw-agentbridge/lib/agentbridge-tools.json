@@ -1,0 +1,2556 @@
+{
+  "schemaVersion": "agentbridge.openclaw-tool-catalog.v1",
+  "tools": [
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one exact pending efficiency-data affair. Pass any opinion already supplied by the user; omitted opinion stays editable in the trusted card.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "prepare_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_efficiency_data_approval_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "prepare_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Efficiency-Data Approval"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization and verify that the exact efficiency-data item leaves the pending collection.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "commit_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_efficiency_data_approve",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "commit_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Approve Authorized OA Efficiency Data"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one exact pending travel-expense reimbursement. Pass any opinion already supplied; AgentBridge shows amount, key fields, and attachment count.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "prepare_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_travel_expense_approval_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "prepare_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Travel-Expense Approval"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization and verify that the exact travel-expense reimbursement leaves the pending collection.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "commit_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_travel_expense_approve",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "commit_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Approve Authorized OA Travel Expense"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one exact pending weekly-report inform item. This is acknowledgement, not approval; pass any review opinion already supplied by the user.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "prepare_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_weekly_report_acknowledgement_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "prepare_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Weekly-Report Acknowledgement"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, acknowledge the exact weekly-report inform item, and verify pending disappearance.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "commit_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_weekly_report_acknowledge",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "commit_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Acknowledge Authorized OA Weekly Report"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one exact ordinary collaboration affair outside registered HR, expense, procurement, seal, efficiency-data, and weekly-report profiles.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "prepare_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_standard_collaboration_approval_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "prepare_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Standard-Collaboration Approval"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization and verify that the exact ordinary collaboration item leaves the pending collection.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "commit_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_standard_collaboration_approve",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "commit_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Approve Authorized OA Standard Collaboration"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Describe this remote MCP endpoint, trusted-interaction delivery methods, client footprint, and write-safety boundary.",
+      "inputSchema": {
+        "properties": {},
+        "title": "agentbridge_server_profileArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_server_profile",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_server_profileDictOutput",
+        "type": "object"
+      },
+      "title": "Get AgentBridge Server Profile"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List templates available to the authenticated OA user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "title": "oa_template_listArguments",
+        "type": "object"
+      },
+      "name": "oa_template_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_template_listDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Templates"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List pending workflows for the authenticated OA user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_workflow_pending_listArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_pending_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_pending_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Pending OA Workflows"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List completed workflows for the authenticated OA user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_workflow_done_listArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_done_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_done_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Completed OA Workflows"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List tracked workflows for the authenticated OA user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_workflow_tracked_listArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_tracked_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_tracked_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Tracked OA Workflows"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Get rendered business fields, text, attachments, and opinions for an opaque workflow affair ID returned by a list tool.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "collection": {
+            "enum": [
+              "pending",
+              "done",
+              "tracked"
+            ],
+            "title": "Collection",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "text_limit": {
+            "default": 6000,
+            "maximum": 20000,
+            "minimum": 0,
+            "title": "Text Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "affair_id"
+        ],
+        "title": "oa_workflow_detail_getArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_detail_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_detail_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get OA Workflow Detail"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List structured opinions for an opaque workflow affair ID.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "collection": {
+            "enum": [
+              "pending",
+              "done",
+              "tracked"
+            ],
+            "title": "Collection",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "collection",
+          "affair_id"
+        ],
+        "title": "oa_workflow_opinions_listArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_opinions_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_opinions_listDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Workflow Opinions"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one opaque affair ID from a prior sent-workflow result and pass any revoke comment already supplied by the user. AgentBridge opens a prefilled trusted card, validates the exact active target, and creates separate revoke authorization.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "repeal_comment": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Repeal Comment"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "oa_workflow_revoke_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_revoke_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_revoke_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Workflow Revoke"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, revoke exactly one frozen sent workflow through OA's native action, and verify that the same workflow returned to wait-send with revoked state.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_workflow_revokeArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_revoke",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_revokeDictOutput",
+        "type": "object"
+      },
+      "title": "Revoke Authorized OA Workflow"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass every business-trip field already supplied by the user. AgentBridge opens a prefilled trusted card; omitted fields remain editable. After field submission it validates the live OA form and creates draft confirmation.",
+      "inputSchema": {
+        "properties": {
+          "destination": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Destination"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "has_direct_supervisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Direct Supervisor"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Origin"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          },
+          "travel_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "大巴",
+                  "火车",
+                  "飞机",
+                  "轮渡",
+                  "自驾车"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Travel Mode"
+          },
+          "trip_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trip Days"
+          },
+          "trip_hours": {
+            "anyOf": [
+              {
+                "maximum": 8784,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trip Hours"
+          }
+        },
+        "title": "oa_business_trip_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_business_trip_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_business_trip_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Business Trip Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved trusted authorization, save the frozen plan as a wait-send OA draft, and verify it by server reload. It never submits the workflow.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_business_trip_save_draftArguments",
+        "type": "object"
+      },
+      "name": "oa_business_trip_save_draft",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_business_trip_save_draftDictOutput",
+        "type": "object"
+      },
+      "title": "Save Authorized OA Business Trip Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass every business-trip field already supplied by the user. AgentBridge opens a prefilled trusted card, validates the live OA form and sent baseline after field submission, then creates formal-submit authorization.",
+      "inputSchema": {
+        "properties": {
+          "destination": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Destination"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "has_direct_supervisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Direct Supervisor"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Origin"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          },
+          "travel_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "大巴",
+                  "火车",
+                  "飞机",
+                  "轮渡",
+                  "自驾车"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Travel Mode"
+          },
+          "trip_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trip Days"
+          },
+          "trip_hours": {
+            "anyOf": [
+              {
+                "maximum": 8784,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trip Hours"
+          }
+        },
+        "title": "oa_business_trip_submit_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_business_trip_submit_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_business_trip_submit_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Business Trip Submission"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, formally send the frozen business-trip request into OA approval, and verify one new sent item.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_business_trip_submitArguments",
+        "type": "object"
+      },
+      "name": "oa_business_trip_submit",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_business_trip_submitDictOutput",
+        "type": "object"
+      },
+      "title": "Submit Authorized OA Business Trip Request"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass every supported leave field already supplied by the user. AgentBridge opens a prefilled trusted card; omitted fields remain editable. After field submission it validates OA and creates draft-save confirmation.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "has_direct_supervisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Direct Supervisor"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "leave_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "年休",
+                  "事假",
+                  "调休"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Leave Type"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "oa_leave_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_leave_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_leave_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Leave Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, save a wait-send leave draft, and verify it by server reload. It never submits the workflow.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_leave_save_draftArguments",
+        "type": "object"
+      },
+      "name": "oa_leave_save_draft",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_leave_save_draftDictOutput",
+        "type": "object"
+      },
+      "title": "Save Authorized OA Leave Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass every supported leave field already supplied by the user. AgentBridge opens a prefilled trusted card, validates OA and the sent baseline after field submission, then creates formal-submit authorization.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "has_direct_supervisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Direct Supervisor"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "leave_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "年休",
+                  "事假",
+                  "调休"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Leave Type"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "oa_leave_submit_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_leave_submit_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_leave_submit_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Leave Submission"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, formally send the frozen leave request into OA approval, and verify one new readable sent item.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_leave_submitArguments",
+        "type": "object"
+      },
+      "name": "oa_leave_submit",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_leave_submitDictOutput",
+        "type": "object"
+      },
+      "title": "Submit Authorized OA Leave Request"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass every missed-punch field already supplied by the user. AgentBridge opens a prefilled trusted card; omitted fields remain editable. After field submission it validates OA and creates draft-save confirmation.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Explanation"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "reason_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "忘记打卡",
+                  "人脸识别有误",
+                  "其他"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason Type"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "oa_missed_punch_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_missed_punch_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_missed_punch_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Missed-Punch Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, save a wait-send missed-punch draft, and verify it by server reload. It never submits the workflow.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_missed_punch_save_draftArguments",
+        "type": "object"
+      },
+      "name": "oa_missed_punch_save_draft",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_missed_punch_save_draftDictOutput",
+        "type": "object"
+      },
+      "title": "Save Authorized OA Missed-Punch Draft"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Bind one opaque pending affair ID and pass any approval opinion already supplied by the user. AgentBridge opens a prefilled trusted card, validates the exact missed-punch target, and creates separate approval confirmation.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "oa_missed_punch_approval_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_missed_punch_approval_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_missed_punch_approval_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Missed-Punch Approval"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, approve the frozen missed-punch item, and verify that it left the pending collection.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_missed_punch_approveArguments",
+        "type": "object"
+      },
+      "name": "oa_missed_punch_approve",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_missed_punch_approveDictOutput",
+        "type": "object"
+      },
+      "title": "Approve Authorized OA Missed-Punch Request"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "On the first call, pass any subject, requested room wording, start_time, and end_time already supplied by the user. AgentBridge checks live OA room availability before opening a prefilled card with real room options. After field submission it rechecks availability and creates a separate confirmation.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Room"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subject"
+          }
+        },
+        "title": "oa_meeting_create_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_create_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_create_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Meeting Creation"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, recheck room availability, create and send the meeting, then verify room-list and meeting-view readback.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_meeting_createArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_create",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_createDictOutput",
+        "type": "object"
+      },
+      "title": "Create Authorized OA Meeting"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Verify the authenticated caller's active central OA session against OA. Non-active sessions are reported from the registry without asking for credentials.",
+      "inputSchema": {
+        "properties": {},
+        "title": "oa_session_statusArguments",
+        "type": "object"
+      },
+      "name": "oa_session_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_session_statusDictOutput",
+        "type": "object"
+      },
+      "title": "Verify OA Session Status"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Reuse and refresh a valid central OA session. Only when OA confirms that the session is no longer authenticated, create a short-lived trusted authentication card. Credentials are entered only in that card and never in MCP arguments.",
+      "inputSchema": {
+        "properties": {
+          "challenge_ttl_seconds": {
+            "default": 300,
+            "maximum": 900,
+            "minimum": 30,
+            "title": "Challenge Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "oa_session_loginArguments",
+        "type": "object"
+      },
+      "name": "oa_session_login",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_session_loginDictOutput",
+        "type": "object"
+      },
+      "title": "Ensure OA Session Login"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Read one host-independent trusted interaction envelope. Poll this tool until resume.ready is true; never collect credential or business-field values in the model conversation.",
+      "inputSchema": {
+        "properties": {
+          "interaction_id": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Interaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id"
+        ],
+        "title": "agentbridge_interaction_getArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_interaction_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_interaction_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get AgentBridge User Interaction"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Continue an interaction after the user completed its trusted surface. This tool cannot enter fields or approve a plan; it only consumes an already completed, user-bound interaction.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "interaction_id": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Interaction Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction_id"
+        ],
+        "title": "agentbridge_interaction_resumeArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_interaction_resume",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_interaction_resumeDictOutput",
+        "type": "object"
+      },
+      "title": "Resume Completed AgentBridge Interaction"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Get one operation owned by the authenticated caller.",
+      "inputSchema": {
+        "properties": {
+          "operation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id"
+        ],
+        "title": "agentbridge_operation_getArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_operation_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_operation_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get AgentBridge Operation"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List recent operations owned by the authenticated caller.",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "agentbridge_operation_listArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_operation_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_operation_listDictOutput",
+        "type": "object"
+      },
+      "title": "List AgentBridge Operations"
+    }
+  ]
+}
