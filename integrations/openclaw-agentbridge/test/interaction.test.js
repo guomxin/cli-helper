@@ -70,7 +70,7 @@ test("redacts historical card URLs without treating audit records as live intera
   assert.equal(JSON.stringify(original).includes(CARD_URL), true);
 });
 
-test("renders private HTTP as a URL button and Telegram HTTPS as a Web App", () => {
+test("renders Telegram HTTPS with embedded and browser buttons", () => {
   const httpInteraction = processToolResult(toolResult(), [CARD_ORIGIN]).interactions[0];
   const httpPresentation = buildPresentation([httpInteraction], "telegram");
   const httpButton = httpPresentation.blocks.at(-1).buttons[0];
@@ -84,13 +84,17 @@ test("renders private HTTP as a URL button and Telegram HTTPS as a Web App", () 
     toolResult(httpsEnvelope),
     ["https://cards.example.test"],
   ).interactions[0];
-  const httpsButton = buildPresentation([httpsInteraction], "telegram").blocks.at(-1)
-    .buttons[0];
-  assert.equal(httpsButton.webApp.url, "https://cards.example.test/auth/token");
-  assert.equal("url" in httpsButton, false);
+  const httpsButtons = buildPresentation([httpsInteraction], "telegram").blocks.at(-1)
+    .buttons;
+  assert.equal(httpsButtons.length, 2);
+  assert.equal(httpsButtons[0].webApp.url, "https://cards.example.test/auth/token");
+  assert.equal("url" in httpsButtons[0], false);
+  assert.equal(httpsButtons[1].label, "浏览器打开");
+  assert.equal(httpsButtons[1].url, "https://cards.example.test/auth/token");
+  assert.equal("webApp" in httpsButtons[1], false);
 });
 
-test("embeds every trusted card type in the Telegram Web App surface", () => {
+test("adds a browser fallback for every Telegram trusted card type", () => {
   const cases = [
     ["credential", "/auth/opaque-credential-token", "安全登录"],
     ["business_input", "/input/opaque-field-token", "填写信息"],
@@ -102,11 +106,15 @@ test("embeds every trusted card type in the Telegram Web App surface", () => {
     const normalized = processToolResult(toolResult(envelope), [
       "https://10.10.50.213:8780",
     ]).interactions[0];
-    const button = buildPresentation([normalized], "telegram").blocks.at(-1).buttons[0];
+    const buttons = buildPresentation([normalized], "telegram").blocks.at(-1).buttons;
 
-    assert.equal(button.label, label);
-    assert.deepEqual(button.webApp, { url });
-    assert.equal("url" in button, false);
+    assert.equal(buttons.length, 2);
+    assert.equal(buttons[0].label, label);
+    assert.deepEqual(buttons[0].webApp, { url });
+    assert.equal("url" in buttons[0], false);
+    assert.equal(buttons[1].label, "浏览器打开");
+    assert.equal(buttons[1].url, url);
+    assert.equal("webApp" in buttons[1], false);
   }
 });
 

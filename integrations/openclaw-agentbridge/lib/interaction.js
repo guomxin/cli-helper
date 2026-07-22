@@ -26,6 +26,7 @@ const BUTTON_LABELS = {
   business_input: "填写信息",
   execution_authorization: "核对并确认",
 };
+const EXTERNAL_BROWSER_LABEL = "浏览器打开";
 const STATE_LABELS = {
   pending: "等待操作",
   processing: "处理中",
@@ -325,12 +326,19 @@ export function buildPresentation(interactions, channel) {
         priority: 100,
         style: "primary",
       };
+      const buttons = [button];
       if (channel === "telegram" && url.startsWith("https://")) {
         button.webApp = { url };
+        buttons.push({
+          label: EXTERNAL_BROWSER_LABEL,
+          priority: 90,
+          style: "secondary",
+          url,
+        });
       } else {
         button.url = url;
       }
-      blocks.push({ type: "buttons", buttons: [button] });
+      blocks.push({ type: "buttons", buttons });
     }
   }
   return {

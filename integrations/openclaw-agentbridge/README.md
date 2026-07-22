@@ -56,7 +56,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.1.15, ...)
+AgentBridge interaction plugin registered (version=0.1.16, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -88,8 +88,13 @@ before any retry.
 
 Telegram receives a native Web App button when the trusted card uses HTTPS.
 Credential, business-input, and execution-authorization cards all use this
-embedded path; private HTTP remains a portable-link fallback for local
-development only. AgentBridge pages use a small self-hosted lifecycle bridge
+embedded path. The same private message also includes a host-rendered
+"浏览器打开" URL button for Android Telegram clients that reject a user-installed
+internal CA in their embedded WebView. Both buttons carry the same short-lived
+trusted URL only in host presentation metadata; the URL remains absent from
+model-visible results and message text. Private HTTP remains a portable-link
+fallback for local development only. AgentBridge pages use a small self-hosted
+lifecycle bridge
 that signals ready, expand, and close without reading or forwarding form data.
 The plugin records the trusted private delivery route that initiated an
 interaction. After a trusted page is completed,
