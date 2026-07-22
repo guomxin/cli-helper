@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bscli.adapters.seeyon_leave import (
     LEAVE_FORM_APP_ID,
@@ -14,6 +14,7 @@ from bscli.adapters.seeyon_leave_submit import (
     LeaveBusinessValidationRequired,
     LeaveSubmissionBlocked,
     _handle_business_validation,
+    _wait_for_sent_readback,
     leave_submit_contract_fingerprint,
     prepare_leave_submission,
     submit_leave_request,
@@ -48,7 +49,8 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
 
         plan = prepared["plan"]
         self.assertEqual(plan["target"]["expected_subject"], readback["subject"])
-        self.assertEqual(plan["target"]["sent_subject_marker"], LEAVE_TEMPLATE_TITLE)
+        self.assertEqual(plan["target"]["template_id"], LEAVE_TEMPLATE_ID)
+        self.assertEqual(plan["target"]["form_app_id"], LEAVE_FORM_APP_ID)
         self.assertEqual(plan["sent_baseline_affair_ids"], ["sent-old"])
         self.assertTrue(plan["expected_effect"]["workflow_submitted"])
         self.assertEqual(prepared["summary"]["authorize_label"], "授权提交审批")
@@ -230,6 +232,45 @@ class SeeyonLeaveSubmitTests(unittest.TestCase):
                 validation_overrides=[],
             )
 
+    def test_authoritative_readback_matches_expanded_leave_subject(self):
+        inputs = normalize_leave_inputs(_inputs())
+        title = "-".join((LEAVE_TEMPLATE_TITLE, "Alice", inputs["leave_type"]))
+        adapter = FakeAdapter(
+            sent_items=[
+                {
+                    "affair_id": "sent-old",
+                    "template_id": LEAVE_TEMPLATE_ID,
+                    "form_app_id": LEAVE_FORM_APP_ID,
+                    "title": "Old leave",
+                },
+                {
+                    "affair_id": "sent-new",
+                    "template_id": LEAVE_TEMPLATE_ID,
+                    "form_app_id": LEAVE_FORM_APP_ID,
+                    "title": title,
+                },
+            ]
+        )
+        tracker = Mock()
+        tracker.pending_business_validation = None
+
+        result = _wait_for_sent_readback(
+            adapter,
+            object(),
+            page=object(),
+            baseline_affair_ids={"sent-old"},
+            expected_template_id=LEAVE_TEMPLATE_ID,
+            expected_form_app_id=LEAVE_FORM_APP_ID,
+            title_markers=(LEAVE_TEMPLATE_TITLE, inputs["leave_type"]),
+            timeout_seconds=5,
+            phase_tracker=tracker,
+            validation_overrides=[],
+        )
+
+        self.assertEqual(result["affair_id"], "sent-new")
+        self.assertEqual(result["title"], title)
+        self.assertTrue(result["detail_readable"])
+
 
 class FakeAdapter:
     def __init__(self, sent_items=None):
@@ -247,10 +288,17 @@ class FakeAdapter:
             ]
         }
 
+    def load_sent_workflow_rows(self, _worker):
+        return list(self.sent_items), object()
+
+    def resolve_sent_workflow_row_detail(self, _worker, *, source_item):
+        return source_item, {
+            "title": source_item["title"],
+            "fields": [{"name": "Applicant", "value": "Alice"}],
+        }
+
     def list_workflows(self, _worker, *, collection, arguments):
-        if collection != "sent" or arguments != {"limit": 100}:
-            raise AssertionError("unexpected sent-list lookup")
-        return {"items": self.sent_items}
+        raise AssertionError("the stale home sent projection must not be used")
 
 
 class FakeForkingWorker:
@@ -401,7 +449,6 @@ def _plan(inputs, subject):
             "template_id": LEAVE_TEMPLATE_ID,
             "form_app_id": LEAVE_FORM_APP_ID,
             "expected_subject": subject,
-            "sent_subject_marker": LEAVE_TEMPLATE_TITLE,
         },
         "form_contract": {
             "version": LEAVE_SUBMIT_CONTRACT_VERSION,

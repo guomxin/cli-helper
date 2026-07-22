@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from bscli.adapters.seeyon_central import (
@@ -141,6 +142,32 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         serialized = json.dumps(result)
         for forbidden in ("href", "write_hints", "actions", "detail-internal-token"):
             self.assertNotIn(forbidden, serialized)
+
+    def test_authoritative_sent_row_opens_detail_without_home_projection(self):
+        row = {
+            "affair_id": "sent-new",
+            "template_id": "template-1",
+            "form_app_id": "form-1",
+            "title": "Expanded sent subject",
+        }
+        with patch(
+            "bscli.adapters.seeyon_central._load_collection_rows",
+            return_value=([row], self.worker.page),
+        ):
+            rows, page = self.adapter.load_sent_workflow_rows(self.worker)
+
+        self.assertEqual(rows, [row])
+        self.assertIs(page, self.worker.page)
+        source_item, detail = self.adapter.resolve_sent_workflow_row_detail(
+            self.worker,
+            source_item=row,
+        )
+        query = parse_qs(urlparse(self.worker.render_calls[-1]).query)
+        self.assertEqual(query["method"], ["summary"])
+        self.assertEqual(query["openFrom"], ["listSent"])
+        self.assertEqual(query["affairId"], ["sent-new"])
+        self.assertEqual(source_item["title"], row["title"])
+        self.assertEqual(detail["fields"], [{"name": "Applicant", "value": "Alice"}])
 
     def test_opinions_returns_bounded_sanitized_items(self):
         result = self.adapter.invoke_capability(

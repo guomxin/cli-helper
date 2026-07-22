@@ -26,6 +26,10 @@ from bscli.adapters.seeyon_business_trip import (
     business_trip_summary,
     normalize_business_trip_inputs,
 )
+from bscli.adapters.seeyon_sent_readback import (
+    new_sent_candidates,
+    sent_snapshot,
+)
 from bscli.adapters.seeyon_submit_phases import (
     SeeyonBusinessValidationRequired,
     SubmissionPhaseTracker,
@@ -35,7 +39,7 @@ from bscli.adapters.seeyon_submit_phases import (
 
 BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY = "oa.business_trip.submit.prepare"
 BUSINESS_TRIP_SUBMIT_CAPABILITY = "oa.business_trip.submit"
-BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v3"
+BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v4"
 BUSINESS_TRIP_SUBMIT_PREPARE_INPUT_SCHEMA = BUSINESS_TRIP_PREPARE_INPUT_SCHEMA
 BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA = BUSINESS_TRIP_SAVE_INPUT_SCHEMA
 
@@ -103,8 +107,8 @@ def prepare_business_trip_submission(adapter, worker, arguments: dict) -> dict:
                 "submitted_count": 1,
                 "verification": [
                     "oa_submission_phase_observation",
-                    "sent_collection_delta",
-                    "sent_detail_readback",
+                    "authoritative_sent_grid_delta",
+                    "authoritative_sent_detail_readback",
                 ],
             },
         },
@@ -169,7 +173,13 @@ def submit_business_trip_request(
                 readback_worker,
                 page=page,
                 baseline_affair_ids=set(plan.get("sent_baseline_affair_ids") or []),
-                expected_subject=expected_subject,
+                expected_template_id=str(target["template_id"]),
+                expected_form_app_id=str(target["form_app_id"]),
+                title_markers=(
+                    BUSINESS_TRIP_TEMPLATE_TITLE,
+                    inputs["start_time"],
+                    inputs["end_time"],
+                ),
                 timeout_seconds=timeout_seconds,
                 phase_tracker=phase_tracker,
                 validation_overrides=validation_overrides,
@@ -184,8 +194,8 @@ def submit_business_trip_request(
                     "confirmed": True,
                     "methods": [
                         "oa_submission_phase_observation",
-                        "sent_collection_delta",
-                        "sent_detail_readback",
+                        "authoritative_sent_grid_delta",
+                        "authoritative_sent_detail_readback",
                     ],
                 },
                 "request_evidence": phase_tracker.evidence,
@@ -234,8 +244,8 @@ def business_trip_submit_contract_fingerprint() -> str:
         "forbidden_controls": ["saveDraft_a"],
         "verification": [
             "oa_submission_phase_observation",
-            "sent_collection_delta",
-            "sent_detail_readback",
+            "authoritative_sent_grid_delta",
+            "authoritative_sent_detail_readback",
         ],
     }
     canonical = json.dumps(contract, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -243,15 +253,7 @@ def business_trip_submit_contract_fingerprint() -> str:
 
 
 def _sent_snapshot(adapter, worker) -> dict:
-    result = adapter.list_workflows(worker, collection="sent", arguments={"limit": 100})
-    items = [item for item in result.get("items") or [] if isinstance(item, dict)]
-    return {
-        "affair_ids": sorted(
-            str(item.get("affair_id") or "")
-            for item in items
-            if str(item.get("affair_id") or "")
-        )
-    }
+    return sent_snapshot(adapter, worker)
 
 
 @contextmanager
@@ -271,7 +273,9 @@ def _wait_for_sent_readback(
     *,
     page,
     baseline_affair_ids: set[str],
-    expected_subject: str,
+    expected_template_id: str,
+    expected_form_app_id: str,
+    title_markers: tuple[str, ...],
     timeout_seconds: float,
     phase_tracker: SubmissionPhaseTracker,
     validation_overrides: list[dict[str, Any]],
@@ -286,26 +290,25 @@ def _wait_for_sent_readback(
             validation_overrides=validation_overrides,
         )
         try:
-            result = adapter.list_workflows(worker, collection="sent", arguments={"limit": 100})
-            candidates = [
-                item
-                for item in result.get("items") or []
-                if isinstance(item, dict)
-                and str(item.get("affair_id") or "") not in baseline_affair_ids
-                and expected_subject in str(item.get("title") or "")
-            ]
+            candidates = new_sent_candidates(
+                adapter,
+                worker,
+                baseline_affair_ids=baseline_affair_ids,
+                template_id=expected_template_id,
+                form_app_id=expected_form_app_id,
+                title_markers=title_markers,
+            )
             if len(candidates) == 1:
                 item = candidates[0]
                 affair_id = str(item.get("affair_id") or "")
-                source_item, detail = adapter.resolve_workflow_detail(
+                source_item, detail = adapter.resolve_sent_workflow_row_detail(
                     worker,
-                    collection="sent",
-                    affair_id=affair_id,
+                    source_item=item,
                 )
                 detail_title = str(detail.get("title") or source_item.get("title") or "")
-                if expected_subject not in detail_title:
+                if not all(marker in detail_title for marker in title_markers):
                     raise BusinessTripOutcomeUnknown(
-                        "The new sent OA item did not match the authorized subject."
+                        "The new sent OA item detail did not match the authorized identity."
                     )
                 return {
                     "affair_id": affair_id,

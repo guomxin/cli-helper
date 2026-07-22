@@ -53,6 +53,7 @@ from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_INPUT_SCHEMA,
     WORKFLOW_REVOKE_PREPARE_CAPABILITY,
     WORKFLOW_REVOKE_PREPARE_INPUT_SCHEMA,
+    _load_collection_rows,
 )
 from bscli.adapters.seeyon_system import SEEYON_OA_URL
 from bscli.adapters.seeyon_home import (
@@ -751,6 +752,35 @@ class SeeyonCentralAdapter:
             affair_id=_validated_identifier(affair_id, "affair_id"),
         )
 
+    def load_sent_workflow_rows(self, worker) -> tuple[list[dict], object]:
+        """Load the authoritative sent grid for governed write verification."""
+        return _load_collection_rows(self, worker, collection="sent")
+
+    def resolve_sent_workflow_row_detail(
+        self,
+        worker,
+        *,
+        source_item: dict,
+    ) -> tuple[dict, dict]:
+        affair_id = _validated_identifier(source_item.get("affair_id"), "affair_id")
+        normalized_item = dict(source_item)
+        normalized_item["affair_id"] = affair_id
+        normalized_item["href"] = urljoin(
+            self.base_url,
+            "collaboration/collaboration.do?"
+            + urlencode(
+                {
+                    "method": "summary",
+                    "openFrom": "listSent",
+                    "affairId": affair_id,
+                    "showTab": "true",
+                }
+            ),
+        )
+        return normalized_item, self._render_workflow_source_detail(
+            worker, normalized_item
+        )
+
     def _fetch_workflow_collection(self, worker, collection: str) -> dict:
         self.list_templates(worker)
         section_url = self._discover_section_url(worker, collection)
@@ -833,6 +863,9 @@ class SeeyonCentralAdapter:
             raise SeeyonReadContractMismatch(
                 f"Workflow affair_id was not found in the current {collection} collection."
             )
+        return source_item, self._render_workflow_source_detail(worker, source_item)
+
+    def _render_workflow_source_detail(self, worker, source_item: dict) -> dict:
         detail_url = str(source_item.get("href") or "")
         if not detail_url:
             raise SeeyonReadContractMismatch("The selected workflow does not expose a detail page.")
@@ -847,7 +880,7 @@ class SeeyonCentralAdapter:
             if isinstance(frame, dict)
         )
         parsed_detail = parse_oa_detail("\n".join(html_parts), base_url=final_url)
-        return source_item, parsed_detail
+        return parsed_detail
 
     def open_login(self, worker) -> None:
         worker.goto(self.base_url)
