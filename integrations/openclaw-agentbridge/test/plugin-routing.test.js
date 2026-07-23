@@ -1,8 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import { AGENTBRIDGE_PROXY_TOOL_NAMES } from "../lib/proxy-tools.js";
+
+test("declares every native AgentBridge tool in the plugin contract", () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL("../openclaw.plugin.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  assert.deepEqual(manifest.contracts.tools, AGENTBRIDGE_PROXY_TOOL_NAMES);
+});
 
 test("registers native per-user tools and blocks the legacy global MCP surface", () => {
   const harness = fakeApi();
