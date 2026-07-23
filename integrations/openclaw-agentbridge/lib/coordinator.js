@@ -19,12 +19,24 @@ const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
 
+export function createInteractionSharedState() {
+  return {
+    id:
+      globalThis.crypto?.randomUUID?.() ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    records: new Map(),
+    sessionRoutes: new Map(),
+    directDeliveries: new Map(),
+  };
+}
+
 export class InteractionCoordinator {
   constructor({
     api,
     config,
     mcpClient = null,
     mcpClientResolver = null,
+    sharedState = createInteractionSharedState(),
     sleep = defaultSleep,
     now = Date.now,
   }) {
@@ -34,12 +46,13 @@ export class InteractionCoordinator {
     this.mcpClientResolver = mcpClientResolver;
     this.sleep = sleep;
     this.now = now;
-    this.records = new Map();
+    this.sharedStateId = sharedState.id || "isolated";
+    this.records = sharedState.records;
     this.polls = new Map();
     this.abortControllers = new Map();
     this.toolBindings = new Map();
-    this.sessionRoutes = new Map();
-    this.directDeliveries = new Map();
+    this.sessionRoutes = sharedState.sessionRoutes;
+    this.directDeliveries = sharedState.directDeliveries;
   }
 
   bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
@@ -62,6 +75,24 @@ export class InteractionCoordinator {
 
   deliveryChannelForSession(sessionKey) {
     return this.sessionRoutes.get(sessionKey)?.channel || null;
+  }
+
+  deliverySessionKeyForRoute({ channel, to, accountId }) {
+    const normalizedChannel = safeRoutePart(channel);
+    const normalizedTo = safeRoutePart(to);
+    const normalizedAccountId = safeRoutePart(accountId);
+    if (!normalizedChannel || !normalizedTo) {
+      return null;
+    }
+    const matches = [...this.sessionRoutes.entries()].filter(
+      ([, route]) =>
+        route.channel === normalizedChannel &&
+        route.to === normalizedTo &&
+        (!normalizedAccountId ||
+          !route.accountId ||
+          route.accountId === normalizedAccountId),
+    );
+    return matches.length === 1 ? matches[0][0] : null;
   }
 
   bindToolCall(event, context) {
@@ -190,17 +221,14 @@ export class InteractionCoordinator {
     this.captureInteractions(interactions, binding, context);
     return undefined;
   }
-  takeForDelivery({ runId, sessionKey }) {
+  takeForDelivery({ sessionKey }) {
     this.prune();
     if (!isPrivateSessionKey(sessionKey)) {
       return [];
     }
-    const matches = [...this.records.values()].filter((record) => {
-      if (record.sessionKey !== sessionKey || record.delivered) {
-        return false;
-      }
-      return runId && record.runId ? record.runId === runId : true;
-    });
+    const matches = [...this.records.values()].filter(
+      (record) => record.sessionKey === sessionKey && !record.delivered,
+    );
     for (const record of matches) {
       record.delivered = true;
     }

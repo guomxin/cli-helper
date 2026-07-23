@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createInteractionSharedState } from "../lib/coordinator.js";
 import { normalizeInteraction } from "../lib/interaction.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import {
@@ -202,6 +203,97 @@ test("recovers WeChat presentation from a private session key without a bound ro
   assert.equal(reply.payload.text.includes("login card opened"), true);
 });
 
+test("shares a captured WeChat card from the agent runtime with the gateway reply hook", () => {
+  const sharedState = createInteractionSharedState();
+  const gateway = fakeApi({ autoPoll: false });
+  const runtime = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(gateway.api, { mcpClient: null, sharedState });
+  registerAgentBridgeInteractions(runtime.api, { mcpClient: null, sharedState });
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-1002@im.wechat";
+  bindDeliveryRoute(gateway, {
+    sessionKey,
+    to: "wechat-user-1002@im.wechat",
+    channel: "openclaw-weixin",
+    accountId: "wechat-bot-account",
+  });
+  bindToolCall(runtime, {
+    toolCallId: "tool-wechat-cross-instance",
+    runId: "run-wechat-cross-instance",
+    sessionKey,
+    channel: "openclaw-weixin",
+  });
+  runtime.middleware(
+    {
+      toolCallId: "tool-wechat-cross-instance",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  const reply = gateway.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "different-outbound-run",
+      payload: { text: "login card opened" },
+    },
+    {
+      channelId: "openclaw-weixin",
+      accountId: "wechat-bot-account",
+      conversationId: "wechat-user-1002@im.wechat",
+      runId: "different-outbound-run",
+    },
+  );
+
+  assert.equal(reply.payload.text.includes(CARD_URL), true);
+  assert.equal(reply.payload.text.includes("login card opened"), true);
+});
+
+test("appends a captured card in message_sending when WeChat skips the reply payload hook", () => {
+  const sharedState = createInteractionSharedState();
+  const gateway = fakeApi({ autoPoll: false });
+  const runtime = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(gateway.api, { mcpClient: null, sharedState });
+  registerAgentBridgeInteractions(runtime.api, { mcpClient: null, sharedState });
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-1002@im.wechat";
+  bindDeliveryRoute(gateway, {
+    sessionKey,
+    to: "wechat-user-1002@im.wechat",
+    channel: "openclaw-weixin",
+    accountId: "wechat-bot-account",
+  });
+  bindToolCall(runtime, {
+    toolCallId: "tool-wechat-message-sending",
+    runId: "run-wechat-message-sending",
+    sessionKey,
+    channel: "openclaw-weixin",
+  });
+  runtime.middleware(
+    {
+      toolCallId: "tool-wechat-message-sending",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  const sent = gateway.hooks.message_sending(
+    {
+      to: "wechat-user-1002@im.wechat",
+      content: "login card opened",
+    },
+    {
+      channelId: "openclaw-weixin",
+      accountId: "wechat-bot-account",
+      conversationId: "wechat-user-1002@im.wechat",
+    },
+  );
+
+  assert.equal(sent.content.includes(CARD_URL), true);
+  assert.equal(sent.content.includes("login card opened"), true);
+});
 test("hydrates a trusted card when OpenClaw drops private MCP result metadata", async () => {
   const harness = fakeApi({ autoPoll: false });
   const calls = [];

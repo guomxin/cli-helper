@@ -13,7 +13,7 @@ import {
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.5";
+const PLUGIN_VERSION = "0.2.8";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -40,6 +40,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     mcpClientResolver: identityRouter.enabled
       ? (sessionKey) => identityRouter.clientForSession(sessionKey)
       : null,
+    sharedState: dependencies.sharedState,
     sleep: dependencies.sleep,
     now: dependencies.now,
   });
@@ -90,24 +91,68 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
   });
 
+  api.on("message_sending", (event, context) => {
+    const routeChannel = context.channelId;
+    const sessionKey =
+      context.sessionKey ||
+      coordinator.deliverySessionKeyForRoute({
+        channel: routeChannel,
+        to: context.conversationId || event.to,
+        accountId: context.accountId,
+      });
+    const channel =
+      coordinator.deliveryChannelForSession(sessionKey) ||
+      routeChannel ||
+      channelFromPrivateSessionKey(sessionKey);
+    if (
+      channel !== "openclaw-weixin" ||
+      coordinator.isDirectDeliveryActive(sessionKey)
+    ) {
+      return undefined;
+    }
+    const pending = coordinator.pendingForSession(sessionKey);
+    api.logger.info(
+      `AgentBridge WeChat message delivery check (private=${isPrivateSessionKey(sessionKey)}, pending=${pending.length})`,
+    );
+    const interactions = coordinator.takeForDelivery({ sessionKey });
+    const presentation = presentationForRecords(interactions, channel);
+    if (!presentation) {
+      return undefined;
+    }
+    const payload = appendPresentationLinks(
+      { text: event.content },
+      presentation,
+    );
+    return { content: payload.text };
+  });
+
   api.on("reply_payload_sending", (event, context) => {
     if (!["final", "block"].includes(event.kind)) {
       return undefined;
     }
     bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
-    const sessionKey = event.sessionKey || context.sessionKey;
+    const routeChannel = event.channel || context.channelId;
+    const sessionKey =
+      event.sessionKey ||
+      context.sessionKey ||
+      coordinator.deliverySessionKeyForRoute({
+        channel: routeChannel,
+        to: context.conversationId,
+        accountId: context.accountId,
+      });
     if (coordinator.isDirectDeliveryActive(sessionKey)) {
       return undefined;
     }
     const channel =
       coordinator.deliveryChannelForSession(sessionKey) ||
-      event.channel ||
-      context.channelId ||
+      routeChannel ||
       channelFromPrivateSessionKey(sessionKey);
-    const interactions = coordinator.takeForDelivery({
-      runId: event.runId || context.runId,
-      sessionKey,
-    });
+    if (routeChannel === "openclaw-weixin") {
+      api.logger.info(
+        `AgentBridge WeChat reply delivery check (private=${isPrivateSessionKey(sessionKey)}, channel=${channel || "unknown"}, pending=${coordinator.pendingForSession(sessionKey).length})`,
+      );
+    }
+    const interactions = coordinator.takeForDelivery({ sessionKey });
     const presentation = presentationForRecords(interactions, channel);
     if (!presentation) {
       return undefined;
@@ -127,7 +172,6 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           : payload,
     };
   });
-
   api.on("session_end", (event, context) => {
     if (["reset", "deleted"].includes(event.reason)) {
       const sessionKey = context.sessionKey || event.sessionKey;
@@ -186,7 +230,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   });
 
   api.logger.info(
-    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
+    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
 }
