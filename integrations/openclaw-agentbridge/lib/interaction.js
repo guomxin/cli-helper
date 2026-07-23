@@ -297,6 +297,16 @@ export function isPrivateSessionKey(sessionKey) {
   return /:(direct|dm):/.test(normalized);
 }
 
+export function channelFromPrivateSessionKey(sessionKey) {
+  if (!isPrivateSessionKey(sessionKey)) {
+    return null;
+  }
+  const match = sessionKey
+    .trim()
+    .match(/^agent:[^:]+:([a-z0-9][a-z0-9._-]{0,63}):(direct|dm):/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 export function isInteractionExpired(interaction, now = Date.now()) {
   if (!interaction.expiresAt) {
     return false;

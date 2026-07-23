@@ -60,6 +60,10 @@ export class InteractionCoordinator {
     return true;
   }
 
+  deliveryChannelForSession(sessionKey) {
+    return this.sessionRoutes.get(sessionKey)?.channel || null;
+  }
+
   bindToolCall(event, context) {
     const toolCallId = normalizeToolCallId(event.toolCallId);
     if (!toolCallId) {

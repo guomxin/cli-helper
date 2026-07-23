@@ -3,6 +3,7 @@ import { InteractionCoordinator, presentationForRecords } from "./coordinator.js
 import { AgentBridgeIdentityRouter } from "./identity-router.js";
 import {
   appendPresentationLinks,
+  channelFromPrivateSessionKey,
   isPrivateSessionKey,
   mergePresentations,
 } from "./interaction.js";
@@ -12,7 +13,7 @@ import {
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.3";
+const PLUGIN_VERSION = "0.2.5";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -98,18 +99,19 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     if (coordinator.isDirectDeliveryActive(sessionKey)) {
       return undefined;
     }
+    const channel =
+      coordinator.deliveryChannelForSession(sessionKey) ||
+      event.channel ||
+      context.channelId ||
+      channelFromPrivateSessionKey(sessionKey);
     const interactions = coordinator.takeForDelivery({
       runId: event.runId || context.runId,
       sessionKey,
     });
-    const presentation = presentationForRecords(
-      interactions,
-      event.channel || context.channelId,
-    );
+    const presentation = presentationForRecords(interactions, channel);
     if (!presentation) {
       return undefined;
     }
-    const channel = event.channel || context.channelId;
     const mergedPresentation = mergePresentations(
       event.payload.presentation,
       presentation,

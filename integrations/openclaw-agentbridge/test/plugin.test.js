@@ -122,6 +122,86 @@ test("binds a real Telegram direct session before middleware and injects its car
   assert.deepEqual(harness.middlewareOptions, { runtimes: ["openclaw"] });
 });
 
+test("uses the bound WeChat route when the final reply omits channel metadata", () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-1002@im.wechat";
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "wechat-user-1002@im.wechat",
+    channel: "openclaw-weixin",
+    accountId: "wechat-bot-account",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-wechat-missing-reply-channel",
+    runId: "run-wechat-missing-reply-channel",
+    sessionKey,
+    channel: "openclaw-weixin",
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-wechat-missing-reply-channel",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "run-wechat-missing-reply-channel",
+      sessionKey,
+      payload: { text: "login card opened" },
+    },
+    {
+      sessionKey,
+      runId: "run-wechat-missing-reply-channel",
+    },
+  );
+
+  assert.equal(reply.payload.text.includes(CARD_URL), true);
+  assert.equal(reply.payload.text.includes("login card opened"), true);
+});
+
+test("recovers WeChat presentation from a private session key without a bound route", () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-1002@im.wechat";
+  bindToolCall(harness, {
+    toolCallId: "tool-wechat-session-fallback",
+    runId: "run-wechat-session-fallback",
+    sessionKey,
+    channel: "openclaw-weixin",
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-wechat-session-fallback",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      runId: "run-wechat-session-fallback",
+      sessionKey,
+      payload: { text: "login card opened" },
+    },
+    {
+      sessionKey,
+      runId: "run-wechat-session-fallback",
+    },
+  );
+
+  assert.equal(reply.payload.text.includes(CARD_URL), true);
+  assert.equal(reply.payload.text.includes("login card opened"), true);
+});
+
 test("hydrates a trusted card when OpenClaw drops private MCP result metadata", async () => {
   const harness = fakeApi({ autoPoll: false });
   const calls = [];
@@ -1235,7 +1315,10 @@ test("queues a heartbeat fallback when the immediate completion wake is skipped"
   );
 });
 
-function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
+function bindToolCall(
+  harness,
+  { toolCallId, runId, sessionKey, channel = "telegram" },
+) {
   harness.hooks.before_tool_call(
     {
       toolName: "oa_session_login",
@@ -1244,7 +1327,7 @@ function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
       runId,
     },
     {
-      channelId: "telegram",
+      channelId: channel,
       sessionKey,
       runId,
       toolCallId,
@@ -1252,18 +1335,23 @@ function bindToolCall(harness, { toolCallId, runId, sessionKey }) {
   );
 }
 
-function bindDeliveryRoute(harness, { sessionKey, to }) {
+function bindDeliveryRoute(
+  harness,
+  { sessionKey, to, channel = "telegram", accountId = null },
+) {
   harness.hooks.message_received(
     {
       from: to,
       senderId: to,
       sessionKey,
+      accountId,
       content: "测试消息",
     },
     {
-      channelId: "telegram",
+      channelId: channel,
       conversationId: to,
       sessionKey,
+      accountId,
     },
   );
 }
