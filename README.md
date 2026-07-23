@@ -378,7 +378,13 @@ managed Gateway launcher and survives future restarts:
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
 openclaw config set mcp.servers.agentbridge.url https://10.20.30.40:8790/mcp
 openclaw config set plugins.entries.agentbridge-interactions.config.allowedCardOrigins.0 https://10.20.30.40:8780
+openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 ~~~
+
+When OpenClaw uses a restricted tool profile such as `coding`, the native
+AgentBridge adapter must be explicitly added through `tools.alsoAllow`.
+Allow only `agentbridge-interactions`, not `group:plugins`, and merge it with
+any existing `alsoAllow` entries.
 
 Telegram then presents credential, business-input, and execution-authorization
 cards as native Web App buttons inside its own WebView instead of opening an

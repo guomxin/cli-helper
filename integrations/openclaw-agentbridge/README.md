@@ -61,11 +61,21 @@ openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
 openclaw config set "mcp.servers.agentbridge.timeout" 150
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
+openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
 openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
+
+Restricted profiles such as `tools.profile: "coding"` do not expose native
+third-party plugin tools by default. Keep the restricted profile and add only
+`agentbridge-interactions` through `tools.alsoAllow`; do not use
+`group:plugins`. If `tools.alsoAllow` already contains other entries, merge
+this plugin id into the existing array instead of replacing it. A plugin can
+report `loaded` while all of its tools are still filtered, so acceptance must
+also confirm that `agentbridge_identity_status` is visible in a real bound
+private session.
 
 Linked plugin source changes require a real Gateway process restart. A config
 hot reload can leave Node's previously imported module in memory. Verify the

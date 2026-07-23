@@ -479,6 +479,7 @@ openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridg
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
+openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
 openclaw plugins inspect agentbridge-interactions --runtime --json
@@ -491,6 +492,12 @@ openclaw gateway status --deep --require-rpc
 PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
 `gateway status --deep --require-rpc --json` 的 `environmentValueSources` 必须包含
 `NODE_EXTRA_CA_CERTS`，再通过真实 MCP 只读调用确认新进程已信任内部 CA。
+
+`tools.profile: "coding"` 不会自动暴露原生第三方插件工具。保留该限制型 profile，
+并通过 `tools.alsoAllow` 仅放行 `agentbridge-interactions`；不要改为
+`group:plugins`。如果已有其他 `alsoAllow` 项，应合并数组后再写入。除插件
+`loaded` 状态外，还必须在真实绑定的私聊会话中调用
+`agentbridge_identity_status`，防止“插件已加载但工具仍被策略过滤”的假通过。
 
 `allowedCardOrigins` 必须是精确 HTTPS 来源，不允许路径、通配符或从 MCP 结果自动学习。认证、业务字段和执行授权三类卡片在 Telegram 中都使用 Web App；卡片页面只通过自托管的无数据桥发送 ready、expand 和 close，不加载可读取表单的第三方脚本。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
 

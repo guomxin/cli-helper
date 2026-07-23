@@ -83,6 +83,12 @@ AGENTBRIDGE_MCP_TOKEN_WECHAT_USER=abmcp_...
 
 ```json
 {
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": [
+      "agentbridge-interactions"
+    ]
+  },
   "plugins": {
     "entries": {
       "agentbridge-interactions": {
@@ -114,6 +120,12 @@ AGENTBRIDGE_MCP_TOKEN_WECHAT_USER=abmcp_...
   }
 }
 ```
+
+`coding` 等限制型 profile 不会默认开放原生第三方插件工具。这里用
+`alsoAllow` 只放行 AgentBridge，不使用会同时开放其他插件的
+`group:plugins`。若已有其他 `alsoAllow` 项，应合并保留。仅看到插件状态
+`loaded` 还不够，真实验收必须在绑定的私聊会话中成功调用
+`agentbridge_identity_status`。
 
 同一个 Gateway 连接多个机器人账号时，可在绑定中增加 `accountId`，形成
 `channel + accountId + senderId` 精确匹配；没有 `accountId` 的配置作为该渠道、

@@ -153,8 +153,15 @@ openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\
 openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
 openclaw config set "mcp.servers.agentbridge.timeout" 150
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
+openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 openclaw plugins enable agentbridge-interactions
 ```
+
+`tools.profile: "coding"` 会过滤原生第三方插件工具，因此必须用
+`tools.alsoAllow` 精确放行 `agentbridge-interactions`。不要为了省事放行
+`group:plugins`；如果已有其他 `alsoAllow` 项，应合并数组后再写入。插件状态为
+`loaded` 只表示代码已加载，最终还要在真实私聊身份会话中确认
+`agentbridge_identity_status` 可调用。
 
 完整重启 Gateway 后至少等待 120 秒，再以深度 RPC、监听端口和插件版本日志判断结果。
 
