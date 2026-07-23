@@ -1,4 +1,5 @@
 import {
+  appendPresentationLinks,
   buildPresentation,
   collectPublicInteractionReferences,
   isInteractionExpired,
@@ -631,7 +632,9 @@ export class InteractionCoordinator {
               presentation,
               ctx: { ...baseContext, payload: initialPayload },
             })
-          : initialPayload;
+          : presentation
+            ? appendPresentationLinks(initialPayload, presentation)
+            : initialPayload;
       if (!payload) {
         return false;
       }

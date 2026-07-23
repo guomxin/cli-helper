@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  appendPresentationLinks,
   buildPresentation,
   isPrivateSessionKey,
   processToolResult,
@@ -92,6 +93,22 @@ test("renders Telegram HTTPS with embedded and browser buttons", () => {
   assert.equal(httpsButtons[1].label, "浏览器打开");
   assert.equal(httpsButtons[1].url, "https://cards.example.test/auth/token");
   assert.equal("webApp" in httpsButtons[1], false);
+});
+
+test("renders trusted links as text for channels without presentation support", () => {
+  const presentation = buildPresentation(
+    [processToolResult(toolResult(), [CARD_ORIGIN]).interactions[0]],
+    "openclaw-weixin",
+  );
+  const payload = appendPresentationLinks(
+    { text: "请继续完成安全操作。", presentation },
+    presentation,
+  );
+
+  assert.match(payload.text, /请继续完成安全操作/);
+  assert.match(payload.text, /安全登录/);
+  assert.equal(payload.text.includes(CARD_URL), true);
+  assert.equal(payload.presentation, presentation);
 });
 
 test("adds a browser fallback for every Telegram trusted card type", () => {

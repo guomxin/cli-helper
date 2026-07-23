@@ -348,6 +348,40 @@ export function buildPresentation(interactions, channel) {
   };
 }
 
+export function appendPresentationLinks(payload, presentation) {
+  if (!isRecord(payload) || !isRecord(presentation)) {
+    return payload;
+  }
+  const text = typeof payload.text === "string" ? payload.text : "";
+  const links = [];
+  const seen = new Set();
+  for (const block of Array.isArray(presentation.blocks)
+    ? presentation.blocks
+    : []) {
+    for (const button of isRecord(block) && Array.isArray(block.buttons)
+      ? block.buttons
+      : []) {
+      const url = trustedButtonUrl(button);
+      if (!url || seen.has(url) || text.includes(url)) {
+        continue;
+      }
+      seen.add(url);
+      links.push({
+        label: safeString(button.label, 80) || "打开安全页面",
+        url,
+      });
+    }
+  }
+  if (links.length === 0) {
+    return payload;
+  }
+  const linkText = links.map((item) => `${item.label}：${item.url}`).join("\n");
+  return {
+    ...payload,
+    text: text ? `${text}\n\n${linkText}` : linkText,
+  };
+}
+
 export function mergePresentations(existing, agentbridge) {
   if (!existing || !Array.isArray(existing.blocks)) {
     return agentbridge;
@@ -360,6 +394,28 @@ export function mergePresentations(existing, agentbridge) {
       ...agentbridge.blocks,
     ],
   };
+}
+
+function trustedButtonUrl(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const direct = safeString(value.url, 4096);
+  const webApp = isRecord(value.webApp)
+    ? safeString(value.webApp.url, 4096)
+    : null;
+  const candidate = direct || webApp;
+  if (!candidate) {
+    return null;
+  }
+  try {
+    const parsed = new URL(candidate);
+    return ["http:", "https:"].includes(parsed.protocol)
+      ? parsed.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function contextText(interaction) {

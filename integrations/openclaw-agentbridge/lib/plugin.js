@@ -1,14 +1,18 @@
 import { resolvePluginConfig } from "./config.js";
 import { InteractionCoordinator, presentationForRecords } from "./coordinator.js";
 import { AgentBridgeIdentityRouter } from "./identity-router.js";
-import { isPrivateSessionKey, mergePresentations } from "./interaction.js";
+import {
+  appendPresentationLinks,
+  isPrivateSessionKey,
+  mergePresentations,
+} from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 import {
   AGENTBRIDGE_PROXY_TOOL_NAMES,
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.2.1";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -105,14 +109,20 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     if (!presentation) {
       return undefined;
     }
+    const channel = event.channel || context.channelId;
+    const mergedPresentation = mergePresentations(
+      event.payload.presentation,
+      presentation,
+    );
+    const payload = {
+      ...event.payload,
+      presentation: mergedPresentation,
+    };
     return {
-      payload: {
-        ...event.payload,
-        presentation: mergePresentations(
-          event.payload.presentation,
-          presentation,
-        ),
-      },
+      payload:
+        channel === "openclaw-weixin"
+          ? appendPresentationLinks(payload, presentation)
+          : payload,
     };
   });
 

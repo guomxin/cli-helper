@@ -4,7 +4,7 @@ This native OpenClaw plugin recognizes `agentbridge.interaction.v1` envelopes
 returned by AgentBridge MCP tools and renders trusted card buttons in private
 conversations.
 
-Version 0.2 also supports multiple Telegram users in one OpenClaw Gateway. It
+Version 0.2 also supports multiple messaging identities in one OpenClaw Gateway. It
 registers the complete AgentBridge MCP catalog as native OpenClaw tools and
 selects an environment-backed Bearer token from trusted runtime sender context,
 never from model tool arguments. See
@@ -52,7 +52,7 @@ Security behavior is intentionally fail closed:
 
 The commands below retain the legacy single-user MCP configuration for existing
 installations. Do not use one global `mcp.servers.agentbridge` Bearer token for
-multiple Telegram users. Multi-user deployments configure plugin `mcpUrl` plus
+multiple messaging users. Multi-user deployments configure plugin `mcpUrl` plus
 `identityBindings`, then remove the global MCP server entry.
 
 ```powershell
@@ -72,7 +72,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.2.0, ...)
+AgentBridge interaction plugin registered (version=0.2.1, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -113,8 +113,14 @@ embedded path. The same private message also includes a host-rendered
 "浏览器打开" URL button for Android Telegram clients that reject a user-installed
 internal CA in their embedded WebView. Both buttons carry the same short-lived
 trusted URL only in host presentation metadata; the URL remains absent from
-model-visible results and message text. Private HTTP remains a portable-link
-fallback for local development only. AgentBridge pages use a small self-hosted
+model-visible results. Private HTTP remains a portable-link fallback for local
+development only.
+
+The official Tencent WeChat adapter exposes text and media delivery but no
+presentation renderer. For WeChat and any other adapter without
+`renderPresentation`, the trusted host appends the action label and short-lived
+HTTP(S) URL directly to the outbound text. The URL still never enters the model
+result, and Telegram continues to use native buttons. AgentBridge pages use a small self-hosted
 lifecycle bridge
 that signals ready, expand, and close without reading or forwarding form data.
 The plugin records the trusted private delivery route that initiated an

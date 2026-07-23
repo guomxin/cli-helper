@@ -87,6 +87,38 @@ test("routes two Telegram users to different MCP bearer tokens", async () => {
   assert.equal(JSON.stringify(identityB).includes("token-b"), false);
 });
 
+test("routes a trusted WeChat sender and bot account to its own token", async () => {
+  const requests = [];
+  const senderId = "wechat-user-1002@im.wechat";
+  const accountId = "wechat-bot-account";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+        label: "WeChat OA User",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests,
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+  const identity = router.resolveToolContext({
+    sessionKey: `agent:main:openclaw-weixin:direct:${senderId}`,
+    messageChannel: "openclaw-weixin",
+    requesterSenderId: senderId,
+    agentAccountId: accountId,
+  });
+
+  assert.equal(identity.bound, true);
+  await identity.client.callTool("oa_session_status", {});
+  assert.equal(requests[0].authorization, "Bearer wechat-token");
+});
+
 test("fails closed when one OpenClaw session changes Telegram identity", () => {
   const router = createRouter({
     requests: [],
@@ -223,9 +255,14 @@ function toolContext(
   };
 }
 
-function createRouter({ requests, env, responseResult = null }) {
+function createRouter({
+  requests,
+  env,
+  responseResult = null,
+  config = multiUserConfig(),
+}) {
   return new AgentBridgeIdentityRouter({
-    config: multiUserConfig(),
+    config,
     hostConfig: {},
     env,
     fetchImpl: async (_url, options) => {
