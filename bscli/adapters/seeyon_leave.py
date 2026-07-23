@@ -8,6 +8,8 @@ import time
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from bscli.adapters.seeyon_cap4 import wait_for_cap4_interactive
+
 
 LEAVE_PREPARE_CAPABILITY = "oa.leave.prepare"
 LEAVE_SAVE_CAPABILITY = "oa.leave.save_draft"
@@ -378,26 +380,12 @@ def _open_and_validate_form(worker, template: dict):
 
 
 def _dismiss_message_notices(page, frame) -> None:
-    deadline = time.monotonic() + 4
-    quiet_since = None
-    while time.monotonic() < deadline:
-        clicked = False
-        for root in (page, frame):
-            buttons = root.locator('[id$="ok_msg_btn_first"]:visible')
-            if buttons.count():
-                buttons.first.click(timeout=3000)
-                clicked = True
-        masks_visible = any(
-            root.locator(".mask.mask_msg:visible").count() for root in (page, frame)
-        )
-        if clicked or masks_visible:
-            quiet_since = None
-        else:
-            quiet_since = quiet_since or time.monotonic()
-            if time.monotonic() - quiet_since >= 0.6:
-                return
-        page.wait_for_timeout(100)
-    raise LeaveContractMismatch("The OA leave form message overlay did not settle.")
+    wait_for_cap4_interactive(
+        page,
+        frame,
+        error_type=LeaveContractMismatch,
+        context="The OA leave form",
+    )
 
 
 def _wait_for_cap4_frame(page, *, timeout_seconds: float):

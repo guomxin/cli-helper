@@ -56,6 +56,16 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(tool, smoke)
 
+    def test_openclaw_config_is_read_as_utf8(self) -> None:
+        script = (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(encoding="utf-8")
+
+        for marker in (
+            "-Encoding UTF8",
+            '"agentbridge-interactions"',
+            '"identityBindings"',
+            '"mcpUrl"',
+        ):
+            self.assertIn(marker, script)
 
     def test_pending_action_preflight_is_read_only_by_construction(self) -> None:
         script = (

@@ -8,6 +8,8 @@ import time
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from bscli.adapters.seeyon_cap4 import wait_for_cap4_interactive
+
 
 MISSED_PUNCH_PREPARE_CAPABILITY = "oa.missed_punch.prepare"
 MISSED_PUNCH_SAVE_CAPABILITY = "oa.missed_punch.save_draft"
@@ -526,6 +528,7 @@ def _resolve_template(template_list: dict) -> dict:
 def _open_and_validate_draft_form(worker, template: dict):
     page = worker.goto(str(template["href"]), timeout_seconds=60)
     frame = _wait_for_draft_frame(page, timeout_seconds=20)
+    _wait_for_interactive_draft_form(page, frame)
     _validate_draft_controls(page, frame)
     if _frame_module_id(frame.url) != MISSED_PUNCH_TEMPLATE_ID:
         raise MissedPunchContractMismatch(
@@ -577,6 +580,15 @@ def _validate_draft_controls(page, frame) -> None:
             pass
 
 
+def _wait_for_interactive_draft_form(page, frame) -> None:
+    wait_for_cap4_interactive(
+        page,
+        frame,
+        error_type=MissedPunchContractMismatch,
+        context="The OA missed-punch form",
+    )
+
+
 def _fill_missed_punch_form(page, frame, inputs: dict) -> None:
     frame.evaluate(
         r"""
@@ -597,10 +609,14 @@ def _fill_missed_punch_form(page, frame, inputs: dict) -> None:
         """,
         {"start": inputs["start_time"], "end": inputs["end_time"]},
     )
+    _wait_for_interactive_draft_form(page, frame)
     frame.locator("#field0010_id input:not([readonly])").first.fill(inputs["location"])
+    _wait_for_interactive_draft_form(page, frame)
     frame.locator("#field0011_id").click()
     frame.get_by_text(inputs["reason_type"], exact=True).last.click()
+    _wait_for_interactive_draft_form(page, frame)
     frame.locator("#field0012_id textarea:visible").first.fill(inputs["explanation"])
+    _wait_for_interactive_draft_form(page, frame)
     page.wait_for_timeout(600)
 
 

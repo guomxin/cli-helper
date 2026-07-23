@@ -27,7 +27,7 @@ if (-not (Test-Path -LiteralPath $OpenClawConfig -PathType Leaf)) {
     throw "OpenClaw configuration was not found"
 }
 try {
-    $config = Get-Content -LiteralPath $OpenClawConfig -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath $OpenClawConfig -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 catch {
     throw "OpenClaw configuration is invalid JSON"
@@ -99,16 +99,43 @@ function Resolve-ConfigString {
 
 $servers = Get-PropertyValue -Object (Get-PropertyValue -Object $config -Name "mcp") -Name "servers"
 $server = Get-PropertyValue -Object $servers -Name $ServerName
-if (-not $server) {
-    throw "OpenClaw MCP server was not found: $ServerName"
+if ($server) {
+    $headers = Get-PropertyValue -Object $server -Name "headers"
+    $url = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $server -Name "url"))
+    $authorization = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $headers -Name "Authorization"))
+    $timeout = Get-PropertyValue -Object $server -Name "timeout"
 }
-$headers = Get-PropertyValue -Object $server -Name "headers"
-$url = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $server -Name "url"))
-$authorization = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $headers -Name "Authorization"))
+else {
+    $plugins = Get-PropertyValue -Object $config -Name "plugins"
+    $entries = Get-PropertyValue -Object $plugins -Name "entries"
+    $plugin = Get-PropertyValue -Object $entries -Name "agentbridge-interactions"
+    $pluginConfig = Get-PropertyValue -Object $plugin -Name "config"
+    $configuredUrl = [string](Get-PropertyValue -Object $pluginConfig -Name "mcpUrl")
+    if ([string]::IsNullOrWhiteSpace($configuredUrl)) {
+        throw "OpenClaw AgentBridge MCP configuration was not found"
+    }
+    $url = Resolve-ConfigString -Value $configuredUrl
+    $timeout = Get-PropertyValue -Object $pluginConfig -Name "mcpTimeoutSeconds"
+    $authorization = $null
+    $bindings = Get-PropertyValue -Object $pluginConfig -Name "identityBindings"
+    foreach ($binding in @($bindings)) {
+        $tokenEnv = [string](Get-PropertyValue -Object $binding -Name "tokenEnv")
+        if ([string]::IsNullOrWhiteSpace($tokenEnv)) {
+            continue
+        }
+        $token = Resolve-EnvironmentValue -Name $tokenEnv
+        if (-not [string]::IsNullOrWhiteSpace($token)) {
+            $authorization = "Bearer $token"
+            break
+        }
+    }
+    if (-not $authorization) {
+        throw "No active AgentBridge identity binding token was found"
+    }
+}
 if (-not $url -or -not $authorization.StartsWith("Bearer ")) {
     throw "Resolved MCP configuration is incomplete"
 }
-$timeout = Get-PropertyValue -Object $server -Name "timeout"
 $resolvedServer = [ordered]@{
     url = $url
     timeout = if ($null -ne $timeout) { [int]$timeout } else { 60 }

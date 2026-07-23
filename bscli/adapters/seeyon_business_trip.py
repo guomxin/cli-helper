@@ -8,6 +8,8 @@ import time
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from bscli.adapters.seeyon_cap4 import wait_for_cap4_interactive
+
 
 BUSINESS_TRIP_PREPARE_CAPABILITY = "oa.business_trip.prepare"
 BUSINESS_TRIP_SAVE_CAPABILITY = "oa.business_trip.save_draft"
@@ -413,6 +415,7 @@ def _resolve_template(template_list: dict) -> dict:
 def _open_and_validate_form(worker, template: dict):
     page = worker.goto(str(template["href"]), timeout_seconds=60)
     frame = _wait_for_cap4_frame(page, timeout_seconds=20)
+    _wait_for_interactive_form(page, frame)
     _validate_form_controls(page, frame)
     if _frame_module_id(frame.url) != BUSINESS_TRIP_TEMPLATE_ID:
         raise BusinessTripContractMismatch(
@@ -464,6 +467,15 @@ def _validate_optional_inputs(page, inputs: dict) -> None:
         )
 
 
+def _wait_for_interactive_form(page, frame) -> None:
+    wait_for_cap4_interactive(
+        page,
+        frame,
+        error_type=BusinessTripContractMismatch,
+        context="The OA business-trip form",
+    )
+
+
 def _fill_business_trip_form(page, frame, inputs: dict) -> None:
     frame.evaluate(
         r"""
@@ -484,19 +496,24 @@ def _fill_business_trip_form(page, frame, inputs: dict) -> None:
         """,
         {"start": inputs["start_time"], "end": inputs["end_time"]},
     )
+    _wait_for_interactive_form(page, frame)
     frame.locator("#field0023_id input:not([readonly])").fill(inputs["origin"])
     frame.locator("#field0026_id input:not([readonly])").fill(inputs["destination"])
     frame.locator("#field0009_id textarea:visible").first.fill(inputs["reason"])
+    _wait_for_interactive_form(page, frame)
     frame.locator("#field0027_id").click()
     frame.get_by_text(inputs["travel_mode"], exact=True).last.click()
+    _wait_for_interactive_form(page, frame)
     supervisor_label = "是" if inputs["has_direct_supervisor"] else "否"
     frame.locator("#field0010_id").get_by_text(supervisor_label, exact=True).last.click()
+    _wait_for_interactive_form(page, frame)
     if "trip_days" in inputs:
         _fill_decimal(frame, "field0029", inputs["trip_days"])
     if "trip_hours" in inputs:
         _fill_decimal(frame, "field0022", inputs["trip_hours"])
     if "note" in inputs:
         page.locator("#content_coll").fill(inputs["note"])
+    _wait_for_interactive_form(page, frame)
     page.wait_for_timeout(600)
 
 
