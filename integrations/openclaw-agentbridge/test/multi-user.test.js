@@ -119,6 +119,181 @@ test("routes a trusted WeChat sender and bot account to its own token", async ()
   assert.equal(requests[0].authorization, "Bearer wechat-token");
 });
 
+test("reuses the trusted inbound binding when WeChat omits SenderId", () => {
+  const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
+  const accountId = "6eaa3d9b1434-im-bot";
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:o9cq806qdyig1p-49qijq1wlpimo@im.wechat";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+        label: "WeChat OA User",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+
+  assert.equal(
+    router.bindSession({
+      sessionKey,
+      channel: "openclaw-weixin",
+      senderId,
+      accountId,
+    }),
+    true,
+  );
+  const identity = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "openclaw-weixin",
+    agentAccountId: accountId,
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.label, "WeChat OA User");
+});
+
+test("recovers a WeChat private sender from matching delivery context", () => {
+  const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
+  const accountId = "6eaa3d9b1434-im-bot";
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:o9cq806qdyig1p-49qijq1wlpimo@im.wechat";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+        label: "WeChat OA User",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+  const identity = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "openclaw-weixin",
+    agentAccountId: accountId,
+    deliveryContext: {
+      channel: "openclaw-weixin",
+      to: senderId,
+      accountId,
+    },
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.label, "WeChat OA User");
+});
+
+test("rejects WeChat delivery fallback outside the matching private chat", () => {
+  const senderId = "wechat-user-1002@im.wechat";
+  const accountId = "wechat-bot-account";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+  const contexts = [
+    {
+      sessionKey:
+        "agent:main:openclaw-weixin:direct:another-user@im.wechat",
+      messageChannel: "openclaw-weixin",
+      agentAccountId: accountId,
+      deliveryContext: {
+        channel: "openclaw-weixin",
+        to: senderId,
+        accountId,
+      },
+    },
+    {
+      sessionKey: `agent:main:openclaw-weixin:group:${senderId}`,
+      messageChannel: "openclaw-weixin",
+      agentAccountId: accountId,
+      deliveryContext: {
+        channel: "openclaw-weixin",
+        to: senderId,
+        accountId,
+      },
+    },
+    {
+      sessionKey: `agent:main:telegram:direct:${senderId}`,
+      messageChannel: "telegram",
+      agentAccountId: accountId,
+      deliveryContext: {
+        channel: "telegram",
+        to: senderId,
+        accountId,
+      },
+    },
+  ];
+
+  for (const context of contexts) {
+    const identity = router.resolveToolContext(context);
+    assert.equal(identity.bound, false);
+  }
+});
+
+test("fails closed when pinned session account changes", () => {
+  const senderId = "wechat-user-1002@im.wechat";
+  const accountId = "wechat-bot-account";
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-1002@im.wechat";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+
+  assert.equal(
+    router.bindSession({
+      sessionKey,
+      channel: "openclaw-weixin",
+      senderId,
+      accountId,
+    }),
+    true,
+  );
+  const identity = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "openclaw-weixin",
+    agentAccountId: "another-bot-account",
+  });
+
+  assert.equal(identity.bound, false);
+  assert.equal(identity.reason, "session_identity_conflict");
+  assert.equal(router.clientForSession(sessionKey), null);
+});
 test("fails closed when one OpenClaw session changes Telegram identity", () => {
   const router = createRouter({
     requests: [],

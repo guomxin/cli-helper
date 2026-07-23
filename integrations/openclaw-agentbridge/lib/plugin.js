@@ -12,7 +12,7 @@ import {
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.2";
+const PLUGIN_VERSION = "0.2.3";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);

@@ -25,11 +25,38 @@ export class AgentBridgeIdentityRouter {
   }
 
   resolveToolContext(context) {
+    const deliveryContext =
+      context.deliveryContext &&
+      typeof context.deliveryContext === "object" &&
+      !Array.isArray(context.deliveryContext)
+        ? context.deliveryContext
+        : {};
+    const sessionKey = context.sessionKey;
+    const channel = context.messageChannel || deliveryContext.channel;
+    const accountId = context.agentAccountId || deliveryContext.accountId;
+    const senderId =
+      context.requesterSenderId ||
+      trustedDirectDeliverySender({
+        sessionKey,
+        channel,
+        deliveryTo: deliveryContext.to,
+      });
+
+    if (!senderId) {
+      const pinned = this.resolvePinnedSession({
+        sessionKey,
+        channel,
+        accountId,
+      });
+      if (pinned) {
+        return pinned;
+      }
+    }
     return this.resolve({
-      sessionKey: context.sessionKey,
-      channel: context.messageChannel,
-      senderId: context.requesterSenderId,
-      accountId: context.agentAccountId,
+      sessionKey,
+      channel,
+      senderId,
+      accountId,
     });
   }
 
@@ -70,6 +97,41 @@ export class AgentBridgeIdentityRouter {
 
   removeSession(sessionKey) {
     this.sessionBindings.delete(sessionKey);
+  }
+
+  resolvePinnedSession({ sessionKey, channel, accountId }) {
+    if (!isPrivateSessionKey(sessionKey) || !this.endpoint) {
+      return null;
+    }
+    const bindingKey = this.sessionBindings.get(sessionKey);
+    if (!bindingKey || bindingKey === "conflict") {
+      return null;
+    }
+    const binding = this.bindingsByKey.get(bindingKey);
+    if (!binding) {
+      return null;
+    }
+    const normalizedChannel = identityPart(channel, true);
+    const normalizedAccountId = identityPart(accountId, false);
+    if (
+      (normalizedChannel && normalizedChannel !== binding.channel) ||
+      (normalizedAccountId &&
+        binding.accountId !== null &&
+        normalizedAccountId !== binding.accountId)
+    ) {
+      this.sessionBindings.set(sessionKey, "conflict");
+      return unbound("session_identity_conflict");
+    }
+    const client = this.clientForBinding(binding);
+    if (!client) {
+      return unbound("identity_token_unavailable");
+    }
+    return Object.freeze({
+      bound: true,
+      binding,
+      client,
+      reason: null,
+    });
   }
 
   resolve({
@@ -142,4 +204,28 @@ function unbound(reason) {
     client: null,
     reason,
   });
+}
+
+function trustedDirectDeliverySender({ sessionKey, channel, deliveryTo }) {
+  if (
+    identityPart(channel, true) !== "openclaw-weixin" ||
+    typeof sessionKey !== "string" ||
+    typeof deliveryTo !== "string"
+  ) {
+    return null;
+  }
+  const match = sessionKey
+    .trim()
+    .match(/^agent:[^:]+:openclaw-weixin:direct:(.+)$/i);
+  const peer = identityPart(match?.[1], true);
+  const target = identityPart(deliveryTo, true);
+  return peer && target && peer === target ? deliveryTo.trim() : null;
+}
+
+function identityPart(value, lowercase) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value).trim().slice(0, 512);
+  return normalized ? (lowercase ? normalized.toLowerCase() : normalized) : null;
 }
