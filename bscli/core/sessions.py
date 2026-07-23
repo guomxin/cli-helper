@@ -75,11 +75,9 @@ class SessionRegistry:
                 raise SessionPrincipalMismatch(message)
             if requested_principal and not bound_principal:
                 existing = self._update_expected(existing["session_id"], expected_principal_ref)
-            Path(existing["profile_path"]).mkdir(parents=True, exist_ok=True)
             return existing
 
         profile_path = self._profile_path(user_subject=user_subject, system_id=system_id)
-        profile_path.mkdir(parents=True, exist_ok=True)
         now = _utc_now()
         session_id = str(uuid4())
         with self._connect() as connection:

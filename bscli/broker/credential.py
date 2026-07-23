@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from bscli.adapters.seeyon_central import (
@@ -7,9 +8,13 @@ from bscli.adapters.seeyon_central import (
     SeeyonLoginContractMismatch,
     SeeyonUnsupportedAuthMethod,
 )
+from bscli.browser.central import CentralProfileUnavailableError
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.session_secrets import SessionSecretError, SessionStateStore
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 class CredentialBroker:
@@ -128,6 +133,13 @@ class CredentialBroker:
                 code="SESSION_STATE_UNAVAILABLE",
                 message="The encrypted OA session could not be saved.",
             )
+        except CentralProfileUnavailableError:
+            return self._fail(
+                challenge_id,
+                session,
+                code="SESSION_PROFILE_UNAVAILABLE",
+                message="The managed OA browser profile is not writable.",
+            )
         except (KeyError, TypeError, ValueError):
             return self._fail(
                 challenge_id,
@@ -136,6 +148,11 @@ class CredentialBroker:
                 message="The authentication request did not match the registered contract.",
             )
         except Exception:
+            logger.exception(
+                "Credential Broker failed unexpectedly for challenge %s and session %s",
+                challenge_id,
+                session.get("session_id") if session else None,
+            )
             return self._fail(
                 challenge_id,
                 session,

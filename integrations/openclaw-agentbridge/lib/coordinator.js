@@ -645,7 +645,7 @@ export class InteractionCoordinator {
       const adapter = await this.api.runtime.channel.outbound.loadAdapter(
         route.channel,
       );
-      if (!adapter?.sendPayload) {
+      if (!adapter?.sendPayload && !adapter?.sendText) {
         return false;
       }
       const text =
@@ -669,6 +669,16 @@ export class InteractionCoordinator {
             : initialPayload;
       if (!payload) {
         return false;
+      }
+      if (!adapter.sendPayload) {
+        if (presentation) {
+          return false;
+        }
+        await adapter.sendText({
+          ...baseContext,
+          text: typeof payload.text === "string" ? payload.text : text,
+        });
+        return true;
       }
       await adapter.sendPayload({
         ...baseContext,

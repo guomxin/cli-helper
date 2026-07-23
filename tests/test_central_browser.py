@@ -7,7 +7,11 @@ from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
     SeeyonSessionCheckUnavailable,
 )
-from bscli.browser.central import CentralBrowserWorker, CentralProfileInUseError
+from bscli.browser.central import (
+    CentralBrowserWorker,
+    CentralProfileInUseError,
+    CentralProfileUnavailableError,
+)
 
 
 class CentralBrowserTests(unittest.TestCase):
@@ -34,6 +38,23 @@ class CentralBrowserTests(unittest.TestCase):
             self.assertEqual(controller.context.request.calls[0]["method"], "GET")
             self.assertEqual(controller.context.request.calls[0]["max_redirects"], 0)
             self.assertTrue(controller.stopped)
+
+    def test_worker_reports_an_unwritable_profile_before_launching_browser(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+            worker._lease.acquire = lambda: (_ for _ in ()).throw(
+                PermissionError("profile denied")
+            )
+
+            with self.assertRaisesRegex(CentralProfileUnavailableError, "not writable"):
+                worker.start()
+
+            self.assertFalse(controller.chromium.launches)
 
     def test_worker_parses_json_body_when_server_uses_text_content_type(self):
         with TemporaryDirectory() as tmp:

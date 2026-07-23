@@ -14,6 +14,10 @@ class CentralProfileInUseError(RuntimeError):
     pass
 
 
+class CentralProfileUnavailableError(RuntimeError):
+    pass
+
+
 class CentralBrowserWorker:
     def __init__(
         self,
@@ -42,8 +46,13 @@ class CentralBrowserWorker:
     def start(self) -> CentralBrowserWorker:
         if self._context is not None:
             return self
-        self.profile_path.mkdir(parents=True, exist_ok=True)
-        self._lease.acquire()
+        try:
+            self.profile_path.mkdir(parents=True, exist_ok=True)
+            self._lease.acquire()
+        except OSError as exc:
+            raise CentralProfileUnavailableError(
+                "central browser profile is not writable by the service account"
+            ) from exc
         try:
             self._controller = self._playwright_starter()
             launch_options: dict[str, Any] = {"headless": self.headless}

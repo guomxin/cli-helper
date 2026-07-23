@@ -428,6 +428,7 @@ def _challenge_ttl_seconds(challenge: dict) -> int:
 
 def _safe_failure_message(code: str) -> str:
     messages = {
+        "SESSION_PROFILE_UNAVAILABLE": "中心受控浏览器的用户目录不可写。",
         "PRINCIPAL_MISMATCH": "登录身份与预期身份不一致，会话已被隔离。",
         "UNSUPPORTED_AUTH_METHOD": "OA 登录需要当前认证卡片不支持的验证方式。",
         "LOGIN_CONTRACT_MISMATCH": "OA 登录页面结构已变化，中心服务已安全停止。",

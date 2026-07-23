@@ -67,7 +67,7 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(listed["count"], 1)
         self.assertNotIn("bearerToken", listed)
         self.assertNotIn(issued["bearerToken"], json.dumps(listed))
-        self.assertTrue(profiles_exists)
+        self.assertFalse(profiles_exists)
 
     def test_identity_token_can_be_revoked(self):
         with TemporaryDirectory() as tmp:

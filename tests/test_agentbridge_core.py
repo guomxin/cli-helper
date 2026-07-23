@@ -179,7 +179,7 @@ class AgentBridgeCoreTests(unittest.TestCase):
             )
 
             self.assertNotEqual(user_a["profile_path"], user_b["profile_path"])
-            self.assertTrue(Path(user_a["profile_path"]).is_dir())
+            self.assertFalse(Path(user_a["profile_path"]).exists())
             active = registry.activate(user_a["session_id"], observed_principal_ref="Alice")
             self.assertEqual(active["state"], "active")
 

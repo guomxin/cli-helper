@@ -82,7 +82,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.2.8, ...)
+AgentBridge interaction plugin registered (version=0.2.9, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

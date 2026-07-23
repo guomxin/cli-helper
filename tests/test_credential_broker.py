@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from bscli.broker.credential import CredentialBroker
+from bscli.browser.central import CentralProfileUnavailableError
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeAccessDenied
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionRegistry
@@ -123,6 +124,42 @@ class CredentialBrokerTests(unittest.TestCase):
             self.assertEqual(sessions.get(session["session_id"])["state"], "quarantined")
             self.assertEqual(challenges.get(challenge["challenge_id"])["state"], "failed")
 
+    def test_broker_reports_an_unwritable_managed_browser_profile(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            challenges = AuthChallengeStore(root / "agentbridge.db")
+            challenge = _create_challenge(challenges, session)
+            csrf = challenges.issue_csrf(challenge["challenge_id"])
+            broker = CredentialBroker(
+                challenge_store=challenges,
+                session_registry=sessions,
+                session_state_store=SessionStateStore(
+                    root / "session-secrets",
+                    protector=ReversingProtector(),
+                ),
+                adapter_factory=lambda _challenge: FakeLoginAdapter(
+                    observed_principal="Alice"
+                ),
+                worker_factory=lambda _session, _adapter: FailingProfileWorker(),
+            )
+
+            result = broker.authenticate(
+                challenge_id=challenge["challenge_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                credentials={"username": "alice", "password": "secret"},
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["code"], "SESSION_PROFILE_UNAVAILABLE")
+            self.assertEqual(sessions.get(session["session_id"])["state"], "expired")
+
 
 def _create_challenge(store: AuthChallengeStore, session: dict) -> dict:
     return store.create(
@@ -177,6 +214,14 @@ class FakeLoginAdapter:
             "observed_principal_ref": self.observed_principal,
             "templates": {"count": 2, "transport": "central_http_session"},
         }
+
+
+class FailingProfileWorker:
+    def __enter__(self):
+        raise CentralProfileUnavailableError("profile is not writable")
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return None
 
 
 class FakeWorker:

@@ -1323,6 +1323,48 @@ test("delivers a final trusted status directly without waking the model", async 
   assert.equal(harness.heartbeats.length, 0);
 });
 
+test("delivers a final trusted status through a text-only channel adapter", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sentTexts = [];
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    async sendText(context) {
+      sentTexts.push(context);
+      return { channel: "openclaw-weixin", messageId: "message-1" };
+    },
+  });
+  const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user-1";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    channel: "openclaw-weixin",
+    to: "wechat-user-1",
+  });
+
+  await coordinator.notify(
+    {
+      sessionKey,
+      interaction: { interactionId: "interaction-completed-123456" },
+    },
+    "succeeded",
+    null,
+  );
+
+  assert.equal(sentTexts.length, 1);
+  assert.equal(sentTexts[0].to, "wechat-user-1");
+  assert.equal(
+    sentTexts[0].text,
+    "AgentBridge \u5df2\u5b8c\u6210\u672c\u6b21\u5b89\u5168\u64cd\u4f5c\u3002",
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+  assert.equal(harness.heartbeats.length, 0);
+});
+
 test("explains an unknown OA write result without implying an automatic retry", async () => {
   const harness = fakeApi({
     autoPoll: false,
