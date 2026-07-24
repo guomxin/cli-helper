@@ -1043,9 +1043,36 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 本轮没有创建、审批或提交 OA 业务数据。Android 手机上的真实备用按钮打开与卡片
   完成回调等待用户下一张可信卡验收。
 
+## 15.17 2026-07-24 双用户隔离与普通协同真实验收
+
+- 当前 OpenClaw 以两条显式身份绑定接入同一 AgentBridge：Telegram
+  `7052061588` 绑定 `guomao` / 辛国茂，微信私聊绑定 `lishiyu` / 李世玉；
+  两者使用独立 MCP Token、预期 OA 姓名和 scope。李世玉 Token 不含会议创建权限；
+- 两个中央 OA 会话均通过实时探测，状态为 active，下游身份分别为辛国茂和李世玉；
+  会话 ID 和浏览器 Profile 目录不同。同一时段只读返回辛国茂 2 条待办、李世玉
+  9 条待办，操作分别写入 `guomao` 和 `lishiyu` 账本分区；
+- 隔离盘点发现历史 `guomao` Profile 目录仍为 `0755`，新建的 `lishiyu` 目录为
+  `0700`。`CentralBrowserWorker.start()` 已改为在浏览器启动前对新旧目录统一执行
+  `chmod 0700`，失败时关闭执行。提交 `443e750` 已推送 GitHub，发布级验证为
+  Python `293 passed, 3 skipped, 19 subtests passed`、OpenClaw `62/62` 和 npm
+  pack dry-run 通过；Linux Release `443e750fedad` 已部署，37 个 MCP 工具完整；
+- 部署后分别实时探测两个 OA 会话，两个 Profile 均已确认 `0700`，所有者仍为统一的
+  Linux `agentbridge` 服务账户。该结果满足当前单服务 PoC 的目录最小权限要求，
+  但不等价于每用户独立 OS/容器 Worker；后者仍是生产隔离门槛；
+- 2026-07-24 14:14 的微信真实入站只调用李世玉的
+  `oa.workflow.pending.list`，结果发回原微信，本轮没有对李世玉待办执行任何写操作；
+- 2026-07-24 14:15 的 Telegram 真实入站对辛国茂待办
+  “关于征集济南市大数据产业专家入库工作的通知”完成字段卡、独立授权和普通协同
+  提交。操作 `2310b95b-5a8b-48e3-bdaa-3fc47360614a` 返回
+  `workflow_profile=standard_collaboration`、`workflow_approved=true`，并以原待办
+  消失确认；字段卡、授权卡和最终 `SUCCEEDED` 状态均只投递到原 Telegram；
+- 独立回查确认原通知已从待办消失。首页“已办事项”后台栏目当前只返回固定 9 条摘要，
+  按标题未找到这条 1 月旧通知，因此本轮不宣称已验证全量已办搜索；成功判据仍是提交
+  操作的精确目标绑定和权威待办消失回读。
+
 ## 16. 后续演进顺序
 
-1. 使用第二台 Windows 与手机分别验证内部 CA 分发和 Telegram WebView 信任；
-2. 使用第二个真实 OA 用户验证 Token、Profile、Cookie、下载和日志隔离；
-3. 再扩充工作流写能力，并逐流程完成真实回读验证；
+1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
+2. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
+3. 补做双用户并发保活、一方会话过期和单 Token 吊销不影响另一方的故障验收；
 4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。
