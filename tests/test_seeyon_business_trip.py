@@ -1,11 +1,13 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_CONTRACT_VERSION,
+    BUSINESS_TRIP_FIELD_CARD_SCHEMA,
     BUSINESS_TRIP_FORM_APP_ID,
     BUSINESS_TRIP_TEMPLATE_ID,
     BUSINESS_TRIP_TEMPLATE_TITLE,
+    _fill_decimal,
     BusinessTripContractMismatch,
     BusinessTripOutcomeUnknown,
     _supervisor_choice_to_bool,
@@ -16,6 +18,32 @@ from bscli.adapters.seeyon_business_trip import (
 )
 
 
+class BusinessTripDecimalFieldTests(unittest.TestCase):
+    def test_decimal_fill_skips_oa_calculated_read_only_field(self):
+        frame = MagicMock()
+        wrapper = frame.locator.return_value
+        active = MagicMock()
+        editable = MagicMock()
+        wrapper.locator.side_effect = [active, editable]
+        active.count.return_value = 0
+        editable.count.return_value = 0
+
+        self.assertFalse(_fill_decimal(frame, "field0029", 0))
+        active.first.fill.assert_not_called()
+        editable.first.fill.assert_not_called()
+
+    def test_decimal_fill_uses_visible_editable_field_when_available(self):
+        frame = MagicMock()
+        wrapper = frame.locator.return_value
+        active = MagicMock()
+        editable = MagicMock()
+        wrapper.locator.side_effect = [active, editable]
+        active.count.return_value = 0
+        editable.count.return_value = 1
+
+        self.assertTrue(_fill_decimal(frame, "field0022", 4))
+        editable.first.fill.assert_called_once_with("4")
+
 class SeeyonBusinessTripTests(unittest.TestCase):
     def test_supervisor_readback_requires_an_explicit_choice(self):
         self.assertTrue(_supervisor_choice_to_bool("是"))
@@ -23,11 +51,20 @@ class SeeyonBusinessTripTests(unittest.TestCase):
         self.assertIsNone(_supervisor_choice_to_bool(""))
 
     def test_normalization_exposes_business_fields_and_rejects_invalid_ranges(self):
-        normalized = normalize_business_trip_inputs(_inputs())
+        normalized = normalize_business_trip_inputs(
+            _inputs(trip_days=0, trip_hours=4)
+        )
 
         self.assertEqual(normalized["start_time"], "2026-07-13 09:00")
         self.assertEqual(normalized["travel_mode"], "火车")
         self.assertFalse(normalized["has_direct_supervisor"])
+        self.assertNotIn("trip_days", normalized)
+        self.assertNotIn("trip_hours", normalized)
+        field_names = {
+            field["name"] for field in BUSINESS_TRIP_FIELD_CARD_SCHEMA["fields"]
+        }
+        self.assertNotIn("trip_days", field_names)
+        self.assertNotIn("trip_hours", field_names)
 
         with self.assertRaisesRegex(ValueError, "later than"):
             normalize_business_trip_inputs(

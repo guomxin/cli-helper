@@ -671,9 +671,6 @@ export class InteractionCoordinator {
         return false;
       }
       if (!adapter.sendPayload) {
-        if (presentation) {
-          return false;
-        }
         await adapter.sendText({
           ...baseContext,
           text: typeof payload.text === "string" ? payload.text : text,
@@ -844,6 +841,20 @@ function safeResponseErrorCode(response) {
   return response?.error?.code ? safeCode(response.error.code) : null;
 }
 
+function safeBusinessRuleMessage(response) {
+  const message = response?.error?.message;
+  if (typeof message !== "string") {
+    return "";
+  }
+  return message
+    .replace(/<[^>]*>/g, "")
+    .replace(/https?:\/\/\S+/gi, "[\u94fe\u63a5\u5df2\u9690\u85cf]")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
 function safeErrorCode(error) {
   return safeCode(error?.code || error?.name || "UNKNOWN_ERROR");
 }
@@ -943,6 +954,12 @@ function safeStatusMessage(status, errorCode, response = null) {
       }
       return "AgentBridge 无法确认本次安全操作的最终状态" + code + "。";
     case "failed":
+      if (safeCode(errorCode) === "OA_BUSINESS_RULE_REJECTED") {
+        const reason = safeBusinessRuleMessage(response);
+        return reason
+          ? `OA \u672a\u63d0\u4ea4\u672c\u6b21\u7533\u8bf7\uff1a${reason}${code}\u3002`
+          : `OA \u6839\u636e\u4e1a\u52a1\u89c4\u5219\u62d2\u7edd\u4e86\u672c\u6b21\u7533\u8bf7${code}\u3002`;
+      }
       return `AgentBridge 未能完成本次安全操作${code}。`;
     default:
       return `AgentBridge 安全交互状态已更新：${safeCode(status)}${code}。`;

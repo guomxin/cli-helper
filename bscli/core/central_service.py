@@ -93,7 +93,10 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
 )
-from bscli.adapters.seeyon_submit_phases import SeeyonBusinessValidationRequired
+from bscli.adapters.seeyon_submit_phases import (
+    SeeyonBusinessRuleRejected,
+    SeeyonBusinessValidationRequired,
+)
 from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
     WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
@@ -107,6 +110,7 @@ from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
 from bscli.core.capability_runtime import (
+    CapabilityRejected,
     CapabilityContext,
     CapabilityEngine,
     OutcomeUnknown,
@@ -1368,6 +1372,11 @@ class CentralCapabilityService:
             ) from exc
         except definition["outcome_error"] as exc:
             raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
+        except SeeyonBusinessRuleRejected as exc:
+            raise CapabilityRejected(
+                "OA_BUSINESS_RULE_REJECTED",
+                str(exc),
+            ) from exc
         except definition["contract_error"] as exc:
             raise ValueError(str(exc)) from exc
         except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:

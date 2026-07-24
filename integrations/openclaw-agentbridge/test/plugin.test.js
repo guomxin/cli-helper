@@ -1365,6 +1365,88 @@ test("delivers a final trusted status through a text-only channel adapter", asyn
   assert.equal(harness.heartbeats.length, 0);
 });
 
+test("delivers the next trusted card through a text-only channel adapter", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sentTexts = [];
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    async sendText(context) {
+      sentTexts.push(context);
+      return { channel: "openclaw-weixin", messageId: "message-1" };
+    },
+  });
+  const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user-1";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    channel: "openclaw-weixin",
+    to: "wechat-user-1",
+  });
+  const authorizationUrl = `${CARD_ORIGIN}/authorize/opaque-authorization-token`;
+  const authorization = interaction({
+    interactionId: "interaction-authorization-text-only-123456",
+    type: "execution_authorization",
+    title: "Confirm business trip submission",
+    presentation: { url: authorizationUrl },
+  });
+
+  const delivered = await coordinator.deliverInteractionsDirect(sessionKey, [authorization]);
+
+  assert.equal(delivered, true);
+  assert.equal(sentTexts.length, 1);
+  assert.equal(sentTexts[0].to, "wechat-user-1");
+  assert.equal(sentTexts[0].text.includes(authorizationUrl), true);
+  assert.equal(harness.systemEvents.length, 0);
+});
+
+test("reports a sanitized OA business-rule rejection and hides generic failures", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user-1";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "wechat-user-1",
+  });
+
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "failed",
+    "OA_BUSINESS_RULE_REJECTED",
+    {
+      error: {
+        code: "OA_BUSINESS_RULE_REJECTED",
+        message: "<b>The selected interval is not eligible.</b> https://oa.example.test/private",
+      },
+    },
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  const text = harness.sentPayloads[0].payload.text;
+  assert.equal(text.includes("OA_BUSINESS_RULE_REJECTED"), true);
+  assert.equal(text.includes("The selected interval is not eligible."), true);
+  assert.equal(text.includes("\u94fe\u63a5\u5df2\u9690\u85cf"), true);
+  assert.equal(text.includes("<b>"), false);
+  assert.equal(text.includes("https://oa.example.test/private"), false);
+
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "failed",
+    "CAPABILITY_EXECUTION_FAILED",
+    { error: { code: "CAPABILITY_EXECUTION_FAILED", message: "internal secret" } },
+  );
+  const genericText = harness.sentPayloads[1].payload.text;
+  assert.equal(genericText.includes("internal secret"), false);
+});
+
 test("explains an unknown OA write result without implying an automatic retry", async () => {
   const harness = fakeApi({
     autoPoll: false,

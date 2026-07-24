@@ -31,6 +31,13 @@ class OutcomeUnknown(RuntimeError):
         self.message = message
 
 
+class CapabilityRejected(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 CapabilityHandler = Callable[[CapabilityContext, dict], Any]
 
 
@@ -95,6 +102,12 @@ class CapabilityEngine:
             )
         except OutcomeUnknown as exc:
             operation = self.operation_store.mark_unknown(
+                operation["operation_id"],
+                code=exc.code,
+                message=exc.message,
+            )
+        except CapabilityRejected as exc:
+            operation = self.operation_store.mark_failed(
                 operation["operation_id"],
                 code=exc.code,
                 message=exc.message,

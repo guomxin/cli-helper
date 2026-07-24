@@ -5,7 +5,11 @@ from tempfile import TemporaryDirectory
 import time
 
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
-from bscli.core.capability_runtime import CapabilityEngine, RequiresUserAction
+from bscli.core.capability_runtime import (
+    CapabilityEngine,
+    CapabilityRejected,
+    RequiresUserAction,
+)
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.session_secrets import SessionStateStore
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
@@ -162,6 +166,33 @@ class AgentBridgeCoreTests(unittest.TestCase):
             self.assertEqual(response["status"], "requires_user_action")
             self.assertEqual(response["error"]["code"], "LOGIN_REQUIRED")
             self.assertEqual(response["nextAction"]["type"], "session_login")
+
+    def test_capability_engine_preserves_controlled_failure_details(self):
+        with TemporaryDirectory() as tmp:
+            registry = CapabilityRegistry()
+            registry.register(_template_capability())
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            engine = CapabilityEngine(registry=registry, operation_store=store)
+
+            def handler(_context, _arguments):
+                raise CapabilityRejected(
+                    "OA_BUSINESS_RULE_REJECTED",
+                    "The selected interval is not eligible for this request.",
+                )
+
+            engine.register_handler("oa.template.list", handler)
+            response = engine.invoke(
+                user_subject="user-a",
+                capability_name="oa.template.list",
+                arguments={},
+            )
+
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["error"]["code"], "OA_BUSINESS_RULE_REJECTED")
+            self.assertIn("not eligible", response["error"]["message"])
+            operation = store.get(response["operationId"])
+            self.assertEqual(operation["status"], "failed")
+            self.assertEqual(operation["error_code"], "OA_BUSINESS_RULE_REJECTED")
 
     def test_session_registry_isolates_profiles_and_checks_principal(self):
         with TemporaryDirectory() as tmp:

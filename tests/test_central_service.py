@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
 from bscli.adapters.seeyon_business_trip_submit import (
     BusinessTripBusinessValidationRequired,
+    BusinessTripSubmissionBlocked,
 )
 from bscli.adapters.seeyon_leave_submit import LeaveBusinessValidationRequired
 from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
@@ -615,8 +616,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "destination": "青岛",
                     "reason": "客户交流",
                     "has_direct_supervisor": False,
-                    "trip_days": 1.0,
-                    "trip_hours": 8.0,
+                    # Duration is calculated by OA and is not trusted-card input.
+                    # The card only collects fields that the user can control.
                 },
                 {},
             ),
@@ -1214,6 +1215,71 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
             self.assertIn("Submit business trip", continued["summary"]["title"])
             self.assertIn(validation["message"], str(continued["summary"]))
+            self.assertEqual(
+                service.write_authorizations.get(
+                    authorization["authorization_id"]
+                )["state"],
+                "consumed",
+            )
+
+    def test_business_trip_commit_surfaces_oa_business_rule_rejection(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            spec = service.registry.get("oa.business_trip.submit")
+            plan = {
+                "business_intent": "submit_business_trip_request",
+                "user_subject": "user-a",
+                "session_binding": {
+                    "session_id": session["session_id"],
+                    "expected_principal_ref": session["expected_principal_ref"],
+                    "downstream_principal_ref": session["downstream_principal_ref"],
+                    "last_verified_at": session["last_verified_at"],
+                },
+            }
+            authorization = service.write_authorizations.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id=session["session_id"],
+                capability_name=spec.name,
+                capability_version=spec.version,
+                prepare_operation_id="prepare-business-trip-rejected",
+                plan=plan,
+                summary={
+                    "title": "Submit business trip",
+                    "system": "OA",
+                    "fields": [{"label": "Destination", "value": "Qingdao"}],
+                },
+                card_base_url=service.trusted_card_base_url,
+            )
+            csrf = service.write_authorizations.issue_csrf(
+                authorization["authorization_id"]
+            )
+            service.write_authorizations.decide(
+                authorization["authorization_id"],
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+            reason = "The selected interval is not eligible for this request."
+
+            def blocked(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                raise BusinessTripSubmissionBlocked(reason)
+
+            with patch(
+                "bscli.core.central_service.submit_business_trip_request",
+                side_effect=blocked,
+            ):
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.business_trip.submit",
+                    arguments={"authorization_id": authorization["authorization_id"]},
+                )
+
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["error"]["code"], "OA_BUSINESS_RULE_REJECTED")
+            self.assertEqual(response["error"]["message"], reason)
             self.assertEqual(
                 service.write_authorizations.get(
                     authorization["authorization_id"]

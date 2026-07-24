@@ -81,8 +81,6 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "destination",
                 "reason",
                 "has_direct_supervisor",
-                "trip_days",
-                "trip_hours",
                 "input_submission_id",
             },
         )

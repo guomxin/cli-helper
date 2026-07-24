@@ -31,6 +31,7 @@ from bscli.adapters.seeyon_sent_readback import (
     sent_snapshot,
 )
 from bscli.adapters.seeyon_submit_phases import (
+    SeeyonBusinessRuleRejected,
     SeeyonBusinessValidationRequired,
     SubmissionPhaseTracker,
     pump_browser_events,
@@ -58,7 +59,7 @@ class LeaveBusinessValidationRequired(SeeyonBusinessValidationRequired):
     pass
 
 
-class LeaveSubmissionBlocked(LeaveContractMismatch):
+class LeaveSubmissionBlocked(LeaveContractMismatch, SeeyonBusinessRuleRejected):
     pass
 
 

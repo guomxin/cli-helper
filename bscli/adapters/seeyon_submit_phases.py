@@ -20,6 +20,10 @@ class SeeyonBusinessValidationRequired(RuntimeError):
         self.validation = dict(validation)
 
 
+class SeeyonBusinessRuleRejected(RuntimeError):
+    """The OA accepted the request but rejected it under a business rule."""
+
+
 def pump_browser_events(page, milliseconds: int = 250) -> None:
     wait_for_timeout = getattr(page, "wait_for_timeout", None)
     if callable(wait_for_timeout):

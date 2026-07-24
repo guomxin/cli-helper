@@ -31,6 +31,7 @@ from bscli.adapters.seeyon_sent_readback import (
     sent_snapshot,
 )
 from bscli.adapters.seeyon_submit_phases import (
+    SeeyonBusinessRuleRejected,
     SeeyonBusinessValidationRequired,
     SubmissionPhaseTracker,
     pump_browser_events,
@@ -39,14 +40,14 @@ from bscli.adapters.seeyon_submit_phases import (
 
 BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY = "oa.business_trip.submit.prepare"
 BUSINESS_TRIP_SUBMIT_CAPABILITY = "oa.business_trip.submit"
-BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v4"
+BUSINESS_TRIP_SUBMIT_CONTRACT_VERSION = "seeyon-business-trip-submit-v5"
 BUSINESS_TRIP_SUBMIT_PREPARE_INPUT_SCHEMA = BUSINESS_TRIP_PREPARE_INPUT_SCHEMA
 BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA = BUSINESS_TRIP_SAVE_INPUT_SCHEMA
 
 BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA = deepcopy(BUSINESS_TRIP_FIELD_CARD_SCHEMA)
 BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA.update(
     {
-        "schema_version": "agentbridge.oa_business_trip_submit_fields.v1",
+        "schema_version": "agentbridge.oa_business_trip_submit_fields.v2",
         "title": "填写并提交出差申请",
         "effect": "生成一份待确认的出差申请提交计划",
         "notice": "字段提交后还需单独授权；授权后会正式发送并进入 OA 审批流程。",
@@ -58,7 +59,10 @@ class BusinessTripBusinessValidationRequired(SeeyonBusinessValidationRequired):
     pass
 
 
-class BusinessTripSubmissionBlocked(BusinessTripContractMismatch):
+class BusinessTripSubmissionBlocked(
+    BusinessTripContractMismatch,
+    SeeyonBusinessRuleRejected,
+):
     pass
 
 

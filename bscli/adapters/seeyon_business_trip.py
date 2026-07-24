@@ -16,7 +16,7 @@ BUSINESS_TRIP_SAVE_CAPABILITY = "oa.business_trip.save_draft"
 BUSINESS_TRIP_TEMPLATE_TITLE = "【HR】出差申请单"
 BUSINESS_TRIP_TEMPLATE_ID = "2668910351205287097"
 BUSINESS_TRIP_FORM_APP_ID = "4948077657800057670"
-BUSINESS_TRIP_CONTRACT_VERSION = "seeyon-business-trip-draft-v1"
+BUSINESS_TRIP_CONTRACT_VERSION = "seeyon-business-trip-draft-v2"
 BUSINESS_TRIP_TRAVEL_MODES = ("大巴", "火车", "飞机", "轮渡", "自驾车")
 
 BUSINESS_TRIP_PREPARE_INPUT_SCHEMA = {
@@ -29,15 +29,13 @@ BUSINESS_TRIP_PREPARE_INPUT_SCHEMA = {
         "destination": {"type": "string", "maxLength": 255},
         "reason": {"type": "string", "maxLength": 4000},
         "has_direct_supervisor": {"type": "boolean"},
-        "trip_days": {"type": "number", "minimum": 0, "maximum": 366},
-        "trip_hours": {"type": "number", "minimum": 0, "maximum": 8784},
         "input_submission_id": {"type": "string"},
     },
     "additionalProperties": False,
 }
 
 BUSINESS_TRIP_FIELD_CARD_SCHEMA = {
-    "schema_version": "agentbridge.oa_business_trip_fields.v1",
+    "schema_version": "agentbridge.oa_business_trip_fields.v2",
     "title": "填写出差申请",
     "system": "致远 OA",
     "effect": "生成一份待确认的出差申请草稿计划",
@@ -100,22 +98,6 @@ BUSINESS_TRIP_FIELD_CARD_SCHEMA = {
                 {"value": "true", "label": "是"},
                 {"value": "false", "label": "否"},
             ],
-        },
-        {
-            "name": "trip_days",
-            "label": "出差天数（选填）",
-            "control": "number",
-            "minimum": 0,
-            "maximum": 366,
-            "step": 0.5,
-        },
-        {
-            "name": "trip_hours",
-            "label": "出差小时数（选填）",
-            "control": "number",
-            "minimum": 0,
-            "maximum": 8784,
-            "step": 0.5,
         },
     ],
     "constraints": [
@@ -339,7 +321,8 @@ def normalize_business_trip_inputs(arguments: dict) -> dict:
             raise ValueError(f"{name} must be a number")
         if value < 0 or value > maximum:
             raise ValueError(f"{name} is outside the supported range")
-        normalized[name] = value
+        # OA recalculates duration after date changes. Validate legacy payloads,
+        # but never drive the form or authorization plan with these values.
     note = arguments.get("note")
     if note is not None:
         normalized["note"] = _bounded_text(note, "note", 2000, allow_blank=True)
@@ -517,11 +500,15 @@ def _fill_business_trip_form(page, frame, inputs: dict) -> None:
     page.wait_for_timeout(600)
 
 
-def _fill_decimal(frame, field_id: str, value: int | float) -> None:
+def _fill_decimal(frame, field_id: str, value: int | float) -> bool:
     wrapper = frame.locator(f"#{field_id}_id")
-    active = wrapper.locator("input.is-activeInput")
-    target = active.first if active.count() else wrapper.locator("input:not([readonly])").first
+    active = wrapper.locator("input.is-activeInput:not([readonly]):visible")
+    editable = wrapper.locator("input:not([readonly]):visible")
+    target = active.first if active.count() else editable.first if editable.count() else None
+    if target is None:
+        return False
     target.fill(str(value))
+    return True
 
 
 def _read_business_trip_form(page, frame) -> dict:
@@ -537,6 +524,18 @@ def _read_business_trip_form(page, frame) -> dict:
             const editable = controls.find((element) => !element.readOnly && getComputedStyle(element).display !== 'none');
             return (active || editable || controls[0])?.value || '';
           };
+          const calculatedValue = (fieldId) => {
+            const wrapper = document.querySelector(`#${fieldId}_id`);
+            if (!wrapper) return '';
+            const browseValue = String(
+              wrapper.querySelector('.cap4-number__browse')?.textContent || ''
+            ).trim();
+            if (browseValue) return browseValue;
+            const values = Array.from(wrapper.querySelectorAll('input,textarea'))
+              .map((element) => String(element.value || '').trim())
+              .filter(Boolean);
+            return values[0] || '';
+          };
           const selectedRadio = (fieldId) => {
             const selected = document.querySelector(
               `#${fieldId}_id .cap-icon-danxuan-xuanzhong`
@@ -550,8 +549,8 @@ def _read_business_trip_form(page, frame) -> dict:
             travel_mode: value('#field0027_inner'),
             origin: editableValue('field0023'),
             destination: editableValue('field0026'),
-            trip_days: editableValue('field0029'),
-            trip_hours: editableValue('field0022'),
+            trip_days: calculatedValue('field0029'),
+            trip_hours: calculatedValue('field0022'),
             reason: editableValue('field0009'),
             supervisor_selection: selectedRadio('field0010'),
           };

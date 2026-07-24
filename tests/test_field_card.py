@@ -141,7 +141,7 @@ class TrustedFieldCardTests(unittest.TestCase):
             self.assertIn("if (true && (platform || canPost || canNotify))", accepted_body)
             self.assertEqual(stored["values"]["start_time"], "2026-07-14 09:00")
             self.assertFalse(stored["values"]["has_direct_supervisor"])
-            self.assertEqual(stored["values"]["trip_days"], 1)
+            self.assertNotIn("trip_days", stored["values"])
             self.assertNotIn("trip_hours", stored["values"])
             self.assertEqual(replay.status, 409)
 
@@ -196,8 +196,6 @@ def _valid_values():
         "destination": "青岛",
         "reason": "客户交流",
         "has_direct_supervisor": "false",
-        "trip_days": "1",
-        "trip_hours": "",
     }
 
 
