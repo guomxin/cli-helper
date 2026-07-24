@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
@@ -55,6 +56,23 @@ class CentralBrowserTests(unittest.TestCase):
                 worker.start()
 
             self.assertFalse(controller.chromium.launches)
+
+    def test_worker_hardens_profile_permissions_before_launch(self):
+        with TemporaryDirectory() as tmp:
+            profile_path = Path(tmp) / "profile"
+            profile_path.mkdir()
+            controller = FakePlaywrightController()
+            worker = CentralBrowserWorker(
+                profile_path=profile_path,
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with patch.object(Path, "chmod", autospec=True) as chmod:
+                with worker:
+                    pass
+
+            chmod.assert_called_once_with(profile_path, 0o700)
 
     def test_worker_parses_json_body_when_server_uses_text_content_type(self):
         with TemporaryDirectory() as tmp:

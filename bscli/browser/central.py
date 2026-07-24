@@ -48,10 +48,11 @@ class CentralBrowserWorker:
             return self
         try:
             self.profile_path.mkdir(parents=True, exist_ok=True)
+            self.profile_path.chmod(0o700)
             self._lease.acquire()
         except OSError as exc:
             raise CentralProfileUnavailableError(
-                "central browser profile is not writable by the service account"
+                "central browser profile is not writable or cannot be restricted to the service account"
             ) from exc
         try:
             self._controller = self._playwright_starter()
