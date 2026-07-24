@@ -50,6 +50,10 @@ Seeyon OA 的首个 R0 纵切已经通过单用户真实环境验收：
   权限复核；权限无法收敛时 Worker 失败关闭；
 - 辛国茂通过 Telegram 完成一条普通协同的字段卡、独立授权、提交和待办消失回读，
   操作 `2310b95b-5a8b-48e3-bdaa-3fc47360614a` 明确返回成功；
+- 辛国茂通过 Telegram 完成一条周报“知会”事项，能力
+  `oa.weekly_report.acknowledge` 明确返回 `workflow_acknowledged=true`、
+  `workflow_approved=null`，操作 `9a2f7967-9ae0-4fde-824a-c4e32761be6d`
+  由待办消失回读确认；字段卡、授权卡和成功回执均留在原 Telegram 通道；
 - 本次可声明“同一中心服务账户内的真实身份、Token、会话、Profile、账本和通道路由
   隔离已通过 PoC 验收”。两个 Profile 仍由同一 Linux 服务账户管理，因此每用户独立
   OS/容器 Worker，以及 Cookie、下载、截图和日志的跨安全主体不可读性仍未完成，

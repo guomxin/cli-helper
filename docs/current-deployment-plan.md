@@ -1070,6 +1070,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   按标题未找到这条 1 月旧通知，因此本轮不宣称已验证全量已办搜索；成功判据仍是提交
   操作的精确目标绑定和权威待办消失回读。
 
+## 15.18 2026-07-24 周报知会真实验收
+
+- 辛国茂通过 Telegram 处理待办“(自动发起)【综合】周报发送流程-人工智能研发中心-29周”。
+  详情探测确认当前节点为“知会”，页面没有同意/不同意语义，因此调用
+  `oa.weekly_report.acknowledge`，填写意见“已阅”，没有把知会伪装成审批；
+- 业务操作 `9a2f7967-9ae0-4fde-824a-c4e32761be6d` 返回 `status=succeeded`、
+  `action_kind=acknowledgement`、`workflow_profile=weekly_report`、
+  `workflow_acknowledged=true` 和 `workflow_approved=null`；
+- 权威回读以原待办消失确认成功。独立重新读取辛国茂待办只剩劳动合同续签事项，
+  周报已消失，其他待办未被处理；本轮未对李世玉待办执行任何操作；
+- OpenClaw 日志确认字段交互、下一张可信卡和最终 `SUCCEEDED` 状态均直接投递到原
+  Telegram 会话 `7052061588`，没有跨到微信通道。本次未发现实现缺陷，因此只记录
+  验收证据，不为制造代码改动而调整已通过验证的链路。
+
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
