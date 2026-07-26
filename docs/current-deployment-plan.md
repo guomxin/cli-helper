@@ -9,7 +9,7 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.2.11 对应本轮工具目录。
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.2.11 已加载。
 > 中心端当前注册 32 个 OA 能力并发布 39 个 MCP 工具。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
@@ -1090,7 +1090,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 补签审批契约升级为 v2。准备与提交阶段都校验模板、表单、流程、节点策略、同意态度和关键业务字段；确认摘要展示申请人、补签日期、开始时间、原因、说明、附件和已有意见，旧授权在目标细节变化后失效；
 - 劳动合同续签固定绑定模板 `3868679303223263344`、表单 `6514522401641018463` 和审批节点。确认卡展示员工、入职日期、合同期限、综合评价、续签建议、指导意见和续签反馈；当前节点业务字段为只读浏览态，AgentBridge 只冻结和展示，不把自动计算或前序节点选择伪装成可填写字段；
 - OpenClaw 静态工具目录、插件声明和完成反馈同步到 39 个工具，插件版本为 `0.2.11`。完成回读会明确反馈“劳动合同续签表已审批通过”，不使用容易误解的通用成功文案；
-- 统一零写入预检脚本已同时支持 `missed_punch_approval` 和 `labor_contract_renewal`，会监听写控件并阻断协同 POST；本轮发布前不审批任何真实待办，部署后先以当前两条事项完成零写入预检。
+- 发布门禁通过 Python `299 passed, 3 skipped`、OpenClaw `63/63`、MCP 目录一致性、`compileall`、`pip check` 和 npm pack dry-run。功能提交 `8d5488f` 与真实预检发现的补签 `action_kind` 契约修复 `6ad9173` 均已推送 GitHub；最终 Linux Release `6ad9173db082` 已部署，Release 冒烟确认 39 个工具完整、OA 会话 active 且登录复用成功；
+- OpenClaw Gateway 仅在插件目录变化时重启一次，运行时检查确认插件 `0.2.11` 为 loaded，39 个 AgentBridge 工具全部注册且无诊断；第二次纯 Python 发布未重复重启 Gateway；
+- 最终对当前补签 `4348835612435300755` 与劳动合同续签 `-7477978128504043448` 执行统一零写入预检，两者分别命中补签 v2 和合同续签 v1；守卫记录 `write_controls_clicked=0`、`collaboration_write_requests=0`、`authorizations_created=0`，未审批任何真实待办。
 
 本轮能力扩展不处理第二用户待办，也不因 Token 已具备 `oa:write:approval` 就自动执行。真实审批仍需用户在原聊天通道逐条确认。
 
