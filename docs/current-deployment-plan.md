@@ -1119,6 +1119,31 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   审批、提交、撤销或其他写能力都不会自动重放。插件单测覆盖精确待办重放、登录优先
   的已发推断、单次执行和原会话投递。
 
+## 15.21 2026-07-26 OA 七天受控保活与时间语义拆分
+
+- 线上日志复盘确认定时任务始终每 10 分钟运行；两个活动会话在 7 月 24 日
+  22:22 和 22:53 先后越过原 8 小时活动租约，随后长期为
+  `eligible=0 / outside_lease=2`。李世玉会话在 7 月 26 日 11:51 的下一次真实请求中
+  被 OA 明确判定过期，因此根因是受控租约过短，不是调度器停止；
+- 当前部署把 `--session-keepalive-lease` 从 `28800` 调整为 `604800`，仍保持
+  600 秒探测间隔。登录或真实智能体调用续租 7 天，后台心跳不为自己续租；OA 单登录
+  竞争、主动注销、密码变更或服务端绝对有效期仍可使会话提前失效；
+- SQLite 会话记录新增 `last_user_activity_at`、`last_keepalive_at` 和 `expired_at`，
+  启动时自动迁移旧表。活动租约只读取真实用户活动时间，成功后台探测只更新心跳时间，
+  失效状态更新不再覆盖最后真实活动。`oa_session_status` 同时返回
+  `lastUserActivityAt`、`lastKeepaliveAt`、`keepaliveEligibleUntil`、
+  `keepaliveState` 和 `expiredAt`；`lastActivityAt` 保留为兼容别名；
+- 最终发布门禁通过 Python `300 passed, 3 skipped, 19 subtests passed`、OpenClaw
+  插件 `65/65`、MCP App 类型检查与构建、`compileall`、`pip check` 和 npm pack
+  dry-run。提交 `5994021` 已推送 GitHub，Linux Release `5994021e9213` 已部署；
+- systemd 实际启动参数已确认使用 `--session-keepalive-interval 600` 和
+  `--session-keepalive-lease 604800`。发布只读冒烟返回辛国茂会话 active；首次后台心跳
+  写入独立 `lastKeepaliveAt=2026-07-26 17:51:14 (GMT+8)`，随后实时状态检查只刷新
+  `lastUserActivityAt`，证明两类时间互不覆盖；
+- 李世玉的既有会话仍保持 expired，没有被配置变更错误复活。旧过期记录无法可靠反推
+  失效前最后真实活动，因此迁移后该字段为 null，`expiredAt` 保留为
+  `2026-07-26 11:51:40 (GMT+8)`；下次完成安全登录后将从新的真实活动时间开始获得
+  7 天受控保活。本轮没有发起登录卡，也没有执行任何 OA 业务写操作。
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
