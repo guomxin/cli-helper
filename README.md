@@ -118,7 +118,11 @@ short-lived `nextAction.cardUrl`.
 `session status` and the MCP `oa_session_status` tool also live-probe an active
 session. Their response distinguishes the authentication epoch
 (`lastVerifiedAt`) from the current liveness check (`checkedAt`) and identifies
-the source as `live`. Inactive sessions are reported from the registry without
+the source as `live`. It also reports real user activity (`lastUserActivityAt`),
+the latest successful background probe (`lastKeepaliveAt`), the bounded lease
+deadline/state (`keepaliveEligibleUntil` / `keepaliveState`), and the detected
+expiry time (`expiredAt`). `lastActivityAt` remains a compatibility alias for
+`lastUserActivityAt`. Inactive sessions are reported from the registry without
 starting a browser. A temporary HTTP error or an unexpected non-login response
 returns `SESSION_CHECK_UNAVAILABLE` and preserves the encrypted session state;
 only an explicit login response expires and deletes that state.
@@ -316,7 +320,7 @@ python -m bscli.cli.main --home .bscli mcp central-serve \
   --auth-host 127.0.0.1 \
   --auth-port 8780 \
   --session-keepalive-interval 600 \
-  --session-keepalive-lease 28800
+  --session-keepalive-lease 604800
 ~~~
 
 Session keepalive is disabled unless `--session-keepalive-interval` is set. The
@@ -370,7 +374,7 @@ python -m bscli.cli.main --home .bscli mcp central-serve \
   --auth-tls-cert /path/to/server.crt \
   --auth-tls-key /path/to/server.key \
   --session-keepalive-interval 600 \
-  --session-keepalive-lease 28800
+  --session-keepalive-lease 604800
 ~~~
 
 Configure OpenClaw with the HTTPS endpoint and exact trusted-card origin. Store

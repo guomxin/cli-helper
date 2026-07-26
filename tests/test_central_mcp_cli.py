@@ -131,7 +131,7 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(serve.call_args.kwargs["keepalive_interval_seconds"], 0)
         self.assertEqual(
             serve.call_args.kwargs["keepalive_activity_lease_seconds"],
-            28_800,
+            604_800,
         )
 
     def test_central_server_enables_bounded_session_keepalive(self):

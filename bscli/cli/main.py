@@ -219,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_central_serve.add_argument(
         "--session-keepalive-lease",
         type=float,
-        default=28_800,
+        default=604_800,
         help="maximum seconds to keep OA alive after the latest real user activity",
     )
     mcp_token = mcp_sub.add_parser("token")
@@ -652,6 +652,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         trusted_card_base_url=auth_config.public_base_url,
+        session_keepalive_lease_seconds=args.session_keepalive_lease,
     )
     identity_store = McpIdentityTokenStore(_central_db_path(home))
     insecure_private_http = (

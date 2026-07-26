@@ -158,7 +158,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_session_status_live_checks_an_active_session(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
-            service = self._service(tmp, worker)
+            service = self._service(tmp, worker, keepalive_lease_seconds=604_800)
             session = self._activate(service)
             service.adapter.probe_session = MagicMock(
                 return_value={
@@ -180,13 +180,24 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 response["lastVerifiedAt"],
                 service.sessions.get(session["session_id"])["last_verified_at"],
             )
-            self.assertGreater(response["lastActivityAt"], session["updated_at"])
+            self.assertGreater(
+                response["lastActivityAt"],
+                session["last_user_activity_at"],
+            )
+            self.assertEqual(response["lastUserActivityAt"], response["lastActivityAt"])
+            self.assertIsNone(response["lastKeepaliveAt"])
+            self.assertEqual(response["keepaliveState"], "eligible")
+            self.assertIsNotNone(response["keepaliveEligibleUntil"])
             self.assertEqual(worker.restored, {"cookies": []})
             service.adapter.probe_session.assert_called_once_with(worker)
 
     def test_session_status_reports_live_expiry_and_deletes_invalid_state(self):
         with TemporaryDirectory() as tmp:
-            service = self._service(tmp, FakeWorker())
+            service = self._service(
+                tmp,
+                FakeWorker(),
+                keepalive_lease_seconds=604_800,
+            )
             session = self._activate(service)
             service.adapter.probe_session = MagicMock(
                 side_effect=SeeyonLoginRequired("OA expired")
@@ -197,6 +208,10 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(response["status"], "expired")
             self.assertEqual(response["statusSource"], "live")
             self.assertIsNotNone(response["checkedAt"])
+            self.assertEqual(response["lastActivityAt"], session["last_user_activity_at"])
+            self.assertIsNotNone(response["expiredAt"])
+            self.assertEqual(response["keepaliveState"], "inactive")
+            self.assertIsNotNone(response["keepaliveEligibleUntil"])
             self.assertEqual(service.sessions.get(session["session_id"])["state"], "expired")
             self.assertIsNone(service.session_states.load(session["session_id"]))
 
@@ -222,7 +237,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_keepalive_cycle_refreshes_oa_without_renewing_its_own_lease(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
-            service = self._service(tmp, worker)
+            service = self._service(tmp, worker, keepalive_lease_seconds=604_800)
             session = self._activate(service)
             service.adapter.probe_session = MagicMock(
                 return_value={
@@ -232,7 +247,10 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "browser_bridge_used": False,
                 }
             )
-            checked_at = datetime.fromisoformat(session["updated_at"]) + timedelta(minutes=1)
+            checked_at = (
+                datetime.fromisoformat(session["last_user_activity_at"])
+                + timedelta(minutes=1)
+            )
 
             summary = service.run_session_keepalive_cycle(
                 activity_lease_seconds=3_600,
@@ -245,6 +263,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             persisted = service.sessions.get(session["session_id"])
             self.assertEqual(persisted["updated_at"], session["updated_at"])
             self.assertEqual(persisted["last_verified_at"], session["last_verified_at"])
+            self.assertEqual(
+                persisted["last_user_activity_at"],
+                session["last_user_activity_at"],
+            )
+            self.assertIsNotNone(persisted["last_keepalive_at"])
             service.adapter.probe_session.assert_called_once_with(worker)
 
     def test_keepalive_cycle_stops_after_activity_lease(self):
@@ -252,7 +275,10 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             service = self._service(tmp, FakeWorker())
             session = self._activate(service)
             service.adapter.probe_session = MagicMock()
-            checked_at = datetime.fromisoformat(session["updated_at"]) + timedelta(hours=9)
+            checked_at = (
+                datetime.fromisoformat(session["last_user_activity_at"])
+                + timedelta(hours=9)
+            )
 
             summary = service.run_session_keepalive_cycle(
                 activity_lease_seconds=28_800,
@@ -1562,11 +1588,12 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "consumed",
             )
     @staticmethod
-    def _service(tmp, worker):
+    def _service(tmp, worker, *, keepalive_lease_seconds=None):
         return CentralCapabilityService(
             home=Path(tmp),
             base_url=BASE_URL,
             worker_factory=lambda _session, _adapter: worker,
+            session_keepalive_lease_seconds=keepalive_lease_seconds,
         )
 
     @staticmethod

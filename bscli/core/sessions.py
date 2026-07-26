@@ -51,8 +51,36 @@ class SessionRegistry:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_verified_at TEXT,
+                    last_user_activity_at TEXT,
+                    last_keepalive_at TEXT,
+                    expired_at TEXT,
                     UNIQUE (user_subject, system_id)
                 )
+                """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            for column in (
+                "last_user_activity_at",
+                "last_keepalive_at",
+                "expired_at",
+            ):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE sessions ADD COLUMN {column} TEXT")
+            connection.execute(
+                """
+                UPDATE sessions
+                SET last_user_activity_at = updated_at
+                WHERE last_user_activity_at IS NULL AND state = 'active'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE sessions
+                SET expired_at = updated_at
+                WHERE expired_at IS NULL AND state = 'expired'
                 """
             )
 
@@ -134,7 +162,7 @@ class SessionRegistry:
         if system_id is not None:
             query += " AND system_id = ?"
             parameters = (system_id,)
-        query += " ORDER BY updated_at, session_id"
+        query += " ORDER BY COALESCE(last_user_activity_at, updated_at), session_id"
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [_session_from_row(row) for row in rows]
@@ -145,13 +173,28 @@ class SessionRegistry:
             cursor = connection.execute(
                 """
                 UPDATE sessions
-                SET updated_at = ?
+                SET updated_at = ?, last_user_activity_at = ?
+                WHERE session_id = ? AND state = 'active'
+                """,
+                (now, now, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("only an active session can record activity")
+        return self.get(session_id)
+
+    def record_keepalive(self, session_id: str) -> dict:
+        now = _utc_now()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE sessions
+                SET last_keepalive_at = ?
                 WHERE session_id = ? AND state = 'active'
                 """,
                 (now, session_id),
             )
             if cursor.rowcount != 1:
-                raise ValueError("only an active session can record activity")
+                raise ValueError("only an active session can record keepalive")
         return self.get(session_id)
 
     def mark_awaiting_login(self, session_id: str) -> dict:
@@ -242,7 +285,18 @@ class SessionRegistry:
                 UPDATE sessions
                 SET state = ?, downstream_principal_ref = COALESCE(?, downstream_principal_ref),
                     last_error = ?, updated_at = ?,
-                    last_verified_at = CASE WHEN ? THEN ? ELSE last_verified_at END
+                    last_verified_at = CASE WHEN ? THEN ? ELSE last_verified_at END,
+                    last_user_activity_at = CASE
+                        WHEN ? THEN ? ELSE last_user_activity_at
+                    END,
+                    last_keepalive_at = CASE
+                        WHEN ? AND state <> 'active' THEN NULL ELSE last_keepalive_at
+                    END,
+                    expired_at = CASE
+                        WHEN ? = 'expired' THEN ?
+                        WHEN ? = 'active' THEN NULL
+                        ELSE expired_at
+                    END
                 WHERE session_id = ?
                 """,
                 (
@@ -252,6 +306,12 @@ class SessionRegistry:
                     now,
                     1 if verified else 0,
                     now,
+                    1 if verified else 0,
+                    now,
+                    1 if verified else 0,
+                    state,
+                    now,
+                    state,
                     session_id,
                 ),
             )

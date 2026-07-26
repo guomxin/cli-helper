@@ -366,7 +366,7 @@ sudo -u agentbridge env \
   --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
   --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
-  --session-keepalive-lease 28800
+  --session-keepalive-lease 604800
 ```
 
 正常启动时，标准输出中的 JSON 应至少包含：
@@ -380,7 +380,7 @@ sudo -u agentbridge env \
   "sessionKeepalive": {
     "enabled": true,
     "intervalSeconds": 600,
-    "activityLeaseSeconds": 28800
+    "activityLeaseSeconds": 604800
   }
 }
 ```
@@ -417,7 +417,7 @@ ExecStart=/home/guomao/agentbridge/venv/bin/python \
   --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
   --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
-  --session-keepalive-lease 28800
+  --session-keepalive-lease 604800
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -532,7 +532,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 
 如果 `oa_session_login` 直接返回 `succeeded` 和 `reused=true`，说明中心会话仍然有效，不应再次要求用户登录。
 
-`oa_session_status` 不会创建认证 interaction。对于活动会话，它会使用已加密保存的会话状态实时访问 OA，并返回 `statusSource=live` 和本次 `checkedAt`；`lastVerifiedAt` 仍表示登录或身份验证纪元，不会被单纯的状态检查改写。对于非活动会话，它只读取注册表并返回 `statusSource=registry`。临时网络错误、OA 5xx 或非登录页的异常 HTML 返回 `SESSION_CHECK_UNAVAILABLE`，保留已有会话；只有明确的登录跳转、401/403 或可结构化识别的登录表单才将会话标记为过期并删除密文状态。需要发起认证时，应明确调用 `oa_session_login`，自然语言可直接使用“登录 OA”。
+`oa_session_status` 不会创建认证 interaction。对于活动会话，它会使用已加密保存的会话状态实时访问 OA，并返回 `statusSource=live` 和本次 `checkedAt`；`lastVerifiedAt` 仍表示登录或身份验证纪元，不会被单纯的状态检查改写。`lastUserActivityAt` 表示最后一次真实用户调用，`lastKeepaliveAt` 表示最近一次成功后台心跳，`keepaliveEligibleUntil` / `keepaliveState` 表示保活截止时间与当前资格，`expiredAt` 表示确认失效的时刻；兼容字段 `lastActivityAt` 与 `lastUserActivityAt` 含义相同。对于非活动会话，它只读取注册表并返回 `statusSource=registry`。临时网络错误、OA 5xx 或非登录页的异常 HTML 返回 `SESSION_CHECK_UNAVAILABLE`，保留已有会话；只有明确的登录跳转、401/403 或可结构化识别的登录表单才将会话标记为过期并删除密文状态。需要发起认证时，应明确调用 `oa_session_login`，自然语言可直接使用“登录 OA”。
 
 ### 10.3 重启恢复验证
 
@@ -570,7 +570,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - `SESSION_CHECK_UNAVAILABLE` 表示暂时无法核验，不应让用户重新输入密码；
 - 卡片 TTL 过期只影响本次交互，不会主动清除已经有效的 OA 会话。
 
-当前中心部署显式启用受控保活：每 10 分钟为租约内的活动会话执行一次轻量 OA 探测，最近一次登录或真实智能体调用将活动租约续到 8 小时。后台心跳本身不续租，因此无人使用时不会永久维持 OA 登录。心跳复用加密会话状态和单会话锁，不创建认证卡；明确登录失效时正常过期，临时错误只记录为 deferred 并保留会话。程序默认仍为关闭状态，其他部署必须显式配置后才启用。
+当前中心部署显式启用受控保活：每 10 分钟为租约内的活动会话执行一次轻量 OA 探测，最近一次登录或真实智能体调用将活动租约续到 7 天。后台心跳本身不续租，因此无人使用时不会永久维持 OA 登录。心跳复用加密会话状态和单会话锁，不创建认证卡；明确登录失效时正常过期，临时错误只记录为 deferred 并保留会话。程序默认仍为关闭状态，其他部署必须显式配置后才启用。
 
 ## 13. 常见问题定位
 

@@ -1,5 +1,6 @@
 import unittest
 import os
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
@@ -268,13 +269,80 @@ class AgentBridgeCoreTests(unittest.TestCase):
             touched = registry.touch_activity(active["session_id"])
 
             self.assertGreater(touched["updated_at"], active["updated_at"])
+            self.assertEqual(touched["last_user_activity_at"], touched["updated_at"])
+            keepalive = registry.record_keepalive(active["session_id"])
+            self.assertEqual(keepalive["updated_at"], touched["updated_at"])
+            self.assertEqual(
+                keepalive["last_user_activity_at"],
+                touched["last_user_activity_at"],
+            )
+            self.assertIsNotNone(keepalive["last_keepalive_at"])
             self.assertEqual(
                 [session["session_id"] for session in registry.list_active(system_id="oa")],
                 [active["session_id"]],
             )
-            registry.mark_expired(active["session_id"])
+            expired = registry.mark_expired(active["session_id"])
+            self.assertIsNotNone(expired["expired_at"])
+            self.assertEqual(
+                expired["last_user_activity_at"],
+                touched["last_user_activity_at"],
+            )
             with self.assertRaisesRegex(ValueError, "active session"):
                 registry.touch_activity(active["session_id"])
+
+    def test_session_registry_migrates_legacy_activity_timestamps(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "agentbridge.db"
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE sessions (
+                        session_id TEXT PRIMARY KEY,
+                        user_subject TEXT NOT NULL,
+                        system_id TEXT NOT NULL,
+                        expected_principal_ref TEXT,
+                        downstream_principal_ref TEXT,
+                        profile_path TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        last_error TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        last_verified_at TEXT,
+                        UNIQUE (user_subject, system_id)
+                    );
+                    INSERT INTO sessions VALUES (
+                        'active-session', 'user-a', 'oa', 'Alice', 'Alice',
+                        'profile-a', 'active', NULL,
+                        '2026-07-20T00:00:00+00:00',
+                        '2026-07-24T06:00:00+00:00',
+                        '2026-07-20T00:00:00+00:00'
+                    );
+                    INSERT INTO sessions VALUES (
+                        'expired-session', 'user-b', 'oa', 'Bob', 'Bob',
+                        'profile-b', 'expired', 'OA expired',
+                        '2026-07-20T00:00:00+00:00',
+                        '2026-07-26T03:51:40+00:00',
+                        '2026-07-23T12:54:52+00:00'
+                    );
+                    """
+                )
+            finally:
+                connection.close()
+
+            registry = SessionRegistry(db_path, root / "profiles")
+
+            active = registry.get("active-session")
+            expired = registry.get("expired-session")
+            self.assertEqual(
+                active["last_user_activity_at"],
+                "2026-07-24T06:00:00+00:00",
+            )
+            self.assertIsNone(active["last_keepalive_at"])
+            self.assertIsNone(active["expired_at"])
+            self.assertIsNone(expired["last_user_activity_at"])
+            self.assertEqual(expired["expired_at"], "2026-07-26T03:51:40+00:00")
 
     def test_session_state_store_encrypts_cookie_state_at_rest(self):
         with TemporaryDirectory() as tmp:

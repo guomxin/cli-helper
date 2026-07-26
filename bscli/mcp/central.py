@@ -1433,7 +1433,7 @@ def serve_central_mcp(
     auth_config: AuthServerConfig,
     login_timeout_seconds: float = 45,
     keepalive_interval_seconds: float = 0,
-    keepalive_activity_lease_seconds: float = 28_800,
+    keepalive_activity_lease_seconds: float = 604_800,
 ) -> None:
     broker = CredentialBroker(
         challenge_store=service.challenges,

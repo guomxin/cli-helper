@@ -367,6 +367,7 @@ class CentralCapabilityService:
         worker_factory: WorkerFactory | None = None,
         session_state_store: SessionStateStore | None = None,
         trusted_card_base_url: str = "http://127.0.0.1:8780",
+        session_keepalive_lease_seconds: float | None = None,
     ) -> None:
         self.home = Path(home)
         self.db_path = self.home / "agentbridge.db"
@@ -383,6 +384,12 @@ class CentralCapabilityService:
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
         self.trusted_card_base_url = trusted_card_base_url
+        if (
+            session_keepalive_lease_seconds is not None
+            and session_keepalive_lease_seconds <= 0
+        ):
+            raise ValueError("session keepalive lease must be positive")
+        self.session_keepalive_lease_seconds = session_keepalive_lease_seconds
         self._locks_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
 
@@ -441,7 +448,7 @@ class CentralCapabilityService:
             }
         if system_id != "oa" or session["state"] != "active":
             return {
-                **session_response(session),
+                **self._session_response(session),
                 "statusSource": "registry",
                 "checkedAt": None,
             }
@@ -455,7 +462,7 @@ class CentralCapabilityService:
         checked_at = _utc_now()
         if live_check is None:
             return {
-                **session_response(self.sessions.get(session["session_id"])),
+                **self._session_response(self.sessions.get(session["session_id"])),
                 "statusSource": "live",
                 "checkedAt": checked_at,
             }
@@ -467,7 +474,7 @@ class CentralCapabilityService:
             }
         return {
             **live_check,
-            "session": session_response(self.sessions.get(session["session_id"])),
+            "session": self._session_response(self.sessions.get(session["session_id"])),
             "statusSource": "live",
             "checkedAt": checked_at,
         }
@@ -522,6 +529,7 @@ class CentralCapabilityService:
         session: dict,
         record_verification: bool = True,
         record_activity: bool = True,
+        record_keepalive: bool = False,
     ) -> dict | None:
         with self._session_lock(session["session_id"]):
             session = self.sessions.get(session["session_id"])
@@ -576,13 +584,15 @@ class CentralCapabilityService:
                 )
             elif record_activity:
                 session = self.sessions.touch_activity(session["session_id"])
+            elif record_keepalive:
+                session = self.sessions.record_keepalive(session["session_id"])
             else:
                 session = self.sessions.get(session["session_id"])
             return {
                 "protocolVersion": "0.1",
                 "status": "succeeded",
                 "sessionId": session["session_id"],
-                "session": session_response(session),
+                "session": self._session_response(session),
                 "result": {
                     "authenticated": True,
                     "templateCount": probe["template_count"],
@@ -615,7 +625,7 @@ class CentralCapabilityService:
         }
         lease = timedelta(seconds=activity_lease_seconds)
         for session in active_sessions:
-            last_activity = _parse_utc(session.get("updated_at"))
+            last_activity = _parse_utc(session.get("last_user_activity_at"))
             if last_activity is None or checked_at - last_activity > lease:
                 summary["outsideLease"] += 1
                 continue
@@ -625,6 +635,7 @@ class CentralCapabilityService:
                 session=session,
                 record_verification=False,
                 record_activity=False,
+                record_keepalive=True,
             )
             if response is None:
                 current = self.sessions.get(session["session_id"])
@@ -777,7 +788,7 @@ class CentralCapabilityService:
                 "protocolVersion": "0.1",
                 "status": "succeeded",
                 "interaction": interaction,
-                "result": {"session": session_response(session)},
+                "result": {"session": self._session_response(session)},
                 "nextAction": {"type": "retry_original_request"},
             }
 
@@ -1429,6 +1440,12 @@ class CentralCapabilityService:
             if current["state"] == "active":
                 self.sessions.touch_activity(current["session_id"])
 
+    def _session_response(self, session: dict) -> dict:
+        return session_response(
+            session,
+            activity_lease_seconds=self.session_keepalive_lease_seconds,
+        )
+
     @staticmethod
     def _default_worker_factory(session: dict, adapter: SeeyonCentralAdapter):
         return CentralBrowserWorker(
@@ -1604,7 +1621,30 @@ def _session_runtime_next_action(
     }
 
 
-def session_response(session: dict) -> dict:
+def session_response(
+    session: dict,
+    *,
+    activity_lease_seconds: float | None = None,
+) -> dict:
+    last_user_activity = session.get("last_user_activity_at")
+    eligible_until = None
+    eligible_at = None
+    if activity_lease_seconds is not None and last_user_activity:
+        activity_at = _parse_utc(last_user_activity)
+        if activity_at is not None:
+            eligible_at = activity_at + timedelta(seconds=activity_lease_seconds)
+            eligible_until = eligible_at.isoformat()
+
+    if activity_lease_seconds is None:
+        keepalive_state = "not_configured"
+    elif session["state"] != "active":
+        keepalive_state = "inactive"
+    elif eligible_at is None:
+        keepalive_state = "activity_unknown"
+    elif datetime.now(timezone.utc) <= eligible_at:
+        keepalive_state = "eligible"
+    else:
+        keepalive_state = "outside_lease"
     return {
         "protocolVersion": "0.1",
         "status": session["state"],
@@ -1614,7 +1654,12 @@ def session_response(session: dict) -> dict:
         "expectedPrincipalRef": session.get("expected_principal_ref"),
         "downstreamPrincipalRef": session.get("downstream_principal_ref"),
         "lastVerifiedAt": session.get("last_verified_at"),
-        "lastActivityAt": session.get("updated_at"),
+        "lastActivityAt": last_user_activity,
+        "lastUserActivityAt": last_user_activity,
+        "lastKeepaliveAt": session.get("last_keepalive_at"),
+        "keepaliveEligibleUntil": eligible_until,
+        "keepaliveState": keepalive_state,
+        "expiredAt": session.get("expired_at"),
         "lastError": session.get("last_error"),
     }
 
