@@ -21,6 +21,7 @@
       "agentbridge_server_profile",
       "oa_template_list",
       "oa_workflow_pending_list",
+      "oa_workflow_sent_list",
       "oa_workflow_done_list",
       "oa_workflow_tracked_list",
       "oa_workflow_detail_get",

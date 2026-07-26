@@ -40,9 +40,12 @@ Security behavior is intentionally fail closed:
 - repeated `oa_session_login` calls for the same bound session and unchanged
   authentication contract reuse the existing unexpired credential card and
   interaction, including while the trusted page is processing;
-- only a successful credential resume that explicitly returns
-  `nextAction.type=retry_original_request` may queue a non-sensitive
-  continuation and wake the same private agent once;
+- after a successful credential resume that explicitly returns
+  `nextAction.type=retry_original_request`, a login-blocked workflow-list read
+  is replayed once through the same per-user MCP client and delivered directly
+  to the originating private channel; login-first requests can infer only the
+  pending, sent, done, or tracked list intent from the current user message;
+- write tools are never captured or replayed by login continuation;
 - background polling resumes a completed interaction once and delivers the
   next trusted card or a fixed terminal-status message through the original
   private channel without involving the model; an opaque heartbeat is retained
@@ -82,7 +85,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.2.11, ...)
+AgentBridge interaction plugin registered (version=0.2.12, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -142,10 +145,18 @@ as fixed host-owned status text through the same adapter.
 
 A successful credential resume with
 `nextAction.type=retry_original_request` is the deliberate exception to the
-model-free terminal path: the plugin sends the fixed status, enqueues a
-non-sensitive instruction to retry the original user request, and wakes that
-same private agent exactly once. Business-input and execution-authorization
-completion never infer this continuation.
+model-free terminal path. When a pending, sent, done, or tracked list call was
+blocked by `LOGIN_REQUIRED`, the plugin stores only its safe `keyword` and
+`limit` arguments, drops the old idempotency key, and replays that read once
+through the same identity-bound MCP client after login. If the model called
+login first, the plugin may infer one of those four list intents from the most
+recent private user message. A successful replay is formatted and delivered
+directly to the original channel; a failed replay reports its error code.
+
+No draft, approval, submission, meeting, revoke, or other write tool is eligible
+for automatic replay. Other credential continuations retain the one-time opaque
+agent wake fallback. Business-input and execution-authorization completion never
+infer login continuation.
 
 If either direct path
 is unavailable, an opaque private-session heartbeat is used as a fallback. The

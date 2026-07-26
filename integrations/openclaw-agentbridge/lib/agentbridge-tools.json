@@ -794,7 +794,62 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List completed workflows for the authenticated OA user.",
+      "description": "List workflows initiated by the authenticated OA user from the Sent page. This is distinct from workflows the user has handled (Done) or follows (Tracked).",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_workflow_sent_listArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_sent_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_sent_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Sent OA Workflows"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List workflows already handled by the authenticated OA user from the Done page. This is distinct from workflows initiated by the user (Sent).",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -849,7 +904,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List tracked workflows for the authenticated OA user.",
+      "description": "List workflows followed by the authenticated OA user from the Tracked page. This is distinct from Sent and Done workflows.",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -916,6 +971,7 @@
           "collection": {
             "enum": [
               "pending",
+              "sent",
               "done",
               "tracked"
             ],
@@ -977,6 +1033,7 @@
           "collection": {
             "enum": [
               "pending",
+              "sent",
               "done",
               "tracked"
             ],

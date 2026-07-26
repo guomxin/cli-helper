@@ -11,7 +11,7 @@ Profile。
 - OpenClaw 插件通过运行时可信字段 `messageChannel`、`requesterSenderId` 和
   `agentAccountId` 识别请求者，模型参数中不允许传入用户身份；
 - 每个身份映射到一个环境变量名，Bearer Token 只从 Gateway 进程环境读取；
-- 插件把当前 39 个 AgentBridge MCP 工具注册为 OpenClaw 原生代理工具；
+- 插件把当前 40 个 AgentBridge MCP 工具注册为 OpenClaw 原生代理工具；
 - 同一会话一旦绑定身份便不可切换，发生身份变化时按冲突拒绝；
 - 卡片轮询、交互恢复和自动续办固定使用最初触发操作的用户客户端；
 - 未配置身份的用户只能看到身份状态工具，不能看到或调用 OA 工具；
@@ -162,7 +162,7 @@ python tools\export_openclaw_agentbridge_catalog.py
 python tools\export_openclaw_agentbridge_catalog.py --check
 ```
 
-当前目录包含 39 个工具。Python 端新增或修改 MCP 工具后，CI/发布检查应先运行
+当前目录包含 40 个工具。Python 端新增或修改 MCP 工具后，CI/发布检查应先运行
 `--check`；失败时重新导出目录并审查差异，防止 OpenClaw 能力面悄悄落后。
 
 ## 7. 真实双用户验收

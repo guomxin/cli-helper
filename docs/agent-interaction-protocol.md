@@ -124,10 +124,13 @@ processing challenge fails closed until that attempt finishes.
    idempotency key.
 5. Render any new interaction returned by resume and repeat the same algorithm.
 6. Only when a successful `credential` resume explicitly returns
-   `nextAction.type=retry_original_request`, enqueue one non-sensitive event in
-   the originating private conversation and schedule one agent turn to retry
-   the original request. Do not infer this from status text or apply it to other
-   interaction types.
+   `nextAction.type=retry_original_request`, continue the original request in
+   the originating private conversation. A host may preserve and replay one
+   allowlisted idempotent read tool with sanitized parameters through the same
+   identity-bound client. It must drop the pre-login idempotency key and must
+   never replay a write tool. When no safe read descriptor exists, enqueue one
+   non-sensitive event and schedule one agent turn instead. Do not infer this
+   signal from status text or apply it to other interaction types.
 7. Stop when the capability succeeds, fails, becomes unknown, or the user
    declines the interaction.
 

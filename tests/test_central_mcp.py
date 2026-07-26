@@ -139,6 +139,7 @@ class CentralMcpTests(unittest.TestCase):
         tools = payload["result"]["tools"]
         names = [tool["name"] for tool in tools]
         self.assertIn("oa_workflow_pending_list", names)
+        self.assertIn("oa_workflow_sent_list", names)
         self.assertIn("oa_workflow_detail_get", names)
         self.assertIn("oa_session_login", names)
         self.assertIn("agentbridge_operation_list", names)
@@ -175,6 +176,7 @@ class CentralMcpTests(unittest.TestCase):
         ):
             self.assertIn(tool_name, names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
+        sent = next(tool for tool in tools if tool["name"] == "oa_workflow_sent_list")
         prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
         submit = next(tool for tool in tools if tool["name"] == "oa_business_trip_submit")
@@ -184,6 +186,9 @@ class CentralMcpTests(unittest.TestCase):
         revoke_prepare = next(tool for tool in tools if tool["name"] == "oa_workflow_revoke_prepare")
         revoke = next(tool for tool in tools if tool["name"] == "oa_workflow_revoke")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
+        self.assertTrue(sent["annotations"]["readOnlyHint"])
+        self.assertIn("Sent page", sent["description"])
+        self.assertIn("Done", sent["description"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["readOnlyHint"])
         self.assertFalse(save["annotations"]["destructiveHint"])

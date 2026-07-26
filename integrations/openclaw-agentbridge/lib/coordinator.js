@@ -17,7 +17,17 @@ const MAX_INTERACTIONS = 100;
 const MAX_POLL_ERRORS = 5;
 const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
+const LOGIN_CONTINUATION_TTL_MS = 5 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
+const LOGIN_READ_TOOLS = new Map([
+  ["oa_workflow_pending_list", { collection: "pending", label: "\u5f85\u529e" }],
+  ["oa_workflow_sent_list", { collection: "sent", label: "\u5df2\u53d1" }],
+  ["oa_workflow_done_list", { collection: "done", label: "\u5df2\u529e" }],
+  [
+    "oa_workflow_tracked_list",
+    { collection: "tracked", label: "\u8ddf\u8e2a\u4e8b\u9879" },
+  ],
+]);
 
 export function createInteractionSharedState() {
   return {
@@ -27,6 +37,8 @@ export function createInteractionSharedState() {
     records: new Map(),
     sessionRoutes: new Map(),
     directDeliveries: new Map(),
+    loginContinuations: new Map(),
+    recentUserMessages: new Map(),
   };
 }
 
@@ -53,6 +65,26 @@ export class InteractionCoordinator {
     this.toolBindings = new Map();
     this.sessionRoutes = sharedState.sessionRoutes;
     this.directDeliveries = sharedState.directDeliveries;
+    this.loginContinuations =
+      sharedState.loginContinuations || (sharedState.loginContinuations = new Map());
+    this.recentUserMessages =
+      sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
+  }
+
+  recordUserMessage(event, context) {
+    const sessionKey = event.sessionKey || context.sessionKey;
+    const rawText = event.content ?? event.text;
+    if (!isPrivateSessionKey(sessionKey) || typeof rawText !== "string") {
+      return;
+    }
+    const text = rawText.trim().slice(0, 1000);
+    if (!text) {
+      return;
+    }
+    this.recentUserMessages.set(sessionKey, {
+      text,
+      capturedAt: this.now(),
+    });
   }
 
   bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
@@ -104,6 +136,11 @@ export class InteractionCoordinator {
       sessionKey: context.sessionKey || null,
       runId: event.runId || context.runId || null,
       capturedAt: this.now(),
+      readContinuation: normalizeReadContinuation(
+        event.toolName,
+        event.params,
+        this.now(),
+      ),
     });
     this.pruneToolBindings();
   }
@@ -126,6 +163,7 @@ export class InteractionCoordinator {
     if (!publicPayload) {
       return undefined;
     }
+    this.rememberLoginContinuation(publicPayload, binding, context);
     const references = collectPublicInteractionReferences(publicPayload).slice(
       0,
       MAX_HYDRATION_REFERENCES,
@@ -138,6 +176,31 @@ export class InteractionCoordinator {
       binding,
       context,
     );
+  }
+
+  rememberLoginContinuation(payload, binding, context) {
+    if (!isLoginRequiredPayload(payload) || !binding?.readContinuation) {
+      return;
+    }
+    const sessionKey = binding.sessionKey || context.sessionKey;
+    if (!isPrivateSessionKey(sessionKey)) {
+      return;
+    }
+    this.loginContinuations.set(sessionKey, binding.readContinuation);
+  }
+
+  consumeLoginContinuation(sessionKey) {
+    const remembered = this.loginContinuations.get(sessionKey);
+    if (isFreshContinuation(remembered, this.now())) {
+      this.loginContinuations.delete(sessionKey);
+      return remembered;
+    }
+    this.loginContinuations.delete(sessionKey);
+    const recent = this.recentUserMessages.get(sessionKey);
+    if (!recent || this.now() - recent.capturedAt > LOGIN_CONTINUATION_TTL_MS) {
+      return null;
+    }
+    return inferReadContinuation(recent.text, this.now());
   }
 
   captureInteractions(interactions, binding, context) {
@@ -153,10 +216,15 @@ export class InteractionCoordinator {
         );
         continue;
       }
+      const readContinuation =
+        interaction.type === "credential"
+          ? this.consumeLoginContinuation(sessionKey)
+          : null;
       const record = this.upsert({
         interaction,
         sessionKey,
         runId,
+        readContinuation,
       });
       this.api.logger.info(
         `AgentBridge interaction captured for private session (type=${interaction.type}, state=${interaction.state})`,
@@ -291,6 +359,8 @@ export class InteractionCoordinator {
         this.toolBindings.delete(toolCallId);
       }
     }
+    this.loginContinuations.delete(sessionKey);
+    this.recentUserMessages.delete(sessionKey);
     this.sessionRoutes.delete(sessionKey);
     this.directDeliveries.delete(sessionKey);
   }
@@ -302,6 +372,8 @@ export class InteractionCoordinator {
     this.abortControllers.clear();
     this.polls.clear();
     this.toolBindings.clear();
+    this.loginContinuations.clear();
+    this.recentUserMessages.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
   }
@@ -310,12 +382,13 @@ export class InteractionCoordinator {
     await Promise.allSettled([...this.polls.values()]);
   }
 
-  upsert({ interaction, sessionKey, runId }) {
+  upsert({ interaction, sessionKey, runId, readContinuation = null }) {
     const existing = this.records.get(interaction.interactionId);
     if (existing) {
       existing.interaction = interaction;
       existing.sessionKey = sessionKey || existing.sessionKey;
       existing.runId = runId || existing.runId;
+      existing.readContinuation ||= readContinuation;
       existing.mcpClient ||= this.clientForSession(existing.sessionKey);
       return existing;
     }
@@ -323,6 +396,7 @@ export class InteractionCoordinator {
       interaction,
       sessionKey,
       runId,
+      readContinuation,
       mcpClient: this.clientForSession(sessionKey),
       delivered: false,
       continuationQueued: false,
@@ -496,6 +570,12 @@ export class InteractionCoordinator {
       ) {
         return;
       }
+      if (
+        record.readContinuation &&
+        (await this.replayReadContinuation(record))
+      ) {
+        return;
+      }
       await this.deliverStatusDirect(record.sessionKey, status, errorCode, response);
       const pendingAfterStatus = this.undeliveredPendingFor(record);
       if (
@@ -556,6 +636,87 @@ export class InteractionCoordinator {
     );
     if (this.config.wakeAgentOnComplete) {
       await this.wakeAgent(record.sessionKey);
+    }
+  }
+
+  async replayReadContinuation(record) {
+    const continuation = record.readContinuation;
+    if (!continuation || !record.mcpClient) {
+      return false;
+    }
+    let response;
+    try {
+      response = await record.mcpClient.callTool(
+        continuation.toolName,
+        continuation.arguments,
+      );
+    } catch (error) {
+      const text =
+        "OA \u767b\u5f55\u5df2\u5b8c\u6210\uff0c\u4f46 AgentBridge \u81ea\u52a8\u7ee7\u7eed\u539f\u8bfb\u53d6\u8bf7\u6c42\u5931\u8d25" +
+        `\uff08\u9519\u8bef\u7801\uff1a${safeErrorCode(error)}\uff09\u3002\u8bf7\u91cd\u65b0\u53d1\u9001\u4e00\u6b21\u8bfb\u53d6\u8bf7\u6c42\u3002`;
+      return this.deliverReadContinuation(record, text, null);
+    }
+
+    if (safeStatus(response) !== "succeeded") {
+      const code = safeResponseErrorCode(response) || safeStatus(response);
+      const text =
+        "OA \u767b\u5f55\u5df2\u5b8c\u6210\uff0c\u4f46\u539f\u8bfb\u53d6\u8bf7\u6c42\u4ecd\u7136\u5931\u8d25" +
+        `\uff08\u9519\u8bef\u7801\uff1a${safeCode(code)}\uff09\u3002\u8bf7\u91cd\u65b0\u53d1\u9001\u4e00\u6b21\u8bfb\u53d6\u8bf7\u6c42\u3002`;
+      return this.deliverReadContinuation(record, text, response);
+    }
+
+    const text = formatReadContinuation(continuation, response);
+    const delivered = await this.deliverReadContinuation(record, text, response);
+    if (delivered) {
+      this.api.logger.info(
+        `AgentBridge read request continued after login (tool=${continuation.toolName})`,
+      );
+    }
+    return delivered;
+  }
+
+  async deliverReadContinuation(record, text, response) {
+    if (await this.deliverTextDirect(record.sessionKey, text)) {
+      return true;
+    }
+    const serialized = JSON.stringify(response || {}).slice(0, 12000);
+    this.api.runtime.system.enqueueSystemEvent(
+      [
+        text,
+        `Continued AgentBridge read tool: ${record.readContinuation.toolName}.`,
+        `Structured result: ${serialized}`,
+        "Answer the original user request from this result. Do not call the login tool again.",
+      ].join("\n"),
+      {
+        sessionKey: record.sessionKey,
+        contextKey: `agentbridge:read-continuation:${record.interaction.interactionId}`,
+      },
+    );
+    await this.wakeAgent(
+      record.sessionKey,
+      "hook:agentbridge-read-continuation-completed",
+    );
+    return true;
+  }
+
+  async deliverTextDirect(sessionKey, text) {
+    const route = this.sessionRoutes.get(sessionKey);
+    if (!route) {
+      this.api.logger.warn(
+        "AgentBridge direct read continuation unavailable because the private session route is missing",
+      );
+      return false;
+    }
+    try {
+      if (!(await this.sendRoutePayload(sessionKey, route, { text }))) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge direct read continuation failed: ${safeErrorCode(error)}`,
+      );
+      return false;
     }
   }
 
@@ -748,6 +909,17 @@ export class InteractionCoordinator {
 
   prune() {
     this.pruneToolBindings();
+    const continuationCutoff = this.now() - LOGIN_CONTINUATION_TTL_MS;
+    for (const [sessionKey, continuation] of this.loginContinuations) {
+      if (continuation.capturedAt <= continuationCutoff) {
+        this.loginContinuations.delete(sessionKey);
+      }
+    }
+    for (const [sessionKey, message] of this.recentUserMessages) {
+      if (message.capturedAt <= continuationCutoff) {
+        this.recentUserMessages.delete(sessionKey);
+      }
+    }
     for (const [interactionId, record] of this.records) {
       if (isInteractionExpired(record.interaction, this.now())) {
         this.abortControllers.get(interactionId)?.abort();
@@ -818,6 +990,124 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
     return null;
   }
   return details.structuredContent;
+}
+
+function normalizeReadContinuation(toolName, params, capturedAt) {
+  const normalizedToolName = String(toolName || "").trim();
+  if (!LOGIN_READ_TOOLS.has(normalizedToolName)) {
+    return null;
+  }
+  const source =
+    params && typeof params === "object" && !Array.isArray(params) ? params : {};
+  const arguments_ = {};
+  if (typeof source.keyword === "string" && source.keyword.trim()) {
+    arguments_.keyword = source.keyword.trim().slice(0, 200);
+  }
+  if (Number.isInteger(source.limit) && source.limit >= 1 && source.limit <= 100) {
+    arguments_.limit = source.limit;
+  }
+  return Object.freeze({
+    toolName: normalizedToolName,
+    arguments: Object.freeze(arguments_),
+    capturedAt,
+  });
+}
+
+function inferReadContinuation(text, capturedAt) {
+  const value = String(text || "");
+  const candidates = [
+    ["\u5f85\u529e", "oa_workflow_pending_list"],
+    ["\u5df2\u53d1", "oa_workflow_sent_list"],
+    ["\u5df2\u529e", "oa_workflow_done_list"],
+    ["\u8ddf\u8e2a", "oa_workflow_tracked_list"],
+  ];
+  const matched = candidates.find(([keyword]) => value.includes(keyword));
+  if (!matched) {
+    return null;
+  }
+  const arguments_ = {};
+  const limitMatch = value.match(/(?:\u8fd1|\u524d)?\s*(\d{1,3})\s*\u6761/);
+  if (limitMatch) {
+    const limit = Number.parseInt(limitMatch[1], 10);
+    if (limit >= 1 && limit <= 100) {
+      arguments_.limit = limit;
+    }
+  }
+  return normalizeReadContinuation(matched[1], arguments_, capturedAt);
+}
+
+function isFreshContinuation(continuation, now) {
+  return Boolean(
+    continuation &&
+      Number.isFinite(continuation.capturedAt) &&
+      now - continuation.capturedAt <= LOGIN_CONTINUATION_TTL_MS,
+  );
+}
+
+function isLoginRequiredPayload(payload) {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      (payload?.error?.code === "LOGIN_REQUIRED" ||
+        payload?.nextAction?.type === "session_login"),
+  );
+}
+
+function formatReadContinuation(continuation, response) {
+  const descriptor = LOGIN_READ_TOOLS.get(continuation.toolName);
+  const result =
+    response?.result && typeof response.result === "object"
+      ? response.result
+      : {};
+  const items = Array.isArray(result.items) ? result.items : [];
+  const count = Number.isInteger(result.count) ? result.count : items.length;
+  const lines = [
+    `OA \u767b\u5f55\u5df2\u6062\u590d\uff0c\u5df2\u81ea\u52a8\u7ee7\u7eed\u8bfb\u53d6${descriptor.label}\uff0c\u5171 ${count} \u6761\uff1a`,
+  ];
+  if (items.length === 0) {
+    return lines.join("\n");
+  }
+  let shown = 0;
+  for (const item of items) {
+    const index = shown + 1;
+    const date = safeDisplayText(item?.date, 40);
+    const title = safeDisplayText(item?.title, 300) || "(untitled)";
+    const affairId = safeDisplayText(item?.affair_id, 160);
+    let metadata;
+    if (descriptor.collection === "pending") {
+      const readState = item?.read ? "\u5df2\u8bfb" : "\u672a\u8bfb";
+      const sender = safeDisplayText(item?.sender, 120);
+      metadata = [`[${readState}]`, date, sender].filter(Boolean).join(" | ");
+    } else {
+      const status = safeDisplayText(item?.status, 120);
+      metadata = [date, status].filter(Boolean).join(" | ");
+    }
+    const block = [
+      `${index}. ${metadata}`.trim(),
+      `   ${title}`,
+      affairId ? `   affair_id: ${affairId}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if ([...lines, block].join("\n\n").length > 3500) {
+      break;
+    }
+    lines.push(block);
+    shown += 1;
+  }
+  if (shown < items.length) {
+    lines.push(`\u5176\u4f59 ${items.length - shown} \u6761\u672a\u5728\u672c\u6761\u6d88\u606f\u4e2d\u5c55\u5f00\u3002`);
+  }
+  return lines.join("\n\n");
+}
+
+function safeDisplayText(value, limit) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit);
 }
 
 function shouldResumeOriginalRequest(record, response, nextInteractions) {

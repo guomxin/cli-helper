@@ -618,6 +618,191 @@ test("continues the original request once after credential login succeeds", asyn
   assert.equal(harness.heartbeatRuns.length, 1);
 });
 
+test("replays the exact pending-list read after credential login", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        return {
+          status: "succeeded",
+          result: { authenticated: true },
+          nextAction: { type: "retry_original_request" },
+        };
+      }
+      assert.equal(name, "oa_workflow_pending_list");
+      return {
+        status: "succeeded",
+        result: {
+          collection: "pending",
+          count: 1,
+          items: [
+            {
+              affair_id: "pending-123",
+              title: "Quarterly report",
+              sender: "Alice",
+              date: "2026-07-26",
+              read: false,
+            },
+          ],
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+
+  const loginRequired = {
+    protocolVersion: "0.1",
+    status: "requires_user_action",
+    error: { code: "LOGIN_REQUIRED" },
+    nextAction: { type: "session_login" },
+  };
+  bindToolCall(harness, {
+    toolCallId: "tool-pending-before-login",
+    runId: "run-pending-before-login",
+    sessionKey,
+    toolName: "oa_workflow_pending_list",
+    params: { limit: 7, idempotency_key: "must-not-be-replayed" },
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-pending-before-login",
+      toolName: "oa_workflow_pending_list",
+      result: {
+        content: [{ type: "text", text: JSON.stringify(loginRequired) }],
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "oa_workflow_pending_list",
+          structuredContent: loginRequired,
+        },
+      },
+    },
+    { runtime: "openclaw" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-login-for-pending",
+    runId: "run-pending-before-login",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-for-pending",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    [
+      "agentbridge_interaction_get",
+      "agentbridge_interaction_resume",
+      "oa_workflow_pending_list",
+    ],
+  );
+  assert.deepEqual(calls.at(-1).arguments_, { limit: 7 });
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("Quarterly report"),
+    true,
+  );
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
+
+test("infers a sent-list continuation when login is the first tool", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        return {
+          status: "succeeded",
+          result: { authenticated: true },
+          nextAction: { type: "retry_original_request" },
+        };
+      }
+      return {
+        status: "succeeded",
+        result: { collection: "sent", count: 0, items: [] },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  harness.hooks.message_received(
+    {
+      sessionKey,
+      channel: "telegram",
+      senderId: "7052061588",
+      from: "7052061588",
+      content: "\u767b\u5f55 OA \u5e76\u67e5\u770b\u8fd1 10 \u6761\u5df2\u53d1\u4e8b\u9879",
+    },
+    { channelId: "telegram", sessionKey, conversationId: "7052061588" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-login-first",
+    runId: "run-login-first",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-first",
+      toolName: "oa_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(calls.at(-1).name, "oa_workflow_sent_list");
+  assert.deepEqual(calls.at(-1).arguments_, { limit: 10 });
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
+
 test("delivers a field card captured during the login continuation heartbeat", async () => {
   const sessionKey = "agent:main:telegram:direct:7052061588";
   const fieldUrl = CARD_ORIGIN + "/fields/continuation-field-token";
@@ -1600,12 +1785,19 @@ test("queues a heartbeat fallback when the immediate completion wake is skipped"
 
 function bindToolCall(
   harness,
-  { toolCallId, runId, sessionKey, channel = "telegram" },
+  {
+    toolCallId,
+    runId,
+    sessionKey,
+    channel = "telegram",
+    toolName = "oa_session_login",
+    params = {},
+  },
 ) {
   harness.hooks.before_tool_call(
     {
-      toolName: "oa_session_login",
-      params: {},
+      toolName,
+      params,
       toolCallId,
       runId,
     },

@@ -51,6 +51,7 @@ Published OA capabilities:
 
 - oa.template.list
 - oa.workflow.pending.list
+- oa.workflow.sent.list
 - oa.workflow.done.list
 - oa.workflow.tracked.list
 - oa.workflow.detail.get

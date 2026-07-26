@@ -9,8 +9,8 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.2.11 已加载。
-> 中心端当前注册 32 个 OA 能力并发布 39 个 MCP 工具。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.2.12 为当前发布版本。
+> 中心端当前注册 33 个 OA 能力并发布 40 个 MCP 工具。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；

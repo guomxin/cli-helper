@@ -57,6 +57,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.workflow.pending.list",
                 "oa.workflow.revoke",
                 "oa.workflow.revoke.prepare",
+                "oa.workflow.sent.list",
                 "oa.workflow.tracked.list",
             ],
         )
@@ -103,6 +104,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                     "oa.workflow.done.list",
                     "oa.workflow.opinions.list",
                     "oa.workflow.pending.list",
+                    "oa.workflow.sent.list",
                     "oa.workflow.tracked.list",
                 }
             )
@@ -135,6 +137,23 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(arguments["sectionBeanId"], "sentSection")
         self.assertEqual(arguments["entityId"], "sent-entity")
         self.assertEqual(arguments["panelId"], "done-panel")
+
+    def test_sent_list_uses_the_distinct_sent_history_panel(self):
+        result = self.adapter.invoke_capability("oa.workflow.sent.list", self.worker, {})
+
+        self.assertEqual(result["collection"], "sent")
+        self.assertEqual(result["items"][0]["affair_id"], "sent-1")
+        arguments = self.worker.last_section_arguments
+        self.assertEqual(arguments["sectionBeanId"], "sentSection")
+        self.assertEqual(arguments["entityId"], "sent-entity")
+        self.assertEqual(arguments["panelId"], "sent-panel")
+
+    def test_tracked_list_uses_the_distinct_tracked_history_panel(self):
+        result = self.adapter.invoke_capability("oa.workflow.tracked.list", self.worker, {})
+
+        self.assertEqual(result["collection"], "tracked")
+        self.assertEqual(result["items"][0]["affair_id"], "tracked-1")
+        self.assertEqual(self.worker.last_section_arguments["panelId"], "tracked-panel")
 
     def test_detail_merges_same_origin_frame_and_exposes_business_data_only(self):
         result = self.adapter.invoke_capability(
@@ -195,7 +214,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             self.adapter.invoke_capability(
                 "oa.workflow.detail.get",
                 self.worker,
-                {"collection": "sent", "affair_id": "done-1"},
+                {"collection": "unknown", "affair_id": "done-1"},
             )
 
         self.assertEqual(self.worker.goto_calls, [])

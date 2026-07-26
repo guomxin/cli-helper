@@ -168,12 +168,20 @@ _UNSUPPORTED_AUTH_SELECTORS = (
 
 _WORKFLOW_LIST_CAPABILITIES = {
     "oa.workflow.pending.list": "pending",
+    "oa.workflow.sent.list": "sent",
     "oa.workflow.done.list": "done",
     "oa.workflow.tracked.list": "tracked",
 }
 
 _WORKFLOW_COLLECTIONS = frozenset(_WORKFLOW_LIST_CAPABILITIES.values())
-_INTERNAL_WORKFLOW_COLLECTIONS = frozenset((*_WORKFLOW_COLLECTIONS, "sent"))
+_INTERNAL_WORKFLOW_COLLECTIONS = _WORKFLOW_COLLECTIONS
+
+_WORKFLOW_COLLECTION_DESCRIPTIONS = {
+    "pending": "List workflows waiting for the current OA user in the Pending page.",
+    "sent": "List workflows initiated by the current OA user in the Sent page.",
+    "done": "List workflows already handled by the current OA user in the Done page.",
+    "tracked": "List workflows followed by the current OA user in the Tracked page.",
+}
 
 _WORKFLOW_LIST_INPUT_SCHEMA = {
     "type": "object",
@@ -492,7 +500,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
             CapabilitySpec(
                 name=capability_name,
                 version="0.1.0",
-                description=f"List {collection} workflows for the current OA user.",
+                description=_WORKFLOW_COLLECTION_DESCRIPTIONS[collection],
                 input_schema=_WORKFLOW_LIST_INPUT_SCHEMA,
                 output_schema={"type": "object"},
                 effect="read",

@@ -543,9 +543,33 @@ def create_central_mcp_server(
         return await invoke(ctx, "oa.workflow.pending.list", arguments, idempotency_key)
 
     @mcp.tool(
+        name="oa_workflow_sent_list",
+        title="List Sent OA Workflows",
+        description=(
+            "List workflows initiated by the authenticated OA user from the Sent page. "
+            "This is distinct from workflows the user has handled (Done) or follows (Tracked)."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_workflow_sent_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments = {"limit": limit}
+        if keyword:
+            arguments["keyword"] = keyword
+        return await invoke(ctx, "oa.workflow.sent.list", arguments, idempotency_key)
+
+    @mcp.tool(
         name="oa_workflow_done_list",
         title="List Completed OA Workflows",
-        description="List completed workflows for the authenticated OA user.",
+        description=(
+            "List workflows already handled by the authenticated OA user from the Done page. "
+            "This is distinct from workflows initiated by the user (Sent)."
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
@@ -563,7 +587,10 @@ def create_central_mcp_server(
     @mcp.tool(
         name="oa_workflow_tracked_list",
         title="List Tracked OA Workflows",
-        description="List tracked workflows for the authenticated OA user.",
+        description=(
+            "List workflows followed by the authenticated OA user from the Tracked page. "
+            "This is distinct from Sent and Done workflows."
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
@@ -590,7 +617,7 @@ def create_central_mcp_server(
     )
     async def oa_workflow_detail_get(
         ctx: Context,
-        collection: Literal["pending", "done", "tracked"],
+        collection: Literal["pending", "sent", "done", "tracked"],
         affair_id: Annotated[str, Field(min_length=1, max_length=256)],
         text_limit: Annotated[int, Field(ge=0, le=20000)] = 6000,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -615,7 +642,7 @@ def create_central_mcp_server(
     )
     async def oa_workflow_opinions_list(
         ctx: Context,
-        collection: Literal["pending", "done", "tracked"],
+        collection: Literal["pending", "sent", "done", "tracked"],
         affair_id: Annotated[str, Field(min_length=1, max_length=256)],
         limit: Annotated[int, Field(ge=1, le=100)] = 100,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,

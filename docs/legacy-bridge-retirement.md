@@ -37,6 +37,7 @@ auth_mode=central_session。中心运行时不存在旧路径自动回退。
 | --- | --- |
 | 模板列表 | oa.template.list |
 | 待办列表 | oa.workflow.pending.list |
+| 已发列表 | oa.workflow.sent.list |
 | 已办列表 | oa.workflow.done.list |
 | 跟踪列表 | oa.workflow.tracked.list |
 | 流程详情 | oa.workflow.detail.get |

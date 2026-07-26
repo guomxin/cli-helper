@@ -13,7 +13,7 @@ import {
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.11";
+const PLUGIN_VERSION = "0.2.12";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -88,6 +88,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   });
 
   api.on("message_received", (event, context) => {
+    coordinator.recordUserMessage(event, context);
     bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
   });
 
