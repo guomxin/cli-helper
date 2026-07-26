@@ -68,6 +68,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             "oa.efficiency_data.approve",
             "oa.travel_expense.approval.prepare",
             "oa.travel_expense.approve",
+            "oa.labor_contract_renewal.approval.prepare",
+            "oa.labor_contract_renewal.approve",
             "oa.weekly_report.acknowledgement.prepare",
             "oa.weekly_report.acknowledge",
             "oa.standard_collaboration.approval.prepare",

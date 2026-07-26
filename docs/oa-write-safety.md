@@ -84,8 +84,18 @@ authorization, deterministic execution, and server-backed readback.
   resume is rejected. The authorization summary identifies the item, sender,
   date, and opinion. Commit revalidates the exact pending title, page affair,
   approval action, opinion control, and submit entry before consuming the
-  authorization. Success requires pending disappearance. Any post-boundary
-  ambiguity is durable `RESULT_UNKNOWN`, never an automatic retry.
+  authorization. The v2 contract also freezes the template, form, process,
+  node policy, available attitudes, and projected business-field values, then
+  revalidates them immediately before commit. Success requires pending
+  disappearance. Any post-boundary ambiguity is durable `RESULT_UNKNOWN`,
+  never an automatic retry.
+- `oa.labor_contract_renewal.approval.prepare` and
+  `oa.labor_contract_renewal.approve` are a dedicated received-workflow pair.
+  They bind the exact HR template/form and approval node, freeze the employee,
+  contract term, evaluation, renewal recommendation, guidance, and feedback,
+  and require those CAP4 business controls to remain browse-only. AgentBridge
+  may submit only the outer processing opinion and explicit agree attitude; it
+  cannot rewrite values selected or calculated by earlier workflow nodes.
 - `oa.meeting.create.prepare` and `oa.meeting.create` form a controlled-write
   pair. Prepare resolves one room and performs local overlap plus OA
   `validateRoomApps` checks. Commit repeats both checks immediately before the

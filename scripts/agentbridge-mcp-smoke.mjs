@@ -24,6 +24,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_efficiency_data_approve",
   "oa_travel_expense_approval_prepare",
   "oa_travel_expense_approve",
+  "oa_labor_contract_renewal_approval_prepare",
+  "oa_labor_contract_renewal_approve",
   "oa_weekly_report_acknowledgement_prepare",
   "oa_weekly_report_acknowledge",
   "oa_standard_collaboration_approval_prepare",

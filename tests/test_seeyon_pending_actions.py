@@ -4,8 +4,10 @@ from bscli.adapters.seeyon_pending_actions import (
     PendingActionContractMismatch,
     acknowledge_weekly_report,
     approve_efficiency_data,
+    approve_labor_contract_renewal,
     pending_action_contract_fingerprint,
     prepare_efficiency_data_approval,
+    prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -45,6 +47,53 @@ class PendingActionTests(unittest.TestCase):
             prepare_travel_expense_approval(
                 FakeAdapter(changed_worker), changed_worker, _inputs()
             )
+
+    def test_labor_contract_renewal_freezes_selected_business_values(self):
+        fixture = _fixture("labor_contract_renewal")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        prepared = prepare_labor_contract_renewal_approval(
+            adapter, worker, _inputs()
+        )
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+
+        self.assertEqual(fields["综合评价"], "优秀，完全胜任岗位工作")
+        self.assertEqual(fields["续签建议"], "续签劳动合同")
+        self.assertTrue(
+            prepared["plan"]["target"]["business_snapshot"][
+                "business_fields_browse_only"
+            ]
+        )
+
+        result = approve_labor_contract_renewal(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(result["workflow_profile"], "labor_contract_renewal")
+
+    def test_labor_contract_business_change_blocks_before_boundary(self):
+        fixture = _fixture("labor_contract_renewal")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        plan = prepare_labor_contract_renewal_approval(
+            adapter, worker, _inputs()
+        )["plan"]
+        fixture["business_snapshot"]["renewal_recommendation"] = "终止劳动合同"
+        boundary = []
+
+        with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
+            approve_labor_contract_renewal(
+                adapter,
+                worker,
+                plan,
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+        self.assertEqual(boundary, [])
 
     def test_weekly_report_is_acknowledgement_not_approval(self):
         worker = FakeWorker(_fixture("weekly_report"))
@@ -132,11 +181,12 @@ class PendingActionTests(unittest.TestCase):
             for profile in (
                 "efficiency_data",
                 "travel_expense",
+                "labor_contract_renewal",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 4)
+        self.assertEqual(len(fingerprints), 5)
 
 
 class FakeAdapter:
@@ -172,6 +222,9 @@ class FakePage:
     def __init__(self, fixture):
         self.fixture = fixture
         self.commit_payload = None
+        self.frames = (
+            [FakeBusinessFrame(fixture)] if fixture.get("business_snapshot") else []
+        )
 
     def evaluate(self, _script, argument):
         if isinstance(argument, str):
@@ -181,6 +234,27 @@ class FakePage:
 
     def on(self, _event, _callback):
         return None
+
+
+class FakeBusinessFrame:
+    url = "http://oa.example.test/seeyon/common/cap4/form/index.html"
+
+    def __init__(self, fixture):
+        self.fixture = fixture
+
+    def locator(self, selector):
+        if selector != "#field0008_id":
+            raise AssertionError("unexpected labor-contract selector")
+        return FakeCountLocator()
+
+    def evaluate(self, _script):
+        return dict(self.fixture["business_snapshot"])
+
+
+class FakeCountLocator:
+    @staticmethod
+    def count():
+        return 1
 
 
 def _inputs(**changes):
@@ -216,6 +290,31 @@ def _fixture(profile):
             "node_policy_name": "报销审批",
             "attitudes": ["agree", "disagree"],
         },
+        "labor_contract_renewal": {
+            "title": "(自动发起)【HR】劳动合同续签表-Alice",
+            "fields": [
+                {"name": "姓名", "value": "Alice 工号 A001 所属部门 研发中心 岗位 工程师"},
+                {
+                    "name": "入职日期",
+                    "value": "2023-09-06 合同续签开始日期 2026-09-06 合同续签结束日期 2029-09-05",
+                },
+                {"name": "综合评价及指导意见", "value": "继续保持"},
+                {"name": "综合评价", "value": "优秀 良好 基本满足"},
+                {"name": "鉴于以上意见，建议", "value": "续签劳动合同 终止劳动合同"},
+                {"name": "续签情况反馈", "value": "已签订劳动合同并领取本人留存份"},
+            ],
+            "template_id": "3868679303223263344",
+            "form_app_id": "6514522401641018463",
+            "node_policy": "approve",
+            "node_policy_name": "审批",
+            "attitudes": ["agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "guidance": "创新能力强，研发能力强，继续保持。",
+                "evaluation": "优秀，完全胜任岗位工作",
+                "renewal_recommendation": "续签劳动合同",
+            },
+        },
         "weekly_report": {
             "title": "(自动发起)【综合】周报发送流程-研发中心-28周",
             "fields": [
@@ -243,6 +342,7 @@ def _fixture(profile):
     }
     selected = fixtures[profile]
     return {
+        "business_snapshot": selected.get("business_snapshot"),
         "source": {
             "affair_id": "affair-1",
             "title": selected["title"],

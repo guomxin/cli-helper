@@ -47,6 +47,8 @@ auth_mode=central_session。中心运行时不存在旧路径自动回退。
 | 补签申请保存待发 | oa.missed_punch.save_draft |
 | 补签待办审批意见收集与计划冻结 | oa.missed_punch.approval.prepare |
 | 补签待办审批通过 | oa.missed_punch.approve |
+| 劳动合同续签审批意见收集与业务快照冻结 | oa.labor_contract_renewal.approval.prepare |
+| 劳动合同续签审批通过 | oa.labor_contract_renewal.approve |
 | 会议字段收集、会议室预检与计划冻结 | oa.meeting.create.prepare |
 | 会议创建、发送与双重回读 | oa.meeting.create |
 
@@ -57,7 +59,7 @@ auth_mode=central_session。中心运行时不存在旧路径自动回退。
 
 | 能力族 | 退役前实现线索 | 后续目标 |
 | --- | --- | --- |
-| 其他待办审批提交 | 补签审批已中心化；其余流程仍需逐表单验证 ContinueSubmit、必填字段和回读规则 | 按工作流继续实现 prepare/authorize/commit/verify |
+| 其他待办审批提交 | 补签和劳动合同续签审批已中心化；其余流程仍需逐表单验证 ContinueSubmit、业务字段读写属性和回读规则 | 按工作流继续实现 prepare/authorize/commit/verify |
 | 会议邀请回复 | 会议详情、参加/不参加/待定、回复后回读 | oa.meeting.reply.* 中心能力 |
 | 其他申请单草稿 | 出差、补签已中心化；其余模板仍需独立 CAP4 字段契约与保存回读 | 每种申请单独立能力，不发布底层原子接口 |
 | 事项矩阵 | 已发/已办/跟踪聚类、模板匹配、发起与接收处理覆盖度 | 基于中心列表离线分析并形成能力 backlog |

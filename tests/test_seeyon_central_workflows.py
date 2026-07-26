@@ -32,6 +32,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.business_trip.submit.prepare",
                 "oa.efficiency_data.approval.prepare",
                 "oa.efficiency_data.approve",
+                "oa.labor_contract_renewal.approval.prepare",
+                "oa.labor_contract_renewal.approve",
                 "oa.leave.prepare",
                 "oa.leave.save_draft",
                 "oa.leave.submit",
@@ -67,6 +69,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.leave.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.leave.submit.prepare"], "controlled_write")
         self.assertEqual(effects["oa.leave.submit"], "controlled_write")
+        self.assertEqual(effects["oa.labor_contract_renewal.approval.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.labor_contract_renewal.approve"], "controlled_write")
         self.assertEqual(effects["oa.workflow.revoke.prepare"], "controlled_write")
         self.assertEqual(effects["oa.workflow.revoke"], "controlled_write")
         prepare = registry.get("oa.business_trip.prepare")

@@ -15,6 +15,10 @@ TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY = (
     "oa.travel_expense.approval.prepare"
 )
 TRAVEL_EXPENSE_APPROVE_CAPABILITY = "oa.travel_expense.approve"
+LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY = (
+    "oa.labor_contract_renewal.approval.prepare"
+)
+LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY = "oa.labor_contract_renewal.approve"
 WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY = (
     "oa.weekly_report.acknowledgement.prepare"
 )
@@ -87,6 +91,12 @@ TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     effect="审批通过一条差旅费审批报销单",
     submit_label="提交审批意见",
 )
+LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_labor_contract_renewal_approval_fields.v1",
+    title="填写劳动合同续签审批意见",
+    effect="审批通过一条劳动合同续签表",
+    submit_label="提交审批意见",
+)
 WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_weekly_report_acknowledgement_fields.v1",
     title="填写周报阅办意见",
@@ -150,6 +160,37 @@ _PROFILES = {
         "summary_title": "审批差旅费报销单",
         "summary_effect": "审批通过后该报销事项将离开待办列表",
         "authorize_label": "授权审批通过",
+    },
+    "labor_contract_renewal": {
+        "prepare_capability": LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-labor-contract-renewal-approval-v1",
+        "plan_schema": "agentbridge.oa_labor_contract_renewal_approval_plan.v1",
+        "result_schema": "agentbridge.oa_labor_contract_renewal_approval_result.v1",
+        "business_intent": "approve_labor_contract_renewal",
+        "title_rule": {
+            "kind": "contains",
+            "value": "【HR】劳动合同续签表-",
+        },
+        "required_fields": {
+            "姓名",
+            "入职日期",
+            "综合评价及指导意见",
+            "综合评价",
+            "鉴于以上意见，建议",
+            "续签情况反馈",
+        },
+        "allowed_fields": None,
+        "template_id": "3868679303223263344",
+        "form_app_id": "6514522401641018463",
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "action_display": "审批通过",
+        "summary_title": "审批劳动合同续签表",
+        "summary_effect": "审批通过后该劳动合同续签事项将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "labor_contract_renewal_v1",
     },
     "weekly_report": {
         "prepare_capability": WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
@@ -267,6 +308,28 @@ def approve_travel_expense(
     )
 
 
+def prepare_labor_contract_renewal_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(
+        adapter, worker, arguments, "labor_contract_renewal"
+    )
+
+
+def approve_labor_contract_renewal(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="labor_contract_renewal",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
 def prepare_weekly_report_acknowledgement(adapter, worker, arguments: dict) -> dict:
     return _prepare_pending_action(adapter, worker, arguments, "weekly_report")
 
@@ -323,6 +386,7 @@ def pending_action_contract_fingerprint(profile_key: str) -> str:
         "node_policies": sorted(profile["node_policies"]),
         "node_policy_names": sorted(profile["node_policy_names"]),
         "action_kind": profile["action_kind"],
+        "business_snapshot_policy": profile.get("business_snapshot_policy"),
         "selection_policy": "exactly_one_pending_affair_id",
         "internal_binding": "ContinueSubmit",
         "verification": "pending_disappearance",
@@ -566,7 +630,86 @@ def _validate_target(
         raise PendingActionContractMismatch(
             "The OA workflow form identity does not match the registered profile."
         )
+    if profile.get("business_snapshot_policy") == "labor_contract_renewal_v1":
+        signals = dict(signals)
+        signals["business_snapshot"] = _labor_contract_business_snapshot(
+            page, detail
+        )
     return signals
+
+
+def _labor_contract_business_snapshot(page, detail: dict) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0008_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA labor-contract CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = (id) => document.querySelector(`#${id}`);
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const selected = (id) => {
+            const wrapper = field(id);
+            const items = Array.from(wrapper?.querySelectorAll('.cap4-radio__item') || []);
+            const chosen = items.filter((item) => item.querySelector('.cap4-radio-xuanzhong'));
+            return chosen.length === 1
+              ? clean(chosen[0].querySelector('.cap4-radio__text')?.textContent)
+              : '';
+          };
+          const ids = ['field0008_id', 'field0009_id', 'field0011_id'];
+          const browseOnly = ids.every((id) => {
+            const section = field(id)?.querySelector('section');
+            return Boolean(section?.classList.contains('is-none'));
+          });
+          return {
+            browse_only: browseOnly,
+            guidance: clean(
+              field('field0008_id')?.querySelector('.cap4-textarea__browse')?.innerText
+            ),
+            evaluation: selected('field0009_id'),
+            renewal_recommendation: selected('field0011_id'),
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA labor-contract business fields are editable at this node; "
+            "a separate field-entry contract is required."
+        )
+    for name in ("guidance", "evaluation", "renewal_recommendation"):
+        if not str(snapshot.get(name) or "").strip():
+            raise PendingActionContractMismatch(
+                f"The OA labor-contract {name} value is unavailable."
+            )
+    values = _field_values(detail)
+    result = {
+        "employee": values.get("姓名", ""),
+        "contract_term": values.get("入职日期", ""),
+        "guidance": str(snapshot["guidance"]),
+        "evaluation": str(snapshot["evaluation"]),
+        "renewal_recommendation": str(snapshot["renewal_recommendation"]),
+        "renewal_feedback": values.get("续签情况反馈", ""),
+        "business_fields_browse_only": True,
+    }
+    for name, value in list(result.items()):
+        if isinstance(value, str):
+            result[name] = re.sub(r"\s+", " ", value).strip()[:1000]
+    if not result["employee"] or not result["contract_term"]:
+        raise PendingActionContractMismatch(
+            "The OA labor-contract employee or contract term is unavailable."
+        )
+    return result
 
 
 def _frozen_target(
@@ -576,7 +719,7 @@ def _frozen_target(
     profile_key: str,
 ) -> dict:
     identity = signals["identity"]
-    return {
+    target = {
         "profile": profile_key,
         "affair_id": str(source.get("affair_id") or ""),
         "summary_id": str(identity.get("summary_id") or ""),
@@ -591,6 +734,9 @@ def _frozen_target(
         "node_policy_name": str(signals.get("node_policy_name") or ""),
         "detail_fingerprint": _detail_fingerprint(source, detail),
     }
+    if signals.get("business_snapshot"):
+        target["business_snapshot"] = dict(signals["business_snapshot"])
+    return target
 
 
 def _assert_frozen_target(expected: dict, actual: dict) -> None:
@@ -613,6 +759,10 @@ def _assert_frozen_target(expected: dict, actual: dict) -> None:
             raise PendingActionContractMismatch(
                 f"The OA pending target {name} changed after authorization."
             )
+    if expected.get("business_snapshot") != actual.get("business_snapshot"):
+        raise PendingActionContractMismatch(
+            "The OA pending target business_snapshot changed after authorization."
+        )
 
 
 def _summary(
@@ -639,6 +789,18 @@ def _summary(
         ):
             if values.get(name):
                 fields.append({"label": name, "value": values[name]})
+    elif profile_key == "labor_contract_renewal":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("employee", "员工信息"),
+            ("contract_term", "合同期限"),
+            ("guidance", "综合评价指导意见"),
+            ("evaluation", "综合评价"),
+            ("renewal_recommendation", "续签建议"),
+            ("renewal_feedback", "续签情况反馈"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
     elif profile_key == "weekly_report":
         for name in ("周报名称", "年度", "本周说明"):
             if values.get(name):

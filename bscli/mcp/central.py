@@ -49,6 +49,8 @@ from bscli.adapters.seeyon_missed_punch import (
 from bscli.adapters.seeyon_pending_actions import (
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
+    LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
     TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
@@ -442,6 +444,23 @@ def create_central_mcp_server(
                 "travel-expense reimbursement leaves the pending collection."
             ),
             "commit_capability": TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_labor_contract_renewal_approval_prepare",
+            "prepare_title": "Prepare OA Labor-Contract Renewal Approval",
+            "prepare_description": (
+                "Bind one exact pending labor-contract renewal approval. AgentBridge "
+                "freezes employee, contract term, evaluation, and renewal recommendation; "
+                "pass any opinion already supplied by the user."
+            ),
+            "prepare_capability": LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_labor_contract_renewal_approve",
+            "commit_title": "Approve Authorized OA Labor-Contract Renewal",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "labor-contract renewal item leaves the pending collection."
+            ),
+            "commit_capability": LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_weekly_report_acknowledgement_prepare",

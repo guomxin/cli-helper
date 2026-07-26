@@ -904,6 +904,7 @@ function safeSucceededMessage(response) {
     const subjects = {
       efficiency_data: "OA \u6548\u80fd\u6570\u636e\u6d41\u7a0b",
       travel_expense: "OA \u5dee\u65c5\u8d39\u5ba1\u6279\u62a5\u9500\u5355",
+      labor_contract_renewal: "OA \u52b3\u52a8\u5408\u540c\u7eed\u7b7e\u8868",
       weekly_report: "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b",
       standard_collaboration: "OA \u666e\u901a\u534f\u540c\u4e8b\u9879",
     };

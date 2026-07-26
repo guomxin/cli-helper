@@ -92,9 +92,20 @@ class SeeyonMissedPunchTests(unittest.TestCase):
             {"affair_id": "affair-1", "opinion": "同意"},
         )
         self.assertEqual(prepared["plan"]["target"]["affair_id"], "affair-1")
+        self.assertEqual(
+            prepared["plan"]["target"]["template_id"], MISSED_PUNCH_TEMPLATE_ID
+        )
+        self.assertEqual(
+            prepared["plan"]["target"]["form_app_id"], MISSED_PUNCH_FORM_APP_ID
+        )
         self.assertEqual(prepared["plan"]["exact_input"]["opinion"], "同意")
         self.assertEqual(prepared["summary"]["authorize_label"], "授权审批通过")
         self.assertIn("立即提交审批通过", prepared["summary"]["authorization_notice"])
+        summary_fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertIn("2026-07-23 13:30", summary_fields["开始时间"])
+        self.assertIn("忘记打卡", summary_fields["补签原因"])
 
         boundary = []
         with patch("bscli.adapters.seeyon_missed_punch.time.sleep", return_value=None):
@@ -121,6 +132,29 @@ class SeeyonMissedPunchTests(unittest.TestCase):
                 plan,
                 enter_commit_boundary=lambda: boundary.append("consumed"),
             )
+        self.assertEqual(boundary, [])
+
+    def test_changed_approval_detail_blocks_before_consumption(self):
+        adapter = FakeAdapter()
+        worker = FakeApprovalWorker()
+        prepared = prepare_missed_punch_approval(
+            adapter,
+            worker,
+            {"affair_id": "affair-1", "opinion": "同意"},
+        )
+        adapter.detail_fields[-1]["value"] = "事由说明 已改变"
+        boundary = []
+
+        with self.assertRaisesRegex(
+            MissedPunchContractMismatch, "detail_fingerprint"
+        ):
+            approve_missed_punch_request(
+                adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+
         self.assertEqual(boundary, [])
 
     def test_post_save_verification_failure_is_unknown(self):
@@ -158,6 +192,21 @@ class SeeyonMissedPunchTests(unittest.TestCase):
 class FakeAdapter:
     def __init__(self):
         self.pending_reads = 0
+        self.detail_fields = [
+            {
+                "name": "申请人",
+                "value": "申请人 Alice 工号 A001 所属部门 研发中心",
+            },
+            {
+                "name": "开始时间",
+                "value": (
+                    "开始时间 2026-07-23 13:30 结束时间 2026-07-23 17:30 "
+                    "时长 4.00"
+                ),
+            },
+            {"name": "补签原因", "value": "补签原因 忘记打卡"},
+            {"name": "事由说明", "value": "事由说明 忘记打卡"},
+        ]
 
     def list_templates(self, _worker):
         return {
@@ -181,7 +230,12 @@ class FakeAdapter:
                 "sender": "Alice",
                 "date": "2026-07-20",
             },
-            {"actions": [{"code": "ContinueSubmit"}]},
+            {
+                "actions": [{"code": "ContinueSubmit"}],
+                "fields": self.detail_fields,
+                "attachments": [],
+                "opinions": [{"opinion": "同意"}],
+            },
         )
 
     def list_workflows(self, _worker, *, collection, arguments):
@@ -202,7 +256,22 @@ class FakeApprovalPage:
 
     def evaluate(self, script, argument):
         if isinstance(argument, str):
-            return {"affair_matches": True, "comment_present": True, "submit_present": True}
+            return {
+                "affair_matches": True,
+                "comment_present": True,
+                "submit_present": True,
+                "page_path": "/seeyon/collaboration/collaboration.do",
+                "node_policy": "approve",
+                "node_policy_name": "审批",
+                "attitude_codes": ["agree", "disagree"],
+                "identity": {
+                    "summary_id": "summary-1",
+                    "process_id": "process-1",
+                    "template_id": MISSED_PUNCH_TEMPLATE_ID,
+                    "form_app_id": MISSED_PUNCH_FORM_APP_ID,
+                    "form_record_id": "record-1",
+                },
+            }
         self.submitted_opinion = argument["opinion"]
         return {"scheduled": True, "submit_entry": "submitClickFunc"}
 

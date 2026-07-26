@@ -6,8 +6,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from bscli.adapters.seeyon_central import SeeyonCentralAdapter
+from bscli.adapters.seeyon_missed_punch import prepare_missed_punch_approval
 from bscli.adapters.seeyon_pending_actions import (
     prepare_efficiency_data_approval,
+    prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -20,6 +22,8 @@ from bscli.core.sessions import SessionRegistry
 
 _PREPARE_FUNCTIONS = {
     "efficiency_data": prepare_efficiency_data_approval,
+    "labor_contract_renewal": prepare_labor_contract_renewal_approval,
+    "missed_punch_approval": prepare_missed_punch_approval,
     "travel_expense": prepare_travel_expense_approval,
     "weekly_report": prepare_weekly_report_acknowledgement,
     "standard_collaboration": prepare_standard_collaboration_approval,

@@ -1077,6 +1077,73 @@ test("reports a verified weekly-report acknowledgement after authorization resum
   );
 });
 
+test("reports a verified labor-contract renewal approval after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-labor-contract-authorization-123456",
+    type: "execution_authorization",
+    title: "Approve labor contract renewal",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          pending_action_processed: true,
+          action_kind: "approval",
+          workflow_profile: "labor_contract_renewal",
+          workflow_approved: true,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-labor-contract-authorization",
+    runId: "run-labor-contract-authorization",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-labor-contract-authorization",
+      toolName: "oa_labor_contract_renewal_approval_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA \u52b3\u52a8\u5408\u540c\u7eed\u7b7e\u8868\u5df2\u5ba1\u6279\u901a\u8fc7\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002",
+  );
+});
+
 
 test("reports a verified business-trip submission after authorization resumes", async () => {
   const harness = fakeApi({

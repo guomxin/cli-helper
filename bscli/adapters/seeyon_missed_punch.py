@@ -19,7 +19,7 @@ MISSED_PUNCH_TEMPLATE_TITLE = "【HR】补签申请单"
 MISSED_PUNCH_TEMPLATE_ID = "-8494358180075582561"
 MISSED_PUNCH_FORM_APP_ID = "-3950641196724501449"
 MISSED_PUNCH_DRAFT_CONTRACT_VERSION = "seeyon-missed-punch-draft-v1"
-MISSED_PUNCH_APPROVAL_CONTRACT_VERSION = "seeyon-missed-punch-approval-v1"
+MISSED_PUNCH_APPROVAL_CONTRACT_VERSION = "seeyon-missed-punch-approval-v2"
 MISSED_PUNCH_REASONS = ("忘记打卡", "人脸识别有误", "其他")
 
 MISSED_PUNCH_PREPARE_INPUT_SCHEMA = {
@@ -298,17 +298,14 @@ def prepare_missed_punch_approval(adapter, worker, arguments: dict) -> dict:
         collection="pending",
         affair_id=inputs["affair_id"],
     )
-    _validate_approval_target(source, detail, worker.page, inputs["affair_id"])
+    signals = _validate_approval_target(
+        source, detail, worker.page, inputs["affair_id"]
+    )
     return {
         "plan": {
             "schema_version": "agentbridge.oa_missed_punch_approval_plan.v1",
             "business_intent": "approve_missed_punch_request",
-            "target": {
-                "affair_id": inputs["affair_id"],
-                "title": str(source.get("title") or ""),
-                "sender": str(source.get("sender") or ""),
-                "date": str(source.get("date") or ""),
-            },
+            "target": _approval_target(source, detail, signals),
             "action_contract": {
                 "version": MISSED_PUNCH_APPROVAL_CONTRACT_VERSION,
                 "fingerprint": missed_punch_approval_contract_fingerprint(),
@@ -329,7 +326,7 @@ def prepare_missed_punch_approval(adapter, worker, arguments: dict) -> dict:
                 "verification": "pending_disappearance",
             },
         },
-        "summary": missed_punch_approval_summary(source, inputs["opinion"]),
+        "summary": missed_punch_approval_summary(source, detail, inputs["opinion"]),
     }
 
 
@@ -349,11 +346,10 @@ def approve_missed_punch_request(
         collection="pending",
         affair_id=affair_id,
     )
-    if str(source.get("title") or "") != str(plan.get("target", {}).get("title") or ""):
-        raise MissedPunchContractMismatch(
-            "The OA missed-punch target changed after authorization."
-        )
-    _validate_approval_target(source, detail, worker.page, affair_id)
+    signals = _validate_approval_target(source, detail, worker.page, affair_id)
+    _assert_approval_target(
+        dict(plan.get("target") or {}), _approval_target(source, detail, signals)
+    )
     page = worker.page
     page.on("dialog", lambda dialog: dialog.accept())
     boundary_crossed = False
@@ -455,19 +451,33 @@ def missed_punch_draft_summary(inputs: dict) -> dict:
     }
 
 
-def missed_punch_approval_summary(source: dict, opinion: str) -> dict:
+def missed_punch_approval_summary(source: dict, detail: dict, opinion: str) -> dict:
+    values = _approval_field_values(detail)
+    fields = [
+        {"label": "事项", "value": str(source.get("title") or "")},
+        {"label": "发起人", "value": str(source.get("sender") or "")},
+        {"label": "日期", "value": str(source.get("date") or "")},
+    ]
+    for name in ("申请人", "开始时间", "补签原因", "事由说明"):
+        if values.get(name):
+            fields.append({"label": name, "value": values[name]})
+    fields.extend(
+        [
+            {"label": "附件数量", "value": str(len(detail.get("attachments") or []))},
+            {
+                "label": "已有意见数量",
+                "value": str(len(detail.get("opinions") or detail.get("workflow") or [])),
+            },
+            {"label": "审批意见", "value": opinion},
+        ]
+    )
     return {
         "title": "审批补签申请",
         "system": "致远 OA",
         "effect": "审批通过后该事项将离开待办列表",
         "authorization_notice": "授权后将立即提交审批通过操作；不会只保存审批意见草稿。",
         "authorize_label": "授权审批通过",
-        "fields": [
-            {"label": "事项", "value": str(source.get("title") or "")},
-            {"label": "发起人", "value": str(source.get("sender") or "")},
-            {"label": "日期", "value": str(source.get("date") or "")},
-            {"label": "审批意见", "value": opinion},
-        ],
+        "fields": fields,
         "submitted_count": 1,
     }
 
@@ -491,6 +501,10 @@ def missed_punch_approval_contract_fingerprint() -> str:
         {
             "version": MISSED_PUNCH_APPROVAL_CONTRACT_VERSION,
             "title_prefix": MISSED_PUNCH_TEMPLATE_TITLE,
+            "template_id": MISSED_PUNCH_TEMPLATE_ID,
+            "form_app_id": MISSED_PUNCH_FORM_APP_ID,
+            "node_policies": ["approve", "审批"],
+            "required_attitude": "agree",
             "internal_binding": "ContinueSubmit",
             "opinion_selectors": [
                 "#content_deal_comment",
@@ -678,7 +692,66 @@ def _validate_draft_plan(plan: dict) -> None:
         )
 
 
-def _validate_approval_target(source: dict, detail: dict, page, affair_id: str) -> None:
+def _approval_field_values(detail: dict) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for item in detail.get("fields") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        value = re.sub(r"\s+", " ", str(item.get("value") or "")).strip()
+        if name and value and name not in values:
+            values[name] = value[:1000]
+    return values
+
+
+def _approval_detail_fingerprint(source: dict, detail: dict) -> str:
+    return _fingerprint(
+        {
+            "title": str(source.get("title") or detail.get("title") or ""),
+            "fields": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "value": str(item.get("value") or ""),
+                }
+                for item in detail.get("fields") or []
+                if isinstance(item, dict)
+            ],
+            "attachments": [
+                str(item.get("name") or "")
+                for item in detail.get("attachments") or []
+                if isinstance(item, dict)
+            ],
+        }
+    )
+
+
+def _approval_target(source: dict, detail: dict, signals: dict) -> dict:
+    identity = signals["identity"]
+    return {
+        "affair_id": str(source.get("affair_id") or ""),
+        "summary_id": str(identity.get("summary_id") or ""),
+        "process_id": str(identity.get("process_id") or ""),
+        "template_id": str(identity.get("template_id") or ""),
+        "form_app_id": str(identity.get("form_app_id") or ""),
+        "form_record_id": str(identity.get("form_record_id") or ""),
+        "title": str(source.get("title") or ""),
+        "sender": str(source.get("sender") or ""),
+        "date": str(source.get("date") or ""),
+        "node_policy": str(signals.get("node_policy") or ""),
+        "node_policy_name": str(signals.get("node_policy_name") or ""),
+        "detail_fingerprint": _approval_detail_fingerprint(source, detail),
+    }
+
+
+def _assert_approval_target(expected: dict, actual: dict) -> None:
+    for name, value in actual.items():
+        if str(expected.get(name) or "") != str(value or ""):
+            raise MissedPunchContractMismatch(
+                f"The OA missed-punch target {name} changed after authorization."
+            )
+
+
+def _validate_approval_target(source: dict, detail: dict, page, affair_id: str) -> dict:
     title = str(source.get("title") or detail.get("title") or "")
     if not title.startswith(MISSED_PUNCH_TEMPLATE_TITLE):
         raise MissedPunchContractMismatch(
@@ -696,8 +769,16 @@ def _validate_approval_target(source: dict, detail: dict, page, affair_id: str) 
     signals = page.evaluate(
         r"""
         (expectedAffairId) => {
-          const pageAffairId = String(window.affairId || '')
-            || document.querySelector('#affairId')?.value
+          const read = (names) => {
+            for (const name of names) {
+              const element = document.querySelector(`#${name}`)
+                || document.querySelector(`[name='${name}']`);
+              const value = String(element?.value || window[name] || '').trim();
+              if (value) return value;
+            }
+            return '';
+          };
+          const pageAffairId = read(['affairId'])
             || new URLSearchParams(location.search).get('affairId')
             || '';
           const comment = document.querySelector('#content_deal_comment')
@@ -710,15 +791,59 @@ def _validate_approval_target(source: dict, detail: dict, page, affair_id: str) 
             submit_present: typeof window.submitClickFunc === 'function'
               || typeof window.dealSubmitFunc === 'function'
               || typeof window.$?.content?.callback?.dealSubmit === 'function',
+            page_path: location.pathname,
+            node_policy: String(window.nodePolicy || ''),
+            node_policy_name: String(window.nodePolicyName || ''),
+            attitude_codes: Array.from(
+              document.querySelectorAll("input[type='radio'][name='attitude']")
+            ).map((radio) => String(radio.getAttribute('code') || radio.value || '').toLowerCase()),
+            identity: {
+              summary_id: read(['summaryId']),
+              process_id: read(['processId']),
+              template_id: read(['templeteId', 'templateId']),
+              form_app_id: read(['formAppId']),
+              form_record_id: read(['formRecordid', 'formRecordId']),
+            },
           };
         }
         """,
         affair_id,
     )
-    if not isinstance(signals, dict) or not all(signals.values()):
+    if not isinstance(signals, dict) or not all(
+        (
+            signals.get("affair_matches") is True,
+            signals.get("comment_present") is True,
+            signals.get("submit_present") is True,
+            signals.get("page_path") == "/seeyon/collaboration/collaboration.do",
+        )
+    ):
         raise MissedPunchContractMismatch(
             "The missed-punch approval page no longer matches the registered contract."
         )
+    if (
+        str(signals.get("node_policy") or "") != "approve"
+        and str(signals.get("node_policy_name") or "") != "审批"
+    ):
+        raise MissedPunchContractMismatch(
+            "The missed-punch node is not a registered approval node."
+        )
+    attitudes = {str(item or "").lower() for item in signals.get("attitude_codes") or []}
+    if "agree" not in attitudes:
+        raise MissedPunchContractMismatch(
+            "The missed-punch approval page does not expose the agree attitude."
+        )
+    identity = signals.get("identity")
+    if not isinstance(identity, dict):
+        raise MissedPunchContractMismatch("The missed-punch workflow identity is unavailable.")
+    if not str(identity.get("summary_id") or "") or not str(identity.get("process_id") or ""):
+        raise MissedPunchContractMismatch(
+            "The missed-punch summary or process identity is unavailable."
+        )
+    if str(identity.get("template_id") or "") != MISSED_PUNCH_TEMPLATE_ID:
+        raise MissedPunchContractMismatch("The missed-punch template identity changed.")
+    if str(identity.get("form_app_id") or "") != MISSED_PUNCH_FORM_APP_ID:
+        raise MissedPunchContractMismatch("The missed-punch form identity changed.")
+    return signals
 
 
 def _validate_approval_plan(plan: dict) -> None:
@@ -811,14 +936,13 @@ _APPROVAL_SCRIPT = r"""
   const agree = radios.find((radio) => {
     const code = String(radio.getAttribute('code') || '').toLowerCase();
     const value = String(radio.value || '').toLowerCase();
-    return ['agree', 'haveread'].includes(code) || ['agree', 'haveread'].includes(value);
+    return code === 'agree' || value === 'agree';
   });
-  if (agree) {
-    agree.checked = true;
-    agree.dispatchEvent(new Event('input', { bubbles: true }));
-    agree.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  const attitudeCode = agree?.getAttribute('code') || agree?.value || 'agree';
+  if (!agree) throw new Error('approval agree attitude is missing');
+  agree.checked = true;
+  agree.dispatchEvent(new Event('input', { bubbles: true }));
+  agree.dispatchEvent(new Event('change', { bubbles: true }));
+  const attitudeCode = agree.getAttribute('code') || agree.value;
   for (const selector of ['#hidAttitudeCode', '#hidAttitude', '#nodeattitude']) {
     const element = document.querySelector(selector);
     if (element) setValue(element, attitudeCode);

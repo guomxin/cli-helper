@@ -47,6 +47,8 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_efficiency_data_approve",
             "oa_travel_expense_approval_prepare",
             "oa_travel_expense_approve",
+            "oa_labor_contract_renewal_approval_prepare",
+            "oa_labor_contract_renewal_approve",
             "oa_weekly_report_acknowledgement_prepare",
             "oa_weekly_report_acknowledge",
             "oa_standard_collaboration_approval_prepare",
@@ -73,15 +75,19 @@ class DeploymentAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         for prepare_function in (
+            "prepare_missed_punch_approval",
             "prepare_efficiency_data_approval",
             "prepare_travel_expense_approval",
+            "prepare_labor_contract_renewal_approval",
             "prepare_weekly_report_acknowledgement",
             "prepare_standard_collaboration_approval",
         ):
             self.assertIn(prepare_function, script)
         for forbidden_function in (
+            "approve_missed_punch_request",
             "approve_efficiency_data",
             "approve_travel_expense",
+            "approve_labor_contract_renewal",
             "acknowledge_weekly_report",
             "approve_standard_collaboration",
         ):
