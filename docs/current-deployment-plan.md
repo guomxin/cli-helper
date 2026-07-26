@@ -1144,6 +1144,40 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   失效前最后真实活动，因此迁移后该字段为 null，`expiredAt` 保留为
   `2026-07-26 11:51:40 (GMT+8)`；下次完成安全登录后将从新的真实活动时间开始获得
   7 天受控保活。本轮没有发起登录卡，也没有执行任何 OA 业务写操作。
+
+## 15.22 2026-07-26 泰华日志系统第二系统适配一期
+
+- AgentBridge 从 OA 单系统运行时扩展为按 `system_id` 路由的多系统中心运行时。OA
+  继续使用托管浏览器会话；泰华日志系统 `http://10.10.50.101` 使用
+  API-first 的中心 HTTP Token 会话。两者按 `(user_subject, system_id)` 分开保存，
+  不共享登录态、刷新令牌或写入计划；
+- 在辛国茂真实登录会话中完成只读页面和接口探索，确认登录/刷新/身份接口，以及个人
+  日志、团队日志、项目和日志创建接口。公开 3 项读取能力、日志创建的字段准备与正式
+  提交能力，以及登录/状态工具，共新增 7 个 MCP 工具；
+- HTTP Worker 只允许配置中的精确 origin，拒绝自动重定向；访问令牌和刷新令牌只进入
+  加密会话状态。401/403 才判定凭据或刷新令牌失效，5xx 与临时网络失败返回
+  `DOWNSTREAM_UNAVAILABLE` / `SESSION_CHECK_UNAVAILABLE`，不会伪报密码错误；
+- 真实团队日志页面证明同一用户同一天可以存在多条、不同项目的日志，因此防重规则
+  改为只拦截日期、工时、项目和内容四项完全相同的精确重复。正式写入仍需可信字段卡
+  和独立授权卡；提交后通过个人日志范围接口权威回读，未知结果不自动重试；
+- Token 签发按实际 scope 建立系统会话。泰华写 scope 自动补齐 `taihua:read`，但
+  不附加 `oa:read`；已有 Token 不因部署新能力而扩大权限。部署后只读核对确认辛国茂
+  和李世玉的活动 Token 仍只有既有 OA scope，尚未获得任何泰华权限；
+- 最终发布门禁通过 Python `320 passed, 3 skipped, 19 subtests passed`、OpenClaw
+  `67/67`、MCP 工具目录一致性、`compileall`、`pip check` 和 npm pack dry-run。
+  提交 `3eb8c24` 已推送 GitHub，Linux Release `3eb8c247230a` 已部署；
+- Linux 状态目录已登记 `taihua -> http://10.10.50.101`，AgentBridge 为 active，
+  8780/8790 正常监听，服务器访问泰华返回 HTTP 200；Release 冒烟确认 47 个工具
+  完整、原 OA 会话仍为 active；
+- OpenClaw Gateway 最终以新 PID `27580` 运行，深度 RPC 成功；运行时插件
+  `0.2.13` 为 loaded，47 个 AgentBridge 原生工具全部注册且无诊断。Windows 上
+  `openclaw gateway restart` 会因计划任务结束后旧 Node 子进程脱管而长期不返回，
+  本次通过核对监听 PID、终止脱管旧进程并重新运行原计划任务完成一次重载。后续发布
+  应把“新 PID 监听 + gateway ready + 深度 RPC”作为完成判据；
+- 本轮没有执行任何真实泰华日志写入。下一步需用户明确决定给哪个 OpenClaw 身份授予
+  `taihua:read`，以及是否同时授予 `taihua:write:worklog`，再完成登录、读取和一条
+  经授权日志写入的真实验收。
+
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
