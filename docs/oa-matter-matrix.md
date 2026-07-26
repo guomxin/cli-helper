@@ -35,7 +35,20 @@ python -m bscli.cli.main --home .bscli oa matter matrix --kind all --keyword 报
 旧 `oa matter matrix` 是退役桥接时期的只读发现产物，继续作为模板匹配和
 迁移线索，但不再是当前执行入口。当前智能体应以中心 Capability Registry
 和 MCP 工具目录为准：共 33 个 OA 能力，其中 7 个只读、26 个受治理写阶段；
-中心 MCP 总计 40 个工具。待办、已发、已办、跟踪是四个独立集合，不得互相替代。
+中心 MCP 总计 40 个工具。待办、已发、已办、跟踪是四个独立集合，不得互相替代：
+
+- 待办读取首页 `pendingSection`；
+- 已发读取完整列表页 `listSent` / `getSentList`；
+- 已办读取完整列表页 `listDone` / `getDoneList`；
+- 跟踪读取首页“跟踪事项”的独立“更多”页
+  `portalAffairController.do?method=moreTrack`，网格契约为
+  `gridId` / `getMoreList4SectionContion`，精确事项 ID 来自行复选框值。
+
+2026-07-26 真实只读验收中，辛国茂账号待办为 0 条；已发总数 215、当前页
+50 条；已办总数 1025、当前页 50 条，当前两页 `affair_id` 交集为 0；
+独立跟踪页总数 28、当前页 28 条。当前加载范围的交集为：已发/已办 0、
+已发/跟踪 5、已办/跟踪 0。已发和已办目前读取 OA 首屏 50 条，跟踪事项当时
+只有一页；各集合的 `total` 用于呈现规模，不冒充已经遍历未加载页面。
 
 | 事项 | 发起处理 | 接收处理 | 当前证据与限制 |
 |---|---|---|---|

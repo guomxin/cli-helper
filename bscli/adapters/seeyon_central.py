@@ -71,11 +71,8 @@ from bscli.adapters.seeyon_workflow_revoke import (
 from bscli.adapters.seeyon_system import SEEYON_OA_URL
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
-    extract_history_sections,
-    parse_navigation_inventory,
     parse_oa_detail,
     parse_pending_projection,
-    parse_sent_projection,
     parse_template_center_response,
 )
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
@@ -183,6 +180,103 @@ _WORKFLOW_COLLECTION_DESCRIPTIONS = {
     "tracked": "List workflows followed by the current OA user in the Tracked page.",
 }
 
+_HISTORY_PAGE_CONTRACTS = {
+    "sent": {
+        "method": "listSent",
+        "grid_id": "listSent",
+        "manager_method": "getSentList",
+        "open_from": "listSent",
+    },
+    "done": {
+        "method": "listDone",
+        "grid_id": "listDone",
+        "manager_method": "getDoneList",
+        "open_from": "listDone",
+    },
+}
+
+_HISTORY_GRID_EXTRACT_SCRIPT = r"""
+({gridId}) => {
+  const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const host = document.getElementById(gridId);
+  const gridObject = window.grid || null;
+  const cellValue = (row, abbr) => {
+    const cell = row.querySelector(`td[abbr="${abbr}"]`);
+    if (!cell) return "";
+    const titled = cell.querySelector("[title]");
+    return clean((titled && titled.getAttribute("title")) || cell.textContent);
+  };
+  const items = [];
+  for (const row of Array.from(host ? host.querySelectorAll("tr") : [])) {
+    const title = cellValue(row, "subject");
+    if (!title) continue;
+    const action = Array.from(row.querySelectorAll("[onclick]"))
+      .map((node) => node.getAttribute("onclick") || "")
+      .find((value) => value.includes("showFlowChartAJax(")) || "";
+    const affairMatch = action.match(/showFlowChartAJax\(\s*["']?(-?\d+)/);
+    if (!affairMatch) continue;
+    const trackText = cellValue(row, "isTrack");
+    items.push({
+      affair_id: affairMatch[1],
+      title,
+      status: cellValue(row, "currentNodesInfo") || cellValue(row, "state"),
+      date: cellValue(row, "dealDate") || cellValue(row, "startDate") || cellValue(row, "createDate"),
+      category: cellValue(row, "category"),
+      sender: cellValue(row, "startMemberName") || cellValue(row, "senderName"),
+      is_track: /^(?:是|yes|true|1)$/i.test(trackText),
+      raw_text: clean(row.textContent).slice(0, 800),
+    });
+  }
+  const total = Number(gridObject && gridObject.p && gridObject.p.total);
+  const page = Number(gridObject && gridObject.p && gridObject.p.page);
+  return {
+    total: Number.isFinite(total) ? total : items.length,
+    page: Number.isFinite(page) ? page : 1,
+    items,
+  };
+}
+"""
+
+_TRACKED_GRID_EXTRACT_SCRIPT = r"""
+({gridId}) => {
+  const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const host = document.getElementById(gridId);
+  const gridObject = window.grid || null;
+  const cellValue = (row, abbr) => {
+    const cell = row.querySelector(`td[abbr="${abbr}"]`);
+    if (!cell) return "";
+    const titled = cell.querySelector("[title]");
+    return clean((titled && titled.getAttribute("title")) || cell.textContent);
+  };
+  const items = [];
+  for (const row of Array.from(host ? host.querySelectorAll("tr") : [])) {
+    const title = cellValue(row, "subject");
+    const checkbox = row.querySelector('input[name="workitemId"]');
+    const affairId = clean((checkbox && checkbox.value) || String(row.id || "").replace(/^row/, ""));
+    if (!title || !affairId || !/^-?\d+$/.test(affairId)) continue;
+    const sourceAction = Array.from(row.querySelectorAll("[onclick]"))
+      .map((node) => node.getAttribute("onclick") || "")
+      .find((value) => value.includes("linkToTrack(")) || "";
+    const sourceMatch = sourceAction.match(/linkToTrack\(\s*["']([^"']+)/);
+    items.push({
+      affair_id: affairId,
+      title,
+      status: cellValue(row, "currentNodesInfo"),
+      date: cellValue(row, "createDate"),
+      category: cellValue(row, "categoryLabel"),
+      open_from: sourceMatch ? sourceMatch[1] : "listSent",
+      raw_text: clean(row.textContent).slice(0, 800),
+    });
+  }
+  const total = Number(gridObject && gridObject.p && gridObject.p.total);
+  const page = Number(gridObject && gridObject.p && gridObject.p.page);
+  return {
+    total: Number.isFinite(total) ? total : items.length,
+    page: Number.isFinite(page) ? page : 1,
+    items,
+  };
+}
+"""
 _WORKFLOW_LIST_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -715,14 +809,18 @@ class SeeyonCentralAdapter:
         return {
             "schema_version": "bscli.oa_workflow_list.v1",
             "collection": collection,
-            "source": "section_api",
+            "source": parsed.get("source") or "section_api",
             "source_count": source_count,
             "matched_count": matched_count,
             "count": len(public_items),
             "total": parsed.get("total"),
             "page": parsed.get("page"),
             "items": public_items,
-            "transport": "central_http_session",
+            "transport": (
+                "central_http_session"
+                if collection == "pending"
+                else "central_browser_session"
+            ),
             "browser_bridge_used": False,
         }
 
@@ -838,7 +936,10 @@ class SeeyonCentralAdapter:
 
     def _fetch_workflow_collection(self, worker, collection: str) -> dict:
         self.list_templates(worker)
-        section_url = self._discover_section_url(worker, collection)
+        if collection != "pending":
+            return self._fetch_history_page_collection(worker, collection)
+
+        section_url = self._discover_pending_section_url(worker)
         response = worker.request("GET", section_url)
         status = int(response.get("status") or 0)
         final_url = str(response.get("url") or "")
@@ -851,16 +952,221 @@ class SeeyonCentralAdapter:
             raise SeeyonReadContractMismatch("The OA workflow section did not return JSON.")
         if not isinstance(payload.get("Data"), dict):
             raise SeeyonReadContractMismatch("The OA workflow section JSON is missing Data.")
-        parser = parse_pending_projection if collection == "pending" else parse_sent_projection
-        parsed = parser(payload, base_url=final_url or self.base_url)
+        parsed = parse_pending_projection(payload, base_url=final_url or self.base_url)
         if parsed.get("error"):
             raise SeeyonReadContractMismatch(str(parsed["error"]))
         return parsed
 
-    def _discover_section_url(
+    def _fetch_history_page_collection(self, worker, collection: str) -> dict:
+        if collection == "tracked":
+            return self._read_tracked_page(worker)
+        return self._read_history_page(worker, collection)
+
+    def _read_history_page(self, worker, collection: str) -> dict:
+        contract = _HISTORY_PAGE_CONTRACTS.get(collection)
+        if contract is None:
+            raise SeeyonReadContractMismatch(
+                f"The OA history page contract does not support {collection}."
+            )
+        page_url = urljoin(
+            self.base_url,
+            "collaboration/collaboration.do?"
+            + urlencode({"method": contract["method"]}),
+        )
+        page = worker.goto(page_url)
+        if _looks_like_login_url(worker.page_url):
+            raise SeeyonLoginRequired(
+                f"The central OA session expired while opening the {collection} page."
+            )
+        try:
+            page.wait_for_function(
+                "({gridId, managerMethod}) => { const host = document.getElementById(gridId); "
+                "const current = window.grid; return Boolean(host && current && current.p && "
+                "current.p.managerMethod === managerMethod && "
+                "(host.querySelector('td[abbr=\"subject\"]') || Number(current.p.total) === 0)); }",
+                arg={
+                    "gridId": contract["grid_id"],
+                    "managerMethod": contract["manager_method"],
+                },
+                timeout=12000,
+            )
+            extracted = page.evaluate(
+                _HISTORY_GRID_EXTRACT_SCRIPT,
+                {"gridId": contract["grid_id"]},
+            )
+        except Exception as exc:
+            if _looks_like_login_url(worker.page_url):
+                raise SeeyonLoginRequired(
+                    f"The central OA session expired while loading the {collection} page."
+                ) from exc
+            raise SeeyonReadContractMismatch(
+                f"The OA {collection} page did not expose its workflow grid."
+            ) from exc
+        if not isinstance(extracted, dict) or not isinstance(extracted.get("items"), list):
+            raise SeeyonReadContractMismatch(
+                f"The OA {collection} page returned an invalid workflow grid."
+            )
+
+        items = []
+        for raw_item in extracted["items"]:
+            if not isinstance(raw_item, dict):
+                continue
+            affair_id = str(raw_item.get("affair_id") or "").strip()
+            title = str(raw_item.get("title") or "").strip()
+            if not affair_id or not title:
+                continue
+            href = urljoin(
+                self.base_url,
+                "collaboration/collaboration.do?"
+                + urlencode(
+                    {
+                        "method": "summary",
+                        "openFrom": contract["open_from"],
+                        "affairId": affair_id,
+                        "showTab": "true",
+                    }
+                ),
+            )
+            items.append(
+                {
+                    "index": len(items),
+                    "affair_id": affair_id,
+                    "title": title,
+                    "status": str(raw_item.get("status") or ""),
+                    "date": str(raw_item.get("date") or ""),
+                    "category": str(raw_item.get("category") or ""),
+                    "sender": str(raw_item.get("sender") or ""),
+                    "is_track": bool(raw_item.get("is_track")),
+                    "raw_text": str(raw_item.get("raw_text") or "")[:800],
+                    "href": href,
+                }
+            )
+        return {
+            "source": "history_page_grid",
+            "count": len(items),
+            "total": extracted.get("total"),
+            "page": extracted.get("page"),
+            "items": items,
+        }
+
+    def _read_tracked_page(self, worker) -> dict:
+        page = worker.goto(
+            urljoin(self.base_url, "main.do?" + urlencode({"method": "main"})),
+            timeout_seconds=60,
+        )
+        if _looks_like_login_url(worker.page_url):
+            raise SeeyonLoginRequired(
+                "The central OA session expired while opening the tracked page."
+            )
+        try:
+            tracked_tab = page.locator(
+                'li[title*="跟踪"], li:has-text("跟踪事项")'
+            ).first
+            tracked_tab.wait_for(state="visible", timeout=12000)
+            tracked_tab.click()
+            more_link = page.locator('[onclick*="method=moreTrack"]').first
+            more_link.wait_for(state="visible", timeout=12000)
+            more_link.click()
+
+            frame = None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if _looks_like_login_url(worker.page_url):
+                    raise SeeyonLoginRequired(
+                        "The central OA session expired while loading the tracked page."
+                    )
+                for candidate in page.frames:
+                    parsed = urlparse(str(candidate.url or ""))
+                    if (
+                        parsed.path.endswith("/portalAffair/portalAffairController.do")
+                        and parse_qs(parsed.query).get("method") == ["moreTrack"]
+                    ):
+                        frame = candidate
+                        break
+                if frame is not None:
+                    break
+                page.wait_for_timeout(250)
+            if frame is None:
+                raise SeeyonReadContractMismatch(
+                    "The OA Tracked page did not open its moreTrack frame."
+                )
+            frame.wait_for_function(
+                "({gridId, managerMethod}) => { const host = document.getElementById(gridId); "
+                "const current = window.grid; return Boolean(host && current && current.p && "
+                "current.p.managerMethod === managerMethod && "
+                "(host.querySelector('td[abbr=\"subject\"]') || Number(current.p.total) === 0)); }",
+                arg={
+                    "gridId": "gridId",
+                    "managerMethod": "getMoreList4SectionContion",
+                },
+                timeout=12000,
+            )
+            extracted = frame.evaluate(
+                _TRACKED_GRID_EXTRACT_SCRIPT,
+                {"gridId": "gridId"},
+            )
+        except SeeyonLoginRequired:
+            raise
+        except SeeyonReadContractMismatch:
+            raise
+        except Exception as exc:
+            if _looks_like_login_url(worker.page_url):
+                raise SeeyonLoginRequired(
+                    "The central OA session expired while loading the tracked page."
+                ) from exc
+            raise SeeyonReadContractMismatch(
+                "The OA Tracked page did not expose its workflow grid."
+            ) from exc
+        if not isinstance(extracted, dict) or not isinstance(extracted.get("items"), list):
+            raise SeeyonReadContractMismatch(
+                "The OA Tracked page returned an invalid workflow grid."
+            )
+
+        items = []
+        for raw_item in extracted["items"]:
+            if not isinstance(raw_item, dict):
+                continue
+            affair_id = str(raw_item.get("affair_id") or "").strip()
+            title = str(raw_item.get("title") or "").strip()
+            if not affair_id or not title:
+                continue
+            open_from = str(raw_item.get("open_from") or "")
+            if open_from not in {"listSent", "listDone"}:
+                open_from = "listSent"
+            href = urljoin(
+                self.base_url,
+                "collaboration/collaboration.do?"
+                + urlencode(
+                    {
+                        "method": "summary",
+                        "openFrom": open_from,
+                        "affairId": affair_id,
+                        "showTab": "true",
+                    }
+                ),
+            )
+            items.append(
+                {
+                    "index": len(items),
+                    "affair_id": affair_id,
+                    "title": title,
+                    "status": str(raw_item.get("status") or ""),
+                    "date": str(raw_item.get("date") or ""),
+                    "category": str(raw_item.get("category") or ""),
+                    "raw_text": str(raw_item.get("raw_text") or "")[:800],
+                    "href": href,
+                }
+            )
+        return {
+            "source": "tracked_page_grid",
+            "count": len(items),
+            "total": extracted.get("total"),
+            "page": extracted.get("page"),
+            "items": items,
+        }
+    def _discover_pending_section_url(
         self,
         worker,
-        collection: str,
         *,
         timeout_seconds: float = 10,
     ) -> str:
@@ -869,39 +1175,18 @@ class SeeyonCentralAdapter:
         while time.monotonic() < deadline:
             if _looks_like_login_url(worker.page_url):
                 raise SeeyonLoginRequired("The central OA session expired while opening the home page.")
-            resource_urls = worker.resource_urls()
-            if collection == "pending":
-                section_url = _find_section_resource_url(resource_urls, "pendingSection")
-                if section_url:
-                    return _section_url_with_arguments(
-                        section_url,
-                        {"sectionBeanId": "pendingSection"},
-                    )
-            else:
-                section_url = _find_section_resource_url(resource_urls, "sentSection")
-                if section_url:
-                    inventory = parse_navigation_inventory(worker.page.content(), base_url=self.base_url)
-                    history = extract_history_sections(inventory)
-                    history_item = next(
-                        (
-                            item
-                            for item in history.get("items") or []
-                            if item.get("kind") == collection
-                        ),
-                        None,
-                    )
-                    if history_item:
-                        return _section_url_with_arguments(
-                            section_url,
-                            {
-                                "sectionBeanId": "sentSection",
-                                "entityId": history_item.get("section_id"),
-                                "panelId": history_item.get("tab_id"),
-                            },
-                        )
+            section_url = _find_section_resource_url(
+                worker.resource_urls(),
+                "pendingSection",
+            )
+            if section_url:
+                return _section_url_with_arguments(
+                    section_url,
+                    {"sectionBeanId": "pendingSection"},
+                )
             time.sleep(0.25)
         raise SeeyonReadContractMismatch(
-            f"The OA home page did not expose the {collection} section contract in time."
+            "The OA home page did not expose the pending section contract in time."
         )
 
     def _render_workflow_detail(self, worker, *, collection: str, affair_id: str) -> tuple[dict, dict]:

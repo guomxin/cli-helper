@@ -126,35 +126,61 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertNotIn("raw_text", serialized)
         self.assertNotIn("owner-secret", serialized)
 
-    def test_done_list_reuses_current_user_contract_and_switches_history_panel(self):
+    def test_done_list_uses_the_distinct_done_page_grid(self):
         result = self.adapter.invoke_capability("oa.workflow.done.list", self.worker, {})
 
+        self.assertEqual(result["source"], "history_page_grid")
         self.assertEqual(result["items"][0]["affair_id"], "done-1")
-        self.assertEqual(result["items"][0]["status"], "Alice 待处理")
-        arguments = self.worker.last_section_arguments
-        self.assertEqual(arguments["ownerId"], "owner-secret")
-        self.assertEqual(arguments["spaceId"], "space-current")
-        self.assertEqual(arguments["sectionBeanId"], "sentSection")
-        self.assertEqual(arguments["entityId"], "sent-entity")
-        self.assertEqual(arguments["panelId"], "done-panel")
+        self.assertEqual(result["items"][0]["status"], "Completed")
+        self.assertIn("method=listDone", self.worker.goto_calls[-1])
+        self.assertEqual(
+            self.worker.page.wait_calls[-1]["managerMethod"],
+            "getDoneList",
+        )
 
-    def test_sent_list_uses_the_distinct_sent_history_panel(self):
+    def test_sent_list_uses_the_distinct_sent_page_grid(self):
         result = self.adapter.invoke_capability("oa.workflow.sent.list", self.worker, {})
 
         self.assertEqual(result["collection"], "sent")
+        self.assertEqual(result["source"], "history_page_grid")
+        self.assertEqual(result["transport"], "central_browser_session")
         self.assertEqual(result["items"][0]["affair_id"], "sent-1")
-        arguments = self.worker.last_section_arguments
-        self.assertEqual(arguments["sectionBeanId"], "sentSection")
-        self.assertEqual(arguments["entityId"], "sent-entity")
-        self.assertEqual(arguments["panelId"], "sent-panel")
+        self.assertIn("method=listSent", self.worker.goto_calls[-1])
+        self.assertEqual(
+            self.worker.page.wait_calls[-1]["managerMethod"],
+            "getSentList",
+        )
 
-    def test_tracked_list_uses_the_distinct_tracked_history_panel(self):
+    def test_tracked_list_uses_the_independent_more_track_grid(self):
         result = self.adapter.invoke_capability("oa.workflow.tracked.list", self.worker, {})
 
         self.assertEqual(result["collection"], "tracked")
-        self.assertEqual(result["items"][0]["affair_id"], "tracked-1")
-        self.assertEqual(self.worker.last_section_arguments["panelId"], "tracked-panel")
+        self.assertEqual(result["source"], "tracked_page_grid")
+        self.assertEqual(result["total"], 28)
+        self.assertEqual(
+            [item["affair_id"] for item in result["items"]],
+            ["tracked-sent", "tracked-done"],
+        )
+        self.assertIn("method=main", self.worker.goto_calls[-1])
+        self.assertEqual(
+            self.worker.page.locator_clicks,
+            ["tracking-tab", "more-track"],
+        )
+        self.assertEqual(
+            self.worker.page.frames[0].wait_calls[-1]["managerMethod"],
+            "getMoreList4SectionContion",
+        )
+    def test_tracked_detail_preserves_the_row_source_page(self):
+        self.adapter.invoke_capability(
+            "oa.workflow.detail.get",
+            self.worker,
+            {
+                "collection": "tracked",
+                "affair_id": "tracked-done",
+            },
+        )
 
+        self.assertIn("openFrom=listDone", self.worker.render_calls[-1])
     def test_detail_merges_same_origin_frame_and_exposes_business_data_only(self):
         result = self.adapter.invoke_capability(
             "oa.workflow.detail.get",
@@ -306,9 +332,127 @@ class FakeWorkflowWorker:
         }
 
 
+class FakeWorkflowLocator:
+    def __init__(self, page, selector):
+        self.page = page
+        self.selector = selector
+
+    @property
+    def first(self):
+        return self
+
+    def wait_for(self, **_kwargs):
+        return None
+
+    def click(self):
+        if "moreTrack" in self.selector:
+            self.page.locator_clicks.append("more-track")
+        else:
+            self.page.locator_clicks.append("tracking-tab")
+
+
+class FakeTrackedFrame:
+    def __init__(self):
+        self.url = (
+            "http://oa.example.test/seeyon/portalAffair/"
+            "portalAffairController.do?method=moreTrack"
+        )
+        self.wait_calls = []
+
+    def wait_for_function(self, _expression, *, arg, timeout):
+        self.wait_calls.append({**arg, "timeout": timeout})
+
+    def evaluate(self, _expression, arg):
+        if arg.get("gridId") != "gridId":
+            raise AssertionError(f"unexpected tracked grid id: {arg.get('gridId')}")
+        return {
+            "total": 28,
+            "page": 1,
+            "items": [
+                {
+                    "affair_id": "tracked-sent",
+                    "title": "Tracked sent request",
+                    "status": "Alice",
+                    "date": "2026-07-02 17:11",
+                    "category": "Collaboration (Sent)",
+                    "open_from": "listSent",
+                },
+                {
+                    "affair_id": "tracked-done",
+                    "title": "Tracked done request",
+                    "status": "Completed",
+                    "date": "2026-06-01 09:00",
+                    "category": "Collaboration (Done)",
+                    "open_from": "listDone",
+                },
+            ],
+        }
+
+
 class FakeWorkflowPage:
     def __init__(self):
         self.url = BASE_URL
+        self.wait_calls = []
+        self.locator_clicks = []
+        self.frames = [FakeTrackedFrame()]
+
+    def locator(self, selector):
+        return FakeWorkflowLocator(self, selector)
+
+    def wait_for_function(self, _expression, *, arg, timeout):
+        self.wait_calls.append({**arg, "timeout": timeout})
+
+    def evaluate(self, _expression, arg):
+        if arg.get("gridId") == "listSent":
+            return {
+                "total": 215,
+                "page": 1,
+                "items": [
+                    {
+                        "affair_id": "sent-1",
+                        "title": "Sent request",
+                        "status": "In progress",
+                        "date": "2026-07-08 09:00",
+                        "is_track": False,
+                    },
+                    {
+                        "affair_id": "shared-tracked",
+                        "title": "Shared tracked request",
+                        "status": "In progress",
+                        "date": "2026-07-01 09:00",
+                        "is_track": True,
+                    },
+                ],
+            }
+        if arg.get("gridId") == "listDone":
+            return {
+                "total": 320,
+                "page": 1,
+                "items": [
+                    {
+                        "affair_id": "done-1",
+                        "title": "Completed request",
+                        "status": "Completed",
+                        "date": "2026-07-10 10:30",
+                        "is_track": False,
+                    },
+                    {
+                        "affair_id": "shared-tracked",
+                        "title": "Shared tracked request",
+                        "status": "Completed",
+                        "date": "2026-07-01 09:00",
+                        "is_track": True,
+                    },
+                    {
+                        "affair_id": "done-tracked",
+                        "title": "Done tracked request",
+                        "status": "Completed",
+                        "date": "2026-07-03 09:00",
+                        "is_track": True,
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected grid id: {arg.get('gridId')}")
 
     def content(self):
         return """

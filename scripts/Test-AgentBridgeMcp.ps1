@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("SessionStatus", "LoginReuse", "Release")]
+    [ValidateSet("SessionStatus", "LoginReuse", "Release", "WorkflowCollections")]
     [string]$Check = "SessionStatus",
     [string]$ServerName = "agentbridge",
     [string]$CaCertificate = "",

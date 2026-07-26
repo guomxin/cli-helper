@@ -1096,6 +1096,29 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 
 本轮能力扩展不处理第二用户待办，也不因 Token 已具备 `oa:write:approval` 就自动执行。真实审批仍需用户在原聊天通道逐条确认。
 
+## 15.20 2026-07-26 四类读取语义与登录后自动续办
+
+- 修正把首页 `sentSection` 的不同面板参数误当作已发、已办、跟踪完整数据源的问题。
+  待办继续读取 `pendingSection`；已发改读 `listSent` / `getSentList`；已办改读
+  `listDone` / `getDoneList`；跟踪通过首页“跟踪事项”的独立“更多”入口加载
+  `portalAffairController.do?method=moreTrack` iframe，并读取 `gridId` /
+  `getMoreList4SectionContion` 网格。跟踪行复选框提供精确 `affair_id`，分类链接保留
+  `listSent` 或 `listDone` 来源，四个工具不再互相替代；
+- 真实只读验收中，辛国茂账号待办 0 条；已发总数 215、当前页 50 条；已办总数
+  1025、当前页 50 条，独立跟踪页总数 28、当前页 28 条。当前加载范围交集为
+  已发/已办 0、已发/跟踪 5、已办/跟踪 0。已发和已办目前读取 OA 首屏 50 条，
+  尚未实现跨页穷举；跟踪事项当时只有一页；
+- 新增 `Test-AgentBridgeMcp.ps1 -Check WorkflowCollections` 只读发布探针。它使用
+  OpenClaw 的身份绑定与 CA 配置调用四个工具，只输出来源、加载数、总数、页码和交集
+  数，不输出事项标题或 ID，并拒绝来源契约不匹配；
+- OpenClaw 插件 `0.2.12` 保存登录前失败的原始只读工具与非敏感参数。安全登录完成
+  后，在同一 OpenClaw 会话、同一绑定用户和同一 MCP Token 上直接重放一次读取，
+  并把结果投递回原 Telegram 或微信通道；若模型先调用登录工具，也可从最近用户
+  消息推断待办、已发、已办或跟踪读取意图；
+- 自动续办严格限于四个列表只读工具，移除旧幂等键并设置五分钟有效期。任何字段填写、
+  审批、提交、撤销或其他写能力都不会自动重放。插件单测覆盖精确待办重放、登录优先
+  的已发推断、单次执行和原会话投递。
+
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；

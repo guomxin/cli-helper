@@ -60,7 +60,7 @@ try {
   const checkName = argument("--check", "SessionStatus");
   const serverName = argument("--server-name", "agentbridge");
   const check = CHECKS.get(checkName);
-  if (!check && checkName !== "Release") {
+  if (!check && !["Release", "WorkflowCollections"].includes(checkName)) {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
   }
 
@@ -85,47 +85,96 @@ try {
     });
   }
 
-  let toolCount = null;
-  if (checkName === "Release") {
-    const tools = await client.listTools();
-    const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
-    const missing = REQUIRED_RELEASE_TOOLS.filter((name) => !names.has(name));
-    if (missing.length) {
-      throw Object.assign(new Error("Release MCP tool catalog is incomplete"), {
-        code: "MCP_TOOL_CATALOG_INCOMPLETE",
-      });
+  if (checkName === "WorkflowCollections") {
+    const definitions = [
+      ["pending", "oa_workflow_pending_list", "section_api"],
+      ["sent", "oa_workflow_sent_list", "history_page_grid"],
+      ["done", "oa_workflow_done_list", "history_page_grid"],
+      ["tracked", "oa_workflow_tracked_list", "tracked_page_grid"],
+    ];
+    const collections = {};
+    const idSets = {};
+    for (const [collection, tool, expectedSource] of definitions) {
+      const payload = await client.callTool(tool, { limit: 100 });
+      if (payload?.error) {
+        throw Object.assign(new Error("Workflow collection read failed"), {
+          code: payload.error.code || "WORKFLOW_COLLECTION_READ_FAILED",
+        });
+      }
+      const result = payload?.result ?? payload;
+      if (result?.collection !== collection || result?.source !== expectedSource) {
+        throw Object.assign(new Error("Workflow collection contract mismatch"), {
+          code: "WORKFLOW_COLLECTION_CONTRACT_MISMATCH",
+        });
+      }
+      const ids = (result?.items ?? [])
+        .map((item) => String(item?.affair_id ?? ""))
+        .filter(Boolean);
+      idSets[collection] = new Set(ids);
+      collections[collection] = {
+        source: result.source,
+        loaded: Number(result.count ?? ids.length),
+        total: Number(result.total ?? ids.length),
+        page: Number(result.page ?? 1),
+      };
     }
-    toolCount = tools.length;
-  }
+    const overlap = (left, right) =>
+      [...idSets[left]].filter((value) => idSets[right].has(value)).length;
+    process.stdout.write(
+      JSON.stringify({
+        status: "succeeded",
+        check: checkName,
+        collections,
+        overlaps: {
+          sentDone: overlap("sent", "done"),
+          sentTracked: overlap("sent", "tracked"),
+          doneTracked: overlap("done", "tracked"),
+        },
+      }) + "\n",
+    );
+  } else {
+    let toolCount = null;
+    if (checkName === "Release") {
+      const tools = await client.listTools();
+      const names = new Set(tools.map((tool) => tool?.name).filter(Boolean));
+      const missing = REQUIRED_RELEASE_TOOLS.filter((name) => !names.has(name));
+      if (missing.length) {
+        throw Object.assign(new Error("Release MCP tool catalog is incomplete"), {
+          code: "MCP_TOOL_CATALOG_INCOMPLETE",
+        });
+      }
+      toolCount = tools.length;
+    }
 
-  const effectiveCheck = check ?? CHECKS.get("SessionStatus");
-  const payload = await client.callTool(effectiveCheck.tool, effectiveCheck.arguments);
-  const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
-  const summary =
-    checkName === "LoginReuse"
-      ? {
-          status: "succeeded",
-          check: checkName,
-          operationStatus: String(payload?.status ?? "unknown").slice(0, 80),
-          reused: Boolean(payload?.reused),
-          hasInteraction: Boolean(payload?.interaction),
-          nextAction: payload?.nextAction?.type
-            ? String(payload.nextAction.type).slice(0, 80)
-            : null,
-          errorCode,
-        }
-      : {
-          status: "succeeded",
-          check: checkName,
-          toolCount,
-          requiredReleaseToolsPresent: checkName === "Release" ? true : null,
-          sessionStatus: String(
-            payload?.result?.status ?? payload?.status ?? "unknown",
-          ).slice(0, 80),
-          checkedAt: payload?.result?.checkedAt ?? payload?.checkedAt ?? null,
-          errorCode,
-        };
-  process.stdout.write(JSON.stringify(summary) + "\n");
+    const effectiveCheck = check ?? CHECKS.get("SessionStatus");
+    const payload = await client.callTool(effectiveCheck.tool, effectiveCheck.arguments);
+    const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
+    const summary =
+      checkName === "LoginReuse"
+        ? {
+            status: "succeeded",
+            check: checkName,
+            operationStatus: String(payload?.status ?? "unknown").slice(0, 80),
+            reused: Boolean(payload?.reused),
+            hasInteraction: Boolean(payload?.interaction),
+            nextAction: payload?.nextAction?.type
+              ? String(payload.nextAction.type).slice(0, 80)
+              : null,
+            errorCode,
+          }
+        : {
+            status: "succeeded",
+            check: checkName,
+            toolCount,
+            requiredReleaseToolsPresent: checkName === "Release" ? true : null,
+            sessionStatus: String(
+              payload?.result?.status ?? payload?.status ?? "unknown",
+            ).slice(0, 80),
+            checkedAt: payload?.result?.checkedAt ?? payload?.checkedAt ?? null,
+            errorCode,
+          };
+    process.stdout.write(JSON.stringify(summary) + "\n");
+  }
 } catch (error) {
   process.stdout.write(
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
