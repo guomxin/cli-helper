@@ -37,14 +37,14 @@ Security behavior is intentionally fail closed:
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
-- repeated `oa_session_login` calls for the same bound session and unchanged
+- repeated OA or Taihua session-login calls for the same bound session and unchanged
   authentication contract reuse the existing unexpired credential card and
   interaction, including while the trusted page is processing;
 - after a successful credential resume that explicitly returns
-  `nextAction.type=retry_original_request`, a login-blocked workflow-list read
-  is replayed once through the same per-user MCP client and delivered directly
-  to the originating private channel; login-first requests can infer only the
-  pending, sent, done, or tracked list intent from the current user message;
+  `nextAction.type=retry_original_request`, a login-blocked OA workflow-list or
+  Taihua log/project read is replayed once through the same per-user MCP client
+  and delivered directly to the originating private channel; login-first
+  requests can infer only the registered read intents from the current user message;
 - write tools are never captured or replayed by login continuation;
 - background polling resumes a completed interaction once and delivers the
   next trusted card or a fixed terminal-status message through the original
@@ -85,7 +85,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.2.12, ...)
+AgentBridge interaction plugin registered (version=0.2.13, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -145,12 +145,12 @@ as fixed host-owned status text through the same adapter.
 
 A successful credential resume with
 `nextAction.type=retry_original_request` is the deliberate exception to the
-model-free terminal path. When a pending, sent, done, or tracked list call was
-blocked by `LOGIN_REQUIRED`, the plugin stores only its safe `keyword` and
-`limit` arguments, drops the old idempotency key, and replays that read once
-through the same identity-bound MCP client after login. If the model called
-login first, the plugin may infer one of those four list intents from the most
-recent private user message. A successful replay is formatted and delivered
+model-free terminal path. Registered OA workflow-list reads and Taihua
+`my/team work logs` or `project search` reads retain only their allowlisted
+filters, dates, and pagination values, drop the old idempotency key, and replay
+once through the same identity-bound MCP client after login. Login-first intent
+inference is likewise restricted to these named read collections. A successful
+replay is formatted for the corresponding business object and delivered
 directly to the original channel; a failed replay reports its error code.
 
 No draft, approval, submission, meeting, revoke, or other write tool is eligible

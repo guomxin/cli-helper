@@ -10,7 +10,7 @@ The active runtime is central AgentBridge:
 - Trusted authentication, business-field, and write-authorization cards
 - A Credential Broker that keeps credentials outside model-visible channels
 - A durable operation ledger with idempotency and explicit outcome states
-- Seeyon OA support with six read capabilities and twelve governed workflow-stage capabilities
+- Seeyon OA plus API-first Taihua work-log support under one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
@@ -83,6 +83,17 @@ Published OA capabilities:
 - oa.workflow.revoke.prepare
 - oa.workflow.revoke
 
+Published Taihua capabilities:
+
+- `taihua.work_log.my.list`
+- `taihua.work_log.team.list`
+- `taihua.project.search`
+- `taihua.work_log.create.prepare`
+- `taihua.work_log.create`
+
+Taihua uses central HTTP token sessions with refresh, exact-origin enforcement,
+and no browser during normal reads or writes. See the
+[Taihua adapter guide](docs/taihua-log-system-adapter.md).
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
 form fields.
@@ -305,9 +316,13 @@ python -m bscli.cli.main --home .bscli mcp token issue \
   --ttl-hours 24
 ~~~
 
-Choose only the scopes required by that client: `oa:write:draft`,
-`oa:write:approval`, `oa:write:meeting`, `oa:write:submit`, and
-`oa:write:revoke` are independent.
+Choose only the scopes required by that client. OA scopes (`oa:read`,
+`oa:write:draft`, `oa:write:approval`, `oa:write:meeting`, `oa:write:submit`,
+`and `oa:write:revoke`) are independent from Taihua scopes (`taihua:read` and
+`taihua:write:worklog`).
+The token command adds the corresponding system's base read scope when any
+write scope for that system is requested, and only creates session bindings for
+systems represented by the final scope set.
 Completing a trusted card or deploying a new capability never widens an already
 issued token.
 

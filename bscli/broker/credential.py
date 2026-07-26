@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from bscli.adapters.seeyon_central import (
-    SeeyonAuthenticationRejected,
-    SeeyonLoginContractMismatch,
-    SeeyonUnsupportedAuthMethod,
+from bscli.adapters.base import (
+    AdapterAuthenticationRejected,
+    AdapterLoginContractMismatch,
+    AdapterSessionCheckUnavailable,
+    AdapterUnsupportedAuthMethod,
 )
 from bscli.browser.central import CentralProfileUnavailableError
 from bscli.core.auth_challenges import AuthChallengeStore
@@ -102,43 +103,50 @@ class CredentialBroker:
                 challenge_id,
                 session,
                 code="PRINCIPAL_MISMATCH",
-                message="The authenticated OA identity did not match the expected identity.",
+                message="The authenticated downstream identity did not match the expected identity.",
                 quarantine=True,
             )
-        except SeeyonUnsupportedAuthMethod:
+        except AdapterUnsupportedAuthMethod:
             return self._fail(
                 challenge_id,
                 session,
                 code="UNSUPPORTED_AUTH_METHOD",
-                message="This OA login requires an authentication method not supported by the card.",
+                message="This login requires an authentication method not supported by the card.",
             )
-        except SeeyonLoginContractMismatch:
+        except AdapterLoginContractMismatch:
             return self._fail(
                 challenge_id,
                 session,
                 code="LOGIN_CONTRACT_MISMATCH",
-                message="The OA login page no longer matches its registered contract.",
+                message="The login no longer matches its registered contract.",
             )
-        except SeeyonAuthenticationRejected:
+        except AdapterAuthenticationRejected:
             return self._fail(
                 challenge_id,
                 session,
                 code="AUTHENTICATION_REJECTED",
-                message="OA did not accept the submitted authentication information.",
+                message="The downstream system did not accept the submitted authentication information.",
+            )
+        except (AdapterSessionCheckUnavailable, ConnectionError):
+            return self._fail(
+                challenge_id,
+                session,
+                code="DOWNSTREAM_UNAVAILABLE",
+                message="The downstream system is temporarily unavailable; please try login again later.",
             )
         except SessionSecretError:
             return self._fail(
                 challenge_id,
                 session,
                 code="SESSION_STATE_UNAVAILABLE",
-                message="The encrypted OA session could not be saved.",
+                message="The encrypted downstream session could not be saved.",
             )
         except CentralProfileUnavailableError:
             return self._fail(
                 challenge_id,
                 session,
                 code="SESSION_PROFILE_UNAVAILABLE",
-                message="The managed OA browser profile is not writable.",
+                message="The managed downstream session worker is not writable.",
             )
         except (KeyError, TypeError, ValueError):
             return self._fail(
@@ -157,7 +165,7 @@ class CredentialBroker:
                 challenge_id,
                 session,
                 code="BROKER_LOGIN_FAILED",
-                message="The credential broker could not complete the OA login.",
+                message="The credential broker could not complete the downstream login.",
             )
         finally:
             credentials.clear()

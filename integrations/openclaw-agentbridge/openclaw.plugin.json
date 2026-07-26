@@ -8,6 +8,7 @@
     ],
     "tools": [
       "agentbridge_identity_status",
+
       "oa_efficiency_data_approval_prepare",
       "oa_efficiency_data_approve",
       "oa_travel_expense_approval_prepare",
@@ -42,6 +43,13 @@
       "oa_missed_punch_approve",
       "oa_meeting_create_prepare",
       "oa_meeting_create",
+      "taihua_work_log_my_list",
+      "taihua_work_log_team_list",
+      "taihua_project_search",
+      "taihua_work_log_create_prepare",
+      "taihua_work_log_create",
+      "taihua_session_status",
+      "taihua_session_login",
       "oa_session_status",
       "oa_session_login",
       "agentbridge_interaction_get",

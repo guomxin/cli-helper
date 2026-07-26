@@ -166,6 +166,41 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
                 )
             )
 
+    def test_taihua_read_and_worklog_write_scopes_are_independent(self):
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            read_only = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["taihua:read"],
+            )
+            writer = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["taihua:read", "taihua:write:worklog"],
+            )
+
+            self.assertIsNotNone(
+                store.verify(
+                    read_only["token"],
+                    required_scopes={"taihua:read"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(
+                    read_only["token"],
+                    required_scopes={"taihua:write:worklog"},
+                )
+            )
+            self.assertIsNotNone(
+                store.verify(
+                    writer["token"],
+                    required_scopes={"taihua:write:worklog"},
+                )
+            )
+            self.assertIsNone(
+                store.verify(writer["token"], required_scopes={"oa:read"})
+            )
     def test_unsupported_scope_and_unsafe_subject_are_rejected(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

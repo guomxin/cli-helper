@@ -20,12 +20,33 @@ const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const LOGIN_CONTINUATION_TTL_MS = 5 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
 const LOGIN_READ_TOOLS = new Map([
-  ["oa_workflow_pending_list", { collection: "pending", label: "\u5f85\u529e" }],
-  ["oa_workflow_sent_list", { collection: "sent", label: "\u5df2\u53d1" }],
-  ["oa_workflow_done_list", { collection: "done", label: "\u5df2\u529e" }],
+  [
+    "oa_workflow_pending_list",
+    { kind: "oa_workflow", collection: "pending", system: "OA", label: "待办" },
+  ],
+  [
+    "oa_workflow_sent_list",
+    { kind: "oa_workflow", collection: "sent", system: "OA", label: "已发" },
+  ],
+  [
+    "oa_workflow_done_list",
+    { kind: "oa_workflow", collection: "done", system: "OA", label: "已办" },
+  ],
   [
     "oa_workflow_tracked_list",
-    { collection: "tracked", label: "\u8ddf\u8e2a\u4e8b\u9879" },
+    { kind: "oa_workflow", collection: "tracked", system: "OA", label: "跟踪事项" },
+  ],
+  [
+    "taihua_work_log_my_list",
+    { kind: "taihua_work_log", system: "泰华日志系统", label: "我的工作日志" },
+  ],
+  [
+    "taihua_work_log_team_list",
+    { kind: "taihua_work_log", system: "泰华日志系统", label: "团队工作日志" },
+  ],
+  [
+    "taihua_project_search",
+    { kind: "taihua_project", system: "泰华日志系统", label: "项目" },
   ],
 ]);
 
@@ -651,17 +672,21 @@ export class InteractionCoordinator {
         continuation.arguments,
       );
     } catch (error) {
+      const system =
+        LOGIN_READ_TOOLS.get(continuation.toolName)?.system || "下游系统";
       const text =
-        "OA \u767b\u5f55\u5df2\u5b8c\u6210\uff0c\u4f46 AgentBridge \u81ea\u52a8\u7ee7\u7eed\u539f\u8bfb\u53d6\u8bf7\u6c42\u5931\u8d25" +
-        `\uff08\u9519\u8bef\u7801\uff1a${safeErrorCode(error)}\uff09\u3002\u8bf7\u91cd\u65b0\u53d1\u9001\u4e00\u6b21\u8bfb\u53d6\u8bf7\u6c42\u3002`;
+        `${system} 登录已完成，但 AgentBridge 自动继续原读取请求失败` +
+        `（错误码：${safeErrorCode(error)}）。请重新发送一次读取请求。`;
       return this.deliverReadContinuation(record, text, null);
     }
 
     if (safeStatus(response) !== "succeeded") {
       const code = safeResponseErrorCode(response) || safeStatus(response);
+      const system =
+        LOGIN_READ_TOOLS.get(continuation.toolName)?.system || "下游系统";
       const text =
-        "OA \u767b\u5f55\u5df2\u5b8c\u6210\uff0c\u4f46\u539f\u8bfb\u53d6\u8bf7\u6c42\u4ecd\u7136\u5931\u8d25" +
-        `\uff08\u9519\u8bef\u7801\uff1a${safeCode(code)}\uff09\u3002\u8bf7\u91cd\u65b0\u53d1\u9001\u4e00\u6b21\u8bfb\u53d6\u8bf7\u6c42\u3002`;
+        `${system} 登录已完成，但原读取请求仍然失败` +
+        `（错误码：${safeCode(code)}）。请重新发送一次读取请求。`;
       return this.deliverReadContinuation(record, text, response);
     }
 
@@ -994,7 +1019,8 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
 
 function normalizeReadContinuation(toolName, params, capturedAt) {
   const normalizedToolName = String(toolName || "").trim();
-  if (!LOGIN_READ_TOOLS.has(normalizedToolName)) {
+  const descriptor = LOGIN_READ_TOOLS.get(normalizedToolName);
+  if (!descriptor) {
     return null;
   }
   const source =
@@ -1003,8 +1029,44 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
   if (typeof source.keyword === "string" && source.keyword.trim()) {
     arguments_.keyword = source.keyword.trim().slice(0, 200);
   }
-  if (Number.isInteger(source.limit) && source.limit >= 1 && source.limit <= 100) {
+  const maximumLimit =
+    descriptor.kind === "taihua_project"
+      ? 50
+      : descriptor.kind === "oa_workflow"
+        ? 100
+        : 500;
+  if (
+    Number.isInteger(source.limit) &&
+    source.limit >= 1 &&
+    source.limit <= maximumLimit
+  ) {
     arguments_.limit = source.limit;
+  }
+  if (descriptor.kind === "taihua_work_log") {
+    for (const name of ["start_date", "end_date"]) {
+      if (
+        typeof source[name] === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(source[name])
+      ) {
+        arguments_[name] = source[name];
+      }
+    }
+    for (const [name, maximum] of [
+      ["page", 10000],
+      ["size", 100],
+    ]) {
+      if (Number.isInteger(source[name]) && source[name] >= 1 && source[name] <= maximum) {
+        arguments_[name] = source[name];
+      }
+    }
+    if (typeof source.view_mode === "string" && source.view_mode.trim()) {
+      arguments_.view_mode = source.view_mode.trim().slice(0, 40);
+    }
+    for (const name of ["dept_id", "member_id"]) {
+      if (Number.isInteger(source[name]) && source[name] >= 1) {
+        arguments_[name] = source[name];
+      }
+    }
   }
   return Object.freeze({
     toolName: normalizedToolName,
@@ -1016,6 +1078,9 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
 function inferReadContinuation(text, capturedAt) {
   const value = String(text || "");
   const candidates = [
+    ["团队日志", "taihua_work_log_team_list"],
+    ["我的日志", "taihua_work_log_my_list"],
+    ["泰华项目", "taihua_project_search"],
     ["\u5f85\u529e", "oa_workflow_pending_list"],
     ["\u5df2\u53d1", "oa_workflow_sent_list"],
     ["\u5df2\u529e", "oa_workflow_done_list"],
@@ -1063,33 +1128,14 @@ function formatReadContinuation(continuation, response) {
   const items = Array.isArray(result.items) ? result.items : [];
   const count = Number.isInteger(result.count) ? result.count : items.length;
   const lines = [
-    `OA \u767b\u5f55\u5df2\u6062\u590d\uff0c\u5df2\u81ea\u52a8\u7ee7\u7eed\u8bfb\u53d6${descriptor.label}\uff0c\u5171 ${count} \u6761\uff1a`,
+    `${descriptor.system} 登录已恢复，已自动继续读取${descriptor.label}，共 ${count} 条：`,
   ];
   if (items.length === 0) {
     return lines.join("\n");
   }
   let shown = 0;
   for (const item of items) {
-    const index = shown + 1;
-    const date = safeDisplayText(item?.date, 40);
-    const title = safeDisplayText(item?.title, 300) || "(untitled)";
-    const affairId = safeDisplayText(item?.affair_id, 160);
-    let metadata;
-    if (descriptor.collection === "pending") {
-      const readState = item?.read ? "\u5df2\u8bfb" : "\u672a\u8bfb";
-      const sender = safeDisplayText(item?.sender, 120);
-      metadata = [`[${readState}]`, date, sender].filter(Boolean).join(" | ");
-    } else {
-      const status = safeDisplayText(item?.status, 120);
-      metadata = [date, status].filter(Boolean).join(" | ");
-    }
-    const block = [
-      `${index}. ${metadata}`.trim(),
-      `   ${title}`,
-      affairId ? `   affair_id: ${affairId}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const block = formatReadItem(descriptor, item, shown + 1);
     if ([...lines, block].join("\n\n").length > 3500) {
       break;
     }
@@ -1097,9 +1143,50 @@ function formatReadContinuation(continuation, response) {
     shown += 1;
   }
   if (shown < items.length) {
-    lines.push(`\u5176\u4f59 ${items.length - shown} \u6761\u672a\u5728\u672c\u6761\u6d88\u606f\u4e2d\u5c55\u5f00\u3002`);
+    lines.push(`其余 ${items.length - shown} 条未在本条消息中展开。`);
   }
   return lines.join("\n\n");
+}
+
+function formatReadItem(descriptor, item, index) {
+  if (descriptor.kind === "taihua_work_log") {
+    const date = safeDisplayText(item?.logDate, 40);
+    const person = safeDisplayText(item?.fullname || item?.username, 120);
+    const hours = Number.isFinite(Number(item?.hours)) ? `${item.hours} 小时` : "";
+    const project = safeDisplayText(item?.projectName, 200);
+    const metadata = [date, person, hours, project].filter(Boolean).join(" | ");
+    const content = safeDisplayText(item?.content, 1000) || "(无日志内容)";
+    return [`${index}. ${metadata}`.trim(), `   ${content}`].join("\n");
+  }
+  if (descriptor.kind === "taihua_project") {
+    const name = safeDisplayText(item?.name, 300) || "(未命名项目)";
+    const code = safeDisplayText(item?.code, 120);
+    const status = safeDisplayText(item?.status, 120);
+    const metadata = [code, status].filter(Boolean).join(" | ");
+    return [`${index}. ${name}`, metadata ? `   ${metadata}` : ""]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  const date = safeDisplayText(item?.date, 40);
+  const title = safeDisplayText(item?.title, 300) || "(untitled)";
+  const affairId = safeDisplayText(item?.affair_id, 160);
+  let metadata;
+  if (descriptor.collection === "pending") {
+    const readState = item?.read ? "已读" : "未读";
+    const sender = safeDisplayText(item?.sender, 120);
+    metadata = [`[${readState}]`, date, sender].filter(Boolean).join(" | ");
+  } else {
+    const status = safeDisplayText(item?.status, 120);
+    metadata = [date, status].filter(Boolean).join(" | ");
+  }
+  return [
+    `${index}. ${metadata}`.trim(),
+    `   ${title}`,
+    affairId ? `   affair_id: ${affairId}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function safeDisplayText(value, limit) {
@@ -1161,7 +1248,8 @@ function safeSucceededMessage(response) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "AgentBridge 已完成本次安全操作。";
   }
-  const verified = result.verification?.confirmed === true;
+  const verified =
+    result.verification?.confirmed === true || result.verification?.matched === true;
   if (result.meeting_created === true && result.meeting_sent === true) {
     return verified
       ? "OA 会议已创建并发送，并已通过回读确认。"
@@ -1174,7 +1262,8 @@ function safeSucceededMessage(response) {
     return verified
       ? "OA 出差申请已提交审批，并已通过已发事项回读确认。"
       : "OA 出差申请已提交审批。";
-  }  if (
+  }
+  if (
     result.business_intent === "submit_leave_request" &&
     result.workflow_submitted === true
   ) {
@@ -1205,7 +1294,15 @@ function safeSucceededMessage(response) {
       ? `${subject}${action}\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002`
       : `${subject}${action}\u3002`;
   }
-  if (result.draft_saved === true && result.workflow_submitted === false) {
+  if (
+    result.status === "created" &&
+    result.workLog &&
+    typeof result.workLog === "object"
+  ) {
+    return verified
+      ? "泰华工作日志已正式提交，并已通过日志回读确认。"
+      : "泰华工作日志已正式提交。";
+  }  if (result.draft_saved === true && result.workflow_submitted === false) {
     return verified
       ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"
       : "OA 待发草稿已保存，未提交审批。";
@@ -1241,15 +1338,22 @@ function safeStatusMessage(status, errorCode, response = null) {
       return `AgentBridge 未能继续执行本次安全操作${code}。`;
     case "unknown":
       if (safeCode(errorCode) === "RESULT_UNKNOWN") {
-        return "OA 写操作的最终结果未能确认。AgentBridge 已停止且不会自动重试，请先到 OA 中核对实际结果后再决定下一步（错误码：RESULT_UNKNOWN）。";
+        return "业务系统写操作的最终结果未能确认。AgentBridge 已停止且不会自动重试，请先到对应业务系统中核对实际结果后再决定下一步（错误码：RESULT_UNKNOWN）。";
       }
       return "AgentBridge 无法确认本次安全操作的最终状态" + code + "。";
     case "failed":
-      if (safeCode(errorCode) === "OA_BUSINESS_RULE_REJECTED") {
+      if (
+        ["OA_BUSINESS_RULE_REJECTED", "TAIHUA_BUSINESS_RULE_REJECTED"].includes(
+          safeCode(errorCode),
+        )
+      ) {
         const reason = safeBusinessRuleMessage(response);
+        const taihua = safeCode(errorCode) === "TAIHUA_BUSINESS_RULE_REJECTED";
+        const system = taihua ? "泰华日志系统" : "OA";
+        const action = taihua ? "工作日志" : "申请";
         return reason
-          ? `OA \u672a\u63d0\u4ea4\u672c\u6b21\u7533\u8bf7\uff1a${reason}${code}\u3002`
-          : `OA \u6839\u636e\u4e1a\u52a1\u89c4\u5219\u62d2\u7edd\u4e86\u672c\u6b21\u7533\u8bf7${code}\u3002`;
+          ? `${system} 未提交本次${action}：${reason}${code}。`
+          : `${system} 根据业务规则拒绝了本次${action}${code}。`;
       }
       return `AgentBridge 未能完成本次安全操作${code}。`;
     default:

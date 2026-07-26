@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from bscli.cli.main import main
+from bscli.core.sessions import SessionRegistry
 
 
 class CentralMcpCliTests(unittest.TestCase):
@@ -68,6 +69,42 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertNotIn("bearerToken", listed)
         self.assertNotIn(issued["bearerToken"], json.dumps(listed))
         self.assertFalse(profiles_exists)
+
+    def test_taihua_token_only_binds_taihua_session_and_adds_base_read_scope(self):
+        with TemporaryDirectory() as tmp:
+            with redirect_stdout(io.StringIO()) as issued_stdout:
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "mcp",
+                        "token",
+                        "issue",
+                        "--user-subject",
+                        "user-a",
+                        "--expected-principal",
+                        "Alice",
+                        "--scope",
+                        "taihua:write:worklog",
+                    ]
+                )
+            issued = json.loads(issued_stdout.getvalue())
+            sessions = SessionRegistry(
+                Path(tmp) / "agentbridge.db",
+                Path(tmp) / "profiles",
+            )
+            has_taihua_session = (
+                sessions.find(user_subject="user-a", system_id="taihua") is not None
+            )
+            has_oa_session = sessions.find(user_subject="user-a", system_id="oa") is not None
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            issued["identityToken"]["scopes"],
+            ["taihua:read", "taihua:write:worklog"],
+        )
+        self.assertTrue(has_taihua_session)
+        self.assertFalse(has_oa_session)
 
     def test_identity_token_can_be_revoked(self):
         with TemporaryDirectory() as tmp:

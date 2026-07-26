@@ -62,6 +62,13 @@ from bscli.adapters.seeyon_workflow_revoke import (
     WORKFLOW_REVOKE_CAPABILITY,
     WORKFLOW_REVOKE_PREPARE_CAPABILITY,
 )
+from bscli.adapters.taihua import (
+    TAIHUA_MY_LOGS_CAPABILITY,
+    TAIHUA_PROJECT_SEARCH_CAPABILITY,
+    TAIHUA_TEAM_LOGS_CAPABILITY,
+    TAIHUA_WORK_LOG_CREATE_CAPABILITY,
+    TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
+)
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
@@ -135,7 +142,7 @@ class CentralSessionKeepalive:
             raise RuntimeError("central session keepalive is already started")
         self._thread = threading.Thread(
             target=self._run,
-            name="agentbridge-oa-keepalive",
+            name="agentbridge-session-keepalive",
             daemon=True,
         )
         self._thread.start()
@@ -154,7 +161,7 @@ class CentralSessionKeepalive:
                     activity_lease_seconds=self.activity_lease_seconds,
                 )
                 _LOGGER.info(
-                    "AgentBridge OA keepalive cycle: active=%d eligible=%d "
+                    "AgentBridge session keepalive cycle: active=%d eligible=%d "
                     "kept_alive=%d expired=%d deferred=%d outside_lease=%d",
                     summary["activeSessions"],
                     summary["eligibleSessions"],
@@ -165,7 +172,7 @@ class CentralSessionKeepalive:
                 )
             except Exception as exc:
                 _LOGGER.warning(
-                    "AgentBridge OA keepalive cycle failed: error=%s",
+                    "AgentBridge session keepalive cycle failed: error=%s",
                     exc.__class__.__name__,
                 )
             if self._stop_event.wait(self.interval_seconds):
@@ -178,7 +185,7 @@ class StoredIdentityTokenVerifier(TokenVerifier):
         self.resource = resource
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        identity = self.store.verify(token, required_scopes={"oa:read"})
+        identity = self.store.verify(token)
         if identity is None:
             return None
         expires_at = int(datetime.fromisoformat(identity["expires_at"]).timestamp())
@@ -320,17 +327,17 @@ def create_central_mcp_server(
     netloc = urlparse(config.public_base_url).netloc
     verifier = StoredIdentityTokenVerifier(identity_store, resource=config.mcp_url)
     mcp = FastMCP(
-        name="agentbridge_oa_mcp",
+        name="agentbridge_central_mcp",
         instructions=(
-            "Central Seeyon OA business capabilities. Caller identity comes from the "
+            "Central legacy-system business capabilities. Caller identity comes from the "
             "authenticated Bearer token; never request or accept a user subject as tool input. "
-            "Business-trip draft writes require a separate trusted action-card approval."
+            "Every controlled write requires trusted field and authorization interactions."
         ),
         token_verifier=verifier,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(config.public_base_url),
             resource_server_url=AnyHttpUrl(config.mcp_url),
-            required_scopes=["oa:read"],
+            required_scopes=[],
         ),
         host=config.host,
         port=config.port,
@@ -1277,6 +1284,225 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="taihua_work_log_my_list",
+        title="List My Taihua Work Logs",
+        description="List the authenticated user's Taihua work logs in one date range.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def taihua_work_log_my_list(
+        ctx: Context,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        for name, value in (
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("keyword", keyword),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            TAIHUA_MY_LOGS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"taihua:read"},
+        )
+
+    @mcp.tool(
+        name="taihua_work_log_team_list",
+        title="List Taihua Team Work Logs",
+        description="List team work logs within the authenticated Taihua user's data scope.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def taihua_work_log_team_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        view_mode: Annotated[str, Field(max_length=40)] = "submittedAt",
+        dept_id: int | None = None,
+        member_id: int | None = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "page": page,
+            "size": size,
+            "view_mode": view_mode,
+        }
+        for name, value in (
+            ("keyword", keyword),
+            ("dept_id", dept_id),
+            ("member_id", member_id),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            TAIHUA_TEAM_LOGS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"taihua:read"},
+        )
+
+    @mcp.tool(
+        name="taihua_project_search",
+        title="Search Taihua Projects",
+        description="Search projects available to the authenticated Taihua user.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def taihua_project_search(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=50)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        if keyword is not None:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            TAIHUA_PROJECT_SEARCH_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"taihua:read"},
+        )
+
+    @mcp.tool(
+        name="taihua_work_log_create_prepare",
+        title="Prepare Taihua Work Log",
+        meta=interaction_tool_meta(),
+        description=(
+            "Open a prefilled trusted field card, validate the exact work-log fields, "
+            "and freeze a submission plan. This tool does not write to Taihua."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def taihua_work_log_create_prepare(
+        ctx: Context,
+        log_date: Annotated[str | None, Field(max_length=10)] = None,
+        hours: Annotated[float | None, Field(ge=0.5, le=16)] = None,
+        project: Annotated[str | None, Field(max_length=255)] = None,
+        content: Annotated[str | None, Field(max_length=4000)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        for name, value in (
+            ("log_date", log_date),
+            ("hours", hours),
+            ("project", project),
+            ("content", content),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"taihua:write:worklog"},
+        )
+
+    @mcp.tool(
+        name="taihua_work_log_create",
+        title="Create Authorized Taihua Work Log",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, create the exact Taihua work log, "
+            "and verify it by authoritative readback."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def taihua_work_log_create(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            TAIHUA_WORK_LOG_CREATE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"taihua:write:worklog"},
+        )
+
+    @mcp.tool(
+        name="taihua_session_status",
+        title="Verify Taihua Session Status",
+        description="Verify the authenticated caller's central Taihua token session.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def taihua_session_status() -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"taihua:read"},
+        )
+        return await asyncio.to_thread(
+            service.session_status,
+            user_subject=identity["user_subject"],
+            system_id="taihua",
+        )
+
+    @mcp.tool(
+        name="taihua_session_login",
+        title="Ensure Taihua Session Login",
+        meta=interaction_tool_meta(),
+        description=(
+            "Reuse or refresh a valid Taihua token session. When login is required, "
+            "create a trusted credential card; credentials never enter MCP arguments."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def taihua_session_login(
+        ctx: Context,
+        challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 300,
+    ) -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"taihua:read"},
+        )
+        response = await asyncio.to_thread(
+            service.start_login,
+            user_subject=identity["user_subject"],
+            expected_principal_ref=identity["expected_principal_ref"],
+            card_base_url=auth_card_base_url,
+            ttl_seconds=challenge_ttl_seconds,
+            system_id="taihua",
+        )
+        return package_interaction_result(response)
+
+    @mcp.tool(
         name="oa_session_status",
         title="Verify OA Session Status",
         description=(
@@ -1287,7 +1513,10 @@ def create_central_mcp_server(
         structured_output=True,
     )
     async def oa_session_status() -> dict[str, Any]:
-        identity = _request_identity(identity_store)
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"oa:read"},
+        )
         return await asyncio.to_thread(
             service.session_status,
             user_subject=identity["user_subject"],
@@ -1316,7 +1545,10 @@ def create_central_mcp_server(
         ctx: Context,
         challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 300,
     ) -> dict[str, Any]:
-        identity = _request_identity(identity_store)
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"oa:read"},
+        )
         response = await asyncio.to_thread(
             service.start_login,
             user_subject=identity["user_subject"],
@@ -1439,7 +1671,9 @@ def serve_central_mcp(
         challenge_store=service.challenges,
         session_registry=service.sessions,
         session_state_store=service.session_states,
-        adapter_factory=lambda _challenge: service.adapter,
+        adapter_factory=lambda challenge: service.adapter_for_system(
+            challenge["system_id"]
+        ),
         worker_factory=service.authentication_worker,
         login_timeout_seconds=login_timeout_seconds,
     )
@@ -1504,7 +1738,7 @@ def _request_identity(
         raise PermissionError("MCP request is not authenticated")
     return store.resolve_client(
         access_token.client_id,
-        required_scopes=required_scopes or {"oa:read"},
+        required_scopes=required_scopes,
     )
 
 

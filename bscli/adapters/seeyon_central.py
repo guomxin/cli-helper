@@ -8,6 +8,14 @@ import re
 import time
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
+from bscli.adapters.base import (
+    AdapterAuthenticationRejected,
+    AdapterLoginContractMismatch,
+    AdapterLoginRequired,
+    AdapterSessionCheckUnavailable,
+    AdapterUnsupportedAuthMethod,
+)
+
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_PREPARE_INPUT_SCHEMA,
@@ -78,19 +86,19 @@ from bscli.adapters.seeyon_home import (
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 
 
-class SeeyonLoginRequired(RuntimeError):
+class SeeyonLoginRequired(AdapterLoginRequired):
     pass
 
 
-class SeeyonAuthenticationRejected(RuntimeError):
+class SeeyonAuthenticationRejected(AdapterAuthenticationRejected):
     pass
 
 
-class SeeyonLoginContractMismatch(RuntimeError):
+class SeeyonLoginContractMismatch(AdapterLoginContractMismatch):
     pass
 
 
-class SeeyonUnsupportedAuthMethod(RuntimeError):
+class SeeyonUnsupportedAuthMethod(AdapterUnsupportedAuthMethod):
     pass
 
 
@@ -98,7 +106,7 @@ class SeeyonReadContractMismatch(RuntimeError):
     pass
 
 
-class SeeyonSessionCheckUnavailable(RuntimeError):
+class SeeyonSessionCheckUnavailable(AdapterSessionCheckUnavailable):
     pass
 
 

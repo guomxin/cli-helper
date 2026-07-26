@@ -8,6 +8,8 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from bscli.adapters.base import AdapterBusinessRuleRejected
+
 
 _MAX_EVIDENCE_ITEMS = 20
 
@@ -20,8 +22,10 @@ class SeeyonBusinessValidationRequired(RuntimeError):
         self.validation = dict(validation)
 
 
-class SeeyonBusinessRuleRejected(RuntimeError):
+class SeeyonBusinessRuleRejected(AdapterBusinessRuleRejected):
     """The OA accepted the request but rejected it under a business rule."""
+
+    error_code = "OA_BUSINESS_RULE_REJECTED"
 
 
 def pump_browser_events(page, milliseconds: int = 250) -> None:

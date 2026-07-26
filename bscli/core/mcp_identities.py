@@ -19,6 +19,8 @@ _ALLOWED_SCOPES = frozenset(
         "oa:write:meeting",
         "oa:write:submit",
         "oa:write:revoke",
+        "taihua:read",
+        "taihua:write:worklog",
     }
 )
 

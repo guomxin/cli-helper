@@ -32,6 +32,13 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_standard_collaboration_approve",
   "oa_meeting_create_prepare",
   "oa_meeting_create",
+  "taihua_work_log_my_list",
+  "taihua_work_log_team_list",
+  "taihua_project_search",
+  "taihua_work_log_create_prepare",
+  "taihua_work_log_create",
+  "taihua_session_status",
+  "taihua_session_login",
 ];
 
 function argument(name, fallback) {

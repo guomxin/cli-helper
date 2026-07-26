@@ -9,9 +9,25 @@ from typing import Callable, Iterator
 
 from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
-    SeeyonLoginRequired,
-    SeeyonSessionCheckUnavailable,
     build_central_capability_registry,
+)
+from bscli.adapters.base import (
+    AdapterBusinessRuleRejected,
+    AdapterLoginRequired,
+    AdapterSessionCheckUnavailable,
+)
+from bscli.adapters.taihua import (
+    TAIHUA_ADAPTER_ID,
+    TAIHUA_SYSTEM_ID,
+    TAIHUA_WORK_LOG_CREATE_CAPABILITY,
+    TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
+    TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA,
+    TaihuaCentralAdapter,
+    TaihuaWorkLogContractMismatch,
+    TaihuaWorkLogOutcomeUnknown,
+    build_taihua_capability_registry,
+    commit_taihua_work_log_create,
+    prepare_taihua_work_log_create,
 )
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_FIELD_CARD_SCHEMA,
@@ -99,7 +115,6 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_weekly_report_acknowledgement,
 )
 from bscli.adapters.seeyon_submit_phases import (
-    SeeyonBusinessRuleRejected,
     SeeyonBusinessValidationRequired,
 )
 from bscli.adapters.seeyon_workflow_revoke import (
@@ -112,6 +127,7 @@ from bscli.adapters.seeyon_workflow_revoke import (
     revoke_workflow,
 )
 from bscli.browser.central import CentralBrowserWorker
+from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
 from bscli.core.capability_runtime import (
@@ -148,7 +164,7 @@ from bscli.core.write_authorizations import (
 )
 
 
-WorkerFactory = Callable[[dict, SeeyonCentralAdapter], CentralBrowserWorker]
+WorkerFactory = Callable[[dict, object], object]
 TRUSTED_WRITE_INTERACTION_TTL_SECONDS = 1800
 
 _TRUSTED_WRITE_DEFINITIONS = {
@@ -303,6 +319,22 @@ _TRUSTED_WRITE_DEFINITIONS.update(
     }
 )
 
+_TRUSTED_WRITE_DEFINITIONS.update(
+    {
+        TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY: {
+            "commit_capability": TAIHUA_WORK_LOG_CREATE_CAPABILITY,
+            "field_schema": TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA,
+            "context_fields": (),
+            "prepare_function": "prepare_taihua_work_log_create",
+            "commit_function": "commit_taihua_work_log_create",
+            "contract_error": TaihuaWorkLogContractMismatch,
+            "outcome_error": TaihuaWorkLogOutcomeUnknown,
+            "field_message": "工作日志字段必须在可信字段卡中核对。",
+            "authorization_message": "泰华工作日志提交计划需要在可信授权卡中确认。",
+        }
+    }
+)
+
 _TRUSTED_WRITE_COMMITS = {
 
     definition["commit_capability"]: (prepare_capability, definition)
@@ -336,6 +368,8 @@ _CAPABILITY_SCOPES = {
     STANDARD_COLLABORATION_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     WORKFLOW_REVOKE_PREPARE_CAPABILITY: frozenset({"oa:write:revoke"}),
     WORKFLOW_REVOKE_CAPABILITY: frozenset({"oa:write:revoke"}),
+    TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY: frozenset({"taihua:write:worklog"}),
+    TAIHUA_WORK_LOG_CREATE_CAPABILITY: frozenset({"taihua:write:worklog"}),
 }
 
 
@@ -363,6 +397,7 @@ class CentralCapabilityService:
         *,
         home: Path | str,
         base_url: str,
+        taihua_base_url: str | None = None,
         registry: CapabilityRegistry | None = None,
         worker_factory: WorkerFactory | None = None,
         session_state_store: SessionStateStore | None = None,
@@ -371,7 +406,12 @@ class CentralCapabilityService:
     ) -> None:
         self.home = Path(home)
         self.db_path = self.home / "agentbridge.db"
-        self.registry = registry or build_central_capability_registry()
+        if registry is None:
+            self.registry = build_central_capability_registry()
+            for spec in build_taihua_capability_registry().list():
+                self.registry.register(spec)
+        else:
+            self.registry = registry
         self.operations = OperationStore(self.db_path)
         self.sessions = SessionRegistry(self.db_path, self.home / "profiles")
         self.session_states = session_state_store or SessionStateStore(
@@ -383,6 +423,18 @@ class CentralCapabilityService:
         self.interactions = InteractionStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
+        self._adapters_by_system: dict[str, object] = {"oa": self.adapter}
+        self._worker_factories_by_system: dict[str, WorkerFactory] = {
+            "oa": self.worker_factory
+        }
+        self._adapter_systems: dict[str, str] = {"seeyon-central": "oa"}
+        if taihua_base_url:
+            taihua_adapter = TaihuaCentralAdapter(base_url=taihua_base_url)
+            self._adapters_by_system[TAIHUA_SYSTEM_ID] = taihua_adapter
+            self._worker_factories_by_system[TAIHUA_SYSTEM_ID] = (
+                self._default_http_worker_factory
+            )
+            self._adapter_systems[TAIHUA_ADAPTER_ID] = TAIHUA_SYSTEM_ID
         self.trusted_card_base_url = trusted_card_base_url
         if (
             session_keepalive_lease_seconds is not None
@@ -405,6 +457,29 @@ class CentralCapabilityService:
             "capability": self.registry.describe(name),
         }
 
+    def adapter_for_system(self, system_id: str) -> object:
+        runtime = self._runtime_for_system(system_id)
+        if runtime is None:
+            raise KeyError(f"central runtime is not configured for {system_id}")
+        return runtime[0]
+
+    def _runtime_for_system(
+        self,
+        system_id: str,
+    ) -> tuple[object, WorkerFactory] | None:
+        adapter = self._adapters_by_system.get(system_id)
+        worker_factory = self._worker_factories_by_system.get(system_id)
+        if adapter is None or worker_factory is None:
+            return None
+        return adapter, worker_factory
+
+    @staticmethod
+    def _raise_system_not_configured(system_id: str) -> dict:
+        raise CapabilityRejected(
+            "SYSTEM_NOT_CONFIGURED",
+            f"The central runtime is not configured for {system_id}.",
+        )
+
     def invoke(
         self,
         *,
@@ -416,13 +491,24 @@ class CentralCapabilityService:
     ) -> dict:
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
-        if spec.adapter == "seeyon-central":
-            self._record_user_activity(user_subject=user_subject, system_id="oa")
+        system_id = self._adapter_systems.get(spec.adapter, spec.system)
+        runtime = self._runtime_for_system(system_id)
+        if runtime is None:
             engine.register_handler(
                 capability_name,
-                lambda context, inputs: self._invoke_seeyon(
+                lambda _context, _inputs: self._raise_system_not_configured(system_id),
+            )
+        else:
+            adapter, selected_worker_factory = runtime
+            self._record_user_activity(user_subject=user_subject, system_id=system_id)
+            engine.register_handler(
+                capability_name,
+                lambda context, inputs: self._invoke_adapter(
                     context=context,
                     user_subject=user_subject,
+                    system_id=system_id,
+                    adapter=adapter,
+                    worker_factory=selected_worker_factory,
                     capability_name=capability_name,
                     arguments=inputs,
                 ),
@@ -446,7 +532,7 @@ class CentralCapabilityService:
                 "statusSource": "registry",
                 "checkedAt": None,
             }
-        if system_id != "oa" or session["state"] != "active":
+        if session["state"] != "active":
             return {
                 **self._session_response(session),
                 "statusSource": "registry",
@@ -486,20 +572,26 @@ class CentralCapabilityService:
         expected_principal_ref: str | None,
         card_base_url: str,
         ttl_seconds: int = 300,
+        system_id: str = "oa",
     ) -> dict:
-        session = self.sessions.find(user_subject=user_subject, system_id="oa")
+        runtime = self._runtime_for_system(system_id)
+        if runtime is None:
+            raise ValueError(f"central login is not configured for {system_id}")
+        session = self.sessions.find(user_subject=user_subject, system_id=system_id)
         if session is None:
             if not expected_principal_ref:
-                raise ValueError("expected downstream principal is required for a new OA session")
+                raise ValueError(
+                    "expected downstream principal is required for a new session"
+                )
             session = self.sessions.get_or_create(
                 user_subject=user_subject,
-                system_id="oa",
+                system_id=system_id,
                 expected_principal_ref=expected_principal_ref,
             )
         elif expected_principal_ref:
             session = self.sessions.get_or_create(
                 user_subject=user_subject,
-                system_id="oa",
+                system_id=system_id,
                 expected_principal_ref=expected_principal_ref,
             )
         expected = str(session.get("expected_principal_ref") or "").strip()
@@ -531,6 +623,14 @@ class CentralCapabilityService:
         record_activity: bool = True,
         record_keepalive: bool = False,
     ) -> dict | None:
+        runtime = self._runtime_for_system(session["system_id"])
+        if runtime is None:
+            return _session_check_unavailable_response(
+                user_subject,
+                session,
+                diagnostics=f"system is not configured: {session['system_id']}",
+            )
+        adapter, selected_worker_factory = runtime
         with self._session_lock(session["session_id"]):
             session = self.sessions.get(session["session_id"])
             if session["state"] != "active":
@@ -549,18 +649,18 @@ class CentralCapabilityService:
                 return None
 
             try:
-                with self.worker_factory(session, self.adapter) as worker:
+                with selected_worker_factory(session, adapter) as worker:
                     worker.restore_session_state(state)
-                    probe = self.adapter.probe_session(worker)
+                    probe = adapter.probe_session(worker)
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
                     )
-            except SeeyonLoginRequired as exc:
+            except AdapterLoginRequired as exc:
                 self.sessions.mark_expired(session["session_id"], str(exc))
                 self.session_states.delete(session["session_id"])
                 return None
-            except SeeyonSessionCheckUnavailable as exc:
+            except AdapterSessionCheckUnavailable as exc:
                 if record_activity:
                     session = self.sessions.touch_activity(session["session_id"])
                 return _session_check_unavailable_response(
@@ -595,7 +695,7 @@ class CentralCapabilityService:
                 "session": self._session_response(session),
                 "result": {
                     "authenticated": True,
-                    "templateCount": probe["template_count"],
+                    "templateCount": probe.get("template_count"),
                     "transport": probe["transport"],
                     "browserBridgeUsed": probe["browser_bridge_used"],
                 },
@@ -612,7 +712,7 @@ class CentralCapabilityService:
         if activity_lease_seconds <= 0:
             raise ValueError("activity lease must be positive")
         checked_at = _as_utc(now or datetime.now(timezone.utc))
-        active_sessions = self.sessions.list_active(system_id="oa")
+        active_sessions = self.sessions.list_active()
         summary = {
             "checkedAt": checked_at.isoformat(),
             "activeSessions": len(active_sessions),
@@ -625,6 +725,9 @@ class CentralCapabilityService:
         }
         lease = timedelta(seconds=activity_lease_seconds)
         for session in active_sessions:
+            if self._runtime_for_system(session["system_id"]) is None:
+                summary["inactive"] += 1
+                continue
             last_activity = _parse_utc(session.get("last_user_activity_at"))
             if last_activity is None or checked_at - last_activity > lease:
                 summary["outsideLease"] += 1
@@ -657,7 +760,8 @@ class CentralCapabilityService:
         card_base_url: str,
         ttl_seconds: int,
     ) -> dict:
-        contract = self.adapter.authentication_contract()
+        adapter = self.adapter_for_system(session["system_id"])
+        contract = adapter.authentication_contract()
         challenge, reused = self.challenges.create_or_reuse(
             user_subject=session["user_subject"],
             system_id=session["system_id"],
@@ -926,28 +1030,39 @@ class CentralCapabilityService:
     def authentication_worker(
         self,
         session: dict,
-        adapter: SeeyonCentralAdapter,
-    ) -> Iterator[CentralBrowserWorker]:
+        adapter: object,
+    ) -> Iterator[object]:
+        runtime = self._runtime_for_system(session["system_id"])
+        if runtime is None:
+            raise KeyError(
+                f"central runtime is not configured for {session['system_id']}"
+            )
+        registered_adapter, worker_factory = runtime
+        if registered_adapter is not adapter:
+            raise ValueError("authentication adapter does not match the session system")
         with self._session_lock(session["session_id"]):
-            with self.worker_factory(session, adapter) as worker:
+            with worker_factory(session, adapter) as worker:
                 yield worker
 
-    def _invoke_seeyon(
+    def _invoke_adapter(
         self,
         *,
         context: CapabilityContext,
         user_subject: str,
+        system_id: str,
+        adapter: object,
+        worker_factory: WorkerFactory,
         capability_name: str,
         arguments: dict,
     ) -> dict:
-        session = self.sessions.find(user_subject=user_subject, system_id="oa")
+        session = self.sessions.find(user_subject=user_subject, system_id=system_id)
         if session is None or session["state"] != "active":
-            raise login_required_action(user_subject, session)
+            raise login_required_action(user_subject, system_id, session)
 
         with self._session_lock(session["session_id"]):
             session = self.sessions.get(session["session_id"])
             if session["state"] != "active":
-                raise login_required_action(user_subject, session)
+                raise login_required_action(user_subject, system_id, session)
             try:
                 state = self.session_states.load(session["session_id"])
             except SessionStateAccessDenied as exc:
@@ -959,7 +1074,7 @@ class CentralCapabilityService:
                     session["session_id"],
                     "Encrypted session state is missing.",
                 )
-                raise login_required_action(user_subject, expired_session)
+                raise login_required_action(user_subject, system_id, expired_session)
             prepare_definition = _TRUSTED_WRITE_DEFINITIONS.get(capability_name)
             commit_definition = _TRUSTED_WRITE_COMMITS.get(capability_name)
             field_submission = None
@@ -976,10 +1091,10 @@ class CentralCapabilityService:
                     )
                     if not callable(schema_function):
                         raise RuntimeError("trusted field schema function is unavailable")
-                    with self.worker_factory(session, self.adapter) as worker:
+                    with worker_factory(session, adapter) as worker:
                         worker.restore_session_state(state)
                         dynamic_field_schema = schema_function(
-                            self.adapter,
+                            adapter,
                             worker,
                             arguments,
                         )
@@ -995,12 +1110,13 @@ class CentralCapabilityService:
                         definition=prepare_definition,
                         form_schema=dynamic_field_schema,
                     )
-                with self.worker_factory(session, self.adapter) as worker:
+                with worker_factory(session, adapter) as worker:
                     worker.restore_session_state(state)
                     if prepare_definition is not None:
                         result = self._prepare_trusted_write(
                             context=context,
                             session=session,
+                            adapter=adapter,
                             worker=worker,
                             arguments=effective_arguments,
                             field_submission=field_submission,
@@ -1011,13 +1127,14 @@ class CentralCapabilityService:
                         result = self._commit_trusted_write(
                             context=context,
                             session=session,
+                            adapter=adapter,
                             worker=worker,
                             arguments=arguments,
                             prepare_capability=prepare_capability,
                             definition=definition,
                         )
                     else:
-                        result = self.adapter.invoke_capability(
+                        result = adapter.invoke_capability(
                             capability_name,
                             worker,
                             arguments,
@@ -1027,11 +1144,11 @@ class CentralCapabilityService:
                         worker.capture_session_state(),
                     )
                     return result
-            except SeeyonLoginRequired as exc:
+            except AdapterLoginRequired as exc:
                 expired_session = self.sessions.mark_expired(session["session_id"], str(exc))
                 self.session_states.delete(session["session_id"])
-                raise login_required_action(user_subject, expired_session) from exc
-            except SeeyonSessionCheckUnavailable as exc:
+                raise login_required_action(user_subject, system_id, expired_session) from exc
+            except AdapterSessionCheckUnavailable as exc:
                 raise _session_check_unavailable_action(
                     user_subject,
                     session,
@@ -1043,7 +1160,8 @@ class CentralCapabilityService:
         *,
         context: CapabilityContext,
         session: dict,
-        worker: CentralBrowserWorker,
+        adapter: object,
+        worker: object,
         arguments: dict,
         field_submission: dict,
         definition: dict,
@@ -1051,7 +1169,7 @@ class CentralCapabilityService:
         prepare_function = globals().get(str(definition["prepare_function"]))
         if not callable(prepare_function):
             raise RuntimeError("trusted write prepare function is unavailable")
-        prepared = prepare_function(self.adapter, worker, arguments)
+        prepared = prepare_function(adapter, worker, arguments)
         resume_arguments = dict(
             field_submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
             or {}
@@ -1246,7 +1364,8 @@ class CentralCapabilityService:
         *,
         context: CapabilityContext,
         session: dict,
-        worker: CentralBrowserWorker,
+        adapter: object,
+        worker: object,
         arguments: dict,
         prepare_capability: str,
         definition: dict,
@@ -1290,7 +1409,9 @@ class CentralCapabilityService:
                 },
             )
         if not self._trusted_write_session_binding_matches(plan, session):
-            raise ValueError("the OA session changed after the write plan was authorized")
+            raise ValueError(
+                "the downstream session changed after the write plan was authorized"
+            )
 
         def enter_commit_boundary() -> None:
             self.write_authorizations.consume(
@@ -1308,7 +1429,7 @@ class CentralCapabilityService:
             raise RuntimeError("trusted write commit function is unavailable")
         try:
             return commit_function(
-                self.adapter,
+                adapter,
                 worker,
                 plan,
                 enter_commit_boundary=enter_commit_boundary,
@@ -1401,9 +1522,9 @@ class CentralCapabilityService:
             ) from exc
         except definition["outcome_error"] as exc:
             raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
-        except SeeyonBusinessRuleRejected as exc:
+        except AdapterBusinessRuleRejected as exc:
             raise CapabilityRejected(
-                "OA_BUSINESS_RULE_REJECTED",
+                exc.error_code,
                 str(exc),
             ) from exc
         except definition["contract_error"] as exc:
@@ -1454,14 +1575,22 @@ class CentralCapabilityService:
             headless=True,
         )
 
+    @staticmethod
+    def _default_http_worker_factory(_session: dict, adapter: object):
+        return CentralHttpWorker(allowed_origins={adapter.origin})
 
-def login_required_action(user_subject: str, session: dict | None) -> RequiresUserAction:
+
+def login_required_action(
+    user_subject: str,
+    system_id: str,
+    session: dict | None,
+) -> RequiresUserAction:
     return RequiresUserAction(
         "LOGIN_REQUIRED",
-        "The central OA session is not active.",
+        f"The central {system_id} session is not active.",
         next_action={
             "type": "session_login",
-            "system": "oa",
+            "system": system_id,
             "userSubject": user_subject,
             "sessionState": session["state"] if session else "not_found",
         },

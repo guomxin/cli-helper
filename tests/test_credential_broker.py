@@ -2,6 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from bscli.adapters.base import AdapterSessionCheckUnavailable
 from bscli.broker.credential import CredentialBroker
 from bscli.browser.central import CentralProfileUnavailableError
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeAccessDenied
@@ -124,6 +125,42 @@ class CredentialBrokerTests(unittest.TestCase):
             self.assertEqual(sessions.get(session["session_id"])["state"], "quarantined")
             self.assertEqual(challenges.get(challenge["challenge_id"])["state"], "failed")
 
+    def test_broker_reports_downstream_unavailable_without_generic_failure(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            challenges = AuthChallengeStore(root / "agentbridge.db")
+            challenge = _create_challenge(challenges, session)
+            csrf = challenges.issue_csrf(challenge["challenge_id"])
+            broker = CredentialBroker(
+                challenge_store=challenges,
+                session_registry=sessions,
+                session_state_store=SessionStateStore(
+                    root / "session-secrets",
+                    protector=ReversingProtector(),
+                ),
+                adapter_factory=lambda _challenge: UnavailableLoginAdapter(
+                    observed_principal="Alice"
+                ),
+                worker_factory=lambda _session, _adapter: FakeWorker(),
+            )
+
+            result = broker.authenticate(
+                challenge_id=challenge["challenge_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                credentials={"username": "alice", "password": "secret"},
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["code"], "DOWNSTREAM_UNAVAILABLE")
+            self.assertEqual(sessions.get(session["session_id"])["state"], "expired")
+
     def test_broker_reports_an_unwritable_managed_browser_profile(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -214,6 +251,11 @@ class FakeLoginAdapter:
             "observed_principal_ref": self.observed_principal,
             "templates": {"count": 2, "transport": "central_http_session"},
         }
+
+
+class UnavailableLoginAdapter(FakeLoginAdapter):
+    def authenticate(self, _worker, _credentials: dict, *, timeout_seconds: float) -> dict:
+        raise AdapterSessionCheckUnavailable("downstream unavailable")
 
 
 class FailingProfileWorker:

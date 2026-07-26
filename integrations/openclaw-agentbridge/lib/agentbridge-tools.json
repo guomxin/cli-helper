@@ -2536,6 +2536,460 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "List the authenticated user's Taihua work logs in one date range.",
+      "inputSchema": {
+        "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "taihua_work_log_my_listArguments",
+        "type": "object"
+      },
+      "name": "taihua_work_log_my_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_work_log_my_listDictOutput",
+        "type": "object"
+      },
+      "title": "List My Taihua Work Logs"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List team work logs within the authenticated Taihua user's data scope.",
+      "inputSchema": {
+        "properties": {
+          "dept_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dept Id"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "member_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Member Id"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "view_mode": {
+            "default": "submittedAt",
+            "maxLength": 40,
+            "title": "View Mode",
+            "type": "string"
+          }
+        },
+        "title": "taihua_work_log_team_listArguments",
+        "type": "object"
+      },
+      "name": "taihua_work_log_team_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_work_log_team_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Taihua Team Work Logs"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Search projects available to the authenticated Taihua user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "taihua_project_searchArguments",
+        "type": "object"
+      },
+      "name": "taihua_project_search",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_project_searchDictOutput",
+        "type": "object"
+      },
+      "title": "Search Taihua Projects"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Open a prefilled trusted field card, validate the exact work-log fields, and freeze a submission plan. This tool does not write to Taihua.",
+      "inputSchema": {
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          },
+          "hours": {
+            "anyOf": [
+              {
+                "maximum": 16,
+                "minimum": 0.5,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hours"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "log_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Log Date"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project"
+          }
+        },
+        "title": "taihua_work_log_create_prepareArguments",
+        "type": "object"
+      },
+      "name": "taihua_work_log_create_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_work_log_create_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare Taihua Work Log"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, create the exact Taihua work log, and verify it by authoritative readback.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "taihua_work_log_createArguments",
+        "type": "object"
+      },
+      "name": "taihua_work_log_create",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_work_log_createDictOutput",
+        "type": "object"
+      },
+      "title": "Create Authorized Taihua Work Log"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Verify the authenticated caller's central Taihua token session.",
+      "inputSchema": {
+        "properties": {},
+        "title": "taihua_session_statusArguments",
+        "type": "object"
+      },
+      "name": "taihua_session_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_session_statusDictOutput",
+        "type": "object"
+      },
+      "title": "Verify Taihua Session Status"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Reuse or refresh a valid Taihua token session. When login is required, create a trusted credential card; credentials never enter MCP arguments.",
+      "inputSchema": {
+        "properties": {
+          "challenge_ttl_seconds": {
+            "default": 300,
+            "maximum": 900,
+            "minimum": 30,
+            "title": "Challenge Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "taihua_session_loginArguments",
+        "type": "object"
+      },
+      "name": "taihua_session_login",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_session_loginDictOutput",
+        "type": "object"
+      },
+      "title": "Ensure Taihua Session Login"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "Verify the authenticated caller's active central OA session against OA. Non-active sessions are reported from the registry without asking for credentials.",
       "inputSchema": {
         "properties": {},

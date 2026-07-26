@@ -264,6 +264,7 @@ def _field_definitions(schema: Any) -> list[dict[str, Any]]:
             "text",
             "textarea",
             "datetime-local",
+            "date",
             "select",
             "segmented",
             "number",
@@ -294,6 +295,18 @@ def _normalize_submission(schema: dict[str, Any], raw_values: dict[str, str]) ->
                 raise ValueError(f"{label}不能超过 {maximum} 个字符。")
             if value or required:
                 normalized[name] = value
+            continue
+        if control == "date":
+            value = raw.strip()
+            if not value:
+                if required:
+                    raise ValueError(f"请选择{label}。")
+                continue
+            try:
+                parsed = datetime.strptime(value, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(f"{label}格式无效。") from exc
+            normalized[name] = parsed.strftime("%Y-%m-%d")
             continue
         if control == "datetime-local":
             value = raw.strip()
@@ -464,6 +477,12 @@ def _render_control(item: dict[str, Any], value: str) -> str:
         return (
             f'<fieldset class="field segmented{wide}"><legend>{label}</legend>'
             f'<div class="segments">{"".join(options)}</div></fieldset>'
+        )
+    if control == "date":
+        return (
+            f'<div class="field{wide}"><label for="{name}">{label}</label>'
+            f'<input type="date" id="{name}" name="{name}" '
+            f'value="{escape(value)}"{required}></div>'
         )
     if control == "datetime-local":
         html_value = value.replace(" ", "T", 1)

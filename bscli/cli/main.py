@@ -7,7 +7,6 @@ from pathlib import Path
 import sys
 from urllib.parse import urlparse
 
-from bscli.adapters.seeyon_central import SeeyonCentralAdapter
 from bscli.adapters.seeyon_home import (
     parse_navigation_inventory,
     parse_pending_list,
@@ -19,7 +18,6 @@ from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
-from bscli.browser.central import CentralBrowserWorker
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeNotFound
 from bscli.core.central_service import (
     CentralCapabilityService,
@@ -27,15 +25,13 @@ from bscli.core.central_service import (
     operation_response as _operation_response,
 )
 from bscli.core.config import ConfigStore, SystemProfile
-from bscli.core.field_submissions import FieldSubmissionStore
 from bscli.core.interactions import InteractionIntegrityError, InteractionNotFound
 from bscli.core.internal_pki import InternalCertificateAuthorityStore
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
-from bscli.core.session_secrets import SessionStateStore, WindowsDpapiProtector
+from bscli.core.session_secrets import WindowsDpapiProtector
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
-from bscli.core.write_authorizations import WriteAuthorizationStore
 from bscli.mcp.central import (
     serve_central_mcp,
     validate_central_mcp_server_config,
@@ -103,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     capability_invoke.add_argument("--idempotency-key")
     capability_invoke.add_argument("--request-id")
     capability_invoke.add_argument("--base-url")
+    capability_invoke.add_argument("--taihua-base-url")
     capability_invoke.add_argument("--card-base-url", default="http://127.0.0.1:8780")
 
     session = subparsers.add_parser("session")
@@ -110,11 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     session_status = session_sub.add_parser("status")
     session_status.add_argument("--system", required=True)
     session_status.add_argument("--user-subject", required=True)
+    session_status.add_argument("--taihua-base-url")
     session_login = session_sub.add_parser("login")
     session_login.add_argument("--system", required=True)
     session_login.add_argument("--user-subject", required=True)
     session_login.add_argument("--expected-principal", required=True)
     session_login.add_argument("--base-url")
+    session_login.add_argument("--taihua-base-url")
     session_login.add_argument("--card-base-url", default="http://127.0.0.1:8780")
     session_login.add_argument("--challenge-ttl", type=int, default=300)
 
@@ -134,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow literal private-IP HTTP for a restricted PoC network",
     )
     auth_serve.add_argument("--base-url")
+    auth_serve.add_argument("--taihua-base-url")
     auth_serve.add_argument("--login-timeout", type=float, default=45)
 
     operation = subparsers.add_parser("operation")
@@ -150,12 +150,14 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_get.add_argument("interaction_id")
     interaction_get.add_argument("--user-subject", required=True)
     interaction_get.add_argument("--base-url")
+    interaction_get.add_argument("--taihua-base-url")
     interaction_get.add_argument("--card-base-url", default="http://127.0.0.1:8780")
     interaction_resume = interaction_sub.add_parser("resume")
     interaction_resume.add_argument("interaction_id")
     interaction_resume.add_argument("--user-subject", required=True)
     interaction_resume.add_argument("--idempotency-key")
     interaction_resume.add_argument("--base-url")
+    interaction_resume.add_argument("--taihua-base-url")
     interaction_resume.add_argument(
         "--card-base-url",
         default="http://127.0.0.1:8780",
@@ -209,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow literal private-IP HTTP for a restricted PoC network",
     )
     mcp_central_serve.add_argument("--base-url")
+    mcp_central_serve.add_argument("--taihua-base-url")
     mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
     mcp_central_serve.add_argument(
         "--session-keepalive-interval",
@@ -239,6 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
             "oa:write:meeting",
             "oa:write:submit",
             "oa:write:revoke",
+            "taihua:read",
+            "taihua:write:worklog",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")
@@ -311,6 +316,10 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
     service = CentralCapabilityService(
         home=home,
         base_url=_central_base_url(home, getattr(args, "base_url", None)),
+        taihua_base_url=_taihua_base_url(
+            home,
+            getattr(args, "taihua_base_url", None),
+        ),
         trusted_card_base_url=getattr(args, "card_base_url", "http://127.0.0.1:8780"),
     )
     if args.action == "list":
@@ -358,26 +367,23 @@ def handle_central_session(args: argparse.Namespace, home: Path) -> int:
     service = CentralCapabilityService(
         home=home,
         base_url=_central_base_url(home, getattr(args, "base_url", None)),
+        taihua_base_url=_taihua_base_url(
+            home,
+            getattr(args, "taihua_base_url", None),
+        ),
     )
     if args.action == "status":
         print_json(service.session_status(user_subject=args.user_subject, system_id=args.system))
         return 0
     if args.action != "login":
         raise ValueError(f"unknown session action: {args.action}")
-    if args.system != "oa":
-        print_json(
-            _central_cli_error(
-                "SYSTEM_NOT_SUPPORTED",
-                f"central login is not implemented for {args.system}",
-            )
-        )
-        return 2
 
     response = service.start_login(
         user_subject=args.user_subject,
         expected_principal_ref=args.expected_principal,
         card_base_url=args.card_base_url,
         ttl_seconds=args.challenge_ttl,
+        system_id=args.system,
     )
     print_json(response)
     return 0
@@ -415,34 +421,29 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         print_json(_central_cli_error("AUTH_SERVER_CONFIG_INVALID", str(exc)))
         return 2
 
-    base_url = _central_base_url(home, args.base_url)
-    sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
-    session_states = SessionStateStore(_central_session_secret_root(home))
-
-    def adapter_factory(_challenge: dict):
-        return SeeyonCentralAdapter(base_url=base_url)
-
-    def worker_factory(session: dict, adapter: SeeyonCentralAdapter):
-        return CentralBrowserWorker(
-            profile_path=session["profile_path"],
-            allowed_origins={adapter.origin},
-            headless=True,
-        )
-
+    service = CentralCapabilityService(
+        home=home,
+        base_url=_central_base_url(home, args.base_url),
+        taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        trusted_card_base_url=config.public_base_url,
+    )
+    challenge_store = service.challenges
     broker = CredentialBroker(
         challenge_store=challenge_store,
-        session_registry=sessions,
-        session_state_store=session_states,
-        adapter_factory=adapter_factory,
-        worker_factory=worker_factory,
+        session_registry=service.sessions,
+        session_state_store=service.session_states,
+        adapter_factory=lambda challenge: service.adapter_for_system(
+            challenge["system_id"]
+        ),
+        worker_factory=service.authentication_worker,
         login_timeout_seconds=args.login_timeout,
     )
     application = TrustedAuthApplication(challenge_store=challenge_store, broker=broker)
     action_application = TrustedActionApplication(
-        authorization_store=WriteAuthorizationStore(_central_db_path(home))
+        authorization_store=service.write_authorizations
     )
     field_application = TrustedFieldApplication(
-        submission_store=FieldSubmissionStore(_central_db_path(home))
+        submission_store=service.field_submissions
     )
     startup = {
         "protocolVersion": "0.1",
@@ -498,6 +499,7 @@ def handle_interaction(args: argparse.Namespace, home: Path) -> int:
     service = CentralCapabilityService(
         home=home,
         base_url=_central_base_url(home, args.base_url),
+        taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
         trusted_card_base_url=args.card_base_url,
     )
     try:
@@ -544,16 +546,27 @@ def handle_mcp(args: argparse.Namespace) -> int:
                 return 2
             try:
                 sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
-                sessions.get_or_create(
-                    user_subject=args.user_subject,
-                    system_id="oa",
-                    expected_principal_ref=args.expected_principal,
-                )
+                scopes = set(args.scope or ["oa:read"])
+                if any(scope.startswith("oa:") for scope in scopes):
+                    scopes.add("oa:read")
+                if any(scope.startswith("taihua:") for scope in scopes):
+                    scopes.add("taihua:read")
+                system_ids = {
+                    scope.split(":", 1)[0]
+                    for scope in scopes
+                    if scope.startswith(("oa:", "taihua:"))
+                }
+                for system_id in sorted(system_ids):
+                    sessions.get_or_create(
+                        user_subject=args.user_subject,
+                        system_id=system_id,
+                        expected_principal_ref=args.expected_principal,
+                    )
                 token = store.issue(
                     user_subject=args.user_subject,
                     expected_principal_ref=args.expected_principal,
                     label=args.label,
-                    scopes=sorted({"oa:read", *(args.scope or [])}),
+                    scopes=sorted(scopes),
                     ttl_seconds=args.ttl_hours * 3600,
                 )
             except (ValueError, SessionPrincipalMismatch) as exc:
@@ -651,6 +664,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
     service = CentralCapabilityService(
         home=home,
         base_url=_central_base_url(home, args.base_url),
+        taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
         trusted_card_base_url=auth_config.public_base_url,
         session_keepalive_lease_seconds=args.session_keepalive_lease,
     )
@@ -661,7 +675,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
     startup = {
         "protocolVersion": "0.1",
         "status": "serving",
-        "service": "agentbridge_oa_mcp",
+        "service": "agentbridge_central_mcp",
         "mcpUrl": mcp_config.mcp_url,
         "authCardBaseUrl": auth_config.public_base_url,
         "transport": "streamable_http",
@@ -743,6 +757,15 @@ def _central_base_url(home: Path, explicit: str | None) -> str:
         return ConfigStore(home).load_system("oa").base_url
     except KeyError:
         return SEEYON_OA_URL
+
+
+def _taihua_base_url(home: Path, explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    try:
+        return ConfigStore(home).load_system("taihua").base_url
+    except KeyError:
+        return None
 
 
 def _central_cli_error(code: str, message: str) -> dict:

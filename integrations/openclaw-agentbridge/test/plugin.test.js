@@ -732,6 +732,130 @@ test("replays the exact pending-list read after credential login", async () => {
   assert.equal(harness.heartbeatRuns.length, 0);
 });
 
+test("replays a Taihua work-log read after credential login", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:wechat:direct:taihua-user";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        return {
+          status: "succeeded",
+          result: { authenticated: true },
+          nextAction: { type: "retry_original_request" },
+        };
+      }
+      assert.equal(name, "taihua_work_log_my_list");
+      return {
+        status: "succeeded",
+        result: {
+          count: 1,
+          items: [
+            {
+              id: "work-log-1",
+              logDate: "2026-07-26",
+              hours: 8,
+              content: "完成 AgentBridge 泰华系统适配。",
+              projectName: "AgentBridge",
+            },
+          ],
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "taihua-user", channel: "wechat" });
+
+  const loginRequired = {
+    protocolVersion: "0.1",
+    status: "requires_user_action",
+    error: { code: "LOGIN_REQUIRED" },
+    nextAction: { type: "session_login", system: "taihua" },
+  };
+  bindToolCall(harness, {
+    toolCallId: "tool-taihua-before-login",
+    runId: "run-taihua-before-login",
+    sessionKey,
+    toolName: "taihua_work_log_my_list",
+    params: {
+      start_date: "2026-07-20",
+      end_date: "2026-07-26",
+      limit: 30,
+      idempotency_key: "must-not-be-replayed",
+    },
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-taihua-before-login",
+      toolName: "taihua_work_log_my_list",
+      result: {
+        content: [{ type: "text", text: JSON.stringify(loginRequired) }],
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "taihua_work_log_my_list",
+          structuredContent: loginRequired,
+        },
+      },
+    },
+    { runtime: "openclaw" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-login-for-taihua",
+    runId: "run-taihua-before-login",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-for-taihua",
+      toolName: "taihua_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    [
+      "agentbridge_interaction_get",
+      "agentbridge_interaction_resume",
+      "taihua_work_log_my_list",
+    ],
+  );
+  assert.deepEqual(calls.at(-1).arguments_, {
+    start_date: "2026-07-20",
+    end_date: "2026-07-26",
+    limit: 30,
+  });
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("AgentBridge 泰华系统适配"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("泰华日志系统 登录已恢复"),
+    true,
+  );
+});
 test("infers a sent-list continuation when login is the first tool", async () => {
   const harness = fakeApi({
     autoPoll: true,
@@ -1655,6 +1779,56 @@ test("delivers the next trusted card through a text-only channel adapter", async
   assert.equal(harness.systemEvents.length, 0);
 });
 
+test("reports verified Taihua work-log success and business rejection", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:openclaw-weixin:direct:taihua-user";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "taihua-user",
+  });
+
+  await coordinator.deliverStatusDirect(sessionKey, "succeeded", null, {
+    result: {
+      status: "created",
+      workLog: { id: "work-log-1" },
+      verification: { matched: true },
+    },
+  });
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "failed",
+    "TAIHUA_BUSINESS_RULE_REJECTED",
+    {
+      error: {
+        code: "TAIHUA_BUSINESS_RULE_REJECTED",
+        message: "该日期已有工作日志。",
+      },
+    },
+  );
+
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("泰华工作日志已正式提交"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("回读确认"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[1].payload.text.includes("该日期已有工作日志"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[1].payload.text.includes("TAIHUA_BUSINESS_RULE_REJECTED"),
+    true,
+  );
+});
 test("reports a sanitized OA business-rule rejection and hides generic failures", async () => {
   const harness = fakeApi({
     autoPoll: false,
