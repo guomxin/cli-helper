@@ -99,6 +99,9 @@ class SeeyonMissedPunchTests(unittest.TestCase):
             prepared["plan"]["target"]["form_app_id"], MISSED_PUNCH_FORM_APP_ID
         )
         self.assertEqual(prepared["plan"]["exact_input"]["opinion"], "同意")
+        self.assertEqual(
+            prepared["plan"]["action_contract"]["action_kind"], "approval"
+        )
         self.assertEqual(prepared["summary"]["authorize_label"], "授权审批通过")
         self.assertIn("立即提交审批通过", prepared["summary"]["authorization_notice"])
         summary_fields = {
@@ -357,6 +360,7 @@ def _approval_plan():
         "action_contract": {
             "version": MISSED_PUNCH_APPROVAL_CONTRACT_VERSION,
             "fingerprint": missed_punch_approval_contract_fingerprint(),
+            "action_kind": "approval",
         },
         "exact_input": {"opinion": "同意"},
     }

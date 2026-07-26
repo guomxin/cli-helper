@@ -310,6 +310,7 @@ def prepare_missed_punch_approval(adapter, worker, arguments: dict) -> dict:
                 "version": MISSED_PUNCH_APPROVAL_CONTRACT_VERSION,
                 "fingerprint": missed_punch_approval_contract_fingerprint(),
                 "internal_binding": "ContinueSubmit",
+                "action_kind": "approval",
                 "verification": "pending_disappearance",
             },
             "exact_input": {"opinion": inputs["opinion"]},
@@ -853,6 +854,7 @@ def _validate_approval_plan(plan: dict) -> None:
     if (
         contract.get("version") != MISSED_PUNCH_APPROVAL_CONTRACT_VERSION
         or contract.get("fingerprint") != missed_punch_approval_contract_fingerprint()
+        or contract.get("action_kind") != "approval"
     ):
         raise MissedPunchContractMismatch(
             "The missed-punch approval contract changed after authorization."
