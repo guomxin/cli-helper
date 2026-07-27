@@ -390,9 +390,9 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
                             "content": [
                                 {
                                     "id": 12,
-                                    "userId": 300000881,
                                     "logDate": "2026-07-24",
                                     "fullname": "刘大扬",
+                                    "username": "liudayang",
                                     "content": "完成周工作。",
                                 }
                             ],

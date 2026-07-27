@@ -903,8 +903,7 @@ def _verify_team_log_filters(
     department: dict | None,
 ) -> None:
     if member is not None:
-        expected_user_id = str(member["id"])
-        if any(str(item.get("userId") or "") != expected_user_id for item in content):
+        if any(not _team_log_matches_member(item, member) for item in content):
             raise TaihuaSessionCheckUnavailable(
                 "团队日志接口未按成员条件筛选，已停止返回可能的全量结果。"
             )
@@ -938,6 +937,21 @@ def _verify_team_log_filters(
                 "团队日志接口未按日期范围筛选，已停止返回可能的全量结果。"
             )
 
+
+def _team_log_matches_member(item: dict, member: dict) -> bool:
+    user = item.get("user") if isinstance(item.get("user"), dict) else {}
+    actual_id = item.get("userId") or user.get("id")
+    if actual_id not in (None, ""):
+        return str(actual_id) == str(member["id"])
+    expected_names = {
+        str(member.get("name") or "").strip().casefold(),
+        str(member.get("username") or "").strip().casefold(),
+    } - {""}
+    actual_names = {
+        str(item.get("fullname") or user.get("fullname") or "").strip().casefold(),
+        str(item.get("username") or user.get("username") or "").strip().casefold(),
+    } - {""}
+    return bool(expected_names & actual_names)
 
 def _normalize_date(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
