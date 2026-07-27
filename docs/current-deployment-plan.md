@@ -1276,9 +1276,27 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   47 个 MCP 工具发布烟测和活动会话检查成功；本次未修改 OpenClaw 插件，因此未重启
   Windows Gateway；
 - 本轮没有执行 OA 或泰华业务写入。
+## 15.29 2026-07-27 会话稳定性与双用户隔离验收一期
+
+- `Test-AgentBridgeMcp.ps1` 支持按身份标签、通道和发送者显式选择 OpenClaw Token，
+  不再依赖配置中的第一个可用 Token；新增 OA、泰华会话和最小只读列表检查；
+- 新增 `Test-AgentBridgeIdentityIsolation.ps1`，可在多轮检查中验证身份标签、
+  `userSubject`、下游账号和会话指纹稳定，并拒绝两个标签解析到同一主体；
+- 自动化补齐“一个用户明确过期，另一个继续保活”和“吊销一个 Token 不影响另一个
+  Token”用例。生产 Token 未被吊销，真实吊销演练仍只允许使用短期临时 Token；
+- 发布前与发布后均通过正式 HTTPS MCP 检查。发布后三轮中，辛国茂/Telegram 始终
+  映射 `guomao/辛国茂`，李世玉/微信始终映射 `lishiyu/李世玉`，两个 OA 会话均为
+  active、eligible；最小待办读取分别返回总数 0 和 33，未读取或处理第二用户详情；
+- 辛国茂泰华会话连续三轮保持 active、eligible，个人日志最小读取成功。历史发布记录
+  已证明 2026-07-27 的 3 小时日志真实创建并权威回读，因此本轮没有重复制造业务日志；
+- 完整门禁通过 Python `336 passed, 3 skipped, 157 subtests passed`、OpenClaw
+  `68/68`、`compileall`、`pip check` 和 npm pack dry-run；
+- 提交 `f23034f` 已推送 GitHub，Linux Release `f23034f24f69` 已部署，47 个 MCP
+  工具发布烟测成功；OpenClaw 插件未修改，Windows Gateway 未重启；
+- 本轮没有执行 OA 或泰华业务写入。
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
 2. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
-3. 补做双用户并发保活、一方会话过期和单 Token 吊销不影响另一方的故障验收；
+3. 完成 24 小时双用户保活观察，并使用短期临时 Token 补做一次真实吊销隔离演练；
 4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。
