@@ -69,6 +69,36 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_identity_isolation_smoke_selects_named_bindings_without_tokens(self) -> None:
+        smoke = (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(encoding="utf-8")
+        isolation = (
+            ROOT / "scripts/Test-AgentBridgeIdentityIsolation.ps1"
+        ).read_text(encoding="utf-8")
+        node_smoke = (
+            ROOT / "scripts/agentbridge-mcp-smoke.mjs"
+        ).read_text(encoding="utf-8")
+
+        for marker in (
+            "IdentityLabel",
+            "IdentityChannel",
+            "IdentitySenderId",
+            "did not resolve exactly one active binding",
+        ):
+            self.assertIn(marker, smoke)
+        for marker in (
+            "uniqueSubjects",
+            "identity changed during the stability check",
+            "session is not active",
+        ):
+            self.assertIn(marker, isolation)
+        for marker in (
+            "TaihuaSessionStatus",
+            "OaPendingRead",
+            "TaihuaMyLogs",
+            "downstreamPrincipalRef",
+        ):
+            self.assertIn(marker, node_smoke)
+        self.assertNotIn("Token =", isolation)
     def test_pending_action_preflight_is_read_only_by_construction(self) -> None:
         script = (
             ROOT / "scripts/validate_oa_pending_actions_preflight.py"

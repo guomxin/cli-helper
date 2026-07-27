@@ -1,11 +1,22 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("SessionStatus", "LoginReuse", "Release", "WorkflowCollections")]
+    [ValidateSet(
+        "SessionStatus",
+        "TaihuaSessionStatus",
+        "OaPendingRead",
+        "TaihuaMyLogs",
+        "LoginReuse",
+        "Release",
+        "WorkflowCollections"
+    )]
     [string]$Check = "SessionStatus",
     [string]$ServerName = "agentbridge",
     [string]$CaCertificate = "",
     [string]$OpenClawConfig = "",
-    [string]$OpenClawEnvFile = ""
+    [string]$OpenClawEnvFile = "",
+    [string]$IdentityLabel = "",
+    [string]$IdentityChannel = "",
+    [string]$IdentitySenderId = ""
 )
 
 Set-StrictMode -Version Latest
@@ -99,7 +110,11 @@ function Resolve-ConfigString {
 
 $servers = Get-PropertyValue -Object (Get-PropertyValue -Object $config -Name "mcp") -Name "servers"
 $server = Get-PropertyValue -Object $servers -Name $ServerName
+$selectedIdentityLabel = $null
 if ($server) {
+    if ($IdentityLabel -or $IdentityChannel -or $IdentitySenderId) {
+        throw "Identity selectors require the AgentBridge OpenClaw plugin configuration"
+    }
     $headers = Get-PropertyValue -Object $server -Name "headers"
     $url = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $server -Name "url"))
     $authorization = Resolve-ConfigString -Value ([string](Get-PropertyValue -Object $headers -Name "Authorization"))
@@ -117,6 +132,7 @@ else {
     $url = Resolve-ConfigString -Value $configuredUrl
     $timeout = Get-PropertyValue -Object $pluginConfig -Name "mcpTimeoutSeconds"
     $authorization = $null
+    $availableBindings = @()
     $bindings = Get-PropertyValue -Object $pluginConfig -Name "identityBindings"
     foreach ($binding in @($bindings)) {
         $tokenEnv = [string](Get-PropertyValue -Object $binding -Name "tokenEnv")
@@ -125,13 +141,32 @@ else {
         }
         $token = Resolve-EnvironmentValue -Name $tokenEnv
         if (-not [string]::IsNullOrWhiteSpace($token)) {
-            $authorization = "Bearer $token"
-            break
+            $availableBindings += [pscustomobject]@{
+                Binding = $binding
+                Token = $token
+            }
         }
     }
-    if (-not $authorization) {
+    if (-not $availableBindings) {
         throw "No active AgentBridge identity binding token was found"
     }
+    $matches = @($availableBindings | Where-Object {
+        $binding = $_.Binding
+        (-not $IdentityLabel -or [string](Get-PropertyValue -Object $binding -Name "label") -ieq $IdentityLabel) -and
+        (-not $IdentityChannel -or [string](Get-PropertyValue -Object $binding -Name "channel") -ieq $IdentityChannel) -and
+        (-not $IdentitySenderId -or [string](Get-PropertyValue -Object $binding -Name "senderId") -eq $IdentitySenderId)
+    })
+    if (($IdentityLabel -or $IdentityChannel -or $IdentitySenderId) -and $matches.Count -ne 1) {
+        throw "AgentBridge identity selector did not resolve exactly one active binding"
+    }
+    $selected = if ($IdentityLabel -or $IdentityChannel -or $IdentitySenderId) {
+        $matches[0]
+    }
+    else {
+        $availableBindings[0]
+    }
+    $authorization = "Bearer $($selected.Token)"
+    $selectedIdentityLabel = [string](Get-PropertyValue -Object $selected.Binding -Name "label")
 }
 if (-not $url -or -not $authorization.StartsWith("Bearer ")) {
     throw "Resolved MCP configuration is incomplete"
@@ -169,7 +204,11 @@ $hadPreviousCa = Test-Path Env:NODE_EXTRA_CA_CERTS
 $previousCa = $env:NODE_EXTRA_CA_CERTS
 try {
     $env:NODE_EXTRA_CA_CERTS = (Resolve-Path $CaCertificate).Path
-    $serverJson | & $node.Source $nodeScript --check $Check --server-name $ServerName
+    $nodeArguments = @($nodeScript, "--check", $Check, "--server-name", $ServerName)
+    if ($selectedIdentityLabel) {
+        $nodeArguments += @("--identity-label", $selectedIdentityLabel)
+    }
+    $serverJson | & $node.Source @nodeArguments
     if ($LASTEXITCODE -ne 0) {
         throw "AgentBridge MCP smoke check failed"
     }

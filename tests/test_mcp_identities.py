@@ -50,6 +50,27 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             self.assertIsNone(store.verify(revoked["token"]))
             self.assertIsNone(store.verify(expired["token"]))
 
+    def test_revoking_one_identity_does_not_affect_another_user(self):
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            first = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                ttl_seconds=3600,
+            )
+            second = store.issue(
+                user_subject="user-b",
+                expected_principal_ref="Bob",
+                ttl_seconds=3600,
+            )
+
+            store.revoke(first["token_id"])
+
+            self.assertIsNone(store.verify(first["token"]))
+            verified = store.verify(second["token"])
+            self.assertEqual(verified["user_subject"], "user-b")
+            self.assertEqual(store.get(first["token_id"])["state"], "revoked")
+            self.assertEqual(store.get(second["token_id"])["state"], "active")
     def test_identity_tokens_are_listed_without_secrets_and_can_be_filtered(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

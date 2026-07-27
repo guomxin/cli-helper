@@ -194,7 +194,9 @@ MCP URL Elicitation 适合把密码、第三方授权等敏感交互导向模型
 - 私网 IP HTTPS 仍需内部 CA 信任；
 - MCP 身份仍由管理员签发 Bearer，而不是标准 OAuth 2.1 授权流程；
 - OpenClaw 当前仍需要适配器才能获得 Telegram 内嵌卡片和自动续跑；
-- 尚未完成第二用户、第二台 Windows 和手机 CA 分发验证。
+- Telegram 与微信两个聊天身份到两个 OA 用户的 Token、会话和结果路由隔离已经完成
+  真实验收；第二台 Windows、每用户独立 OS/容器 Worker，以及 Telegram Android
+  WebView 对用户安装内部 CA 的兼容性仍未完成。
 
 后续优先级：
 
@@ -202,7 +204,7 @@ MCP URL Elicitation 适合把密码、第三方授权等敏感交互导向模型
 2. 验证 MCP Apps 宿主的真实内嵌显示与自动续跑；
 3. 推动 OpenClaw 使用原生 MCP Apps 或等价宿主能力；
 4. 通过企业 PKI、GPO/MDM 或正式可信证书取消人工 CA 安装；
-5. 完成第二用户隔离和移动端验证。
+5. 完成第二台 Windows、独立 Worker 和移动端 WebView/证书分发验证。
 
 ## 8. 验证命令
 

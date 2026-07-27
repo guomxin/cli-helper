@@ -1,8 +1,20 @@
 import { createAgentBridgeMcpClient } from "../integrations/openclaw-agentbridge/lib/mcp-client.js";
 
 const CHECKS = new Map([
-  ["SessionStatus", { tool: "oa_session_status", arguments: {} }],
-  ["LoginReuse", { tool: "oa_session_login", arguments: {} }],
+  ["SessionStatus", { tool: "oa_session_status", arguments: {}, kind: "session" }],
+  [
+    "TaihuaSessionStatus",
+    { tool: "taihua_session_status", arguments: {}, kind: "session" },
+  ],
+  [
+    "OaPendingRead",
+    { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
+  ],
+  [
+    "TaihuaMyLogs",
+    { tool: "taihua_work_log_my_list", arguments: { limit: 1 }, kind: "list" },
+  ],
+  ["LoginReuse", { tool: "oa_session_login", arguments: {}, kind: "login" }],
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
@@ -66,6 +78,7 @@ async function readStdin() {
 try {
   const checkName = argument("--check", "SessionStatus");
   const serverName = argument("--server-name", "agentbridge");
+  const identityLabel = argument("--identity-label", null);
   const check = CHECKS.get(checkName);
   if (!check && !["Release", "WorkflowCollections"].includes(checkName)) {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
@@ -156,11 +169,13 @@ try {
     const effectiveCheck = check ?? CHECKS.get("SessionStatus");
     const payload = await client.callTool(effectiveCheck.tool, effectiveCheck.arguments);
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
+    const result = payload?.result ?? payload;
     const summary =
       checkName === "LoginReuse"
         ? {
             status: "succeeded",
             check: checkName,
+            identityLabel,
             operationStatus: String(payload?.status ?? "unknown").slice(0, 80),
             reused: Boolean(payload?.reused),
             hasInteraction: Boolean(payload?.interaction),
@@ -169,17 +184,32 @@ try {
               : null,
             errorCode,
           }
-        : {
-            status: "succeeded",
-            check: checkName,
-            toolCount,
-            requiredReleaseToolsPresent: checkName === "Release" ? true : null,
-            sessionStatus: String(
-              payload?.result?.status ?? payload?.status ?? "unknown",
-            ).slice(0, 80),
-            checkedAt: payload?.result?.checkedAt ?? payload?.checkedAt ?? null,
-            errorCode,
-          };
+        : effectiveCheck.kind === "list"
+          ? {
+              status: "succeeded",
+              check: checkName,
+              identityLabel,
+              itemCount: Number(result?.count ?? result?.items?.length ?? 0),
+              total: Number(result?.total ?? result?.count ?? result?.items?.length ?? 0),
+              errorCode,
+            }
+          : {
+              status: "succeeded",
+              check: checkName,
+              identityLabel,
+              toolCount,
+              requiredReleaseToolsPresent: checkName === "Release" ? true : null,
+              sessionStatus: String(result?.status ?? "unknown").slice(0, 80),
+              sessionId: result?.sessionId ?? null,
+              systemId: result?.systemId ?? null,
+              userSubject: result?.userSubject ?? null,
+              downstreamPrincipalRef: result?.downstreamPrincipalRef ?? null,
+              keepaliveState: result?.keepaliveState ?? null,
+              lastActivityAt: result?.lastActivityAt ?? null,
+              lastKeepaliveAt: result?.lastKeepaliveAt ?? null,
+              checkedAt: result?.checkedAt ?? payload?.checkedAt ?? null,
+              errorCode,
+            };
     process.stdout.write(JSON.stringify(summary) + "\n");
   }
 } catch (error) {

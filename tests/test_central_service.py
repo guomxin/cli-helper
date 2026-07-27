@@ -319,6 +319,74 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertEqual(service.sessions.get(session["session_id"])["state"], "active")
             self.assertIsNotNone(service.session_states.load(session["session_id"]))
 
+    def test_keepalive_cycle_isolates_one_expired_user_from_another(self):
+        with TemporaryDirectory() as tmp:
+            def worker_factory(session, _adapter):
+                worker = FakeWorker()
+                worker.user_subject = session["user_subject"]
+                return worker
+
+            service = CentralCapabilityService(
+                home=Path(tmp),
+                base_url=BASE_URL,
+                worker_factory=worker_factory,
+            )
+            sessions = {}
+            for user_subject, principal in (("user-a", "Alice"), ("user-b", "Bob")):
+                session = service.sessions.get_or_create(
+                    user_subject=user_subject,
+                    system_id="oa",
+                    expected_principal_ref=principal,
+                )
+                session = service.sessions.activate(
+                    session["session_id"],
+                    observed_principal_ref=principal,
+                )
+                service.session_states.save(
+                    session["session_id"],
+                    {"cookies": [{"owner": user_subject}]},
+                )
+                sessions[user_subject] = session
+
+            def probe(worker):
+                if worker.user_subject == "user-a":
+                    raise SeeyonLoginRequired("OA expired")
+                return {
+                    "authenticated": True,
+                    "template_count": 118,
+                    "transport": "central_http_session",
+                }
+
+            service.adapter.probe_session = MagicMock(side_effect=probe)
+            checked_at = (
+                datetime.fromisoformat(sessions["user-a"]["last_user_activity_at"])
+                + timedelta(minutes=1)
+            )
+
+            summary = service.run_session_keepalive_cycle(
+                activity_lease_seconds=3_600,
+                now=checked_at,
+            )
+
+            self.assertEqual(summary["activeSessions"], 2)
+            self.assertEqual(summary["eligibleSessions"], 2)
+            self.assertEqual(summary["expired"], 1)
+            self.assertEqual(summary["keptAlive"], 1)
+            self.assertEqual(
+                service.sessions.get(sessions["user-a"]["session_id"])["state"],
+                "expired",
+            )
+            self.assertIsNone(
+                service.session_states.load(sessions["user-a"]["session_id"])
+            )
+            self.assertEqual(
+                service.sessions.get(sessions["user-b"]["session_id"])["state"],
+                "active",
+            )
+            self.assertEqual(
+                service.session_states.load(sessions["user-b"]["session_id"]),
+                {"cookies": []},
+            )
     def test_start_login_uses_server_bound_expected_principal(self):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, FakeWorker())

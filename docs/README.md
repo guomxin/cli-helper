@@ -18,6 +18,8 @@
 - [受控写模型](./governed-write-model.md)：写操作的信任边界、状态机和验收要求。
 - [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)：聊天身份到
   AgentBridge Token 和用户会话的隔离。
+- [会话稳定性与多用户隔离验收](./session-stability-and-isolation-acceptance.md)：
+  显式身份烟测、长时观察和单方故障验收。
 - [开发安全策略](./development-policy.md)：开发和真实环境验证的强制边界。
 
 ## 部署与运维
