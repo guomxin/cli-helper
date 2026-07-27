@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlparse
 
@@ -19,6 +19,8 @@ from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 TAIHUA_SYSTEM_ID = "taihua"
 TAIHUA_ADAPTER_ID = "taihua-central"
 TAIHUA_SYSTEM_NAME = "泰华日志系统"
+_TAIHUA_CLIENT_HEADERS = {"X-Sisyphus-Client": "pc-web"}
+_TAIHUA_REFRESH_WINDOW = timedelta(minutes=15)
 
 TAIHUA_MY_LOGS_CAPABILITY = "taihua.work_log.my.list"
 TAIHUA_TEAM_LOGS_CAPABILITY = "taihua.work_log.team.list"
@@ -197,6 +199,7 @@ class TaihuaCentralAdapter:
         response = worker.request(
             "POST",
             self._url("/api/authenticates/basic"),
+            headers=_TAIHUA_CLIENT_HEADERS,
             body={
                 "username": str(credentials.get("username") or "").strip(),
                 "password": str(credentials.get("password") or ""),
@@ -346,10 +349,14 @@ class TaihuaCentralAdapter:
         authorization = str(state.get("authorization") or "")
         if not authorization:
             raise TaihuaLoginRequired("泰华日志系统会话不存在。")
+        if _access_token_refresh_due(state):
+            self._refresh(worker)
+            state = worker.get_http_state()
+            authorization = str(state.get("authorization") or "")
         response = worker.request(
             method,
             self._url(path),
-            headers={"Authorization": authorization, "X-Sisyphus-Client": "agentbridge"},
+            headers={"Authorization": authorization, **_TAIHUA_CLIENT_HEADERS},
             body=body,
         )
         if _token_invalid(response):
@@ -360,7 +367,7 @@ class TaihuaCentralAdapter:
                 self._url(path),
                 headers={
                     "Authorization": str(state["authorization"]),
-                    "X-Sisyphus-Client": "agentbridge",
+                    **_TAIHUA_CLIENT_HEADERS,
                 },
                 body=body,
             )
@@ -391,14 +398,18 @@ class TaihuaCentralAdapter:
         response = worker.request(
             "POST",
             self._url("/api/authenticates/refresh"),
-            headers={"X-Sisyphus-Client": "agentbridge"},
+            headers=_TAIHUA_CLIENT_HEADERS,
             body={"refreshToken": refresh_token},
         )
         if response["status"] in {401, 403} or _token_invalid(response):
-            raise TaihuaLoginRequired("泰华日志系统刷新令牌已失效。")
+            raise TaihuaLoginRequired(
+                "泰华日志系统刷新令牌已失效"
+                f"（HTTP {response['status']}）：{_response_message(response)}"
+            )
         if response["status"] < 200 or response["status"] >= 300:
             raise TaihuaSessionCheckUnavailable(
-                f"泰华日志系统暂时无法刷新会话（HTTP {response['status']}）。"
+                "泰华日志系统暂时无法刷新会话"
+                f"（HTTP {response['status']}）：{_response_message(response)}"
             )
         payload = _json_object(response)
         if not payload.get("token") or not payload.get("refreshToken"):
@@ -662,6 +673,39 @@ def _token_state(payload: dict) -> dict:
         "token_expired_at": payload.get("tokenExpired"),
         "refresh_token_expired_at": payload.get("refreshTokenExpired"),
     }
+
+
+def _access_token_refresh_due(
+    state: dict,
+    *,
+    now: datetime | None = None,
+    refresh_window: timedelta = _TAIHUA_REFRESH_WINDOW,
+) -> bool:
+    expires_at = _parse_token_timestamp(state.get("token_expired_at"))
+    if expires_at is None:
+        return False
+    if expires_at.tzinfo is None:
+        current = datetime.now() if now is None else now
+        if current.tzinfo is not None:
+            current = current.astimezone().replace(tzinfo=None)
+    else:
+        current = datetime.now(timezone.utc) if now is None else now
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current = current.astimezone(expires_at.tzinfo)
+    return expires_at - current <= refresh_window
+
+
+def _parse_token_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _token_invalid(response: dict) -> bool:

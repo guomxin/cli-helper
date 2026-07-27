@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -11,6 +12,7 @@ from bscli.adapters.taihua import (
     TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA,
     TaihuaBusinessRuleRejected,
     TaihuaCentralAdapter,
+    TaihuaLoginRequired,
     TaihuaSessionCheckUnavailable,
     TaihuaWorkLogOutcomeUnknown,
     commit_taihua_work_log_create,
@@ -46,8 +48,8 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
                         {
                             "token": "access-1",
                             "refreshToken": "refresh-1",
-                            "tokenExpired": "2026-07-26T14:00:00Z",
-                            "refreshTokenExpired": "2026-08-26T14:00:00Z",
+                            "tokenExpired": "2099-07-26T14:00:00Z",
+                            "refreshTokenExpired": "2099-08-26T14:00:00Z",
                         },
                     ),
                 ),
@@ -76,6 +78,10 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
         self.assertEqual(authenticated["observed_principal_ref"], "辛国茂")
         self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-1")
         self.assertNotIn("secret", repr(worker.get_http_state()))
+        self.assertEqual(
+            worker.calls[0]["headers"]["X-Sisyphus-Client"],
+            "pc-web",
+        )
 
         worker.responses.extend(
             [
@@ -92,8 +98,8 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
                         {
                             "token": "access-2",
                             "refreshToken": "refresh-2",
-                            "tokenExpired": "2026-07-26T15:00:00Z",
-                            "refreshTokenExpired": "2026-08-26T15:00:00Z",
+                            "tokenExpired": "2099-07-26T15:00:00Z",
+                            "refreshTokenExpired": "2099-08-26T15:00:00Z",
                         },
                     ),
                 ),
@@ -117,6 +123,128 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
         self.assertTrue(probe["authenticated"])
         self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-2")
         self.assertFalse(probe["browser_bridge_used"])
+        self.assertTrue(
+            all(
+                call["headers"]["X-Sisyphus-Client"] == "pc-web"
+                for call in worker.calls
+            )
+        )
+
+    def test_access_token_is_refreshed_before_the_protected_request(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "POST",
+                    "/api/authenticates/refresh",
+                    response(
+                        200,
+                        {
+                            "token": "access-2",
+                            "refreshToken": "refresh-2",
+                            "tokenExpired": "2099-07-26T15:00:00Z",
+                            "refreshTokenExpired": "2099-08-26T15:00:00Z",
+                        },
+                    ),
+                ),
+                expected(
+                    "GET",
+                    "/api/users/principal",
+                    response(
+                        200,
+                        {
+                            "id": 7,
+                            "username": "xingm",
+                            "fullname": "辛国茂",
+                        },
+                    ),
+                ),
+            ],
+            state={
+                "authorization": "Bearer access-1",
+                "refresh_token": "refresh-1",
+                "token_expired_at": (
+                    datetime.now() + timedelta(minutes=5)
+                ).isoformat(sep=" ", timespec="seconds"),
+            },
+        )
+
+        probe = adapter.probe_session(worker)
+
+        self.assertTrue(probe["authenticated"])
+        self.assertEqual(
+            [call["path"] for call in worker.calls],
+            ["/api/authenticates/refresh", "/api/users/principal"],
+        )
+        self.assertEqual(
+            worker.calls[1]["headers"]["Authorization"],
+            "Bearer access-2",
+        )
+        self.assertEqual(worker.get_http_state()["refresh_token"], "refresh-2")
+
+    def test_access_token_outside_refresh_window_is_reused(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "GET",
+                    "/api/users/principal",
+                    response(
+                        200,
+                        {
+                            "id": 7,
+                            "username": "xingm",
+                            "fullname": "辛国茂",
+                        },
+                    ),
+                )
+            ],
+            state={
+                "authorization": "Bearer access-1",
+                "refresh_token": "refresh-1",
+                "token_expired_at": (
+                    datetime.now(timezone.utc) + timedelta(minutes=30)
+                ).isoformat(),
+            },
+        )
+
+        adapter.probe_session(worker)
+
+        self.assertEqual(
+            [call["path"] for call in worker.calls],
+            ["/api/users/principal"],
+        )
+        self.assertEqual(
+            worker.calls[0]["headers"]["Authorization"],
+            "Bearer access-1",
+        )
+
+    def test_rejected_proactive_refresh_reports_server_detail(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "POST",
+                    "/api/authenticates/refresh",
+                    response(401, {"message": "refresh token rejected"}),
+                )
+            ],
+            state={
+                "authorization": "Bearer access-1",
+                "refresh_token": "refresh-1",
+                "token_expired_at": (
+                    datetime.now() + timedelta(minutes=5)
+                ).isoformat(sep=" ", timespec="seconds"),
+            },
+        )
+
+        with self.assertRaisesRegex(
+            TaihuaLoginRequired,
+            "HTTP 401.*refresh token rejected",
+        ):
+            adapter.probe_session(worker)
+
+        self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-1")
 
     def test_transient_refresh_failure_preserves_existing_session_state(self):
         adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
