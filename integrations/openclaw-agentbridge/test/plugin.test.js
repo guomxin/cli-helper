@@ -943,6 +943,84 @@ test("infers a sent-list continuation when login is the first tool", async () =>
   assert.equal(harness.heartbeatRuns.length, 0);
 });
 
+test("does not infer a work-log read continuation from a write request", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      assert.equal(name, "agentbridge_interaction_resume");
+      return {
+        status: "succeeded",
+        result: { authenticated: true },
+        nextAction: { type: "retry_original_request" },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  harness.hooks.message_received(
+    {
+      sessionKey,
+      channel: "telegram",
+      senderId: "7052061588",
+      from: "7052061588",
+      content:
+        "填写今日我的日志，内容：AgentBridge日志系统修改保持用户登录机制；" +
+        "支持按用户、项目和正文关键词及时间段查询，工时：3小时",
+    },
+    { channelId: "telegram", sessionKey, conversationId: "7052061588" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-taihua-write-login-first",
+    runId: "run-taihua-write-login-first",
+    sessionKey,
+    toolName: "taihua_session_login",
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-taihua-write-login-first",
+      toolName: "taihua_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["agentbridge_interaction_get", "agentbridge_interaction_resume"],
+  );
+  assert.equal(harness.systemEvents.length, 1);
+  assert.equal(
+    harness.systemEvents[0].text.includes("继续处理触发本次登录的原始用户请求"),
+    true,
+  );
+  assert.equal(harness.heartbeatRuns.length, 1);
+  assert.equal(
+    harness.heartbeatRuns[0].reason,
+    "hook:agentbridge-login-completed",
+  );
+});
 test("delivers a field card captured during the login continuation heartbeat", async () => {
   const sessionKey = "agent:main:telegram:direct:7052061588";
   const fieldUrl = CARD_ORIGIN + "/fields/continuation-field-token";

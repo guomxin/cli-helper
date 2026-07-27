@@ -1095,6 +1095,16 @@ function inferReadContinuation(text, capturedAt) {
   if (!matched) {
     return null;
   }
+  if (
+    ["taihua_work_log_team_list", "taihua_work_log_my_list"].includes(
+      matched[1],
+    ) &&
+    /(?:填写|填报|新建|创建|记录|修改|更新|保存|提交)[^。！？\n]{0,20}(?:工作)?日志|(?:写|填)[^。！？\n]{0,12}(?:工作)?日志/u.test(
+      value,
+    )
+  ) {
+    return null;
+  }
   const arguments_ = {};
   const limitMatch = value.match(/(?:\u8fd1|\u524d)?\s*(\d{1,3})\s*\u6761/);
   if (limitMatch) {
