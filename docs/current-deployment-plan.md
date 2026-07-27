@@ -1260,6 +1260,22 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `pip check` 和 npm pack dry-run；
 - 修复提交 `222d0e9` 已推送 GitHub；本机 OpenClaw Gateway 已重启，深度 RPC 正常，
   新进程启动日志确认 `agentbridge-interactions` `0.2.15` 已加载。
+## 15.28 2026-07-27 旧浏览器桥退役二期与文档收敛
+
+- `SystemProfile` 只接受 `central_session`，删除了对 `chrome_extension` 的静默迁移；
+  本机与服务器上的 OA、泰华系统配置均已核对为中央会话模式；
+- 从当前适配器和中央服务返回值中删除冗余的 `browser_bridge_used` /
+  `browserBridgeUsed` 字段，统一以 `transport` 表示实际执行通道；
+- 增加源码退役守卫、文档链接和历史归档守卫。当前文档入口收敛到
+  `docs/README.md`，受治理写动作以 `docs/governed-write-model.md` 为准，旧桥设计和
+  早期写动作草案移入 `docs/archive/`，仅保留历史证据；
+- 完整发布门禁通过 Python `333 passed, 3 skipped, 156 subtests passed`、
+  OpenClaw `68/68`、`compileall`、`pip check` 和 npm pack dry-run；追加的文档与退役
+  守卫 `9/9` 通过；
+- 提交 `d35e846` 已推送 GitHub，Linux Release `d35e84679405` 已部署。服务重启、
+  47 个 MCP 工具发布烟测和活动会话检查成功；本次未修改 OpenClaw 插件，因此未重启
+  Windows Gateway；
+- 本轮没有执行 OA 或泰华业务写入。
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
