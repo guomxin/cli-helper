@@ -488,10 +488,15 @@ class TaihuaCentralAdapter:
         authorization = str(state.get("authorization") or "")
         if not authorization:
             raise TaihuaLoginRequired("泰华日志系统会话不存在。")
+        proactive_refresh_error = None
         if _access_token_refresh_due(state):
-            self._refresh(worker)
-            state = worker.get_http_state()
-            authorization = str(state.get("authorization") or "")
+            try:
+                self._refresh(worker)
+            except (TaihuaLoginRequired, TaihuaSessionCheckUnavailable) as exc:
+                proactive_refresh_error = exc
+            else:
+                state = worker.get_http_state()
+                authorization = str(state.get("authorization") or "")
         response = worker.request(
             method,
             self._url(path),
@@ -499,6 +504,8 @@ class TaihuaCentralAdapter:
             body=body,
         )
         if _token_invalid(response):
+            if proactive_refresh_error is not None:
+                raise proactive_refresh_error
             self._refresh(worker)
             state = worker.get_http_state()
             response = worker.request(

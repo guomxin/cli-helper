@@ -219,7 +219,7 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
             "Bearer access-1",
         )
 
-    def test_rejected_proactive_refresh_reports_server_detail(self):
+    def test_rejected_proactive_refresh_uses_still_valid_access_token(self):
         adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
         worker = FakeHttpWorker(
             [
@@ -227,7 +227,52 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
                     "POST",
                     "/api/authenticates/refresh",
                     response(401, {"message": "refresh token rejected"}),
-                )
+                ),
+                expected(
+                    "GET",
+                    "/api/users/principal",
+                    response(
+                        200,
+                        {
+                            "id": 7,
+                            "username": "xingm",
+                            "fullname": "辛国茂",
+                        },
+                    ),
+                ),
+            ],
+            state={
+                "authorization": "Bearer access-1",
+                "refresh_token": "refresh-1",
+                "token_expired_at": (
+                    datetime.now() + timedelta(minutes=5)
+                ).isoformat(sep=" ", timespec="seconds"),
+            },
+        )
+
+        probe = adapter.probe_session(worker)
+
+        self.assertTrue(probe["authenticated"])
+        self.assertEqual(
+            worker.calls[1]["headers"]["Authorization"],
+            "Bearer access-1",
+        )
+        self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-1")
+
+    def test_rejected_proactive_refresh_reports_detail_if_access_token_is_invalid(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "POST",
+                    "/api/authenticates/refresh",
+                    response(401, {"message": "refresh token rejected"}),
+                ),
+                expected(
+                    "GET",
+                    "/api/users/principal",
+                    response(401, {"message": "access token rejected"}),
+                ),
             ],
             state={
                 "authorization": "Bearer access-1",
@@ -245,7 +290,6 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
             adapter.probe_session(worker)
 
         self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-1")
-
     def test_transient_refresh_failure_preserves_existing_session_state(self):
         adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
         worker = FakeHttpWorker(
