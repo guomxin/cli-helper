@@ -290,7 +290,6 @@ def create_meeting(
                 "content_saved": bool(content_save.get("content_id")),
             },
             "transport": "central_http_session",
-            "browser_bridge_used": False,
         }
     except MeetingOutcomeUnknown:
         raise

@@ -280,7 +280,6 @@ class CentralCliTests(unittest.TestCase):
                     "authenticated": True,
                     "templateCount": 118,
                     "transport": "central_http_session",
-                    "browserBridgeUsed": False,
                 },
                 "nextAction": None,
                 "reused": True,

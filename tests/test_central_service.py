@@ -165,7 +165,6 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "authenticated": True,
                     "template_count": 118,
                     "transport": "central_http_session",
-                    "browser_bridge_used": False,
                 }
             )
             time.sleep(0.01)
@@ -244,7 +243,6 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "authenticated": True,
                     "template_count": 118,
                     "transport": "central_http_session",
-                    "browser_bridge_used": False,
                 }
             )
             checked_at = (
@@ -388,7 +386,6 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     "authenticated": True,
                     "template_count": 118,
                     "transport": "central_http_session",
-                    "browser_bridge_used": False,
                 }
             )
 
@@ -403,7 +400,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertNotIn("challenge", response)
             self.assertIsNone(response["nextAction"])
             self.assertEqual(response["result"]["templateCount"], 118)
-            self.assertFalse(response["result"]["browserBridgeUsed"])
+            self.assertNotIn("browserBridgeUsed", response["result"])
             self.assertEqual(worker.restored, {"cookies": []})
             self.assertEqual(
                 service.sessions.get(session["session_id"])["state"],

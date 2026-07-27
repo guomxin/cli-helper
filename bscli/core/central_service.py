@@ -697,7 +697,6 @@ class CentralCapabilityService:
                     "authenticated": True,
                     "templateCount": probe.get("template_count"),
                     "transport": probe["transport"],
-                    "browserBridgeUsed": probe["browser_bridge_used"],
                 },
                 "nextAction": None,
                 "reused": True,

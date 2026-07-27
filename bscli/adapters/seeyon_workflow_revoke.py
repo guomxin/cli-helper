@@ -185,7 +185,6 @@ def revoke_workflow(
                     "wait_send_state": verification,
                 },
                 "transport": "central_browser_session",
-                "browser_bridge_used": False,
             }
         except WorkflowRevokeOutcomeUnknown:
             raise

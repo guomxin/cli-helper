@@ -457,7 +457,7 @@ Playwright/Chromium 与上述 systemd 加固项需要在目标 Linux 发行版�
 
 仅支持核心 MCP 的宿主可以在 OA 会话有效时使用只读能力；遇到登录、字段填写或执行授权时，必须具备 MCP Apps 或经过批准的私有宿主适配器。服务不会把卡片 URL 降级暴露给模型。
 
-当前仍使用管理员签发的 Bearer 和内部 CA，因此“添加 MCP 地址并授权”尚未完全一键化。标准 OAuth 2.1、浏览器身份绑定和第二用户隔离验证仍是后续生产化工作。详细说明见 [远程 MCP 低安装接入](remote-mcp-onboarding.md)。
+当前仍使用管理员签发的 Bearer 和内部 CA，因此“添加 MCP 地址并授权”尚未完全一键化。标准 OAuth 2.1、浏览器身份绑定和每用户独立 OS/容器安全主体仍是后续生产化工作。详细说明见 [远程 MCP 低安装接入](remote-mcp-onboarding.md)。
 
 ### 9.2 当前 OpenClaw 兼容适配
 
@@ -528,7 +528,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 5. 用户用普通浏览器打开卡片并输入 OA 登录信息；
 6. OpenClaw 插件在模型循环之外轮询 interaction，完成后单次调用 `agentbridge_interaction_resume`；
 7. 调用 `oa_workflow_pending_list`，验证能够读取当前用户真实待办；
-8. 核对返回身份、执行通道和操作账本，确认没有使用浏览器桥接。
+8. 核对返回身份、`transport` 执行通道和操作账本。
 
 如果 `oa_session_login` 直接返回 `succeeded` 和 `reused=true`，说明中心会话仍然有效，不应再次要求用户登录。
 
@@ -632,9 +632,9 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 | 单用户中心会话与真实 OA 纵切 | 已验证；真实待办读取成功，连续两次服务重启后均复用原会话；10 分钟受控保活已跨过真实空闲窗口 |
 | OpenClaw interaction renderer 合约 | Python 参考适配器已实现；认证、业务字段、执行授权三类 HTTPS 卡片均映射为 Telegram 原生 Web App 按钮 |
 | OpenClaw 与另一台 AgentBridge 服务器真实跨机联调 | HTTPS MCP 注册、Bearer 认证和工具探测已完成；智能体通过正式 HTTPS MCP 真实调用状态查询和待办读取成功 |
-| 可安装 OpenClaw 插件与本机接线 | 0.1.10 已实现并链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持私聊绑定、可信直投、历史卡片隔离、登录卡复用、登录后一次性续办及出差和请假正式提交回读反馈；URL 与可信值不进入模型上下文 |
-| 中心受治理写能力 | 已实现出差申请草稿与独立正式提交、请假申请草稿与独立正式提交、补签申请草稿与审批、新建会议；静态业务卡统一按智能体已提供字段预填，再经过用户核对、实时校验、冻结计划、独立授权、一次性 commit 与业务回读。出差正式提交、请假草稿和请假正式提交已完成零写入真实预检，尚未做相应真实 commit |
-| 第二个真实 OA 用户隔离验证 | 待执行 |
+| 可安装 OpenClaw 插件与本机接线 | 0.2.15 已链接安装；兼容 OpenClaw 2026.7.1 的远程 MCP `_meta` 缺失，支持双用户私聊绑定、可信直投、登录续办、后续卡片和最终结果反馈；URL 与可信值不进入模型上下文 |
+| 中心受治理写能力 | 已实现出差、请假、补签、会议、普通协同、周报、效能数据、差旅费、劳动合同续签和流程撤销等工作流能力；业务卡按用户已提供信息预填，再经过核对、实时 prepare、独立授权、单次 commit 与权威回读。出差和请假正式提交与撤销、普通协同、周报知会及会议创建已完成真实闭环 |
+| 第二个真实 OA 用户隔离验证 | 已完成同服务账户 PoC；独立 OS/容器 Worker 仍待生产化 |
 | Linux systemd 服务化运行 | 已完成；固定服务用户、自动启动、重启恢复均已验证 |
 | 企业 PKI、OIDC、限流、审计、Vault/KMS | 生产阶段待实现；当前专用内部 CA 不作为企业生产 PKI |
 
@@ -735,7 +735,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 ## 15.2 2026-07-18 写能力扩展一期部署与只读实机预检
 
 - 发布提交和 Linux Release ID 均为 `f6d6274ec88a`。wheel 已安装到 `/home/guomao/agentbridge/releases/f6d6274ec88a/cli_helper-0.1.0-py3-none-any.whl`，SHA-256 为 `24706b611c070f6ee7b1b5c976fbb44d516a986926b651b1b5a7d9a825f973b3`；systemd 服务、`compileall` 和 `pip check` 均通过；
-- 新增 `oa.missed_punch.prepare`、`oa.missed_punch.save_draft`、`oa.missed_punch.approval.prepare`、`oa.missed_punch.approve`、`oa.meeting.create.prepare` 和 `oa.meeting.create`。目标 wheel 的 registry 共注册 14 项 OA 能力，未包含旧 Chrome 扩展或浏览器桥接；该次检查没有覆盖 systemd 进程的实际模块来源和公开 MCP 工具目录，后续由 15.3 节补齐并纠正；
+- 新增 `oa.missed_punch.prepare`、`oa.missed_punch.save_draft`、`oa.missed_punch.approval.prepare`、`oa.missed_punch.approve`、`oa.meeting.create.prepare` 和 `oa.meeting.create`。目标 wheel 的 registry 共注册 14 项中心 OA 能力；该次检查没有覆盖 systemd 进程的实际模块来源和公开 MCP 工具目录，后续由 15.3 节补齐并纠正；
 - 补签草稿、补签审批和会议创建复用同一中心治理流程：可信字段卡、实时 OA 契约校验、冻结计划、会话身份绑定、独立执行授权、一次性消费、提交边界和业务回读。MCP 权限拆分为 `oa:write:draft`、`oa:write:approval` 和 `oa:write:meeting`；
 - 发布前全量验证为 `219 passed, 3 skipped, 19 subtests passed`，覆盖草稿不得发送、审批精确绑定 affair、会议冲突在写边界前拒绝、中文负载编码、登录页误分类、授权消费和 `RESULT_UNKNOWN` 等关键路径；
 - 用户重新登录后，正式 MCP `SessionStatus` 返回 active。服务器以同一加密会话执行真实 OA 无写入预检：补签模板 `-8494358180075582561` 与表单 `-3950641196724501449` 的字段、保存草稿按钮和禁止发送控制均通过校验；

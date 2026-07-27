@@ -279,7 +279,6 @@ def save_missed_punch_draft(
             },
             "request_evidence": observed_requests,
             "transport": "central_browser_session",
-            "browser_bridge_used": False,
         }
     except MissedPunchOutcomeUnknown:
         raise
@@ -389,7 +388,6 @@ def approve_missed_punch_request(
                         "method": "pending_disappearance",
                     },
                     "transport": "central_browser_session",
-                    "browser_bridge_used": False,
                 }
         raise MissedPunchOutcomeUnknown(
             "The approval was scheduled, but the affair remained in the pending list."

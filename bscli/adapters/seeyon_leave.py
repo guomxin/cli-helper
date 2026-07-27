@@ -273,7 +273,6 @@ def save_leave_draft(
             },
             "request_evidence": observed_requests,
             "transport": "central_browser_session",
-            "browser_bridge_used": False,
         }
     except LeaveOutcomeUnknown:
         raise

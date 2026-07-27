@@ -201,7 +201,6 @@ def submit_leave_request(
                 },
                 "request_evidence": phase_tracker.evidence,
                 "transport": "central_browser_session",
-                "browser_bridge_used": False,
             }
         except (LeaveBusinessValidationRequired, LeaveSubmissionBlocked):
             raise

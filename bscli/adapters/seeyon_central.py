@@ -770,7 +770,6 @@ class SeeyonCentralAdapter:
         return {
             **result,
             "transport": "central_http_session",
-            "browser_bridge_used": False,
         }
 
     def probe_session(self, worker) -> dict:
@@ -779,7 +778,6 @@ class SeeyonCentralAdapter:
             "authenticated": True,
             "template_count": int(templates.get("count") or 0),
             "transport": templates["transport"],
-            "browser_bridge_used": False,
         }
 
     def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:
@@ -829,7 +827,6 @@ class SeeyonCentralAdapter:
                 if collection == "pending"
                 else "central_browser_session"
             ),
-            "browser_bridge_used": False,
         }
 
     def get_workflow_detail(self, worker, *, arguments: dict) -> dict:
@@ -876,7 +873,6 @@ class SeeyonCentralAdapter:
                 "opinion_count": len(opinions),
             },
             "transport": "central_browser_session",
-            "browser_bridge_used": False,
         }
 
     def list_workflow_opinions(self, worker, *, arguments: dict) -> dict:
@@ -896,7 +892,6 @@ class SeeyonCentralAdapter:
             "count": len(opinions),
             "items": opinions,
             "transport": "central_browser_session",
-            "browser_bridge_used": False,
         }
 
     def resolve_workflow_detail(

@@ -1,0 +1,39 @@
+# AgentBridge 文档导航
+
+本文档目录只列出当前有效资料。已经退役的浏览器桥、localhost daemon、
+代理型 CLI 和早期探索方案统一放在 [archive](./archive/README.md)，不得作为
+实现或部署依据。
+
+## 从这里开始
+
+- [项目总览](../README.md)：能力范围、快速入口和安全不变量。
+- [目标架构](../agent-oriented-legacy-bs-adaptation-design.md)：面向智能体的中心化
+  B/S 遗留系统适配设计。
+- [PoC 验证计划](../poc-validation-plan.md)：已验证能力、证据和待验收事项。
+- [后续增强事项](../deferred-considerations.md)：暂缓到生产化阶段的问题。
+
+## 架构与安全
+
+- [智能体交互协议](./agent-interaction-protocol.md)：认证卡、字段卡、授权卡及恢复协议。
+- [受控写模型](./governed-write-model.md)：写操作的信任边界、状态机和验收要求。
+- [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)：聊天身份到
+  AgentBridge Token 和用户会话的隔离。
+- [开发安全策略](./development-policy.md)：开发和真实环境验证的强制边界。
+
+## 部署与运维
+
+- [当前内网部署](./current-deployment-plan.md)：10.10.50.213 的运行架构和部署记录。
+- [开发验证与发布](./development-and-release-workflow.md)：测试、构建、部署和冒烟流程。
+- [远程 MCP 接入](./remote-mcp-onboarding.md)：OpenClaw 等宿主的低安装接入方式。
+
+## 系统适配
+
+- [OA 事项能力矩阵](./oa-matter-matrix.md)：发起与接收处理的流程覆盖情况。
+- [OA 写能力扩展手册](./oa-write-action-expansion-playbook.md)：从探索证据到正式能力的
+  提升流程。
+- [泰华日志系统适配](./taihua-log-system-adapter.md)：API、会话和日志能力说明。
+
+## 退役与归档
+
+- [旧浏览器桥退役记录](./legacy-bridge-retirement.md)：删除范围、保留边界和防回归规则。
+- [历史资料目录](./archive/README.md)：仅用于追溯，不得复制回当前运行时。

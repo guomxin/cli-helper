@@ -264,8 +264,8 @@ be read back. That sent collection is verification-only and is not a public list
 or detail surface.
 
 Formal submission requires the independent `oa:write:submit` token scope. The
-real central OA session has passed the non-mutating prepare/preflight path; an
-actual submission remains pending a specifically approved live test.
+formal submission path has completed real authorized commit, sent-list readback,
+and controlled revoke validation.
 
 ### Leave request
 
@@ -459,11 +459,11 @@ fingerprinted from `pyproject.toml`, so unchanged dependencies are reused.
 See the [development validation and release workflow](docs/development-and-release-workflow.md)
 for MCP smoke-test safety boundaries and wheel deployment commands.
 
-The central path has completed single-user real-OA validation for trusted-card
-login, encrypted-session restoration, workflow reads, rendered details and
-opinions, business-field collection, authorization, wait-send draft save,
-field readback, and idempotent replay. Every validated operation reported
-browser_bridge_used=false.
+The central path has completed real-OA validation for trusted-card login,
+encrypted-session restoration, workflow reads, rendered details and opinions,
+business-field collection, authorization, draft and formal submission, approval,
+revoke, meeting creation, field readback, and idempotent replay. Results identify
+the actual central execution channel through `transport`.
 
 Formal Windows current-user root trust, native TLS, and production Telegram
 WebView clicks for credential, business-input, and execution-authorization cards
@@ -474,13 +474,14 @@ distribution, a natural-expiry end-to-end continuation observation, and addition
 central write workflows remain open validation items. The current intranet server
 and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
 
-## Design Documents
+## Documentation
 
-- [Development validation and release workflow](docs/development-and-release-workflow.md)
-- [Current Linux intranet PoC deployment plan](docs/current-deployment-plan.md)
+Start with the [documentation map](docs/README.md). The primary references are:
+
 - [Target architecture](agent-oriented-legacy-bs-adaptation-design.md)
+- [Agent interaction protocol](docs/agent-interaction-protocol.md)
+- [Governed write model](docs/governed-write-model.md)
+- [Current Linux intranet deployment](docs/current-deployment-plan.md)
+- [Development validation and release workflow](docs/development-and-release-workflow.md)
 - [PoC validation plan](poc-validation-plan.md)
 - [Deferred production considerations](deferred-considerations.md)
-- [Legacy bridge retirement ledger](docs/legacy-bridge-retirement.md)
-- [Agent interaction protocol](docs/agent-interaction-protocol.md)
-- [Remote MCP low-install onboarding](docs/remote-mcp-onboarding.md)

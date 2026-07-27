@@ -276,7 +276,6 @@ def save_business_trip_draft(
             },
             "request_evidence": observed_requests,
             "transport": "central_browser_session",
-            "browser_bridge_used": False,
         }
     except BusinessTripOutcomeUnknown:
         raise

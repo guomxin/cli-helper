@@ -45,7 +45,7 @@ class BridgeRetirementTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(profile["auth_mode"], "central_session")
 
-    def test_legacy_profile_metadata_is_migrated_on_read(self):
+    def test_legacy_profile_metadata_is_rejected(self):
         with TemporaryDirectory() as tmp:
             systems = Path(tmp) / "systems"
             systems.mkdir()
@@ -62,9 +62,20 @@ class BridgeRetirementTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            profile = ConfigStore(Path(tmp)).load_system("oa")
+            with self.assertRaisesRegex(
+                ValueError,
+                "auth_mode must be central_session",
+            ):
+                ConfigStore(Path(tmp)).load_system("oa")
 
-        self.assertEqual(profile.auth_mode, "central_session")
+    def test_legacy_bridge_result_flag_is_absent(self):
+        root = Path(__file__).resolve().parents[1] / "bscli"
+        for path in root.rglob("*.py"):
+            with self.subTest(path=path.relative_to(root)):
+                self.assertNotIn(
+                    "browser_bridge_used",
+                    path.read_text(encoding="utf-8"),
+                )
 
 
 if __name__ == "__main__":

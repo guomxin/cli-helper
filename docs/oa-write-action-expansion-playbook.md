@@ -1,7 +1,8 @@
 # OA Write Action Expansion Playbook
 
-> Central-runtime note: the old browser bridge was removed on 2026-07-13. Any
-> bridge command examples below are historical evidence, not executable steps.
+> Status: current implementation guide. All discovery and execution use the managed
+> central session. Follow the [governed write model](./governed-write-model.md) and
+> record coverage in the [OA matter matrix](./oa-matter-matrix.md).
 
 This playbook turns one-off OA exploration into a repeatable promotion path for
 new write actions. Use it when adding a new action for a workflow, a launch

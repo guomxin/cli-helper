@@ -122,7 +122,7 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
 
         self.assertTrue(probe["authenticated"])
         self.assertEqual(worker.get_http_state()["authorization"], "Bearer access-2")
-        self.assertFalse(probe["browser_bridge_used"])
+        self.assertNotIn("browser_bridge_used", probe)
         self.assertTrue(
             all(
                 call["headers"]["X-Sisyphus-Client"] == "pc-web"

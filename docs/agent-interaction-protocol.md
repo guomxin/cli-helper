@@ -253,8 +253,7 @@ path without an OA write:
 - credential interaction changed from `pending` to `completed` through
   background polling and resumed to the bound active session;
 - live session probing verified downstream principal `辛国茂`, returned 118
-  templates, reused the central HTTP session, and reported
-  `browserBridgeUsed=false`;
+  templates, and reused the `central_http_session` transport;
 - `oa.business_trip.prepare {}` created a nine-field `business_input`
   interaction, and querying it returned only non-sensitive display metadata;
 - attempting to resume the untouched field interaction returned

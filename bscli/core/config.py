@@ -23,6 +23,8 @@ class SystemProfile:
             raise ValueError("allowed_origins is required")
         if self.base_origin not in self.allowed_origins:
             raise ValueError("base_url origin must be included in allowed_origins")
+        if self.auth_mode != "central_session":
+            raise ValueError("auth_mode must be central_session")
 
     @property
     def base_origin(self) -> str:
@@ -63,7 +65,4 @@ class ConfigStore:
 
 
 def _profile_from_data(data: dict) -> SystemProfile:
-    migrated = dict(data)
-    if migrated.get("auth_mode") == "chrome_extension":
-        migrated["auth_mode"] = "central_session"
-    return SystemProfile(**migrated)
+    return SystemProfile(**data)

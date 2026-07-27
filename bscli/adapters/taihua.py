@@ -248,7 +248,6 @@ class TaihuaCentralAdapter:
             "principal": _normalize_principal(principal),
             "template_count": None,
             "transport": "central_http_token",
-            "browser_bridge_used": False,
         }
 
     def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:

@@ -523,7 +523,6 @@ def _commit_pending_action(
                         "method": "pending_disappearance",
                     },
                     "transport": "central_browser_session",
-                    "browser_bridge_used": False,
                 }
                 if profile["action_kind"] == "acknowledgement":
                     result["workflow_acknowledged"] = True
