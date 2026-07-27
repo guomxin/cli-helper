@@ -61,7 +61,37 @@
 
 ## 4. 长时稳定性观察
 
-下面的命令每 30 分钟检查一次，连续运行 24 小时：
+### 4.1 纯空闲保活验收
+
+纯空闲保活不能每 30 分钟调用一次 MCP，因为状态查询本身会记录真实用户活动，重新
+延长保活租约。正确方法是“两点检查”：
+
+1. T0 分别保存两个 OA 身份和辛国茂泰华会话的状态摘要；
+2. 24 小时内不使用这些身份调用 OA 或泰华工具；
+3. 中央服务继续按 systemd 配置每 600 秒执行一次受控保活；
+4. T+24h 再次执行同样的状态检查；
+5. 比较开始和结束的 `sessionId`、`userSubject`、下游账号及 `lastKeepaliveAt`，并
+   检查服务器日志中的保活汇总。
+
+T0 和 T+24h 均执行：
+
+```powershell
+.\scripts\Test-AgentBridgeMcp.ps1 -Check SessionStatus -IdentityLabel "辛国茂"
+.\scripts\Test-AgentBridgeMcp.ps1 -Check SessionStatus -IdentityLabel "李世玉"
+.\scripts\Test-AgentBridgeMcp.ps1 -Check TaihuaSessionStatus -IdentityLabel "辛国茂"
+```
+
+严格成功条件：
+
+- 三个结束状态均为 `active`；
+- 开始和结束的 `sessionId`、`userSubject` 和下游账号保持一致；
+- `lastKeepaliveAt` 持续前进；
+- 24 小时服务日志约有 144 轮保活，没有 `expired`，且没有连续 `deferred`；
+- 窗口中没有真实用户调用。若用户实际使用过，只能证明持续可用，不能算纯空闲保活。
+
+### 4.2 周期路由可用性
+
+如果目标是验证 OpenClaw 在 24 小时内反复按正确身份选 Token，可以运行：
 
 ```powershell
 .\scripts\Test-AgentBridgeIdentityIsolation.ps1 `
@@ -71,20 +101,7 @@
   -IntervalSeconds 1800
 ```
 
-脚本只输出最终摘要；任一身份变为非活动状态、身份发生变化或两个标签解析到同一主体时
-立即失败。需要观察中间进度时，应由外层任务调度器记录每次独立调用，不得把 Token 写入
-日志。
-
-泰华当前只为辛国茂配置权限，可单独执行：
-
-```powershell
-.\scripts\Test-AgentBridgeIdentityIsolation.ps1 `
-  -IdentityLabel "辛国茂" `
-  -Check TaihuaSessionStatus `
-  -Cycles 48 `
-  -IntervalSeconds 1800
-```
-
+该命令会持续产生用户活动，适合路由与会话可用性观察，不得作为纯空闲保活证据。
 ## 5. 故障隔离
 
 自动化测试必须覆盖：

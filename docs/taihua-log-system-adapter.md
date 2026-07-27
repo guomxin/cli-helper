@@ -95,9 +95,8 @@ OA 仍使用 `SeeyonCentralAdapter + CentralBrowserWorker`。泰华使用
 确认。登录后的续办曾误触发一次“我的日志”读取，但原写计划和字段值未被覆盖，随后
 已经增加写意图保护回归测试。
 
-真实成功路径已经验证；`TAIHUA_BUSINESS_RULE_REJECTED` 的具体失败反馈目前完成模拟
-HTTP 和 OpenClaw 回执测试，仍待目标系统自然出现业务拒绝时补充真实证据。不得为制造
-失败样本提交无效业务日志。
+真实成功路径已经验证。`TAIHUA_BUSINESS_RULE_REJECTED` 的具体失败反馈保留模拟 HTTP
+和 OpenClaw 回执测试，不再安排真实拒绝实验，也不得为制造失败样本提交无效业务日志。
 
 ## 4. 权限
 
