@@ -90,6 +90,28 @@ class CentralBrowserTests(unittest.TestCase):
             self.assertEqual(response["content_type"], "text/plain; charset=utf-8")
             self.assertEqual(response["json"], {"Data": {"rows": []}})
 
+    def test_worker_returns_binary_body_without_decoding_it_as_text(self):
+        with TemporaryDirectory() as tmp:
+            controller = FakePlaywrightController()
+            controller.context.request.response = FakePdfResponse()
+            worker = CentralBrowserWorker(
+                profile_path=Path(tmp) / "profile",
+                allowed_origins={"http://oa.example.test"},
+                playwright_starter=lambda: controller,
+            )
+
+            with worker:
+                response = worker.request_bytes(
+                    "GET",
+                    "http://oa.example.test/seeyon/fileDownload.do",
+                )
+
+            self.assertEqual(response["content_type"], "application/pdf")
+            self.assertEqual(response["body"], b"%PDF-1.7\ncertificate")
+            self.assertEqual(
+                controller.context.request.calls[0]["max_redirects"],
+                0,
+            )
     def test_worker_captures_and_restores_allowed_session_cookies(self):
         with TemporaryDirectory() as tmp:
             controller = FakePlaywrightController()
@@ -507,6 +529,9 @@ class FakeResponse:
     def json(self):
         return {"code": 0, "data": {"templates": []}}
 
+    def body(self):
+        return self.text().encode()
+
 
 class FakePlainTextJsonResponse(FakeResponse):
     @property
@@ -516,6 +541,17 @@ class FakePlainTextJsonResponse(FakeResponse):
     def text(self):
         return '{"Data": {"rows": []}}'
 
+
+class FakePdfResponse(FakeResponse):
+    @property
+    def headers(self):
+        return {
+            "content-type": "application/pdf",
+            "content-length": "20",
+        }
+
+    def body(self):
+        return b"%PDF-1.7\ncertificate"
 
 class FakeRequestContext:
     def __init__(self):

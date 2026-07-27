@@ -131,6 +131,52 @@ class CentralBrowserWorker:
             if callable(dispose):
                 dispose()
 
+    def request_bytes(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        self._require_started()
+        self._validate_url(url)
+        started_at = time.monotonic()
+        options: dict[str, Any] = {
+            "method": method.upper(),
+            "headers": headers or {},
+            "timeout": max(timeout_seconds, 0.1) * 1000,
+            "max_redirects": 0,
+        }
+        if body is not None:
+            options["data"] = body
+        response = self._context.request.fetch(url, **options)
+        try:
+            self._validate_url(response.url)
+            response_headers = response.headers
+            if callable(response_headers):
+                response_headers = response_headers()
+            normalized_headers = {
+                str(name).lower(): str(value)
+                for name, value in (response_headers or {}).items()
+            }
+            return {
+                "status": response.status,
+                "url": response.url,
+                "content_type": normalized_headers.get("content-type", ""),
+                "content_length": normalized_headers.get("content-length"),
+                "location": normalized_headers.get("location"),
+                "body": response.body(),
+                "elapsed_ms": max(
+                    0,
+                    round((time.monotonic() - started_at) * 1000),
+                ),
+            }
+        finally:
+            dispose = getattr(response, "dispose", None)
+            if callable(dispose):
+                dispose()
     def goto(self, url: str, *, timeout_seconds: float = 30):
         self._require_started()
         self._validate_url(url)
@@ -300,6 +346,22 @@ class CentralBrowserPageWorker:
             timeout_seconds=timeout_seconds,
         )
 
+    def request_bytes(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        return self._owner.request_bytes(
+            method,
+            url,
+            headers=headers,
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
     def goto(self, url: str, *, timeout_seconds: float = 30):
         self._owner._require_started()
         self._owner._validate_url(url)

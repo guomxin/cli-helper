@@ -33,6 +33,7 @@
 - [OA 事项能力矩阵](./oa-matter-matrix.md)：发起与接收处理的流程覆盖情况。
 - [OA 写能力扩展手册](./oa-write-action-expansion-playbook.md)：从探索证据到正式能力的
   提升流程。
+- [OA 证书扫描件检索与下载](./oa-certificate-document-download.md)：文档中心目录、按名称检索和短时可信下载边界。
 - [泰华日志系统适配](./taihua-log-system-adapter.md)：API、会话和日志能力说明。
 
 ## 退役与归档

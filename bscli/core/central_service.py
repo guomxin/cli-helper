@@ -11,6 +11,7 @@ from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
     build_central_capability_registry,
 )
+from bscli.adapters.seeyon_documents import DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY
 from bscli.adapters.base import (
     AdapterBusinessRuleRejected,
     AdapterLoginRequired,
@@ -138,6 +139,7 @@ from bscli.core.capability_runtime import (
     RequiresUserAction,
 )
 from bscli.core.operations import OperationStore
+from bscli.core.document_downloads import DocumentDownloadStore
 from bscli.core.field_submissions import (
     FieldSubmissionAccessDenied,
     FieldSubmissionIntegrityError,
@@ -419,6 +421,7 @@ class CentralCapabilityService:
         )
         self.challenges = AuthChallengeStore(self.db_path)
         self.field_submissions = FieldSubmissionStore(self.db_path)
+        self.document_downloads = DocumentDownloadStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
@@ -1138,6 +1141,11 @@ class CentralCapabilityService:
                             worker,
                             arguments,
                         )
+                        if capability_name == DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY:
+                            result = self._materialize_document_downloads(
+                                session=session,
+                                result=result,
+                            )
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
@@ -1154,6 +1162,67 @@ class CentralCapabilityService:
                     diagnostics=str(exc),
                 ) from exc
 
+    def fetch_document_download(self, record: dict) -> dict:
+        session = self.sessions.get(record["session_id"])
+        if any(
+            (
+                session["user_subject"] != record["user_subject"],
+                session["system_id"] != record["system_id"],
+                session["state"] != "active",
+            )
+        ):
+            raise ValueError("document download session binding is invalid")
+        runtime = self._runtime_for_system(session["system_id"])
+        if runtime is None:
+            raise ValueError("document download system is not configured")
+        adapter, worker_factory = runtime
+        with self._session_lock(session["session_id"]):
+            state = self.session_states.load(session["session_id"])
+            if state is None:
+                raise ValueError("document download session state is unavailable")
+            try:
+                with worker_factory(session, adapter) as worker:
+                    worker.restore_session_state(state)
+                    payload = adapter.fetch_certificate_document(
+                        worker,
+                        record["document"],
+                    )
+                    self.session_states.save(
+                        session["session_id"],
+                        worker.capture_session_state(),
+                    )
+                    self.sessions.touch_activity(session["session_id"])
+                    return payload
+            except AdapterLoginRequired:
+                self.sessions.mark_expired(
+                    session["session_id"],
+                    "OA session expired during certificate download.",
+                )
+                self.session_states.delete(session["session_id"])
+                raise
+
+    def _materialize_document_downloads(self, *, session: dict, result: dict) -> dict:
+        public_result = {key: value for key, value in result.items() if key != "items"}
+        public_items = []
+        for source_item in result.get("items") or []:
+            item = dict(source_item)
+            reference = item.pop("_download_reference")
+            grant = self.document_downloads.create(
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                session_id=session["session_id"],
+                document=reference,
+                filename=item["filename"],
+                document_type=item["document_type"],
+                display_size=item.get("display_size") or "",
+                card_base_url=self.trusted_card_base_url,
+                ttl_seconds=600,
+            )
+            item["download_url"] = grant["card_url"]
+            item["download_expires_at"] = grant["expires_at"]
+            public_items.append(item)
+        public_result["items"] = public_items
+        return public_result
     def _prepare_trusted_write(
         self,
         *,

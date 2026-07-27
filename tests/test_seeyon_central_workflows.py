@@ -30,6 +30,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.business_trip.save_draft",
                 "oa.business_trip.submit",
                 "oa.business_trip.submit.prepare",
+                "oa.document.certificate.search",
                 "oa.efficiency_data.approval.prepare",
                 "oa.efficiency_data.approve",
                 "oa.labor_contract_renewal.approval.prepare",
@@ -62,6 +63,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             ],
         )
         effects = {spec.name: spec.effect for spec in registry.list(system="oa")}
+        self.assertEqual(effects["oa.document.certificate.search"], "read")
         self.assertEqual(effects["oa.business_trip.prepare"], "reversible_write")
         self.assertEqual(effects["oa.business_trip.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.business_trip.submit.prepare"], "controlled_write")

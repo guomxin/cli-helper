@@ -72,6 +72,7 @@ from bscli.adapters.taihua import (
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
+from bscli.auth.document_download import TrustedDocumentDownloadApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
 from bscli.core.central_service import CentralCapabilityService
@@ -531,6 +532,38 @@ def create_central_mcp_server(
     ) -> dict[str, Any]:
         return await invoke(ctx, "oa.template.list", {}, idempotency_key)
 
+    @mcp.tool(
+        name="oa_certificate_search",
+        title="Search OA Certificate Scans",
+        description=(
+            "Search patent and software-copyright certificate PDF scans by name in "
+            "OA Document Center. Exact matches are ranked first; each accessible result "
+            "contains a short-lived trusted download URL."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_certificate_search(
+        ctx: Context,
+        name: Annotated[str, Field(min_length=2, max_length=160)],
+        document_type: Literal[
+            "all",
+            "patent_certificate",
+            "software_copyright_certificate",
+        ] = "all",
+        limit: Annotated[int, Field(ge=1, le=20)] = 10,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            "oa.document.certificate.search",
+            {
+                "name": name,
+                "document_type": document_type,
+                "limit": limit,
+            },
+            idempotency_key,
+        )
     @mcp.tool(
         name="oa_workflow_pending_list",
         title="List Pending OA Workflows",
@@ -1723,11 +1756,16 @@ def serve_central_mcp(
     field_application = TrustedFieldApplication(
         submission_store=service.field_submissions,
     )
+    download_application = TrustedDocumentDownloadApplication(
+        download_store=service.document_downloads,
+        fetcher=service.fetch_document_download,
+    )
     auth_server = create_auth_http_server(
         config=auth_config,
         application=auth_application,
         action_application=action_application,
         field_application=field_application,
+        download_application=download_application,
     )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,

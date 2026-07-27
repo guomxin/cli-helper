@@ -29,6 +29,7 @@ class DeploymentAssetTests(unittest.TestCase):
         smoke = (ROOT / "scripts/agentbridge-mcp-smoke.mjs").read_text(encoding="utf-8")
 
         for tool in (
+            "oa_certificate_search",
             "oa_business_trip_prepare",
             "oa_business_trip_save_draft",
             "oa_business_trip_submit_prepare",
@@ -127,6 +128,27 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn('"authorizations_created": 0', script)
         self.assertNotIn("state_store.save", script)
 
+    def test_unit_document_probe_is_read_only_by_construction(self) -> None:
+        script = (
+            ROOT / "scripts/inspect_oa_unit_documents.py"
+        ).read_text(encoding="utf-8")
+
+        for marker in (
+            '"downloads_started": 0',
+            '"write_controls_clicked": 0',
+            '"response_bodies_included": False',
+            'method in {"DELETE", "PATCH", "PUT"}',
+            "_BLOCKED_WRITE_MARKERS",
+        ):
+            self.assertIn(marker, script)
+        for forbidden_function in (
+            "expect_download",
+            "state_store.save",
+            "set_input_files",
+            "request.post(",
+            "request.put(",
+        ):
+            self.assertNotIn(forbidden_function, script)
 
 if __name__ == "__main__":
     unittest.main()

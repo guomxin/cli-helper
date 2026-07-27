@@ -4,6 +4,7 @@ param(
         "SessionStatus",
         "TaihuaSessionStatus",
         "OaPendingRead",
+        "CertificateSearch",
         "TaihuaMyLogs",
         "LoginReuse",
         "Release",

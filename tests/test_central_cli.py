@@ -17,11 +17,12 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 38)
+        self.assertEqual(len(payload["capabilities"]), 39)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
         self.assertIn("oa.workflow.sent.list", capabilities)
+        self.assertIn("oa.document.certificate.search", capabilities)
         self.assertIn("taihua.work_log.my.list", capabilities)
         self.assertIn("taihua.work_log.team.list", capabilities)
         self.assertIn("taihua.project.search", capabilities)

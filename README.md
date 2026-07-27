@@ -56,6 +56,7 @@ Published OA capabilities:
 - oa.workflow.tracked.list
 - oa.workflow.detail.get
 - oa.workflow.opinions.list
+- oa.document.certificate.search
 - oa.business_trip.prepare
 - oa.business_trip.save_draft
 - oa.business_trip.submit.prepare
@@ -101,7 +102,7 @@ form fields.
 ## Trusted Login
 
 Start the trusted-card service. The same listener serves authentication,
-business-input, and write-authorization cards:
+business-input, write-authorization, and short-lived document-download pages:
 
 ~~~bash
 python -m bscli.cli.main --home .bscli auth serve \

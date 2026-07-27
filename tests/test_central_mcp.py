@@ -139,6 +139,7 @@ class CentralMcpTests(unittest.TestCase):
         tools = payload["result"]["tools"]
         names = [tool["name"] for tool in tools]
         self.assertIn("oa_workflow_pending_list", names)
+        self.assertIn("oa_certificate_search", names)
         self.assertIn("oa_workflow_sent_list", names)
         self.assertIn("oa_workflow_detail_get", names)
         self.assertIn("oa_session_login", names)

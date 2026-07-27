@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from bscli.adapters.seeyon_documents import (
+    SeeyonDocumentAccessDenied,
+    _certificate_title,
+    _request_download_with_redirects,
+    _validated_reference,
+    search_certificate_documents,
+)
+
+
+class SeeyonCertificateSearchTests(unittest.TestCase):
+    def test_search_ranks_title_match_and_hides_inaccessible_rows(self):
+        patent_rows = [
+            _row(
+                resource_id="patent-1",
+                filename=(
+                    "\u3010TH-26-1-16\u3011\u3010SDZM-26-1-06\u3011"
+                    "\u4e00\u79cd\u57fa\u4e8e\u52a8\u6001\u6e29\u5dee\u8865\u507f\u7684"
+                    "\u5149\u654f\u503c\u4fee\u6b63\u65b9\u6cd5\u53ca\u7cfb\u7edf.pdf"
+                ),
+            ),
+            _row(
+                resource_id="patent-2",
+                filename="\u5176\u4ed6\u5149\u654f\u503c\u4fee\u6b63\u65b9\u6cd5.pdf",
+            ),
+            _row(
+                resource_id="patent-3",
+                filename="\u4e0d\u53ef\u4e0b\u8f7d\u7684\u5149\u654f\u503c\u6587\u6863.pdf",
+                download_acl=False,
+            ),
+        ]
+        copyright_rows = []
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ),
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                side_effect=[patent_rows, copyright_rows],
+            ),
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "name": (
+                        "\u4e00\u79cd\u57fa\u4e8e\u52a8\u6001\u6e29\u5dee\u8865\u507f\u7684"
+                        "\u5149\u654f\u503c\u4fee\u6b63\u65b9\u6cd5\u53ca\u7cfb\u7edf"
+                    ),
+                    "document_type": "all",
+                    "limit": 10,
+                },
+            )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["match_kind"], "exact")
+        self.assertEqual(
+            result["items"][0]["title"],
+            "\u4e00\u79cd\u57fa\u4e8e\u52a8\u6001\u6e29\u5dee\u8865\u507f\u7684"
+            "\u5149\u654f\u503c\u4fee\u6b63\u65b9\u6cd5\u53ca\u7cfb\u7edf",
+        )
+        self.assertIn("_download_reference", result["items"][0])
+        self.assertEqual(result["inaccessible_count"], 0)
+
+    def test_search_rejects_short_query_and_unsupported_type(self):
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test",
+                arguments={"name": "a"},
+            )
+        with self.assertRaisesRegex(ValueError, "document_type"):
+            search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test",
+                arguments={"name": "certificate", "document_type": "other"},
+            )
+
+    def test_reference_rejects_category_substitution(self):
+        reference = {
+            **_row(resource_id="patent-1", filename="certificate.pdf"),
+            "document_type": "patent_certificate",
+            "category_label": "2-\u8457\u4f5c\u6743\u8bc1\u4e66\u626b\u63cf\u4ef6",
+        }
+
+        with self.assertRaises(SeeyonDocumentAccessDenied):
+            _validated_reference(reference)
+
+    def test_certificate_title_removes_internal_codes_but_preserves_real_title(self):
+        self.assertEqual(
+            _certificate_title(
+                "\u3010TH-26-1-16 \u3011\u3010SDZM-26-1-06\u3011"
+                "\u667a\u80fd\u5171\u7a7a\u76d1\u6d4b\u7cfb\u7edf.pdf"
+            ),
+            "\u667a\u80fd\u5171\u7a7a\u76d1\u6d4b\u7cfb\u7edf",
+        )
+
+
+    def test_download_follows_only_worker_validated_redirects(self):
+        worker = RedirectWorker(
+            [
+                {
+                    "status": 302,
+                    "url": "http://oa.example.test/seeyon/fileDownload.do",
+                    "location": "/seeyon/files/certificate.pdf",
+                },
+                {
+                    "status": 200,
+                    "url": "http://oa.example.test/seeyon/files/certificate.pdf",
+                    "body": b"%PDF-1.7",
+                },
+            ]
+        )
+
+        response = _request_download_with_redirects(
+            worker,
+            "http://oa.example.test/seeyon/fileDownload.do",
+        )
+
+        self.assertEqual(response["status"], 200)
+        self.assertEqual(
+            worker.urls,
+            [
+                "http://oa.example.test/seeyon/fileDownload.do",
+                "http://oa.example.test/seeyon/files/certificate.pdf",
+            ],
+        )
+
+    def test_download_rejects_redirect_without_location(self):
+        worker = RedirectWorker(
+            [{"status": 302, "url": "http://oa.example.test/download"}]
+        )
+
+        with self.assertRaisesRegex(Exception, "no location"):
+            _request_download_with_redirects(
+                worker,
+                "http://oa.example.test/download",
+            )
+def _row(
+    *,
+    resource_id: str,
+    filename: str,
+    download_acl: bool = True,
+) -> dict:
+    return {
+        "resource_id": resource_id,
+        "source_id": f"source-{resource_id}",
+        "filename": filename,
+        "display_size": "1 MB",
+        "create_date": "2026-07-27",
+        "version": "v1",
+        "mime_type_id": "22",
+        "secret_level": "1",
+        "read_acl": True,
+        "download_acl": download_acl,
+        "is_upload_file": True,
+    }
+
+
+class RedirectWorker:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.urls = []
+
+    def request_bytes(self, _method, url, **_kwargs):
+        self.urls.append(url)
+        return self.responses.pop(0)
+if __name__ == "__main__":
+    unittest.main()

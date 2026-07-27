@@ -11,6 +11,18 @@ const CHECKS = new Map([
     { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
   ],
   [
+    "CertificateSearch",
+    {
+      tool: "oa_certificate_search",
+      arguments: {
+        name: "一种基于动态温差补偿的光敏值修正方法及系统",
+        document_type: "patent_certificate",
+        limit: 5,
+      },
+      kind: "documentSearch",
+    },
+  ],
+  [
     "TaihuaMyLogs",
     { tool: "taihua_work_log_my_list", arguments: { limit: 1 }, kind: "list" },
   ],
@@ -18,6 +30,7 @@ const CHECKS = new Map([
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
+  "oa_certificate_search",
   "oa_business_trip_prepare",
   "oa_business_trip_save_draft",
   "oa_business_trip_submit_prepare",
@@ -184,7 +197,15 @@ try {
               : null,
             errorCode,
           }
-        : effectiveCheck.kind === "list"
+        : effectiveCheck.kind === "documentSearch"
+          ? certificateSearchSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
+          : effectiveCheck.kind === "list"
           ? {
               status: "succeeded",
               check: checkName,
@@ -217,4 +238,51 @@ try {
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
   );
   process.exitCode = 1;
+}
+
+function certificateSearchSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Certificate search failed"), {
+      code: errorCode || "CERTIFICATE_SEARCH_FAILED",
+    });
+  }
+  const items = Array.isArray(result?.items) ? result.items : [];
+  if (!items.length) {
+    throw Object.assign(new Error("Certificate search returned no matches"), {
+      code: "CERTIFICATE_SEARCH_EMPTY",
+    });
+  }
+  for (const item of items) {
+    if (
+      "_download_reference" in item ||
+      "resource_id" in item ||
+      "source_id" in item
+    ) {
+      throw Object.assign(new Error("Certificate search leaked OA identifiers"), {
+        code: "CERTIFICATE_SEARCH_IDENTIFIER_LEAK",
+      });
+    }
+    if (!String(item?.download_url ?? "").startsWith("https://")) {
+      throw Object.assign(new Error("Certificate search download URL is invalid"), {
+        code: "CERTIFICATE_SEARCH_URL_INVALID",
+      });
+    }
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    matchCount: items.length,
+    exactMatches: items.filter((item) => item?.match_kind === "exact").length,
+    titles: items.map((item) => String(item?.title ?? "")).filter(Boolean),
+    firstDownloadUrl: items[0].download_url,
+    expiresAt: items[0].download_expires_at ?? null,
+    errorCode: null,
+  };
 }

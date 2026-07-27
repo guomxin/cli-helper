@@ -77,6 +77,12 @@ from bscli.adapters.seeyon_workflow_revoke import (
     _load_collection_rows,
 )
 from bscli.adapters.seeyon_system import SEEYON_OA_URL
+from bscli.adapters.seeyon_documents import (
+    DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY,
+    DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA,
+    fetch_certificate_document as fetch_oa_certificate_document,
+    search_certificate_documents,
+)
 from bscli.adapters.seeyon_home import (
     TEMPLATE_CENTER_API_URL,
     parse_oa_detail,
@@ -329,6 +335,21 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="read",
             adapter="seeyon-central",
             workflow="template-list-v1",
+        )
+    )
+    registry.register(
+        CapabilitySpec(
+            name=DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Search patent and software-copyright certificate scans by name in "
+                "OA Document Center and issue short-lived trusted download links."
+            ),
+            input_schema=DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="read",
+            adapter="seeyon-central",
+            workflow="certificate-document-search-v1",
         )
     )
     registry.register(
@@ -785,6 +806,12 @@ class SeeyonCentralAdapter:
             if arguments:
                 raise ValueError("oa.template.list does not accept arguments")
             return self.list_templates(worker)
+        if capability_name == DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY:
+            return search_certificate_documents(
+                worker,
+                base_url=self.base_url,
+                arguments=arguments,
+            )
         collection = _WORKFLOW_LIST_CAPABILITIES.get(capability_name)
         if collection:
             return self.list_workflows(worker, collection=collection, arguments=arguments)
@@ -794,6 +821,12 @@ class SeeyonCentralAdapter:
             return self.list_workflow_opinions(worker, arguments=arguments)
         raise KeyError(f"unsupported Seeyon central capability: {capability_name}")
 
+    def fetch_certificate_document(self, worker, reference: dict) -> dict:
+        return fetch_oa_certificate_document(
+            worker,
+            base_url=self.base_url,
+            reference=reference,
+        )
     def list_workflows(self, worker, *, collection: str, arguments: dict | None = None) -> dict:
         collection = _validated_internal_collection(collection)
         arguments = arguments or {}
