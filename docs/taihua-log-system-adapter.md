@@ -44,10 +44,25 @@ OA 仍使用 `SeeyonCentralAdapter + CentralBrowserWorker`。泰华使用
 - `GET /api/work-logs/team`
 - `GET /api/work-logs/team/dept-options`
 - `GET /api/work-logs/team/member-options`
+- `GET /api/watch-groups`
 - `GET /api/projects`
 
-团队日志页码从 `1` 开始；默认视角为 `submittedAt`。读取结果只暴露稳定业务字段，
-不暴露访问令牌、内部认证状态或页面实现细节。
+团队日志支持以下查询条件：
+
+- 成员姓名、用户名或 `member_id`；名称会解析为真实 `userId`，并自动携带成员所属
+  `deptId`；
+- 部门名称或 `dept_id`；
+- 关注组名称或 `watch_group_id`；
+- 单个日志日期 `log_date`，或闭区间 `start_date + end_date`；
+- 日志正文/项目等自由文本 `keyword`；
+- `page`、`size` 分页；
+- `submittedAt`（按填写时间）或 `logDate`（按日志日期）视角。
+
+默认视角为 `submittedAt`。只要提供日期条件，适配器就自动采用 `logDate` 视角和
+日志日期排序，因为泰华页面在 `submittedAt` 视角下会主动移除日期参数。成员、部门
+和日期查询会在返回后再次核对；若后台忽略筛选条件，AgentBridge 拒绝返回结果，避免
+把全量日志误报为筛选结果。读取结果只暴露稳定业务字段，不暴露访问令牌、内部认证
+状态或页面实现细节。
 
 ### 3.2 写入
 

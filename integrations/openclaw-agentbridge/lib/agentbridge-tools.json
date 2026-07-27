@@ -2617,12 +2617,27 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List team work logs within the authenticated Taihua user's data scope.",
+      "description": "List team work logs within the authenticated Taihua user's data scope. Filter by member, department, watch group, keyword, one log date, or a closed date range. Date filters automatically use logDate view mode.",
       "inputSchema": {
         "properties": {
+          "department": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact department name.",
+            "title": "Department"
+          },
           "dept_id": {
             "anyOf": [
               {
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -2631,6 +2646,20 @@
             ],
             "default": null,
             "title": "Dept Id"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Range end in YYYY-MM-DD format.",
+            "title": "End Date"
           },
           "idempotency_key": {
             "anyOf": [
@@ -2656,11 +2685,41 @@
               }
             ],
             "default": null,
+            "description": "Free-text log keyword, not a member name.",
             "title": "Keyword"
+          },
+          "log_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One log date in YYYY-MM-DD format.",
+            "title": "Log Date"
+          },
+          "member": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact member full name or username.",
+            "title": "Member"
           },
           "member_id": {
             "anyOf": [
               {
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -2684,11 +2743,62 @@
             "title": "Size",
             "type": "integer"
           },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Range start in YYYY-MM-DD format.",
+            "title": "Start Date"
+          },
           "view_mode": {
-            "default": "submittedAt",
-            "maxLength": 40,
-            "title": "View Mode",
-            "type": "string"
+            "anyOf": [
+              {
+                "enum": [
+                  "submittedAt",
+                  "logDate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "View Mode"
+          },
+          "watch_group": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact watch-group name.",
+            "title": "Watch Group"
+          },
+          "watch_group_id": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Watch Group Id"
           }
         },
         "title": "taihua_work_log_team_listArguments",

@@ -1043,12 +1043,17 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
     arguments_.limit = source.limit;
   }
   if (descriptor.kind === "taihua_work_log") {
-    for (const name of ["start_date", "end_date"]) {
+    for (const name of ["log_date", "start_date", "end_date"]) {
       if (
         typeof source[name] === "string" &&
         /^\d{4}-\d{2}-\d{2}$/.test(source[name])
       ) {
         arguments_[name] = source[name];
+      }
+    }
+    for (const name of ["member", "department", "watch_group"]) {
+      if (typeof source[name] === "string" && source[name].trim()) {
+        arguments_[name] = source[name].trim().slice(0, 200);
       }
     }
     for (const [name, maximum] of [
@@ -1059,10 +1064,10 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
         arguments_[name] = source[name];
       }
     }
-    if (typeof source.view_mode === "string" && source.view_mode.trim()) {
-      arguments_.view_mode = source.view_mode.trim().slice(0, 40);
+    if (["submittedAt", "logDate"].includes(source.view_mode)) {
+      arguments_.view_mode = source.view_mode;
     }
-    for (const name of ["dept_id", "member_id"]) {
+    for (const name of ["dept_id", "member_id", "watch_group_id"]) {
       if (Number.isInteger(source[name]) && source[name] >= 1) {
         arguments_[name] = source[name];
       }

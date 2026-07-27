@@ -1317,29 +1317,65 @@ def create_central_mcp_server(
     @mcp.tool(
         name="taihua_work_log_team_list",
         title="List Taihua Team Work Logs",
-        description="List team work logs within the authenticated Taihua user's data scope.",
+        description=(
+            "List team work logs within the authenticated Taihua user's data scope. "
+            "Filter by member, department, watch group, keyword, one log date, or a "
+            "closed date range. Date filters automatically use logDate view mode."
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
     async def taihua_work_log_team_list(
         ctx: Context,
-        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        keyword: Annotated[
+            str | None,
+            Field(max_length=200, description="Free-text log keyword, not a member name."),
+        ] = None,
+        log_date: Annotated[
+            str | None,
+            Field(max_length=10, description="One log date in YYYY-MM-DD format."),
+        ] = None,
+        start_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Range start in YYYY-MM-DD format."),
+        ] = None,
+        end_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Range end in YYYY-MM-DD format."),
+        ] = None,
+        member: Annotated[
+            str | None,
+            Field(max_length=200, description="Exact member full name or username."),
+        ] = None,
+        department: Annotated[
+            str | None,
+            Field(max_length=200, description="Exact department name."),
+        ] = None,
+        watch_group: Annotated[
+            str | None,
+            Field(max_length=200, description="Exact watch-group name."),
+        ] = None,
         page: Annotated[int, Field(ge=1, le=10000)] = 1,
         size: Annotated[int, Field(ge=1, le=100)] = 20,
-        view_mode: Annotated[str, Field(max_length=40)] = "submittedAt",
-        dept_id: int | None = None,
-        member_id: int | None = None,
+        view_mode: Literal["submittedAt", "logDate"] | None = None,
+        dept_id: Annotated[int | None, Field(ge=1)] = None,
+        member_id: Annotated[int | None, Field(ge=1)] = None,
+        watch_group_id: Annotated[int | None, Field(ge=1)] = None,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
-            "page": page,
-            "size": size,
-            "view_mode": view_mode,
-        }
+        arguments: dict[str, Any] = {"page": page, "size": size}
         for name, value in (
             ("keyword", keyword),
+            ("log_date", log_date),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("member", member),
+            ("department", department),
+            ("watch_group", watch_group),
+            ("view_mode", view_mode),
             ("dept_id", dept_id),
             ("member_id", member_id),
+            ("watch_group_id", watch_group_id),
         ):
             if value is not None:
                 arguments[name] = value

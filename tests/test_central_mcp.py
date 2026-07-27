@@ -184,6 +184,9 @@ class CentralMcpTests(unittest.TestCase):
             self.assertIn(tool_name, names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
         sent = next(tool for tool in tools if tool["name"] == "oa_workflow_sent_list")
+        team_logs = next(
+            tool for tool in tools if tool["name"] == "taihua_work_log_team_list"
+        )
         prepare = next(tool for tool in tools if tool["name"] == "oa_business_trip_prepare")
         save = next(tool for tool in tools if tool["name"] == "oa_business_trip_save_draft")
         submit = next(tool for tool in tools if tool["name"] == "oa_business_trip_submit")
@@ -213,6 +216,23 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
+        team_log_schema = team_logs["inputSchema"]["properties"]
+        for field_name in (
+            "keyword",
+            "log_date",
+            "start_date",
+            "end_date",
+            "member",
+            "department",
+            "watch_group",
+            "dept_id",
+            "member_id",
+            "watch_group_id",
+        ):
+            self.assertIn(field_name, team_log_schema)
+        view_mode_schema = team_log_schema["view_mode"]
+        self.assertIn("submittedAt", json.dumps(view_mode_schema))
+        self.assertIn("logDate", json.dumps(view_mode_schema))
         prepare_schema = prepare["inputSchema"]["properties"]
         for field_name in (
             "start_time",

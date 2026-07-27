@@ -361,6 +361,203 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
         self.assertEqual(team_query["page"], ["1"])
         self.assertEqual(team_query["viewMode"], ["submittedAt"])
 
+    def test_team_logs_resolve_member_and_apply_date_range(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "GET",
+                    "/api/work-logs/team/member-options",
+                    response(
+                        200,
+                        [
+                            {
+                                "userId": 300000881,
+                                "fullname": "刘大扬",
+                                "username": "liudayang",
+                                "deptId": 300000101,
+                                "deptName": "山东泰华照明科技有限公司",
+                            }
+                        ],
+                    ),
+                ),
+                expected(
+                    "GET",
+                    "/api/work-logs/team",
+                    response(
+                        200,
+                        {
+                            "content": [
+                                {
+                                    "id": 12,
+                                    "userId": 300000881,
+                                    "logDate": "2026-07-24",
+                                    "fullname": "刘大扬",
+                                    "content": "完成周工作。",
+                                }
+                            ],
+                            "totalElements": 1,
+                        },
+                    ),
+                ),
+            ],
+            state={"authorization": "Bearer access", "refresh_token": "refresh"},
+        )
+
+        result = adapter.list_team_logs(
+            worker,
+            {
+                "member": "刘大扬",
+                "start_date": "2026-07-20",
+                "end_date": "2026-07-26",
+                "view_mode": "submittedAt",
+                "size": 100,
+            },
+        )
+
+        query = worker.calls[1]["query"]
+        self.assertEqual(query["userId"], ["300000881"])
+        self.assertEqual(query["deptId"], ["300000101"])
+        self.assertEqual(query["startDate"], ["2026-07-20"])
+        self.assertEqual(query["endDate"], ["2026-07-26"])
+        self.assertEqual(query["viewMode"], ["logDate"])
+        self.assertEqual(query["sort"], ["logDate,desc", "createdAt,desc"])
+        self.assertEqual(result["viewMode"], "logDate")
+        self.assertEqual(result["filters"]["member"]["username"], "liudayang")
+
+    def test_team_logs_support_department_watch_group_and_single_date(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "GET",
+                    "/api/work-logs/team/dept-options",
+                    response(
+                        200,
+                        [
+                            {
+                                "value": 300000001,
+                                "label": "泰华智慧产业集团",
+                                "children": [
+                                    {
+                                        "value": 300000101,
+                                        "label": "山东泰华照明科技有限公司",
+                                    }
+                                ],
+                            }
+                        ],
+                    ),
+                ),
+                expected(
+                    "GET",
+                    "/api/watch-groups",
+                    response(200, [{"id": 9, "name": "重点关注"}]),
+                ),
+                expected(
+                    "GET",
+                    "/api/work-logs/team",
+                    response(
+                        200,
+                        {
+                            "content": [
+                                {
+                                    "id": 13,
+                                    "deptId": 300000101,
+                                    "deptName": "山东泰华照明科技有限公司",
+                                    "logDate": "2026-07-24",
+                                    "content": "部门日志。",
+                                }
+                            ],
+                            "totalElements": 1,
+                        },
+                    ),
+                ),
+            ],
+            state={"authorization": "Bearer access", "refresh_token": "refresh"},
+        )
+
+        result = adapter.list_team_logs(
+            worker,
+            {
+                "department": "山东泰华照明科技有限公司",
+                "watch_group": "重点关注",
+                "log_date": "2026-07-24",
+            },
+        )
+
+        query = worker.calls[2]["query"]
+        self.assertEqual(query["deptId"], ["300000101"])
+        self.assertEqual(query["watchGroupId"], ["9"])
+        self.assertEqual(query["logDate"], ["2026-07-24"])
+        self.assertEqual(
+            result["filters"]["department"]["name"],
+            "山东泰华照明科技有限公司",
+        )
+        self.assertEqual(result["filters"]["watchGroup"]["name"], "重点关注")
+
+    def test_team_logs_reject_invalid_date_ranges_before_calling_backend(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [],
+            state={"authorization": "Bearer access", "refresh_token": "refresh"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "provided together"):
+            adapter.list_team_logs(worker, {"start_date": "2026-07-20"})
+        with self.assertRaisesRegex(ValueError, "must not be earlier"):
+            adapter.list_team_logs(
+                worker,
+                {"start_date": "2026-07-26", "end_date": "2026-07-20"},
+            )
+        self.assertEqual(worker.calls, [])
+
+    def test_team_logs_stop_when_backend_ignores_member_filter(self):
+        adapter = TaihuaCentralAdapter(base_url="http://10.10.50.101")
+        worker = FakeHttpWorker(
+            [
+                expected(
+                    "GET",
+                    "/api/work-logs/team/member-options",
+                    response(
+                        200,
+                        [
+                            {
+                                "userId": 300000881,
+                                "fullname": "刘大扬",
+                                "username": "liudayang",
+                                "deptId": 300000101,
+                            }
+                        ],
+                    ),
+                ),
+                expected(
+                    "GET",
+                    "/api/work-logs/team",
+                    response(
+                        200,
+                        {
+                            "content": [
+                                {
+                                    "id": 14,
+                                    "userId": 999,
+                                    "logDate": "2026-07-24",
+                                    "content": "不属于所选成员。",
+                                }
+                            ],
+                            "totalElements": 1,
+                        },
+                    ),
+                ),
+            ],
+            state={"authorization": "Bearer access", "refresh_token": "refresh"},
+        )
+
+        with self.assertRaisesRegex(
+            TaihuaSessionCheckUnavailable,
+            "未按成员条件筛选",
+        ):
+            adapter.list_team_logs(worker, {"member": "刘大扬"})
+
     def test_write_errors_distinguish_business_rejection_and_unknown_outcome(self):
         business_worker = FakeHttpWorker(
             [

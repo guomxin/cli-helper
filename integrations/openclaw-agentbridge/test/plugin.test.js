@@ -732,7 +732,7 @@ test("replays the exact pending-list read after credential login", async () => {
   assert.equal(harness.heartbeatRuns.length, 0);
 });
 
-test("replays a Taihua work-log read after credential login", async () => {
+test("replays a filtered Taihua team work-log read after credential login", async () => {
   const harness = fakeApi({
     autoPoll: true,
     pollIntervalSeconds: 1,
@@ -760,7 +760,7 @@ test("replays a Taihua work-log read after credential login", async () => {
           nextAction: { type: "retry_original_request" },
         };
       }
-      assert.equal(name, "taihua_work_log_my_list");
+      assert.equal(name, "taihua_work_log_team_list");
       return {
         status: "succeeded",
         result: {
@@ -794,23 +794,31 @@ test("replays a Taihua work-log read after credential login", async () => {
     toolCallId: "tool-taihua-before-login",
     runId: "run-taihua-before-login",
     sessionKey,
-    toolName: "taihua_work_log_my_list",
+    toolName: "taihua_work_log_team_list",
     params: {
       start_date: "2026-07-20",
       end_date: "2026-07-26",
-      limit: 30,
+      member: "刘大扬",
+      department: "山东泰华照明科技有限公司",
+      watch_group: "重点关注",
+      page: 1,
+      size: 30,
+      view_mode: "logDate",
+      dept_id: 300000101,
+      member_id: 300000881,
+      watch_group_id: 9,
       idempotency_key: "must-not-be-replayed",
     },
   });
   harness.middleware(
     {
       toolCallId: "tool-taihua-before-login",
-      toolName: "taihua_work_log_my_list",
+      toolName: "taihua_work_log_team_list",
       result: {
         content: [{ type: "text", text: JSON.stringify(loginRequired) }],
         details: {
           mcpServer: "agentbridge",
-          mcpTool: "taihua_work_log_my_list",
+          mcpTool: "taihua_work_log_team_list",
           structuredContent: loginRequired,
         },
       },
@@ -838,13 +846,21 @@ test("replays a Taihua work-log read after credential login", async () => {
     [
       "agentbridge_interaction_get",
       "agentbridge_interaction_resume",
-      "taihua_work_log_my_list",
+      "taihua_work_log_team_list",
     ],
   );
   assert.deepEqual(calls.at(-1).arguments_, {
     start_date: "2026-07-20",
     end_date: "2026-07-26",
-    limit: 30,
+    member: "刘大扬",
+    department: "山东泰华照明科技有限公司",
+    watch_group: "重点关注",
+    page: 1,
+    size: 30,
+    view_mode: "logDate",
+    dept_id: 300000101,
+    member_id: 300000881,
+    watch_group_id: 9,
   });
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(

@@ -45,9 +45,16 @@ _TEAM_LOGS_INPUT_SCHEMA = {
         "keyword": {"type": "string"},
         "page": {"type": "integer"},
         "size": {"type": "integer"},
-        "view_mode": {"type": "string"},
+        "view_mode": {"type": "string", "enum": ["submittedAt", "logDate"]},
+        "log_date": {"type": "string"},
+        "start_date": {"type": "string"},
+        "end_date": {"type": "string"},
+        "department": {"type": "string"},
+        "member": {"type": "string"},
+        "watch_group": {"type": "string"},
         "dept_id": {"type": "integer"},
         "member_id": {"type": "integer"},
+        "watch_group_id": {"type": "integer"},
     },
     "additionalProperties": False,
 }
@@ -280,30 +287,162 @@ class TaihuaCentralAdapter:
         }
 
     def list_team_logs(self, worker, arguments: dict) -> dict:
+        date_filters = _normalize_team_log_dates(arguments)
+        requested_view_mode = str(arguments.get("view_mode") or "").strip()
+        if requested_view_mode and requested_view_mode not in {"submittedAt", "logDate"}:
+            raise ValueError("view_mode must be submittedAt or logDate")
+        view_mode = "logDate" if date_filters else (requested_view_mode or "submittedAt")
         params: dict[str, Any] = {
             "page": _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000),
             "size": _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100),
-            "sort": ["createdAt,desc", "id,desc"],
-            "viewMode": str(arguments.get("view_mode") or "submittedAt"),
+            "sort": (
+                ["logDate,desc", "createdAt,desc"]
+                if view_mode == "logDate"
+                else ["createdAt,desc", "id,desc"]
+            ),
+            "viewMode": view_mode,
         }
-        for argument_name, parameter_name in (
-            ("keyword", "keyword"),
-            ("dept_id", "deptId"),
-            ("member_id", "memberId"),
-        ):
-            value = arguments.get(argument_name)
-            if value not in (None, ""):
-                params[parameter_name] = value
+        params.update(date_filters)
+        keyword = str(arguments.get("keyword") or "").strip()
+        if keyword:
+            params["keyword"] = keyword
+
+        resolved_member = self._resolve_team_member(worker, arguments)
+        resolved_department = self._resolve_team_department(
+            worker,
+            arguments,
+            member=resolved_member,
+        )
+        resolved_watch_group = self._resolve_watch_group(worker, arguments)
+        if resolved_member is not None:
+            params["userId"] = resolved_member["id"]
+            params["deptId"] = resolved_member["deptId"]
+        elif resolved_department is not None:
+            params["deptId"] = resolved_department["id"]
+        if resolved_watch_group is not None:
+            params["watchGroupId"] = resolved_watch_group["id"]
+
         query = urlencode(params, doseq=True)
         payload = self._authorized_json(worker, "GET", f"/api/work-logs/team?{query}")
         content, total = _page_content(payload, "团队日志")
+        _verify_team_log_filters(
+            content,
+            date_filters=date_filters,
+            member=resolved_member,
+            department=resolved_department if resolved_member is None else None,
+        )
         return {
             "count": len(content),
             "total": total,
             "page": params["page"],
             "size": params["size"],
+            "viewMode": view_mode,
+            "filters": {
+                "keyword": keyword or None,
+                "logDate": date_filters.get("logDate"),
+                "startDate": date_filters.get("startDate"),
+                "endDate": date_filters.get("endDate"),
+                "member": resolved_member,
+                "department": resolved_department,
+                "watchGroup": resolved_watch_group,
+            },
             "items": [_normalize_work_log(item) for item in content],
         }
+
+    def _resolve_team_member(self, worker, arguments: dict) -> dict | None:
+        query = str(arguments.get("member") or "").strip()
+        member_id = arguments.get("member_id")
+        if not query and member_id in (None, ""):
+            return None
+        payload = self._authorized_json(
+            worker,
+            "GET",
+            "/api/work-logs/team/member-options",
+        )
+        if not isinstance(payload, list):
+            raise TaihuaSessionCheckUnavailable("团队成员选项接口未返回列表。")
+        candidates = [
+            normalized
+            for item in payload
+            if isinstance(item, dict)
+            if (normalized := _normalize_team_member(item)) is not None
+        ]
+        resolved = _resolve_named_option(
+            candidates,
+            query=query,
+            explicit_id=member_id,
+            label="团队成员",
+            searchable_fields=("name", "username"),
+        )
+        if not resolved.get("deptId"):
+            raise TaihuaSessionCheckUnavailable("团队成员选项缺少所属部门。")
+        return resolved
+
+    def _resolve_team_department(
+        self,
+        worker,
+        arguments: dict,
+        *,
+        member: dict | None,
+    ) -> dict | None:
+        query = str(arguments.get("department") or "").strip()
+        dept_id = arguments.get("dept_id")
+        if member is not None:
+            if dept_id not in (None, "") and str(dept_id) != str(member["deptId"]):
+                raise ValueError("dept_id does not match the selected member")
+            if query:
+                resolved = self._lookup_team_department(worker, query=query, dept_id=None)
+                if str(resolved["id"]) != str(member["deptId"]):
+                    raise ValueError("department does not match the selected member")
+                return resolved
+            return {"id": str(member["deptId"]), "name": member.get("department")}
+        if not query and dept_id in (None, ""):
+            return None
+        return self._lookup_team_department(worker, query=query, dept_id=dept_id)
+
+    def _lookup_team_department(
+        self,
+        worker,
+        *,
+        query: str,
+        dept_id: Any,
+    ) -> dict:
+        payload = self._authorized_json(
+            worker,
+            "GET",
+            "/api/work-logs/team/dept-options",
+        )
+        if not isinstance(payload, list):
+            raise TaihuaSessionCheckUnavailable("团队部门选项接口未返回列表。")
+        return _resolve_named_option(
+            _flatten_department_options(payload),
+            query=query,
+            explicit_id=dept_id,
+            label="部门",
+            searchable_fields=("name", "path"),
+        )
+
+    def _resolve_watch_group(self, worker, arguments: dict) -> dict | None:
+        query = str(arguments.get("watch_group") or "").strip()
+        watch_group_id = arguments.get("watch_group_id")
+        if not query and watch_group_id in (None, ""):
+            return None
+        payload = self._authorized_json(worker, "GET", "/api/watch-groups")
+        if not isinstance(payload, list):
+            raise TaihuaSessionCheckUnavailable("关注组接口未返回列表。")
+        candidates = [
+            normalized
+            for item in payload
+            if isinstance(item, dict)
+            if (normalized := _normalize_watch_group(item)) is not None
+        ]
+        return _resolve_named_option(
+            candidates,
+            query=query,
+            explicit_id=watch_group_id,
+            label="关注组",
+            searchable_fields=("name",),
+        )
 
     def search_projects(self, worker, arguments: dict) -> dict:
         keyword = str(arguments.get("keyword") or "").strip()
@@ -634,6 +773,170 @@ def _resolve_project(adapter, worker, query: str) -> dict | None:
         for item in candidates[:5]
     )
     raise TaihuaBusinessRuleRejected(f"项目匹配不唯一，请使用准确名称或编码：{labels}")
+
+
+def _normalize_team_log_dates(arguments: dict) -> dict[str, str]:
+    log_date = str(arguments.get("log_date") or "").strip()
+    start_date = str(arguments.get("start_date") or "").strip()
+    end_date = str(arguments.get("end_date") or "").strip()
+    if log_date and (start_date or end_date):
+        raise ValueError("log_date cannot be combined with start_date or end_date")
+    if bool(start_date) != bool(end_date):
+        raise ValueError("start_date and end_date must be provided together")
+    if log_date:
+        return {"logDate": _normalize_date(log_date, "log_date")}
+    if not start_date:
+        return {}
+    normalized_start = _normalize_date(start_date, "start_date")
+    normalized_end = _normalize_date(end_date, "end_date")
+    if normalized_end < normalized_start:
+        raise ValueError("end_date must not be earlier than start_date")
+    return {"startDate": normalized_start, "endDate": normalized_end}
+
+
+def _normalize_team_member(item: dict) -> dict | None:
+    user_id = item.get("userId") or item.get("id") or item.get("value")
+    name = str(item.get("fullname") or item.get("label") or item.get("name") or "").strip()
+    username = str(item.get("username") or "").strip()
+    if user_id in (None, "") or not (name or username):
+        return None
+    dept = item.get("dept") if isinstance(item.get("dept"), dict) else {}
+    dept_id = item.get("deptId") or dept.get("id")
+    department = str(item.get("deptName") or dept.get("name") or "").strip() or None
+    return {
+        "id": str(user_id),
+        "name": name or username,
+        "username": username or None,
+        "deptId": str(dept_id) if dept_id not in (None, "") else None,
+        "department": department,
+    }
+
+
+def _flatten_department_options(items: list, parents: tuple[str, ...] = ()) -> list[dict]:
+    options: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        dept_id = item.get("value") or item.get("id") or item.get("deptId")
+        name = str(item.get("label") or item.get("name") or item.get("deptName") or "").strip()
+        path_parts = (*parents, name) if name else parents
+        if dept_id not in (None, "") and name:
+            options.append(
+                {
+                    "id": str(dept_id),
+                    "name": name,
+                    "path": " / ".join(path_parts),
+                }
+            )
+        children = item.get("children")
+        if isinstance(children, list):
+            options.extend(_flatten_department_options(children, path_parts))
+    return options
+
+
+def _normalize_watch_group(item: dict) -> dict | None:
+    group_id = item.get("id") or item.get("value") or item.get("watchGroupId")
+    name = str(item.get("name") or item.get("label") or "").strip()
+    if group_id in (None, "") or not name:
+        return None
+    return {"id": str(group_id), "name": name}
+
+
+def _resolve_named_option(
+    candidates: list[dict],
+    *,
+    query: str,
+    explicit_id: Any,
+    label: str,
+    searchable_fields: tuple[str, ...],
+) -> dict:
+    by_id = None
+    if explicit_id not in (None, ""):
+        expected_id = str(explicit_id)
+        matches = [item for item in candidates if str(item.get("id")) == expected_id]
+        if len(matches) != 1:
+            raise ValueError(f"没有找到{label} ID：{expected_id}")
+        by_id = matches[0]
+    normalized_query = query.casefold()
+    by_name = None
+    if normalized_query:
+        exact = [
+            item
+            for item in candidates
+            if normalized_query
+            in {
+                str(item.get(field) or "").strip().casefold()
+                for field in searchable_fields
+            }
+        ]
+        matches = exact or [
+            item
+            for item in candidates
+            if any(
+                normalized_query in str(item.get(field) or "").casefold()
+                for field in searchable_fields
+            )
+        ]
+        if len(matches) == 1:
+            by_name = matches[0]
+        elif not matches:
+            raise ValueError(f"没有找到{label}：{query}")
+        else:
+            options = "；".join(
+                f"{item.get('name') or '-'}({item.get('username') or item.get('id')})"
+                for item in matches[:5]
+            )
+            raise ValueError(f"{label}匹配不唯一，请使用准确名称或 ID：{options}")
+    if by_id is not None and by_name is not None and by_id["id"] != by_name["id"]:
+        raise ValueError(f"{label}名称与 ID 不匹配")
+    resolved = by_id or by_name
+    if resolved is None:
+        raise ValueError(f"必须提供{label}名称或 ID")
+    return resolved
+
+
+def _verify_team_log_filters(
+    content: list[dict],
+    *,
+    date_filters: dict[str, str],
+    member: dict | None,
+    department: dict | None,
+) -> None:
+    if member is not None:
+        expected_user_id = str(member["id"])
+        if any(str(item.get("userId") or "") != expected_user_id for item in content):
+            raise TaihuaSessionCheckUnavailable(
+                "团队日志接口未按成员条件筛选，已停止返回可能的全量结果。"
+            )
+    if department is not None:
+        expected_dept_id = str(department["id"])
+        expected_name = str(department.get("name") or "").casefold()
+        for item in content:
+            dept = item.get("dept") if isinstance(item.get("dept"), dict) else {}
+            actual_id = item.get("deptId") or dept.get("id")
+            actual_name = str(
+                item.get("deptName") or item.get("departmentName") or dept.get("name") or ""
+            ).casefold()
+            if actual_id not in (None, ""):
+                matched = str(actual_id) == expected_dept_id
+            else:
+                matched = bool(expected_name) and actual_name == expected_name
+            if not matched:
+                raise TaihuaSessionCheckUnavailable(
+                    "团队日志接口未按部门条件筛选，已停止返回可能的全量结果。"
+                )
+    for item in content:
+        actual_date = str(item.get("logDate") or "")[:10]
+        if "logDate" in date_filters and actual_date != date_filters["logDate"]:
+            raise TaihuaSessionCheckUnavailable(
+                "团队日志接口未按日志日期筛选，已停止返回可能的全量结果。"
+            )
+        if "startDate" in date_filters and not (
+            date_filters["startDate"] <= actual_date <= date_filters["endDate"]
+        ):
+            raise TaihuaSessionCheckUnavailable(
+                "团队日志接口未按日期范围筛选，已停止返回可能的全量结果。"
+            )
 
 
 def _normalize_date(value: Any, field_name: str) -> str:
