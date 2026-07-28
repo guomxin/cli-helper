@@ -8,6 +8,7 @@ from bscli.adapters.seeyon_documents import (
     _certificate_content_type,
     _certificate_title,
     _request_download_with_redirects,
+    _validated_queries,
     _validated_reference,
     search_certificate_documents,
 )
@@ -115,9 +116,48 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
         )
         self.assertEqual(result["schema_version"], "bscli.oa_certificate_search.v2")
         self.assertEqual(result["queries"], ["系统甲V1.0", "系统乙Ｖ 1.0"])
+        self.assertEqual(result["matched_queries"], result["queries"])
+        self.assertEqual(result["unmatched_queries"], [])
         self.assertEqual(
             [(item["query"], item["title"]) for item in result["items"]],
             [("系统甲V1.0", "系统甲V1.0"), ("系统乙Ｖ 1.0", "系统乙V1.0")],
+        )
+
+    def test_batch_reports_unmatched_queries_and_keeps_one_slot_per_name(self):
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ),
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                side_effect=[
+                    [
+                        _row(resource_id="patent-1", filename="专利甲.pdf"),
+                        _row(resource_id="patent-2", filename="专利甲附录.pdf"),
+                    ],
+                    [_row(resource_id="patent-3", filename="专利乙.pdf")],
+                    [],
+                ],
+            ),
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "names": ["专利甲", "专利乙", "专利丙"],
+                    "document_type": "patent_certificate",
+                    "limit": 1,
+                },
+            )
+
+        self.assertEqual(result["matched_queries"], ["专利甲", "专利乙"])
+        self.assertEqual(result["unmatched_queries"], ["专利丙"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["source_count"], 3)
+        self.assertEqual(
+            [item["query"] for item in result["items"]],
+            ["专利甲", "专利乙"],
         )
 
     def test_patent_search_preserves_trailing_version_like_text(self):
@@ -142,6 +182,13 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
 
         self.assertEqual(search_folder.call_args.kwargs["query"], "专利V1.0")
         self.assertEqual(result["count"], 1)
+
+    def test_batch_accepts_twenty_names_and_rejects_twenty_one(self):
+        names = [f"专利名称{index:02d}" for index in range(20)]
+        self.assertEqual(_validated_queries({"names": names}), names)
+        with self.assertRaisesRegex(ValueError, "between 1 and 20"):
+            _validated_queries({"names": names + ["专利名称20"]})
+
     def test_search_requires_name_or_names(self):
         with self.assertRaisesRegex(ValueError, "name or names"):
             search_certificate_documents(
@@ -178,7 +225,7 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
     def test_certificate_title_removes_internal_codes_but_preserves_real_title(self):
         self.assertEqual(
             _certificate_title(
-                "\u3010TH-26-1-16 \u3011\u3010SDZM-26-1-06\u3011"
+                "\u200b&\u3010TH-26-1-16 \u3011\u3010SDZM-26-1-06\u3011"
                 "\u667a\u80fd\u5171\u7a7a\u76d1\u6d4b\u7cfb\u7edf.pdf"
             ),
             "\u667a\u80fd\u5171\u7a7a\u76d1\u6d4b\u7cfb\u7edf",

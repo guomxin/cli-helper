@@ -147,7 +147,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("names", certificate_properties)
         self.assertEqual(
             certificate_properties["names"]["anyOf"][0]["maxItems"],
-            10,
+            20,
         )
         self.assertIn(
             "do not launch parallel searches",

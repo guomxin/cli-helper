@@ -17,7 +17,7 @@ DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA = {
             "type": "array",
             "items": {"type": "string"},
             "minItems": 1,
-            "maxItems": 10,
+            "maxItems": 20,
         },
         "document_type": {
             "type": "string",
@@ -79,7 +79,7 @@ def search_certificate_documents(
         requested_types = (document_type,)
     else:
         raise ValueError("document_type is invalid")
-    limit = _validated_limit(arguments.get("limit"))
+    limit = max(_validated_limit(arguments.get("limit")), len(queries))
 
     matches: list[dict] = []
     inaccessible_count = 0
@@ -126,6 +126,14 @@ def search_certificate_documents(
                 }
                 matches.append(public_item)
 
+    match_counts = {
+        _normalize_text(query): sum(
+            1
+            for item in matches
+            if _normalize_text(item["query"]) == _normalize_text(query)
+        )
+        for query in queries
+    }
     deduplicated = {}
     for item in matches:
         key = (
@@ -137,7 +145,7 @@ def search_certificate_documents(
             existing["match_kind"]
         ):
             deduplicated[key] = item
-    ordered = sorted(
+    ranked = sorted(
         deduplicated.values(),
         key=lambda item: (
             item["_query_index"],
@@ -146,7 +154,18 @@ def search_certificate_documents(
             item["title"].casefold(),
         ),
     )
-    source_count = len(ordered)
+    primary = []
+    extras = []
+    represented_queries = set()
+    for item in ranked:
+        query_index = item["_query_index"]
+        if query_index in represented_queries:
+            extras.append(item)
+            continue
+        represented_queries.add(query_index)
+        primary.append(item)
+    source_count = len(ranked)
+    ordered = primary if len(queries) > 1 else primary + extras
     ordered = ordered[:limit]
     return {
         "schema_version": "bscli.oa_certificate_search.v2",
@@ -157,6 +176,12 @@ def search_certificate_documents(
         "count": len(ordered),
         "source_count": source_count,
         "inaccessible_count": inaccessible_count,
+        "matched_queries": [
+            query for query in queries if match_counts[_normalize_text(query)]
+        ],
+        "unmatched_queries": [
+            query for query in queries if not match_counts[_normalize_text(query)]
+        ],
         "items": [
             {key: value for key, value in item.items() if key != "_query_index"}
             for item in ordered
@@ -499,7 +524,12 @@ def _public_document_item(row: dict, document_type: str, query: str) -> dict:
 
 def _certificate_title(filename: str) -> str:
     value = re.sub(r"(?i)\.(?:pdf|jpe?g|png)$", "", str(filename or "")).strip()
-    value = re.sub(r"^(?:\s*\u3010[^\u3011]+\u3011)+\s*", "", value)
+    value = re.sub(
+        r"^[&＆\s\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]*"
+        r"(?:\u3010[^\u3011]+\u3011\s*)+",
+        "",
+        value,
+    )
     return value.strip()
 
 
@@ -578,8 +608,8 @@ def _validated_queries(arguments: dict) -> list[str]:
     if supplied_names is not None:
         if not isinstance(supplied_names, list):
             raise ValueError("certificate names must be an array")
-        if len(supplied_names) < 1 or len(supplied_names) > 10:
-            raise ValueError("certificate names must contain between 1 and 10 items")
+        if len(supplied_names) < 1 or len(supplied_names) > 20:
+            raise ValueError("certificate names must contain between 1 and 20 items")
         values.extend(supplied_names)
     if not values:
         raise ValueError("certificate name or names is required")

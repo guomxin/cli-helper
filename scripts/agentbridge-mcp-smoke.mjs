@@ -101,7 +101,7 @@ try {
     let names = null;
     if (namesBase64) {
       names = JSON.parse(Buffer.from(namesBase64, "base64").toString("utf8"));
-      if (!Array.isArray(names) || names.length < 1 || names.length > 10) {
+      if (!Array.isArray(names) || names.length < 1 || names.length > 20) {
         throw Object.assign(new Error("Invalid certificate names"), {
           code: "INVALID_CERTIFICATE_NAMES",
         });
@@ -301,6 +301,12 @@ function certificateSearchSummary({
     identityLabel,
     matchCount: items.length,
     exactMatches: items.filter((item) => item?.match_kind === "exact").length,
+    matchedQueries: Array.isArray(result?.matched_queries)
+      ? result.matched_queries.map(String)
+      : [],
+    unmatchedQueries: Array.isArray(result?.unmatched_queries)
+      ? result.unmatched_queries.map(String)
+      : [],
     titles: items.map((item) => String(item?.title ?? "")).filter(Boolean),
     firstDownloadUrl: items[0].download_url,
     expiresAt: items[0].download_expires_at ?? null,
