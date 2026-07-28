@@ -17,7 +17,11 @@ param(
     [string]$OpenClawEnvFile = "",
     [string]$IdentityLabel = "",
     [string]$IdentityChannel = "",
-    [string]$IdentitySenderId = ""
+    [string]$IdentitySenderId = "",
+    [string]$CertificateName = "",
+    [string[]]$CertificateNames = @(),
+    [ValidateSet("all", "patent_certificate", "software_copyright_certificate")]
+    [string]$CertificateDocumentType = ""
 )
 
 Set-StrictMode -Version Latest
@@ -208,6 +212,18 @@ try {
     $nodeArguments = @($nodeScript, "--check", $Check, "--server-name", $ServerName)
     if ($selectedIdentityLabel) {
         $nodeArguments += @("--identity-label", $selectedIdentityLabel)
+    }
+    if ($Check -eq "CertificateSearch" -and $CertificateName) {
+        $nodeArguments += @("--certificate-name", $CertificateName)
+    }
+    if ($Check -eq "CertificateSearch" -and $CertificateNames.Count -gt 0) {
+        $nodeArguments += @(
+            "--certificate-names-json",
+            ($CertificateNames | ConvertTo-Json -Compress)
+        )
+    }
+    if ($Check -eq "CertificateSearch" -and $CertificateDocumentType) {
+        $nodeArguments += @("--certificate-document-type", $CertificateDocumentType)
     }
     $serverJson | & $node.Source @nodeArguments
     if ($LASTEXITCODE -ne 0) {

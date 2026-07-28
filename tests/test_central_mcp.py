@@ -140,6 +140,19 @@ class CentralMcpTests(unittest.TestCase):
         names = [tool["name"] for tool in tools]
         self.assertIn("oa_workflow_pending_list", names)
         self.assertIn("oa_certificate_search", names)
+        certificate_tool = next(
+            tool for tool in tools if tool["name"] == "oa_certificate_search"
+        )
+        certificate_properties = certificate_tool["inputSchema"]["properties"]
+        self.assertIn("names", certificate_properties)
+        self.assertEqual(
+            certificate_properties["names"]["anyOf"][0]["maxItems"],
+            10,
+        )
+        self.assertIn(
+            "do not launch parallel searches",
+            certificate_tool["description"],
+        )
         self.assertIn("oa_workflow_sent_list", names)
         self.assertIn("oa_workflow_detail_get", names)
         self.assertIn("oa_session_login", names)

@@ -739,7 +739,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search patent and software-copyright certificate PDF scans by name in OA Document Center. Exact matches are ranked first; each accessible result contains a short-lived trusted download URL.",
+      "description": "Search one or up to 10 patent or software-copyright certificate PDF scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download URL.",
       "inputSchema": {
         "properties": {
           "document_type": {
@@ -773,15 +773,37 @@
             "type": "integer"
           },
           "name": {
-            "maxLength": 160,
-            "minLength": 2,
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Names"
           }
         },
-        "required": [
-          "name"
-        ],
         "title": "oa_certificate_searchArguments",
         "type": "object"
       },

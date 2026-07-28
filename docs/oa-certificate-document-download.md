@@ -29,9 +29,10 @@ oa_certificate_search
 
 | 参数 | 含义 |
 | --- | --- |
-| `name` | 专利或软件著作权名称，至少 2 个字符 |
-| `document_type` | `all`、`patent_certificate` 或 `software_copyright_certificate` |
-| `limit` | 返回数量，1 至 20，默认 10 |
+| `name` | 单个专利或软件著作权名称，至少 2 个字符 |
+| `names` | 批量名称，1 至 10 个；查询多篇时必须优先使用该参数 |
+| `document_type` | `all`、`patent_certificate` 或 `software_copyright_certificate`；用户明确说“软著”时使用后者 |
+| `limit` | 总返回数量，1 至 20，默认 10 |
 
 示例请求：
 
@@ -52,6 +53,23 @@ oa_certificate_search
 - 匹配类型；
 - 10 分钟有效的 AgentBridge 可信下载链接。
 
+## 批量检索与并发规则
+
+同一 OA 用户只有一个受控浏览器会话，页面操作必须串行。智能体需要查询多篇证书时，应把最多 10 个名称放入一次 `names` 调用；AgentBridge 只进入一次目标目录，再依次执行目录内搜索。
+
+不要为同一用户并行调用多个 `oa_certificate_search`。若已有 OA 操作占用会话，并发证书检索会在 1 秒左右返回 `SESSION_BUSY`，而不是继续排队直到 MCP 超时。智能体应等待当前操作完成后重试一次，或把多个名称合并为批量请求。
+
+明确查询软著或软件著作权时，必须设置：
+
+```json
+{
+  "names": ["系统甲V1.0", "系统乙V1.0"],
+  "document_type": "software_copyright_certificate",
+  "limit": 10
+}
+```
+
+只有用户没有说明证书类型时才使用 `all`。
 ## 下载流程
 
 ```mermaid

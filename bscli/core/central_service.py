@@ -503,7 +503,11 @@ class CentralCapabilityService:
             )
         else:
             adapter, selected_worker_factory = runtime
-            self._record_user_activity(user_subject=user_subject, system_id=system_id)
+            if capability_name != DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY:
+                self._record_user_activity(
+                    user_subject=user_subject,
+                    system_id=system_id,
+                )
             engine.register_handler(
                 capability_name,
                 lambda context, inputs: self._invoke_adapter(
@@ -1061,7 +1065,11 @@ class CentralCapabilityService:
         if session is None or session["state"] != "active":
             raise login_required_action(user_subject, system_id, session)
 
-        with self._session_lock(session["session_id"]):
+        document_search = capability_name == DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY
+        with self._session_lock(
+            session["session_id"],
+            wait_seconds=1.0 if document_search else None,
+        ):
             session = self.sessions.get(session["session_id"])
             if session["state"] != "active":
                 raise login_required_action(user_subject, system_id, session)
@@ -1150,6 +1158,8 @@ class CentralCapabilityService:
                         session["session_id"],
                         worker.capture_session_state(),
                     )
+                    if document_search:
+                        self.sessions.touch_activity(session["session_id"])
                     return result
             except AdapterLoginRequired as exc:
                 expired_session = self.sessions.mark_expired(session["session_id"], str(exc))
@@ -1614,11 +1624,30 @@ class CentralCapabilityService:
         )
 
     @contextmanager
-    def _session_lock(self, session_id: str) -> Iterator[None]:
+    def _session_lock(
+        self,
+        session_id: str,
+        *,
+        wait_seconds: float | None = None,
+    ) -> Iterator[None]:
         with self._locks_guard:
             lock = self._session_locks.setdefault(session_id, threading.Lock())
-        with lock:
+        acquired = (
+            lock.acquire()
+            if wait_seconds is None
+            else lock.acquire(timeout=max(0.0, wait_seconds))
+        )
+        if not acquired:
+            raise CapabilityRejected(
+                "SESSION_BUSY",
+                "Another OA operation is using this user session. Retry once after it "
+                "finishes; batch certificate titles through the names argument instead "
+                "of launching parallel searches.",
+            )
+        try:
             yield
+        finally:
+            lock.release()
 
     def _record_user_activity(self, *, user_subject: str, system_id: str) -> None:
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)

@@ -536,16 +536,20 @@ def create_central_mcp_server(
         name="oa_certificate_search",
         title="Search OA Certificate Scans",
         description=(
-            "Search patent and software-copyright certificate PDF scans by name in "
-            "OA Document Center. Exact matches are ranked first; each accessible result "
-            "contains a short-lived trusted download URL."
+            "Search one or up to 10 patent or software-copyright certificate PDF scans "
+            "in OA Document Center. Use names for multiple titles in one call; do not "
+            "launch parallel searches for the same user. When the user says software "
+            "copyright or 软著, set document_type=software_copyright_certificate. "
+            "Use all only when the type is genuinely unknown. Exact matches rank first; "
+            "each accessible result contains a short-lived trusted download URL."
         ),
         annotations=read_annotations,
         structured_output=True,
     )
     async def oa_certificate_search(
         ctx: Context,
-        name: Annotated[str, Field(min_length=2, max_length=160)],
+        name: Annotated[str | None, Field(min_length=2, max_length=160)] = None,
+        names: Annotated[list[str] | None, Field(min_length=1, max_length=10)] = None,
         document_type: Literal[
             "all",
             "patent_certificate",
@@ -559,6 +563,7 @@ def create_central_mcp_server(
             "oa.document.certificate.search",
             {
                 "name": name,
+                "names": names,
                 "document_type": document_type,
                 "limit": limit,
             },

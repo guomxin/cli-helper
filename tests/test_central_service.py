@@ -110,6 +110,49 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 session["updated_at"],
             )
 
+    def test_parallel_certificate_search_fails_fast_instead_of_queueing(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker)
+            self._activate(service)
+            started = threading.Event()
+            release = threading.Event()
+
+            def invoke_capability(_name, _worker, _arguments):
+                started.set()
+                release.wait(timeout=5)
+                return {"count": 0, "items": []}
+
+            service.adapter.invoke_capability = invoke_capability
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(
+                    service.invoke,
+                    user_subject="user-a",
+                    capability_name="oa.document.certificate.search",
+                    arguments={
+                        "name": "系统甲",
+                        "document_type": "software_copyright_certificate",
+                    },
+                )
+                self.assertTrue(started.wait(timeout=1))
+                before = time.monotonic()
+                second = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.document.certificate.search",
+                    arguments={
+                        "name": "系统乙",
+                        "document_type": "software_copyright_certificate",
+                    },
+                )
+                elapsed = time.monotonic() - before
+                release.set()
+                first_result = first.result(timeout=2)
+
+            self.assertLess(elapsed, 1.5)
+            self.assertEqual(second["status"], "failed")
+            self.assertEqual(second["error"]["code"], "SESSION_BUSY")
+            self.assertEqual(first_result["status"], "succeeded")
+
     def test_login_expiry_is_shared_by_cli_and_future_mcp_callers(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

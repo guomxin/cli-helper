@@ -81,6 +81,49 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
                 arguments={"name": "certificate", "document_type": "other"},
             )
 
+    def test_batch_search_opens_one_category_once_and_preserves_query_order(self):
+        first_rows = [_row(resource_id="soft-1", filename="系统甲V1.0.pdf")]
+        second_rows = [_row(resource_id="soft-2", filename="系统乙V1.0.pdf")]
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ) as open_category,
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                side_effect=[first_rows, second_rows],
+            ) as search_folder,
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "names": ["系统甲V1.0", "系统乙V1.0"],
+                    "document_type": "software_copyright_certificate",
+                    "limit": 10,
+                },
+            )
+
+        self.assertEqual(open_category.call_count, 1)
+        self.assertEqual(
+            [call.kwargs["query"] for call in search_folder.call_args_list],
+            ["系统甲V1.0", "系统乙V1.0"],
+        )
+        self.assertEqual(result["schema_version"], "bscli.oa_certificate_search.v2")
+        self.assertEqual(result["queries"], ["系统甲V1.0", "系统乙V1.0"])
+        self.assertEqual(
+            [(item["query"], item["title"]) for item in result["items"]],
+            [("系统甲V1.0", "系统甲V1.0"), ("系统乙V1.0", "系统乙V1.0")],
+        )
+
+    def test_search_requires_name_or_names(self):
+        with self.assertRaisesRegex(ValueError, "name or names"):
+            search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test",
+                arguments={},
+            )
+
     def test_reference_rejects_category_substitution(self):
         reference = {
             **_row(resource_id="patent-1", filename="certificate.pdf"),

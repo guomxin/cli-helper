@@ -96,6 +96,27 @@ try {
   if (!check && !["Release", "WorkflowCollections"].includes(checkName)) {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
   }
+  if (checkName === "CertificateSearch") {
+    const namesJson = argument("--certificate-names-json", null);
+    let names = null;
+    if (namesJson) {
+      names = JSON.parse(namesJson);
+      if (!Array.isArray(names) || names.length < 1 || names.length > 10) {
+        throw Object.assign(new Error("Invalid certificate names"), {
+          code: "INVALID_CERTIFICATE_NAMES",
+        });
+      }
+    }
+    check.arguments = {
+      ...check.arguments,
+      name: names ? null : argument("--certificate-name", check.arguments.name),
+      names,
+      document_type: argument(
+        "--certificate-document-type",
+        check.arguments.document_type,
+      ),
+    };
+  }
 
   const server = JSON.parse(await readStdin());
   if (

@@ -13,6 +13,12 @@ DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "name": {"type": "string"},
+        "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 10,
+        },
         "document_type": {
             "type": "string",
             "enum": [
@@ -23,7 +29,6 @@ DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA = {
         },
         "limit": {"type": "integer"},
     },
-    "required": ["name"],
     "additionalProperties": False,
 }
 
@@ -57,7 +62,7 @@ def search_certificate_documents(
     base_url: str,
     arguments: dict,
 ) -> dict:
-    query = _validated_query(arguments.get("name"))
+    queries = _validated_queries(arguments)
     document_type = str(arguments.get("document_type") or "all").strip()
     if document_type == "all":
         requested_types = tuple(_CERTIFICATE_CATEGORIES)
@@ -75,28 +80,31 @@ def search_certificate_documents(
             base_url=base_url,
             category_label=_CERTIFICATE_CATEGORIES[current_type],
         )
-        rows = _search_current_folder(worker, frame=frame, query=query)
-        for row in rows:
-            if not _row_matches_query(row, query):
-                continue
-            public_item = _public_document_item(row, current_type, query)
-            if not row["download_acl"] or not row["read_acl"]:
-                inaccessible_count += 1
-                continue
-            public_item["_download_reference"] = {
-                "resource_id": row["resource_id"],
-                "source_id": row["source_id"],
-                "filename": row["filename"],
-                "display_size": row["display_size"],
-                "document_type": current_type,
-                "category_label": _CERTIFICATE_CATEGORIES[current_type],
-                "create_date": row["create_date"],
-                "version": row["version"],
-                "mime_type_id": row["mime_type_id"],
-                "secret_level": row["secret_level"],
-                "is_upload_file": row["is_upload_file"],
-            }
-            matches.append(public_item)
+        for query_index, query in enumerate(queries):
+            rows = _search_current_folder(worker, frame=frame, query=query)
+            for row in rows:
+                if not _row_matches_query(row, query):
+                    continue
+                public_item = _public_document_item(row, current_type, query)
+                public_item["query"] = query
+                public_item["_query_index"] = query_index
+                if not row["download_acl"] or not row["read_acl"]:
+                    inaccessible_count += 1
+                    continue
+                public_item["_download_reference"] = {
+                    "resource_id": row["resource_id"],
+                    "source_id": row["source_id"],
+                    "filename": row["filename"],
+                    "display_size": row["display_size"],
+                    "document_type": current_type,
+                    "category_label": _CERTIFICATE_CATEGORIES[current_type],
+                    "create_date": row["create_date"],
+                    "version": row["version"],
+                    "mime_type_id": row["mime_type_id"],
+                    "secret_level": row["secret_level"],
+                    "is_upload_file": row["is_upload_file"],
+                }
+                matches.append(public_item)
 
     deduplicated = {}
     for item in matches:
@@ -112,6 +120,7 @@ def search_certificate_documents(
     ordered = sorted(
         deduplicated.values(),
         key=lambda item: (
+            item["_query_index"],
             _match_rank(item["match_kind"]),
             item["document_type"],
             item["title"].casefold(),
@@ -120,14 +129,18 @@ def search_certificate_documents(
     source_count = len(ordered)
     ordered = ordered[:limit]
     return {
-        "schema_version": "bscli.oa_certificate_search.v1",
-        "query": query,
+        "schema_version": "bscli.oa_certificate_search.v2",
+        "query": queries[0] if len(queries) == 1 else None,
+        "queries": queries,
         "requested_document_type": document_type,
         "scope": "unit_documents/intellectual_property/group_certificates",
         "count": len(ordered),
         "source_count": source_count,
         "inaccessible_count": inaccessible_count,
-        "items": ordered,
+        "items": [
+            {key: value for key, value in item.items() if key != "_query_index"}
+            for item in ordered
+        ],
     }
 
 
@@ -483,6 +496,30 @@ def _validated_query(value) -> str:
     if len(query) > 160:
         raise ValueError("certificate name is too long")
     return query
+
+
+def _validated_queries(arguments: dict) -> list[str]:
+    values = []
+    if arguments.get("name") is not None:
+        values.append(arguments.get("name"))
+    supplied_names = arguments.get("names")
+    if supplied_names is not None:
+        if not isinstance(supplied_names, list):
+            raise ValueError("certificate names must be an array")
+        if len(supplied_names) < 1 or len(supplied_names) > 10:
+            raise ValueError("certificate names must contain between 1 and 10 items")
+        values.extend(supplied_names)
+    if not values:
+        raise ValueError("certificate name or names is required")
+    queries = []
+    seen = set()
+    for value in values:
+        query = _validated_query(value)
+        key = _normalize_text(query)
+        if key not in seen:
+            seen.add(key)
+            queries.append(query)
+    return queries
 
 
 def _validated_limit(value) -> int:
