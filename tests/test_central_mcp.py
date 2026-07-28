@@ -292,6 +292,38 @@ class CentralMcpTests(unittest.TestCase):
             MCP_APP_RESOURCE_URI,
         )
 
+    def test_certificate_batch_tool_omits_unused_null_name(self):
+        with self._server() as (service, _store, token, client):
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "certificate-batch",
+                "operationId": "certificate-operation",
+                "status": "succeeded",
+                "result": {"count": 0, "items": []},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=19,
+                token=token,
+                params={
+                    "name": "oa_certificate_search",
+                    "arguments": {
+                        "names": ["系统甲V1.0", "系统乙V1.0"],
+                        "document_type": "software_copyright_certificate",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        call = service.invoke.call_args.kwargs
+        self.assertEqual(call["capability_name"], "oa.document.certificate.search")
+        self.assertNotIn("name", call["arguments"])
+        self.assertEqual(call["arguments"]["names"], ["系统甲V1.0", "系统乙V1.0"])
     def test_profile_resource_prompt_and_tool_are_discoverable(self):
         with self._server() as (_service, _store, token, client):
             resources = self._request(

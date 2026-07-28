@@ -558,15 +558,18 @@ def create_central_mcp_server(
         limit: Annotated[int, Field(ge=1, le=20)] = 10,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
+        arguments = {
+            "document_type": document_type,
+            "limit": limit,
+        }
+        if name is not None:
+            arguments["name"] = name
+        if names is not None:
+            arguments["names"] = names
         return await invoke(
             ctx,
             "oa.document.certificate.search",
-            {
-                "name": name,
-                "names": names,
-                "document_type": document_type,
-                "limit": limit,
-            },
+            arguments,
             idempotency_key,
         )
     @mcp.tool(

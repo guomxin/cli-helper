@@ -217,9 +217,13 @@ try {
         $nodeArguments += @("--certificate-name", $CertificateName)
     }
     if ($Check -eq "CertificateSearch" -and $CertificateNames.Count -gt 0) {
+        $namesJson = ConvertTo-Json -InputObject $CertificateNames -Compress
+        $namesBase64 = [Convert]::ToBase64String(
+            [Text.Encoding]::UTF8.GetBytes($namesJson)
+        )
         $nodeArguments += @(
-            "--certificate-names-json",
-            ($CertificateNames | ConvertTo-Json -Compress)
+            "--certificate-names-base64",
+            $namesBase64
         )
     }
     if ($Check -eq "CertificateSearch" -and $CertificateDocumentType) {

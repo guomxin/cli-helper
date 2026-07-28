@@ -97,10 +97,10 @@ try {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
   }
   if (checkName === "CertificateSearch") {
-    const namesJson = argument("--certificate-names-json", null);
+    const namesBase64 = argument("--certificate-names-base64", null);
     let names = null;
-    if (namesJson) {
-      names = JSON.parse(namesJson);
+    if (namesBase64) {
+      names = JSON.parse(Buffer.from(namesBase64, "base64").toString("utf8"));
       if (!Array.isArray(names) || names.length < 1 || names.length > 10) {
         throw Object.assign(new Error("Invalid certificate names"), {
           code: "INVALID_CERTIFICATE_NAMES",
