@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from bscli.adapters.seeyon_documents import (
     SeeyonDocumentAccessDenied,
+    _certificate_content_type,
     _certificate_title,
     _request_download_with_redirects,
     _validated_reference,
@@ -83,8 +84,8 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
 
     def test_batch_search_strips_software_versions_then_checks_candidates(self):
         first_rows = [
-            _row(resource_id="soft-wrong", filename="系统甲V2.0.pdf"),
-            _row(resource_id="soft-1", filename="系统甲V1.0.pdf"),
+            _row(resource_id="soft-wrong", filename="系统甲V2.0.jpg"),
+            _row(resource_id="soft-1", filename="系统甲V1.0.jpg"),
         ]
         second_rows = [_row(resource_id="soft-2", filename="系统乙V1.0.pdf")]
         with (
@@ -159,6 +160,21 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
         with self.assertRaises(SeeyonDocumentAccessDenied):
             _validated_reference(reference)
 
+    def test_reference_accepts_image_scan_and_rejects_other_extensions(self):
+        image_reference = {
+            **_row(resource_id="soft-1", filename="certificate.jpg"),
+            "document_type": "software_copyright_certificate",
+            "category_label": "2-著作权证书扫描件",
+        }
+        self.assertEqual(
+            _validated_reference(image_reference)["filename"],
+            "certificate.jpg",
+        )
+
+        image_reference["filename"] = "certificate.zip"
+        with self.assertRaises(SeeyonDocumentAccessDenied):
+            _validated_reference(image_reference)
+
     def test_certificate_title_removes_internal_codes_but_preserves_real_title(self):
         self.assertEqual(
             _certificate_title(
@@ -168,6 +184,22 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
             "\u667a\u80fd\u5171\u7a7a\u76d1\u6d4b\u7cfb\u7edf",
         )
 
+
+    def test_certificate_content_type_requires_matching_extension_and_magic(self):
+        self.assertEqual(
+            _certificate_content_type("scan.jpg", b"\xff\xd8\xff\xe0data"),
+            "image/jpeg",
+        )
+        self.assertEqual(
+            _certificate_content_type("scan.png", b"\x89PNG\r\n\x1a\ndata"),
+            "image/png",
+        )
+        self.assertIsNone(
+            _certificate_content_type("scan.jpg", b"%PDF-1.7")
+        )
+        self.assertIsNone(
+            _certificate_content_type("scan.zip", b"PK\x03\x04")
+        )
 
     def test_download_follows_only_worker_validated_redirects(self):
         worker = RedirectWorker(

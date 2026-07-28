@@ -321,8 +321,8 @@ def _validate_filename(value: str) -> str:
         raise ValueError("document download filename is invalid")
     if any(ord(character) < 32 for character in filename):
         raise ValueError("document download filename is invalid")
-    if not filename.lower().endswith(".pdf"):
-        raise ValueError("only PDF certificate downloads are supported")
+    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
+        raise ValueError("only PDF and image certificate downloads are supported")
     return filename[:240]
 
 

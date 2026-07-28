@@ -49,6 +49,12 @@ _MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 _SOFTWARE_VERSION_SUFFIX = re.compile(
     r"(?i)v\s*(?P<version>\d+(?:\.\d+)+)\s*$"
 )
+_CERTIFICATE_FILE_TYPES = {
+    ".pdf": ("application/pdf", b"%PDF-"),
+    ".jpg": ("image/jpeg", b"\xff\xd8\xff"),
+    ".jpeg": ("image/jpeg", b"\xff\xd8\xff"),
+    ".png": ("image/png", b"\x89PNG\r\n\x1a\n"),
+}
 
 
 class SeeyonDocumentContractMismatch(RuntimeError):
@@ -295,14 +301,15 @@ def fetch_certificate_document(
         )
     if "html" in content_type or body.lstrip().startswith(b"<!DOCTYPE html"):
         raise AdapterLoginRequired("the central OA session expired during download")
-    if not body.startswith(b"%PDF-"):
+    content_type = _certificate_content_type(row["filename"], body)
+    if content_type is None:
         raise SeeyonDocumentContractMismatch(
-            "OA certificate download did not return a PDF file"
+            "OA certificate download did not match its supported scan format"
         )
     return {
         "body": body,
         "filename": row["filename"],
-        "content_type": "application/pdf",
+        "content_type": content_type,
     }
 
 
@@ -403,7 +410,7 @@ def _search_current_folder(worker, *, frame, query: str) -> list[dict]:
         row
         for row in rows
         if isinstance(row, dict)
-        and str(row.get("filename") or "").lower().endswith(".pdf")
+        and _certificate_file_type(str(row.get("filename") or "")) is not None
         and str(row.get("resource_id") or "")
         and str(row.get("source_id") or "")
     ]
@@ -491,9 +498,25 @@ def _public_document_item(row: dict, document_type: str, query: str) -> dict:
 
 
 def _certificate_title(filename: str) -> str:
-    value = re.sub(r"(?i)\.pdf$", "", str(filename or "")).strip()
+    value = re.sub(r"(?i)\.(?:pdf|jpe?g|png)$", "", str(filename or "")).strip()
     value = re.sub(r"^(?:\s*\u3010[^\u3011]+\u3011)+\s*", "", value)
     return value.strip()
+
+
+def _certificate_file_type(filename: str) -> tuple[str, bytes] | None:
+    normalized = str(filename or "").strip().casefold()
+    for suffix, file_type in _CERTIFICATE_FILE_TYPES.items():
+        if normalized.endswith(suffix):
+            return file_type
+    return None
+
+
+def _certificate_content_type(filename: str, body: bytes) -> str | None:
+    file_type = _certificate_file_type(filename)
+    if file_type is None:
+        return None
+    content_type, magic = file_type
+    return content_type if body.startswith(magic) else None
 
 
 def _row_matches_query(row: dict, query: str) -> bool:
@@ -606,8 +629,10 @@ def _validated_reference(value) -> dict:
         or value["category_label"] != _CERTIFICATE_CATEGORIES[document_type]
     ):
         raise SeeyonDocumentAccessDenied("document download category binding is invalid")
-    if not str(value["filename"]).lower().endswith(".pdf"):
-        raise SeeyonDocumentAccessDenied("document download is not a PDF certificate")
+    if _certificate_file_type(str(value["filename"])) is None:
+        raise SeeyonDocumentAccessDenied(
+            "document download is not a supported certificate scan"
+        )
     return dict(value)
 
 

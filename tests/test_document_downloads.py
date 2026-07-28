@@ -119,6 +119,47 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
             self.assertTrue(response.body.startswith(b"%PDF-"))
             self.assertEqual(store.get(created["download_id"])["state"], "completed")
 
+    def test_card_returns_jpeg_scan_with_safe_download_filename(self):
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            created = store.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                document={**_reference(), "filename": "旧软著V1.0.jpg"},
+                filename="旧软著V1.0.jpg",
+                document_type="software_copyright_certificate",
+                display_size="1.2 MB",
+                card_base_url="https://10.10.50.213:8780",
+            )
+            application = TrustedDocumentDownloadApplication(
+                download_store=store,
+                fetcher=lambda record: {
+                    "body": b"\xff\xd8\xff\xe0scan",
+                    "filename": record["filename"],
+                    "content_type": "image/jpeg",
+                },
+            )
+
+            card = application.get_card(created["download_id"], secure_cookie=True)
+            html = card.body.decode("utf-8")
+            self.assertIn("下载证书扫描件", html)
+            csrf_token = re.search(
+                r'name="csrf_token" value="([^"]+)"',
+                html,
+            ).group(1)
+            response = application.submit_card(
+                created["download_id"],
+                body=f"csrf_token={csrf_token}".encode(),
+                content_type="application/x-www-form-urlencoded",
+                csrf_cookie=csrf_token,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "image/jpeg")
+            self.assertIn("filename=certificate.jpg", response.headers["Content-Disposition"])
+            self.assertTrue(response.body.startswith(b"\xff\xd8\xff"))
+
     def test_fetch_failure_returns_retryable_card_state(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")

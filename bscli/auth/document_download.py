@@ -142,6 +142,8 @@ class TrustedDocumentDownloadApplication:
             content_type = str(payload.get("content_type") or "application/pdf")
             if not isinstance(file_body, bytes):
                 raise TypeError("document fetcher did not return bytes")
+            if content_type not in {"application/pdf", "image/jpeg", "image/png"}:
+                raise TypeError("document fetcher returned an unsupported content type")
             self.download_store.complete(download_id)
         except Exception as exc:
             error_code = _safe_error_code(exc)
@@ -164,7 +166,12 @@ class TrustedDocumentDownloadApplication:
                 tone="error",
             )
 
-        ascii_name = "certificate.pdf"
+        ascii_suffix = {
+            "application/pdf": ".pdf",
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+        }[content_type]
+        ascii_name = f"certificate{ascii_suffix}"
         disposition = (
             f"attachment; filename={ascii_name}; "
             f"filename*=UTF-8''{quote(filename, safe='')}"
@@ -206,7 +213,7 @@ def _render_download_form(record: dict, *, csrf_token: str, nonce: str) -> str:
             {size_html}
             <form method="post" action="/download/{escape(record["download_id"])}">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
-              <button type="submit">下载 PDF</button>
+              <button type="submit">下载证书扫描件</button>
             </form>
             <p class="hint">链接为一次性短时授权，文件不会经过聊天内容。</p>
           </section>

@@ -536,7 +536,7 @@ def create_central_mcp_server(
         name="oa_certificate_search",
         title="Search OA Certificate Scans",
         description=(
-            "Search one or up to 10 patent or software-copyright certificate PDF scans "
+            "Search one or up to 10 patent or software-copyright certificate scans "
             "in OA Document Center. Use names for multiple titles in one call; do not "
             "launch parallel searches for the same user. When the user says software "
             "copyright or 软著, set document_type=software_copyright_certificate. "
