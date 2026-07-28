@@ -115,6 +115,10 @@ def create_auth_http_server(
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
+            document_file_id = _document_file_id_from_path(self.path)
+            if document_file_id is not None and download_application is not None:
+                self._send(download_application.get_file(document_file_id))
+                return
             card_application, card_id = self._card_target()
             if card_application is None or card_id is None:
                 self._send(application._message_response(
@@ -271,6 +275,14 @@ def _field_submission_id_from_path(path: str) -> str | None:
 def _document_download_id_from_path(path: str) -> str | None:
     match = re.fullmatch(r"/download/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
     return match.group(1) if match else None
+
+def _document_file_id_from_path(path: str) -> str | None:
+    match = re.fullmatch(
+        r"/download/([A-Za-z0-9_-]{32,128})/file",
+        path.split("?", 1)[0],
+    )
+    return match.group(1) if match else None
+
 
 def _csrf_cookie(value: str) -> str:
     cookie = SimpleCookie()

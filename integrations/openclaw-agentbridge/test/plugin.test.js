@@ -2051,6 +2051,128 @@ test("queues a heartbeat fallback when the immediate completion wake is skipped"
   );
 });
 
+test("delivers a prepared OA certificate as one direct attachment message", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-delivery",
+    runId: "run-certificate-delivery",
+    sessionKey,
+    toolName: "oa_certificate_prepare_download",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-certificate-delivery",
+      toolName: "oa_certificate_prepare_download",
+      result: preparedDocumentResult("certificate-a.pdf", "a".repeat(43)),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  assert.equal(replacement, undefined);
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/certificate.bin");
+  assert.match(harness.sentPayloads[0].payload.text, /certificate-a\.pdf/);
+});
+
+test("falls back to a short-lived download link when attachment upload fails", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  let attempts = 0;
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    async sendPayload(context) {
+      attempts += 1;
+      if (context.payload.mediaUrl) {
+        throw new Error("telegram upload failed");
+      }
+      harness.sentPayloads.push(context);
+      return { channel: "telegram", messageId: "fallback-message" };
+    },
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-fallback",
+    runId: "run-certificate-fallback",
+    sessionKey,
+    toolName: "oa_certificate_prepare_download",
+  });
+
+  await harness.middleware(
+    {
+      toolCallId: "tool-certificate-fallback",
+      toolName: "oa_certificate_prepare_download",
+      result: preparedDocumentResult("certificate-b.jpg", "b".repeat(43)),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.match(harness.sentPayloads[0].payload.text, /附件上传失败/);
+  assert.match(harness.sentPayloads[0].payload.text, /\/file/);
+});
+
+function preparedDocumentDependencies() {
+  return {
+    documentFetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get(name) {
+          return name.toLowerCase() === "content-type"
+            ? "application/pdf"
+            : name.toLowerCase() === "content-length"
+              ? "21"
+              : null;
+        },
+      },
+      async arrayBuffer() {
+        return Buffer.from("%PDF-1.7 prepared");
+      },
+    }),
+    saveMediaBufferImpl: async () => ({
+      id: "certificate.bin",
+      path: "C:/media/certificate.bin",
+      size: 21,
+      contentType: "application/pdf",
+    }),
+  };
+}
+
+function preparedDocumentResult(filename, downloadId) {
+  const structuredContent = {
+    protocolVersion: "0.1",
+    schemaVersion: "agentbridge.document_delivery.v1",
+    status: "succeeded",
+    file: {
+      downloadId,
+      filename,
+      contentType: filename.endsWith(".pdf") ? "application/pdf" : "image/jpeg",
+      size: 128,
+      mediaUrl: `${CARD_ORIGIN}/download/${downloadId}/file`,
+      expiresAt: "2099-07-14T12:00:00+00:00",
+    },
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+    details: {
+      mcpServer: "agentbridge",
+      mcpTool: "oa_certificate_prepare_download",
+      structuredContent,
+    },
+  };
+}
+
 function bindToolCall(
   harness,
   {

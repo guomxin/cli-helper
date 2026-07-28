@@ -739,7 +739,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, then verifies the requested version against every returned title. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download URL.",
+      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, then verifies the requested version against every returned title. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download ID and URL. When the user asks to receive a file in chat, call oa_certificate_prepare_download once per selected result; never write an ad-hoc download script or emit several MEDIA attachments in one model reply.",
       "inputSchema": {
         "properties": {
           "document_type": {
@@ -814,6 +814,37 @@
         "type": "object"
       },
       "title": "Search OA Certificate Scans"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Fetch one certificate selected by oa_certificate_search into AgentBridge's short-lived cache. Call this once per download_id. The OpenClaw host adapter delivers the resulting file as one attachment message, so do not create local download scripts and do not repeat the returned media URL in a MEDIA line.",
+      "inputSchema": {
+        "properties": {
+          "download_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Download Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_id"
+        ],
+        "title": "oa_certificate_prepare_downloadArguments",
+        "type": "object"
+      },
+      "name": "oa_certificate_prepare_download",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_certificate_prepare_downloadDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare and Deliver One OA Certificate Scan"
     },
     {
       "annotations": {

@@ -139,7 +139,13 @@ from bscli.core.capability_runtime import (
     RequiresUserAction,
 )
 from bscli.core.operations import OperationStore
-from bscli.core.document_downloads import DocumentDownloadStore
+from bscli.core.document_downloads import (
+    DocumentDownloadAccessDenied,
+    DocumentDownloadIntegrityError,
+    DocumentDownloadNotFound,
+    DocumentDownloadStateError,
+    DocumentDownloadStore,
+)
 from bscli.core.field_submissions import (
     FieldSubmissionAccessDenied,
     FieldSubmissionIntegrityError,
@@ -1211,6 +1217,77 @@ class CentralCapabilityService:
                 self.session_states.delete(session["session_id"])
                 raise
 
+    def prepare_document_download(
+        self,
+        *,
+        user_subject: str,
+        download_id: str,
+    ) -> dict:
+        try:
+            existing = self.document_downloads.get(
+                download_id,
+                include_document=True,
+            )
+            if existing["user_subject"] != user_subject:
+                raise DocumentDownloadAccessDenied(
+                    "document download belongs to another user"
+                )
+            if existing["state"] == "ready":
+                ready = existing
+            else:
+                record = self.document_downloads.claim_for_prepare(
+                    download_id,
+                    user_subject=user_subject,
+                )
+                try:
+                    payload = self.fetch_document_download(record)
+                    body = payload.get("body")
+                    content_type = str(payload.get("content_type") or "")
+                    ready = self.document_downloads.mark_ready(
+                        download_id,
+                        body=body,
+                        content_type=content_type,
+                    )
+                except Exception:
+                    try:
+                        self.document_downloads.release(download_id)
+                    except DocumentDownloadStateError:
+                        pass
+                    raise
+        except DocumentDownloadNotFound:
+            return _document_delivery_failure("DOWNLOAD_NOT_FOUND", retryable=False)
+        except DocumentDownloadAccessDenied:
+            return _document_delivery_failure("DOWNLOAD_ACCESS_DENIED", retryable=False)
+        except DocumentDownloadIntegrityError:
+            return _document_delivery_failure("DOWNLOAD_INTEGRITY_FAILED", retryable=False)
+        except DocumentDownloadStateError:
+            return _document_delivery_failure("DOWNLOAD_NOT_READY", retryable=True)
+        except AdapterLoginRequired:
+            return _document_delivery_failure("LOGIN_REQUIRED", retryable=True)
+        except Exception as exc:
+            return _document_delivery_failure(
+                _document_download_error_code(exc),
+                retryable=True,
+            )
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.document_delivery.v1",
+            "status": "succeeded",
+            "file": {
+                "downloadId": ready["download_id"],
+                "filename": ready["filename"],
+                "contentType": ready["content_type"],
+                "size": ready["prepared_size"],
+                "mediaUrl": f"{ready['card_url']}/file",
+                "expiresAt": ready["expires_at"],
+            },
+            "hostDelivery": {
+                "mode": "direct_attachment",
+                "oneFilePerMessage": True,
+                "handledByHost": True,
+            },
+        }
+
     def _materialize_document_downloads(self, *, session: dict, result: dict) -> dict:
         public_result = {key: value for key, value in result.items() if key != "items"}
         public_items = []
@@ -1228,6 +1305,7 @@ class CentralCapabilityService:
                 card_base_url=self.trusted_card_base_url,
                 ttl_seconds=600,
             )
+            item["download_id"] = grant["download_id"]
             item["download_url"] = grant["card_url"]
             item["download_expires_at"] = grant["expires_at"]
             public_items.append(item)
@@ -1888,6 +1966,28 @@ def session_response(
         "expiredAt": session.get("expired_at"),
         "lastError": session.get("last_error"),
     }
+
+
+def _document_delivery_failure(error_code: str, *, retryable: bool) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "schemaVersion": "agentbridge.document_delivery.v1",
+        "status": "failed",
+        "error": {
+            "code": error_code,
+            "message": "AgentBridge could not prepare the OA certificate attachment.",
+            "retryable": retryable,
+        },
+    }
+
+
+def _document_download_error_code(exc: Exception) -> str:
+    name = exc.__class__.__name__
+    normalized = "".join(
+        character if character.isalnum() else "_"
+        for character in name.upper()
+    ).strip("_")
+    return normalized[:80] or "DOCUMENT_PREPARATION_FAILED"
 
 
 def _utc_now() -> str:

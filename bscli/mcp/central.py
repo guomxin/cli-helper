@@ -543,7 +543,10 @@ def create_central_mcp_server(
             "Software-copyright lookup removes a trailing version only for OA recall, "
             "then verifies the requested version against every returned title. "
             "Use all only when the type is genuinely unknown. Exact matches rank first; "
-            "each accessible result contains a short-lived trusted download URL."
+            "each accessible result contains a short-lived trusted download ID and URL. "
+            "When the user asks to receive a file in chat, call "
+            "oa_certificate_prepare_download once per selected result; never write an ad-hoc "
+            "download script or emit several MEDIA attachments in one model reply."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -574,6 +577,31 @@ def create_central_mcp_server(
             arguments,
             idempotency_key,
         )
+    @mcp.tool(
+        name="oa_certificate_prepare_download",
+        title="Prepare and Deliver One OA Certificate Scan",
+        description=(
+            "Fetch one certificate selected by oa_certificate_search into AgentBridge's "
+            "short-lived cache. Call this once per download_id. The OpenClaw host adapter "
+            "delivers the resulting file as one attachment message, so do not create local "
+            "download scripts and do not repeat the returned media URL in a MEDIA line."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_certificate_prepare_download(
+        download_id: Annotated[str, Field(min_length=32, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"oa:read"},
+        )
+        return await asyncio.to_thread(
+            service.prepare_document_download,
+            user_subject=identity["user_subject"],
+            download_id=download_id,
+        )
+
     @mcp.tool(
         name="oa_workflow_pending_list",
         title="List Pending OA Workflows",

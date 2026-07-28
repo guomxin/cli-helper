@@ -140,6 +140,7 @@ class CentralMcpTests(unittest.TestCase):
         names = [tool["name"] for tool in tools]
         self.assertIn("oa_workflow_pending_list", names)
         self.assertIn("oa_certificate_search", names)
+        self.assertIn("oa_certificate_prepare_download", names)
         certificate_tool = next(
             tool for tool in tools if tool["name"] == "oa_certificate_search"
         )
@@ -324,6 +325,41 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["capability_name"], "oa.document.certificate.search")
         self.assertNotIn("name", call["arguments"])
         self.assertEqual(call["arguments"]["names"], ["系统甲V1.0", "系统乙V1.0"])
+    def test_certificate_prepare_download_is_bound_to_authenticated_identity(self):
+        with self._server() as (service, _store, token, client):
+            service.prepare_document_download.return_value = {
+                "protocolVersion": "0.1",
+                "schemaVersion": "agentbridge.document_delivery.v1",
+                "status": "succeeded",
+                "file": {
+                    "downloadId": "a" * 43,
+                    "filename": "certificate.pdf",
+                    "contentType": "application/pdf",
+                    "size": 128,
+                    "mediaUrl": f"https://10.10.50.213:8780/download/{'a' * 43}/file",
+                    "expiresAt": "2026-07-28T08:00:00+00:00",
+                },
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=191,
+                token=token,
+                params={
+                    "name": "oa_certificate_prepare_download",
+                    "arguments": {"download_id": "a" * 43},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        call = service.prepare_document_download.call_args.kwargs
+        self.assertEqual(call["download_id"], "a" * 43)
+        self.assertNotIn("user_subject", response.text)
+        self.assertEqual(
+            response.json()["result"]["structuredContent"]["status"],
+            "succeeded",
+        )
+
     def test_profile_resource_prompt_and_tool_are_discoverable(self):
         with self._server() as (_service, _store, token, client):
             resources = self._request(

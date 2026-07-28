@@ -31,6 +31,7 @@ const CHECKS = new Map([
 
 const REQUIRED_RELEASE_TOOLS = [
   "oa_certificate_search",
+  "oa_certificate_prepare_download",
   "oa_business_trip_prepare",
   "oa_business_trip_save_draft",
   "oa_business_trip_submit_prepare",

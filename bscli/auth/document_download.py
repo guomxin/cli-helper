@@ -47,6 +47,8 @@ class TrustedDocumentDownloadApplication:
                 message="下载引用校验失败，请返回智能体重新查找证书。",
                 tone="error",
             )
+        if record["state"] == "ready":
+            return self.get_file(download_id)
         if record["state"] == "pending":
             csrf_token = self.download_store.issue_csrf(download_id)
             nonce = secrets.token_urlsafe(18)
@@ -79,6 +81,50 @@ class TrustedDocumentDownloadApplication:
             title=title,
             message=message,
             tone="neutral",
+        )
+
+    def get_file(self, download_id: str) -> AuthCardResponse:
+        try:
+            payload = self.download_store.ready_payload(download_id)
+        except DocumentDownloadNotFound:
+            return _message_response(
+                status=404,
+                title="下载链接不存在",
+                message="请返回智能体重新查找证书。",
+                tone="error",
+            )
+        except (
+            DocumentDownloadIntegrityError,
+            DocumentDownloadStateError,
+        ):
+            return _message_response(
+                status=409,
+                title="证书尚未准备好",
+                message="请返回智能体重新准备或下载证书。",
+                tone="error",
+            )
+        content_type = str(payload["content_type"])
+        filename = str(payload["filename"])
+        ascii_suffix = {
+            "application/pdf": ".pdf",
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+        }[content_type]
+        disposition = (
+            f"attachment; filename=certificate{ascii_suffix}; "
+            f"filename*=UTF-8''{quote(filename, safe='')}"
+        )
+        return AuthCardResponse(
+            200,
+            {
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": disposition,
+                "Content-Type": content_type,
+                "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+            payload["body"],
         )
 
     def submit_card(

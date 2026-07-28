@@ -13,7 +13,7 @@ import {
   createAgentBridgeProxyTools,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.15";
+const PLUGIN_VERSION = "0.2.16";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -43,6 +43,8 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     sharedState: dependencies.sharedState,
     sleep: dependencies.sleep,
     now: dependencies.now,
+    fetchImpl: dependencies.documentFetchImpl || globalThis.fetch,
+    saveMediaBufferImpl: dependencies.saveMediaBufferImpl,
   });
 
   if (identityRouter.enabled) {
@@ -69,7 +71,16 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   }
 
   api.registerAgentToolResultMiddleware(
-    (event, context) => coordinator.captureToolResult(event, context),
+    (event, context) => {
+      const documentDelivery = coordinator.deliverPreparedDocumentResult(
+        event,
+        context,
+      );
+      const replacement = coordinator.captureToolResult(event, context);
+      return documentDelivery
+        ? documentDelivery.then(() => replacement)
+        : replacement;
+    },
     { runtimes: ["openclaw"] },
   );
 

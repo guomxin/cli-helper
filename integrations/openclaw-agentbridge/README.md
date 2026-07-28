@@ -129,6 +129,15 @@ trusted URL only in host presentation metadata; the URL remains absent from
 model-visible results. Private HTTP remains a portable-link fallback for local
 development only.
 
+Certificate files use a separate host-owned delivery path. After
+`oa_certificate_prepare_download` finishes the slow OA fetch, the plugin queues
+the prepared files per private session and sends each as an independent
+`mediaUrl` payload. One failed attachment therefore cannot suppress later files.
+If the channel adapter throws, the plugin immediately falls back to a text message
+containing the same short-lived prepared-file URL. Configure Telegram transport
+proxy and bounded retry in OpenClaw itself; this plugin does not patch OpenClaw
+source or retain files after the AgentBridge grant expires.
+
 The official Tencent WeChat adapter exposes text and media delivery but no
 presentation renderer. For WeChat and any other adapter without
 `renderPresentation`, the trusted host appends the action label and short-lived

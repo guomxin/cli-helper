@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import {
   appendPresentationLinks,
   buildPresentation,
@@ -60,6 +65,7 @@ export function createInteractionSharedState() {
     directDeliveries: new Map(),
     loginContinuations: new Map(),
     recentUserMessages: new Map(),
+    documentDeliveries: new Map(),
   };
 }
 
@@ -72,6 +78,8 @@ export class InteractionCoordinator {
     sharedState = createInteractionSharedState(),
     sleep = defaultSleep,
     now = Date.now,
+    fetchImpl = globalThis.fetch,
+    saveMediaBufferImpl = saveOpenClawMediaBuffer,
   }) {
     this.api = api;
     this.config = config;
@@ -79,6 +87,8 @@ export class InteractionCoordinator {
     this.mcpClientResolver = mcpClientResolver;
     this.sleep = sleep;
     this.now = now;
+    this.fetchImpl = fetchImpl;
+    this.saveMediaBufferImpl = saveMediaBufferImpl;
     this.sharedStateId = sharedState.id || "isolated";
     this.records = sharedState.records;
     this.polls = new Map();
@@ -90,6 +100,8 @@ export class InteractionCoordinator {
       sharedState.loginContinuations || (sharedState.loginContinuations = new Map());
     this.recentUserMessages =
       sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
+    this.documentDeliveries =
+      sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
   }
 
   recordUserMessage(event, context) {
@@ -164,6 +176,36 @@ export class InteractionCoordinator {
       ),
     });
     this.pruneToolBindings();
+  }
+
+  deliverPreparedDocumentResult(event, context) {
+    const payload = trustedAgentBridgeStructuredContent(
+      event.result,
+      this.config.mcpServerName,
+    );
+    const file = normalizePreparedDocument(payload, this.config.allowedCardOrigins);
+    if (!file) {
+      return null;
+    }
+    const toolCallId = normalizeToolCallId(event.toolCallId);
+    const binding = toolCallId ? this.toolBindings.get(toolCallId) : null;
+    const sessionKey = binding?.sessionKey || context.sessionKey;
+    if (!isPrivateSessionKey(sessionKey)) {
+      this.api.logger.warn(
+        "AgentBridge prepared document withheld because no private session binding was available",
+      );
+      return Promise.resolve(false);
+    }
+    const previous = this.documentDeliveries.get(sessionKey) || Promise.resolve();
+    const delivery = previous
+      .catch(() => undefined)
+      .then(() => this.deliverPreparedDocumentDirect(sessionKey, file));
+    this.documentDeliveries.set(sessionKey, delivery);
+    return delivery.finally(() => {
+      if (this.documentDeliveries.get(sessionKey) === delivery) {
+        this.documentDeliveries.delete(sessionKey);
+      }
+    });
   }
 
   captureToolResult(event, context) {
@@ -724,6 +766,90 @@ export class InteractionCoordinator {
     return true;
   }
 
+  async materializePreparedDocument(file) {
+    if (typeof this.fetchImpl !== "function") {
+      throw new Error("prepared document fetch is unavailable");
+    }
+    const response = await this.fetchImpl(file.mediaUrl, {
+      headers: { Accept: file.contentType },
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!response?.ok) {
+      throw new Error(`prepared document fetch failed: HTTP ${response?.status || 0}`);
+    }
+    const declaredSize = Number(response.headers?.get?.("content-length") || 0);
+    const maximumSize = 25 * 1024 * 1024;
+    if (declaredSize > maximumSize) {
+      throw new Error("prepared document exceeds the media size limit");
+    }
+    const body = Buffer.from(await response.arrayBuffer());
+    if (!body.length || body.length > maximumSize) {
+      throw new Error("prepared document body is invalid");
+    }
+    const contentType =
+      String(response.headers?.get?.("content-type") || "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase() || file.contentType;
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
+      throw new Error("prepared document content type is unsupported");
+    }
+    const saved = await this.saveMediaBufferImpl(
+      body,
+      contentType,
+      "inbound",
+      maximumSize,
+      file.filename,
+      file.filename,
+    );
+    if (!saved?.path) {
+      throw new Error("prepared document was not saved to the OpenClaw media store");
+    }
+    return saved.path;
+  }
+
+  async deliverPreparedDocumentDirect(sessionKey, file) {
+    const route = this.sessionRoutes.get(sessionKey);
+    if (!route) {
+      this.api.logger.warn(
+        "AgentBridge prepared document delivery unavailable because the private session route is missing",
+      );
+      return false;
+    }
+    const text = `OA 证书已准备完成：${file.filename}`;
+    try {
+      const localMediaPath = await this.materializePreparedDocument(file);
+      if (
+        await this.sendRoutePayload(sessionKey, route, {
+          text,
+          mediaUrl: localMediaPath,
+        })
+      ) {
+        this.api.logger.info(
+          `AgentBridge prepared document delivered directly (channel=${route.channel}, filename=${safeCode(file.filename)})`,
+        );
+        return true;
+      }
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge prepared document attachment delivery failed: ${safeErrorCode(error)}`,
+      );
+    }
+    const fallback = [
+      `OA 证书“${file.filename}”已准备好，但附件上传失败。`,
+      "可在链接有效期内直接下载：",
+      file.mediaUrl,
+    ].join("\n");
+    try {
+      return await this.sendRoutePayload(sessionKey, route, { text: fallback });
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge prepared document fallback delivery failed: ${safeErrorCode(error)}`,
+      );
+      return false;
+    }
+  }
+
   async deliverTextDirect(sessionKey, text) {
     const route = this.sessionRoutes.get(sessionKey);
     if (!route) {
@@ -1015,6 +1141,99 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
     return null;
   }
   return details.structuredContent;
+}
+
+async function saveOpenClawMediaBuffer(
+  buffer,
+  contentType,
+  _subdir,
+  maximumSize,
+  originalFilename,
+) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > maximumSize) {
+    throw new Error("prepared document media buffer is invalid");
+  }
+  const stateDir = resolveOpenClawStateDir();
+  const inboundDir = path.join(stateDir, "media", "inbound");
+  await mkdir(inboundDir, { recursive: true, mode: 0o700 });
+  const rawStem = path.basename(String(originalFilename || "certificate"), path.extname(String(originalFilename || "")));
+  const stem = rawStem
+    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 60) || "certificate";
+  const extension = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+  }[contentType];
+  if (!extension) {
+    throw new Error("prepared document content type is unsupported");
+  }
+  const id = `${stem}---${randomUUID()}${extension}`;
+  const finalPath = path.join(inboundDir, id);
+  const temporaryPath = `${finalPath}.tmp`;
+  try {
+    await writeFile(temporaryPath, buffer, { flag: "wx", mode: 0o600 });
+    await rename(temporaryPath, finalPath);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
+  return { id, path: finalPath, size: buffer.length, contentType };
+}
+
+function resolveOpenClawStateDir() {
+  const home = process.env.OPENCLAW_HOME?.trim() || os.homedir();
+  const expand = (value) =>
+    value.startsWith("~") ? path.join(home, value.slice(1).replace(/^[\\/]+/, "")) : value;
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    return path.resolve(expand(stateOverride));
+  }
+  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) {
+    return path.dirname(path.resolve(expand(configPath)));
+  }
+  return path.join(home, ".openclaw");
+}
+
+function normalizePreparedDocument(payload, allowedOrigins) {
+  if (
+    payload?.schemaVersion !== "agentbridge.document_delivery.v1" ||
+    payload.status !== "succeeded" ||
+    !payload.file ||
+    typeof payload.file !== "object"
+  ) {
+    return null;
+  }
+  const filename = String(payload.file.filename || "").trim();
+  const mediaUrl = String(payload.file.mediaUrl || "").trim();
+  if (!filename || !mediaUrl) {
+    return null;
+  }
+  try {
+    const parsed = new URL(mediaUrl);
+    const trustedOrigins = new Set(allowedOrigins || []);
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      !trustedOrigins.has(parsed.origin) ||
+      !/^\/download\/[A-Za-z0-9_-]{32,128}\/file$/.test(parsed.pathname) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const contentType = String(payload.file.contentType || "").trim().toLowerCase();
+  if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
+    return null;
+  }
+  return { filename: filename.slice(0, 240), mediaUrl, contentType };
 }
 
 function normalizeReadContinuation(toolName, params, capturedAt) {

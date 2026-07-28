@@ -99,6 +99,17 @@ Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
 form fields.
 
+### Certificate delivery
+
+`oa_certificate_search` returns opaque, user-bound download IDs and browser download
+cards. When a chat user asks to receive a patent or software-copyright scan, the
+host calls `oa_certificate_prepare_download` once for each selected ID. AgentBridge
+fetches the file from OA under the same central session, caches it only for the
+short grant lifetime, and exposes a fast media URL. The OpenClaw adapter sends one
+attachment per message; if Telegram upload fails, it sends the same short-lived
+URL as an explicit fallback instead of silently dropping the remaining files.
+Ad-hoc client download scripts are not part of the supported path.
+
 ## Trusted Login
 
 Start the trusted-card service. The same listener serves authentication,

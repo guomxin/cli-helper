@@ -64,6 +64,39 @@ class DocumentDownloadStoreTests(unittest.TestCase):
             self.assertEqual(released["state"], "pending")
             self.assertNotEqual(store.issue_csrf(created["download_id"]), token)
 
+    def test_machine_prepare_is_user_bound_cached_and_reusable(self):
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            created = _create(store)
+
+            with self.assertRaises(DocumentDownloadAccessDenied):
+                store.claim_for_prepare(
+                    created["download_id"],
+                    user_subject="user-b",
+                )
+
+            store.claim_for_prepare(
+                created["download_id"],
+                user_subject="user-a",
+            )
+            ready = store.mark_ready(
+                created["download_id"],
+                body=b"%PDF-1.7\nprepared",
+                content_type="application/pdf",
+            )
+            first = store.ready_payload(
+                created["download_id"],
+                user_subject="user-a",
+            )
+            second = store.ready_payload(
+                created["download_id"],
+                user_subject="user-a",
+            )
+
+            self.assertEqual(ready["state"], "ready")
+            self.assertEqual(first["body"], second["body"])
+            self.assertEqual(first["prepared_size"], len(first["body"]))
+
     def test_expired_download_cannot_be_claimed(self):
         now = [datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)]
         with TemporaryDirectory() as tmp:
@@ -160,6 +193,31 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
             self.assertIn("filename=certificate.jpg", response.headers["Content-Disposition"])
             self.assertTrue(response.body.startswith(b"\xff\xd8\xff"))
 
+    def test_ready_file_is_served_without_refetching_oa(self):
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            created = _create(store)
+            store.claim_for_prepare(created["download_id"], user_subject="user-a")
+            store.mark_ready(
+                created["download_id"],
+                body=b"%PDF-1.7\nprepared",
+                content_type="application/pdf",
+            )
+            application = TrustedDocumentDownloadApplication(
+                download_store=store,
+                fetcher=lambda _record: self.fail("ready file must not refetch OA"),
+            )
+
+            response = application.get_file(created["download_id"])
+            card_response = application.get_card(
+                created["download_id"],
+                secure_cookie=True,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(card_response.body, response.body)
+            self.assertEqual(response.headers["Content-Type"], "application/pdf")
+
     def test_fetch_failure_returns_retryable_card_state(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
@@ -227,6 +285,54 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
                 )
             )
             self.assertIn("download_expires_at", item)
+            self.assertRegex(item["download_id"], r"^[A-Za-z0-9_-]{32,128}$")
+
+    def test_prepare_download_fetches_once_and_returns_fast_media_url(self):
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://oa.example.test/seeyon/main.do",
+                trusted_card_base_url="https://10.10.50.213:8780",
+            )
+            grant = service.document_downloads.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                document=_reference(),
+                filename="certificate.pdf",
+                document_type="patent_certificate",
+                display_size="1.2 MB",
+                card_base_url="https://10.10.50.213:8780",
+            )
+            calls = []
+
+            def fetch(record):
+                calls.append(record["download_id"])
+                return {
+                    "body": b"%PDF-1.7\nprepared",
+                    "filename": record["filename"],
+                    "content_type": "application/pdf",
+                }
+
+            service.fetch_document_download = fetch
+            first = service.prepare_document_download(
+                user_subject="user-a",
+                download_id=grant["download_id"],
+            )
+            second = service.prepare_document_download(
+                user_subject="user-a",
+                download_id=grant["download_id"],
+            )
+            denied = service.prepare_document_download(
+                user_subject="user-b",
+                download_id=grant["download_id"],
+            )
+
+            self.assertEqual(first["status"], "succeeded")
+            self.assertEqual(second["file"], first["file"])
+            self.assertEqual(calls, [grant["download_id"]])
+            self.assertTrue(first["file"]["mediaUrl"].endswith("/file"))
+            self.assertEqual(denied["error"]["code"], "DOWNLOAD_ACCESS_DENIED")
 
 def _reference() -> dict:
     return {
