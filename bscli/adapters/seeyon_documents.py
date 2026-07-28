@@ -46,6 +46,9 @@ _CERTIFICATE_CATEGORIES = {
 
 _RESULT_SETTLE_MS = 900
 _MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
+_SOFTWARE_VERSION_SUFFIX = re.compile(
+    r"(?i)v\s*(?P<version>\d+(?:\.\d+)+)\s*$"
+)
 
 
 class SeeyonDocumentContractMismatch(RuntimeError):
@@ -81,9 +84,20 @@ def search_certificate_documents(
             category_label=_CERTIFICATE_CATEGORIES[current_type],
         )
         for query_index, query in enumerate(queries):
-            rows = _search_current_folder(worker, frame=frame, query=query)
+            search_query = _certificate_search_query(query, current_type)
+            rows = _search_current_folder(
+                worker,
+                frame=frame,
+                query=search_query,
+            )
             for row in rows:
-                if not _row_matches_query(row, query):
+                if not _row_matches_query(row, search_query):
+                    continue
+                if not _certificate_version_matches(
+                    row,
+                    document_type=current_type,
+                    query=query,
+                ):
                     continue
                 public_item = _public_document_item(row, current_type, query)
                 public_item["query"] = query
@@ -487,6 +501,41 @@ def _row_matches_query(row: dict, query: str) -> bool:
     return needle in _normalize_text(row["filename"]) or needle in _normalize_text(
         _certificate_title(row["filename"])
     )
+
+
+def _certificate_search_query(query: str, document_type: str) -> str:
+    if document_type != "software_copyright_certificate":
+        return query
+    normalized = unicodedata.normalize("NFKC", query).strip()
+    match = _SOFTWARE_VERSION_SUFFIX.search(normalized)
+    if match is None:
+        return query
+    base_name = normalized[: match.start()].rstrip()
+    return base_name if len(_normalize_text(base_name)) >= 2 else query
+
+
+def _certificate_version_matches(
+    row: dict,
+    *,
+    document_type: str,
+    query: str,
+) -> bool:
+    if document_type != "software_copyright_certificate":
+        return True
+    requested_version = _software_version(query)
+    if requested_version is None:
+        return True
+    return requested_version == _software_version(
+        _certificate_title(row["filename"])
+    )
+
+
+def _software_version(value: str) -> str | None:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).strip()
+    match = _SOFTWARE_VERSION_SUFFIX.search(normalized)
+    if match is None:
+        return None
+    return f"v{match.group('version')}".casefold()
 
 
 def _validated_query(value) -> str:

@@ -81,8 +81,11 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
                 arguments={"name": "certificate", "document_type": "other"},
             )
 
-    def test_batch_search_opens_one_category_once_and_preserves_query_order(self):
-        first_rows = [_row(resource_id="soft-1", filename="系统甲V1.0.pdf")]
+    def test_batch_search_strips_software_versions_then_checks_candidates(self):
+        first_rows = [
+            _row(resource_id="soft-wrong", filename="系统甲V2.0.pdf"),
+            _row(resource_id="soft-1", filename="系统甲V1.0.pdf"),
+        ]
         second_rows = [_row(resource_id="soft-2", filename="系统乙V1.0.pdf")]
         with (
             patch(
@@ -98,7 +101,7 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
                 object(),
                 base_url="http://oa.example.test/seeyon/main.do",
                 arguments={
-                    "names": ["系统甲V1.0", "系统乙V1.0"],
+                    "names": ["系统甲V1.0", "系统乙Ｖ 1.0"],
                     "document_type": "software_copyright_certificate",
                     "limit": 10,
                 },
@@ -107,15 +110,37 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
         self.assertEqual(open_category.call_count, 1)
         self.assertEqual(
             [call.kwargs["query"] for call in search_folder.call_args_list],
-            ["系统甲V1.0", "系统乙V1.0"],
+            ["系统甲", "系统乙"],
         )
         self.assertEqual(result["schema_version"], "bscli.oa_certificate_search.v2")
-        self.assertEqual(result["queries"], ["系统甲V1.0", "系统乙V1.0"])
+        self.assertEqual(result["queries"], ["系统甲V1.0", "系统乙Ｖ 1.0"])
         self.assertEqual(
             [(item["query"], item["title"]) for item in result["items"]],
-            [("系统甲V1.0", "系统甲V1.0"), ("系统乙V1.0", "系统乙V1.0")],
+            [("系统甲V1.0", "系统甲V1.0"), ("系统乙Ｖ 1.0", "系统乙V1.0")],
         )
 
+    def test_patent_search_preserves_trailing_version_like_text(self):
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ),
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                return_value=[_row(resource_id="patent-1", filename="专利V1.0.pdf")],
+            ) as search_folder,
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "name": "专利V1.0",
+                    "document_type": "patent_certificate",
+                },
+            )
+
+        self.assertEqual(search_folder.call_args.kwargs["query"], "专利V1.0")
+        self.assertEqual(result["count"], 1)
     def test_search_requires_name_or_names(self):
         with self.assertRaisesRegex(ValueError, "name or names"):
             search_certificate_documents(

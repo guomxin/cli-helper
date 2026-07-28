@@ -540,6 +540,8 @@ def create_central_mcp_server(
             "in OA Document Center. Use names for multiple titles in one call; do not "
             "launch parallel searches for the same user. When the user says software "
             "copyright or 软著, set document_type=software_copyright_certificate. "
+            "Software-copyright lookup removes a trailing version only for OA recall, "
+            "then verifies the requested version against every returned title. "
             "Use all only when the type is genuinely unknown. Exact matches rank first; "
             "each accessible result contains a short-lived trusted download URL."
         ),
