@@ -1387,7 +1387,10 @@ def create_central_mcp_server(
     @mcp.tool(
         name="yuque_document_catalog",
         title="List Yuque Documents",
-        description="List or filter document titles in one department knowledge base.",
+        description=(
+            "List, filter, sort, and page document metadata across all visible "
+            "department knowledge bases, or restrict the result to one book."
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
@@ -1395,14 +1398,28 @@ def create_central_mcp_server(
         ctx: Context,
         book: Annotated[str | None, Field(max_length=200)] = None,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
+        document_type: Annotated[str | None, Field(max_length=20)] = None,
+        updated_after: Annotated[str | None, Field(max_length=40)] = None,
+        updated_before: Annotated[str | None, Field(max_length=40)] = None,
+        sort: Annotated[str, Field(max_length=20)] = "updated_desc",
+        page: Annotated[int, Field(ge=1, le=1000)] = 1,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {"limit": limit}
-        if book is not None:
-            arguments["book"] = book
-        if keyword is not None:
-            arguments["keyword"] = keyword
+        arguments: dict[str, Any] = {
+            "sort": sort,
+            "page": page,
+            "limit": limit,
+        }
+        for name, value in (
+            ("book", book),
+            ("keyword", keyword),
+            ("document_type", document_type),
+            ("updated_after", updated_after),
+            ("updated_before", updated_before),
+        ):
+            if value is not None:
+                arguments[name] = value
         return await invoke(
             ctx,
             YUQUE_DOCUMENT_CATALOG_CAPABILITY,
@@ -1415,8 +1432,9 @@ def create_central_mcp_server(
         name="yuque_document_search",
         title="Search Yuque Documents",
         description=(
-            "Search one department knowledge base. Search snippets are deliberately "
-            "omitted so credentials in incidental matches do not enter agent context."
+            "Search every visible department knowledge base unless one book is "
+            "specified. Search snippets are deliberately omitted so credentials in "
+            "incidental matches do not enter agent context."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -1425,6 +1443,7 @@ def create_central_mcp_server(
         ctx: Context,
         query: Annotated[str, Field(min_length=1, max_length=500)],
         book: Annotated[str | None, Field(max_length=200)] = None,
+        document_type: Annotated[str | None, Field(max_length=20)] = None,
         page: Annotated[int, Field(ge=1, le=1000)] = 1,
         limit: Annotated[int, Field(ge=1, le=50)] = 20,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -1432,6 +1451,8 @@ def create_central_mcp_server(
         arguments: dict[str, Any] = {"query": query, "page": page, "limit": limit}
         if book is not None:
             arguments["book"] = book
+        if document_type is not None:
+            arguments["document_type"] = document_type
         return await invoke(
             ctx,
             YUQUE_DOCUMENT_SEARCH_CAPABILITY,
@@ -1444,8 +1465,11 @@ def create_central_mcp_server(
         name="yuque_document_read",
         title="Read One Yuque Document",
         description=(
-            "Read one explicitly selected document as plain text. Likely passwords, "
-            "tokens, API keys, URL credentials, and private keys are always redacted."
+            "Read one explicitly selected Yuque Doc, Sheet, or Table as structured "
+            "text. Headings, tables, image OCR, links, and attachment metadata are "
+            "preserved; likely passwords, tokens, API keys, URL credentials, and "
+            "private keys are always redacted. Omit book to resolve a unique document "
+            "across all visible knowledge bases."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -1454,11 +1478,15 @@ def create_central_mcp_server(
         ctx: Context,
         document: Annotated[str, Field(min_length=1, max_length=500)],
         book: Annotated[str | None, Field(max_length=200)] = None,
+        row_offset: Annotated[int, Field(ge=0, le=100000)] = 0,
+        max_rows: Annotated[int, Field(ge=1, le=500)] = 100,
         max_chars: Annotated[int, Field(ge=500, le=50000)] = 12000,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "document": document,
+            "row_offset": row_offset,
+            "max_rows": max_rows,
             "max_chars": max_chars,
         }
         if book is not None:
@@ -1470,7 +1498,6 @@ def create_central_mcp_server(
             idempotency_key,
             {"yuque:read"},
         )
-
     @mcp.tool(
         name="yuque_session_status",
         title="Verify Yuque Session Status",

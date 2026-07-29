@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from html.parser import HTMLParser
+from datetime import datetime, timezone
+import json
 import re
 from typing import Any
 from urllib.parse import quote, urlencode, urljoin, urlparse
@@ -9,6 +10,15 @@ from bscli.adapters.base import (
     AdapterLoginContractMismatch,
     AdapterLoginRequired,
     AdapterSessionCheckUnavailable,
+)
+from bscli.adapters.yuque_content import (
+    _display_cell_value,
+    _redact_nested_strings,
+    _render_lake_sheet,
+    _render_tabular_section,
+    lake_to_plain_text,
+    lake_to_structured_text,
+    redact_sensitive_text,
 )
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 
@@ -25,40 +35,12 @@ YUQUE_DOCUMENT_READ_CAPABILITY = "yuque.document.read"
 _BOOK_SELECTOR_SCHEMA = {
     "book": {
         "type": "string",
-        "description": "Knowledge-base name, slug, or numeric id. Defaults to 共享文档.",
+        "description": (
+            "Knowledge-base name, slug, or numeric id. Omit it to search or list "
+            "across every visible department knowledge base."
+        ),
     },
 }
-
-_SECRET_PATTERNS = (
-    (
-        "credential",
-        re.compile(
-            r"(?im)(账号|用户名|user(?:name)?|密码|口令|password|passwd)"
-            r"(\s*[:：=]\s*)([^\s,，;；<>{}\[\]]{2,})"
-        ),
-    ),
-    (
-        "token",
-        re.compile(
-            r"(?im)(access[_ -]?key(?:[_ -]?id)?|secret(?:[_ -]?key)?|"
-            r"api[_ -]?key|token|bearer)"
-            r"(\s*[:：=]\s*)([A-Za-z0-9_./+=-]{6,})"
-        ),
-    ),
-    (
-        "url_credential",
-        re.compile(r"(?i)\b(https?://)([^/\s:@]+):([^@\s/]+)@"),
-    ),
-    (
-        "private_key",
-        re.compile(
-            r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?"
-            r"-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
-            re.DOTALL,
-        ),
-    ),
-)
-
 
 class YuqueLoginRequired(AdapterLoginRequired):
     pass
@@ -177,48 +159,99 @@ class YuqueCentralAdapter:
         }
 
     def list_documents(self, worker, arguments: dict) -> dict:
-        book = self._resolve_book(worker, arguments.get("book"))
-        payload = self._request_json(
-            worker,
-            "GET",
-            f"/api/docs?{urlencode({'book_id': book['id']})}",
-        )
-        raw_items = payload.get("data")
-        if not isinstance(raw_items, list):
-            raise YuqueSessionCheckUnavailable(
-                "Yuque document catalog did not return a list."
-            )
+        public_area, books = self._public_area(worker)
+        selector = str(arguments.get("book") or "").strip()
+        selected_books = [_select_book(books, selector)] if selector else books
         keyword = str(arguments.get("keyword") or "").strip()
-        normalized = [
-            _normalize_document_summary(item, book)
-            for item in raw_items
-            if isinstance(item, dict)
-        ]
+        document_type = _document_type_option(arguments.get("document_type"))
+        updated_after = _datetime_option(
+            arguments.get("updated_after"), option="updated_after", upper=False
+        )
+        updated_before = _datetime_option(
+            arguments.get("updated_before"), option="updated_before", upper=True
+        )
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=1000)
+        limit = _bounded_int(arguments.get("limit"), default=100, minimum=1, maximum=500)
+        sort = str(arguments.get("sort") or "updated_desc").strip().lower()
+        if sort not in {"updated_desc", "updated_asc", "title_asc", "title_desc"}:
+            raise ValueError(
+                "sort must be updated_desc, updated_asc, title_asc, or title_desc"
+            )
+
+        normalized = []
+        for book in selected_books:
+            normalized.extend(self._list_book_documents(worker, book))
         if keyword:
             folded = keyword.casefold()
             normalized = [
+                item for item in normalized if folded in item["title"].casefold()
+            ]
+        if document_type:
+            normalized = [
                 item
                 for item in normalized
-                if folded in item["title"].casefold()
+                if item["type"].casefold() == document_type.casefold()
             ]
-        limit = _bounded_int(arguments.get("limit"), default=100, minimum=1, maximum=500)
+        if updated_after:
+            normalized = [
+                item
+                for item in normalized
+                if (stamp := _parse_api_datetime(item.get("updatedAt"))) is not None
+                and stamp >= updated_after
+            ]
+        if updated_before:
+            normalized = [
+                item
+                for item in normalized
+                if (stamp := _parse_api_datetime(item.get("updatedAt"))) is not None
+                and stamp <= updated_before
+            ]
+
+        if sort.startswith("updated_"):
+            normalized.sort(
+                key=lambda item: _parse_api_datetime(item.get("updatedAt"))
+                or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=sort.endswith("desc"),
+            )
+        else:
+            normalized.sort(
+                key=lambda item: item["title"].casefold(),
+                reverse=sort.endswith("desc"),
+            )
+        offset = (page - 1) * limit
+        items = normalized[offset : offset + limit]
+        selected_book = selected_books[0] if selector else None
         return {
-            "book": book,
+            "scope": "book" if selected_book else "all_books",
+            "publicArea": public_area,
+            "book": selected_book,
+            "booksScanned": len(selected_books),
             "keyword": keyword or None,
+            "documentType": document_type,
+            "updatedAfter": arguments.get("updated_after") or None,
+            "updatedBefore": arguments.get("updated_before") or None,
+            "sort": sort,
+            "page": page,
+            "limit": limit,
             "total": len(normalized),
-            "count": min(len(normalized), limit),
-            "items": normalized[:limit],
+            "count": len(items),
+            "hasMore": offset + len(items) < len(normalized),
+            "items": items,
         }
 
     def search_documents(self, worker, arguments: dict) -> dict:
         query = str(arguments.get("query") or "").strip()
         if not query:
             raise ValueError("query is required")
-        book = self._resolve_book(worker, arguments.get("book"))
-        public_area, _books = self._public_area(worker)
+        public_area, books = self._public_area(worker)
+        selector = str(arguments.get("book") or "").strip()
+        selected_book = _select_book(books, selector) if selector else None
         page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=1000)
         limit = _bounded_int(arguments.get("limit"), default=20, minimum=1, maximum=50)
-        scope = f"{public_area['login']}/{book['slug']}"
+        document_type = _document_type_option(arguments.get("document_type"))
+        scope = public_area["login"]
+        if selected_book:
+            scope = f"{scope}/{selected_book['slug']}"
         params = {
             "p": page,
             "q": query,
@@ -238,17 +271,27 @@ class YuqueCentralAdapter:
             raise YuqueSessionCheckUnavailable(
                 "Yuque search did not return a hit list."
             )
-        items = [
-            _normalize_search_hit(item, book)
-            for item in result["hits"]
-            if isinstance(item, dict)
-        ]
+        items = []
+        for item in result["hits"]:
+            if not isinstance(item, dict):
+                continue
+            book = _book_for_search_hit(item, books, fallback=selected_book)
+            normalized = _normalize_search_hit(item, book)
+            if document_type and normalized["type"].casefold() != document_type.casefold():
+                continue
+            items.append(normalized)
+        total = int(result.get("totalHits") or result.get("numHits") or len(items))
         return {
             "query": query,
-            "book": book,
+            "scope": "book" if selected_book else "all_books",
+            "book": selected_book,
+            "booksSearched": 1 if selected_book else len(books),
+            "documentType": document_type,
             "page": page,
+            "limit": limit,
             "count": len(items),
-            "total": int(result.get("totalHits") or result.get("numHits") or len(items)),
+            "total": total,
+            "hasMore": page * limit < total,
             "snippetPolicy": "omitted_to_prevent_incidental_secret_disclosure",
             "items": items,
         }
@@ -257,8 +300,12 @@ class YuqueCentralAdapter:
         selector = str(arguments.get("document") or "").strip()
         if not selector:
             raise ValueError("document is required")
-        book = self._resolve_book(worker, arguments.get("book"))
-        document = self._resolve_document(worker, book, selector)
+        book_selector = str(arguments.get("book") or "").strip()
+        if book_selector:
+            book = self._resolve_book(worker, book_selector)
+            document = self._resolve_document(worker, book, selector)
+        else:
+            book, document = self._resolve_document_across_books(worker, selector)
         params = {
             "include_contributors": "true",
             "include_like": "true",
@@ -274,8 +321,23 @@ class YuqueCentralAdapter:
         raw = payload.get("data")
         if not isinstance(raw, dict):
             raise YuqueSessionCheckUnavailable("Yuque document response is invalid.")
-        plain_text = lake_to_plain_text(str(raw.get("content") or ""))
-        sanitized_text, redactions = redact_sensitive_text(plain_text)
+        row_offset = _bounded_int(
+            arguments.get("row_offset"), default=0, minimum=0, maximum=100_000
+        )
+        max_rows = _bounded_int(
+            arguments.get("max_rows"), default=100, minimum=1, maximum=500
+        )
+        rendered = self._render_document(
+            worker,
+            raw,
+            row_offset=row_offset,
+            max_rows=max_rows,
+        )
+        sanitized_text, redactions = redact_sensitive_text(rendered["text"])
+        sanitized_structure, structure_redactions = _redact_nested_strings(
+            rendered["structure"]
+        )
+        redactions.extend(structure_redactions)
         max_chars = _bounded_int(
             arguments.get("max_chars"),
             default=12_000,
@@ -298,10 +360,14 @@ class YuqueCentralAdapter:
                 ],
                 "wordCount": raw.get("word_count"),
                 "contentUpdatedAt": raw.get("content_updated_at"),
+                "createdAt": raw.get("created_at"),
                 "updatedAt": raw.get("updated_at"),
             },
             "content": sanitized_text,
-            "contentFormat": "plain_text_from_lake",
+            "contentFormat": rendered["content_format"],
+            "structure": sanitized_structure,
+            "rowOffset": row_offset,
+            "maxRows": max_rows,
             "truncated": truncated,
             "maxChars": max_chars,
             "redaction": {
@@ -312,29 +378,172 @@ class YuqueCentralAdapter:
             },
         }
 
-    def _resolve_book(self, worker, selector: Any) -> dict:
-        _public_area, books = self._public_area(worker)
-        query = str(selector or "共享文档").strip()
-        exact = [
-            book
-            for book in books
-            if query == str(book["id"])
-            or query.casefold() == book["slug"].casefold()
-            or query.casefold() == book["name"].casefold()
+    def _list_book_documents(self, worker, book: dict) -> list[dict]:
+        payload = self._request_json(
+            worker,
+            "GET",
+            f"/api/docs?{urlencode({'book_id': book['id']})}",
+        )
+        raw_items = payload.get("data")
+        if not isinstance(raw_items, list):
+            raise YuqueSessionCheckUnavailable(
+                "Yuque document catalog did not return a list."
+            )
+        return [
+            _normalize_document_summary(item, book)
+            for item in raw_items
+            if isinstance(item, dict)
         ]
-        if len(exact) == 1:
-            return exact[0]
-        partial = [book for book in books if query.casefold() in book["name"].casefold()]
-        if len(partial) == 1:
-            return partial[0]
-        if not exact and not partial:
-            raise ValueError(f"Yuque knowledge base was not found: {query}")
+
+    def _resolve_document_across_books(
+        self, worker, selector: str
+    ) -> tuple[dict, dict]:
+        _public_area, books = self._public_area(worker)
+        folded = selector.casefold()
+        exact: list[tuple[dict, dict]] = []
+        partial: list[tuple[dict, dict]] = []
+        for book in books:
+            for item in self._list_book_documents(worker, book):
+                if (
+                    selector == str(item["id"])
+                    or folded == item["slug"].casefold()
+                    or folded == item["title"].casefold()
+                ):
+                    exact.append((book, item))
+                elif folded in item["title"].casefold():
+                    partial.append((book, item))
         candidates = exact or partial
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise ValueError(f"Yuque document was not found: {selector}")
         raise ValueError(
-            "Yuque knowledge-base selector is ambiguous: "
-            + ", ".join(book["name"] for book in candidates[:10])
+            "Yuque document selector is ambiguous: "
+            + ", ".join(
+                f"{item['title']} ({book['name']})" for book, item in candidates[:10]
+            )
         )
 
+    def _render_document(
+        self,
+        worker,
+        raw: dict,
+        *,
+        row_offset: int,
+        max_rows: int,
+    ) -> dict:
+        document_type = str(raw.get("type") or "Doc").casefold()
+        document_format = str(raw.get("format") or "lake").casefold()
+        content = str(raw.get("content") or raw.get("body") or "")
+        if document_type == "sheet" or document_format == "lakesheet":
+            return _render_lake_sheet(
+                content,
+                row_offset=row_offset,
+                max_rows=max_rows,
+            )
+        if document_type == "table" or document_format == "laketable":
+            return self._render_lake_table(
+                worker,
+                raw,
+                content,
+                row_offset=row_offset,
+                max_rows=max_rows,
+            )
+        text, structure = lake_to_structured_text(content)
+        return {
+            "text": text,
+            "content_format": "structured_text_from_lake",
+            "structure": structure,
+        }
+
+    def _render_lake_table(
+        self,
+        worker,
+        raw: dict,
+        content: str,
+        *,
+        row_offset: int,
+        max_rows: int,
+    ) -> dict:
+        try:
+            model = json.loads(content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise YuqueSessionCheckUnavailable(
+                "Yuque data table content is invalid."
+            ) from exc
+        sheets = model.get("sheet")
+        if not isinstance(sheets, list) or not sheets:
+            raise YuqueSessionCheckUnavailable("Yuque data table has no sheets.")
+        sections: list[str] = []
+        metadata = []
+        for index, sheet in enumerate(sheets):
+            if not isinstance(sheet, dict):
+                continue
+            columns = [item for item in sheet.get("columns") or [] if isinstance(item, dict)]
+            sheet_id = str(model.get("sheetId") or sheet.get("id") or "").strip()
+            if not sheet_id:
+                continue
+            params = {
+                "docId": raw.get("id"),
+                "docType": "Doc",
+                "limit": max_rows,
+                "offset": row_offset,
+                "sheetId": sheet_id,
+            }
+            response = self._request_json(
+                worker,
+                "GET",
+                "/api/modules/table/doc/TableRecordController/show?"
+                + urlencode(params),
+            )
+            records = response.get("records")
+            if not isinstance(records, list):
+                raise YuqueSessionCheckUnavailable(
+                    "Yuque data table did not return rows."
+                )
+            headers = [str(item.get("name") or f"Column {offset + 1}") for offset, item in enumerate(columns)]
+            rows = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    values = json.loads(str(record.get("data") or "{}"))
+                except json.JSONDecodeError:
+                    values = {}
+                rows.append(
+                    [
+                        _display_cell_value(
+                            (values.get(str(column.get("id") or "")) or {}).get("value")
+                        )
+                        for column in columns
+                    ]
+                )
+            name = str(sheet.get("name") or f"Sheet {index + 1}")
+            sections.append(_render_tabular_section(name, headers, rows))
+            metadata.append(
+                {
+                    "name": name,
+                    "columnCount": len(headers),
+                    "columns": headers,
+                    "returnedRows": len(rows),
+                    "rowOffset": row_offset,
+                    "hasMore": bool(response.get("hasMore")),
+                }
+            )
+        return {
+            "text": "\n\n".join(section for section in sections if section).strip(),
+            "content_format": "tabular_text_from_laketable",
+            "structure": {
+                "kind": "table",
+                "sheets": metadata,
+                "images": [],
+                "attachments": [],
+            },
+        }
+
+    def _resolve_book(self, worker, selector: Any) -> dict:
+        _public_area, books = self._public_area(worker)
+        return _select_book(books, str(selector or "共享文档"))
     def _resolve_document(self, worker, book: dict, selector: str) -> dict:
         catalog = self.list_documents(
             worker,
@@ -444,13 +653,32 @@ def build_yuque_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=YUQUE_DOCUMENT_CATALOG_CAPABILITY,
-            version="0.1.0",
-            description="List or filter documents in one Yuque knowledge base.",
+            version="0.2.0",
+            description=(
+                "List, filter, sort, and page documents across all visible Yuque "
+                "knowledge bases or one explicitly selected base."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     **_BOOK_SELECTOR_SCHEMA,
                     "keyword": {"type": "string"},
+                    "document_type": {
+                        "type": "string",
+                        "enum": ["all", "doc", "sheet", "table"],
+                    },
+                    "updated_after": {"type": "string"},
+                    "updated_before": {"type": "string"},
+                    "sort": {
+                        "type": "string",
+                        "enum": [
+                            "updated_desc",
+                            "updated_asc",
+                            "title_asc",
+                            "title_desc",
+                        ],
+                    },
+                    "page": {"type": "integer"},
                     "limit": {"type": "integer"},
                 },
                 "additionalProperties": False,
@@ -458,20 +686,24 @@ def build_yuque_capability_registry() -> CapabilityRegistry:
             output_schema={"type": "object"},
             effect="read",
             adapter=YUQUE_ADAPTER_ID,
-            workflow="yuque-document-catalog-v1",
+            workflow="yuque-document-catalog-v2",
         ),
         CapabilitySpec(
             name=YUQUE_DOCUMENT_SEARCH_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
-                "Search Yuque document content while omitting snippets that may "
-                "incidentally expose credentials."
+                "Search one or every visible Yuque knowledge base while omitting "
+                "server snippets that may incidentally expose credentials."
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     **_BOOK_SELECTOR_SCHEMA,
                     "query": {"type": "string"},
+                    "document_type": {
+                        "type": "string",
+                        "enum": ["all", "doc", "sheet", "table"],
+                    },
                     "page": {"type": "integer"},
                     "limit": {"type": "integer"},
                 },
@@ -481,13 +713,14 @@ def build_yuque_capability_registry() -> CapabilityRegistry:
             output_schema={"type": "object"},
             effect="read",
             adapter=YUQUE_ADAPTER_ID,
-            workflow="yuque-document-search-v1",
+            workflow="yuque-document-search-v2",
         ),
         CapabilitySpec(
             name=YUQUE_DOCUMENT_READ_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
-                "Read one explicitly selected Yuque document as sanitized plain text."
+                "Read one selected Yuque Doc, Sheet, or Table as sanitized structured "
+                "text with outline, table, image/OCR, link, and attachment metadata."
             ),
             input_schema={
                 "type": "object",
@@ -497,6 +730,8 @@ def build_yuque_capability_registry() -> CapabilityRegistry:
                         "type": "string",
                         "description": "Document title, slug, or numeric id.",
                     },
+                    "row_offset": {"type": "integer"},
+                    "max_rows": {"type": "integer"},
                     "max_chars": {"type": "integer"},
                 },
                 "required": ["document"],
@@ -505,102 +740,90 @@ def build_yuque_capability_registry() -> CapabilityRegistry:
             output_schema={"type": "object"},
             effect="read",
             adapter=YUQUE_ADAPTER_ID,
-            workflow="yuque-document-read-v1",
+            workflow="yuque-document-read-v2",
         ),
     )
     for spec in specs:
         registry.register(spec)
     return registry
 
+def _select_book(books: list[dict], selector: str) -> dict:
+    query = str(selector or "").strip()
+    exact = [
+        book
+        for book in books
+        if query == str(book["id"])
+        or query.casefold() == book["slug"].casefold()
+        or query.casefold() == book["name"].casefold()
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [book for book in books if query.casefold() in book["name"].casefold()]
+    if len(partial) == 1:
+        return partial[0]
+    if not exact and not partial:
+        raise ValueError(f"Yuque knowledge base was not found: {query}")
+    raise ValueError(
+        "Yuque knowledge-base selector is ambiguous: "
+        + ", ".join(book["name"] for book in (exact or partial)[:10])
+    )
 
-def lake_to_plain_text(content: str) -> str:
-    parser = _LakeTextParser()
+
+def _book_for_search_hit(
+    item: dict, books: list[dict], *, fallback: dict | None
+) -> dict:
+    if fallback:
+        return fallback
+    path = urlparse(str(item.get("url") or "")).path
+    parts = [part for part in path.split("/") if part]
+    book_slug = parts[-2] if len(parts) >= 2 else ""
+    for book in books:
+        if book_slug and book["slug"].casefold() == book_slug.casefold():
+            return book
+    book_name = str(item.get("book_name") or "").strip()
+    for book in books:
+        if book_name and book["name"].casefold() == book_name.casefold():
+            return book
+    return {"id": "", "slug": book_slug, "name": book_name or "未知知识库"}
+
+
+def _document_type_option(value: Any) -> str | None:
+    normalized = str(value or "").strip().casefold()
+    if not normalized or normalized == "all":
+        return None
+    mapping = {"doc": "Doc", "sheet": "Sheet", "table": "Table"}
+    if normalized not in mapping:
+        raise ValueError("document_type must be all, doc, sheet, or table")
+    return mapping[normalized]
+
+
+def _datetime_option(value: Any, *, option: str, upper: bool) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
     try:
-        parser.feed(content)
-        parser.close()
-    except Exception:
-        text = re.sub(r"<[^>]+>", " ", content)
-    else:
-        text = parser.text()
-    text = text.replace("\xa0", " ")
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n[ \t]+", "\n", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            stamp = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+            if upper:
+                stamp = stamp.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return stamp
+        return _parse_api_datetime(text, required=True)
+    except ValueError as exc:
+        raise ValueError(f"{option} must be an ISO date or timestamp") from exc
 
 
-def redact_sensitive_text(text: str) -> tuple[str, list[str]]:
-    categories: list[str] = []
-    value = text
-    for category, pattern in _SECRET_PATTERNS:
-        if category == "url_credential":
-            value, count = pattern.subn(r"\1[REDACTED]@", value)
-        elif category == "private_key":
-            value, count = pattern.subn("[REDACTED PRIVATE KEY]", value)
-        else:
-            value, count = pattern.subn(r"\1\2[REDACTED]", value)
-        categories.extend([category] * count)
-    return value, categories
-
-
-class _LakeTextParser(HTMLParser):
-    _BLOCK_TAGS = {
-        "address",
-        "article",
-        "aside",
-        "blockquote",
-        "br",
-        "div",
-        "figcaption",
-        "figure",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "hr",
-        "li",
-        "ol",
-        "p",
-        "pre",
-        "section",
-        "table",
-        "tbody",
-        "td",
-        "th",
-        "thead",
-        "tr",
-        "ul",
-    }
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._parts: list[str] = []
-        self._ignored_depth = 0
-
-    def handle_starttag(self, tag: str, _attrs) -> None:
-        lowered = tag.lower()
-        if lowered in {"script", "style"}:
-            self._ignored_depth += 1
-        elif not self._ignored_depth and lowered in self._BLOCK_TAGS:
-            self._parts.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        lowered = tag.lower()
-        if lowered in {"script", "style"} and self._ignored_depth:
-            self._ignored_depth -= 1
-        elif not self._ignored_depth and lowered in self._BLOCK_TAGS:
-            self._parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self._ignored_depth:
-            self._parts.append(data)
-
-    def text(self) -> str:
-        return "".join(self._parts)
-
+def _parse_api_datetime(value: Any, *, required: bool = False) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        if required:
+            raise ValueError("timestamp is required")
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    stamp = datetime.fromisoformat(text)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(timezone.utc)
 
 def _normalize_book(book: dict) -> dict:
     return {
@@ -619,8 +842,15 @@ def _normalize_document_summary(item: dict, book: dict) -> dict:
         "slug": str(item.get("slug") or ""),
         "title": str(item.get("title") or ""),
         "type": str(item.get("type") or ""),
+        "format": str(item.get("format") or ""),
         "book": {"id": book["id"], "slug": book["slug"], "name": book["name"]},
+        "author": _normalize_person(item.get("user")),
+        "lastEditor": _normalize_person(item.get("last_editor")),
         "wordCount": item.get("word_count"),
+        "commentCount": item.get("comments_count"),
+        "likeCount": item.get("likes_count"),
+        "createdAt": item.get("created_at"),
+        "publishedAt": item.get("published_at"),
         "updatedAt": item.get("content_updated_at") or item.get("updated_at"),
     }
 
@@ -639,7 +869,6 @@ def _normalize_search_hit(item: dict, book: dict) -> dict:
         "url": str(item.get("url") or ""),
         "snippet": None,
     }
-
 
 def _normalize_person(value: Any) -> dict | None:
     if not isinstance(value, dict):

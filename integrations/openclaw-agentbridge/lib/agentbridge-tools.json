@@ -2685,7 +2685,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List or filter document titles in one department knowledge base.",
+      "description": "List, filter, sort, and page document metadata across all visible department knowledge bases, or restrict the result to one book.",
       "inputSchema": {
         "properties": {
           "book": {
@@ -2700,6 +2700,19 @@
             ],
             "default": null,
             "title": "Book"
+          },
+          "document_type": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Type"
           },
           "idempotency_key": {
             "anyOf": [
@@ -2733,6 +2746,45 @@
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "sort": {
+            "default": "updated_desc",
+            "maxLength": 20,
+            "title": "Sort",
+            "type": "string"
+          },
+          "updated_after": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated After"
+          },
+          "updated_before": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated Before"
           }
         },
         "title": "yuque_document_catalogArguments",
@@ -2753,7 +2805,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search one department knowledge base. Search snippets are deliberately omitted so credentials in incidental matches do not enter agent context.",
+      "description": "Search every visible department knowledge base unless one book is specified. Search snippets are deliberately omitted so credentials in incidental matches do not enter agent context.",
       "inputSchema": {
         "properties": {
           "book": {
@@ -2768,6 +2820,19 @@
             ],
             "default": null,
             "title": "Book"
+          },
+          "document_type": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Document Type"
           },
           "idempotency_key": {
             "anyOf": [
@@ -2824,7 +2889,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Read one explicitly selected document as plain text. Likely passwords, tokens, API keys, URL credentials, and private keys are always redacted.",
+      "description": "Read one explicitly selected Yuque Doc, Sheet, or Table as structured text. Headings, tables, image OCR, links, and attachment metadata are preserved; likely passwords, tokens, API keys, URL credentials, and private keys are always redacted. Omit book to resolve a unique document across all visible knowledge bases.",
       "inputSchema": {
         "properties": {
           "book": {
@@ -2864,6 +2929,20 @@
             "maximum": 50000,
             "minimum": 500,
             "title": "Max Chars",
+            "type": "integer"
+          },
+          "max_rows": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Max Rows",
+            "type": "integer"
+          },
+          "row_offset": {
+            "default": 0,
+            "maximum": 100000,
+            "minimum": 0,
+            "title": "Row Offset",
             "type": "integer"
           }
         },
