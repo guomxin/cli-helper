@@ -1300,8 +1300,10 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 8781 使用现有内部 CA 提供 HTTPS noVNC。一次性 VNC 密码仅存在于浏览器 URL fragment 和 `0600` 临时文件中，由可信卡自动带入，不进入聊天、HTTP 查询参数或服务日志；
 - 实测发现 Debian noVNC 的 `vnc_lite.html` 只有在密码前存在片段参数时才能识别。正式 URL 增加非敏感占位参数，解决长期 `connecting` 和手工密码提示；语雀挑战默认有效期同时提高到 15 分钟；
 - 共享 `agentbridge-xvfb.service`、旧截图 Broker、CDP 指针注入和独立 `yuque_novnc_poc` 工具已退役。部署只保留一个 AgentBridge unit，登录资源按挑战创建并在成功、失败或超时后回收；
-- Python 全量测试 `393 passed, 3 skipped`，OpenClaw 插件测试 `71/71`。开发 Release `2a49df77dbab-dirty` 已部署到 `10.10.50.213`，服务重启和 55 个 MCP 工具烟测成功；
+- Python 全量测试 `394 passed, 3 skipped`，OpenClaw 插件测试 `71/71`。最初部署开发 Release `2a49df77dbab-dirty` 完成真实登录验收，随后提交并部署正式 Release `ea6ac811d397`，服务重启和 55 个 MCP 工具烟测成功；
+- 验收后发现 setuptools 的历史 `build` 缓存会把已删除源码重新带入 wheel。部署脚本现已在严格校验目标位于仓库根目录后清理该缓存；重建 wheel 和服务器安装目录均确认不再包含旧截图 Broker、`interactive_browser.py` 或 `yuque_novnc_poc.py`；
 - 用户完成真实语雀滑块登录后，正式 MCP 状态确认会话为 active、下游账号为“辛国茂”。临时 sessions、路由、Chromium、Xvfb、x11vnc、RFB 和 CDP 监听均已清理，仅保留无活动路由的 8781 网关；
+- 正式 Release 重启后，语雀会话仍以原 session ID `e943d17d-6413-4029-a7e6-e6be42cd0f80` 恢复为 active，证明加密 Cookie 会话可跨服务发布复用；
 - 本轮仅建立语雀读取会话，没有创建、修改或删除语雀内容，也没有执行 OA 或泰华业务写入。
 ## 16. 后续演进顺序
 

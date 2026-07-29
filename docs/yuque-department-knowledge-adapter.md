@@ -128,6 +128,7 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
 - 完成后临时 sessions、Token 路由、Chromium、Xvfb、x11vnc、RFB 和 CDP 监听均已清理；
 - 8781 noVNC 网关保留按需常驻，但没有活动路由时不能访问任何浏览器；
 - 原截图轮询、CDP 指针注入、共享 Xvfb unit 和独立 `yuque_novnc_poc` 工具均已退役；
-- Python 全量测试 393 项通过（3 项跳过），OpenClaw 插件测试 71 项通过。
+- Python 全量测试 394 项通过（3 项跳过），OpenClaw 插件测试 71 项通过；
+- 部署打包会在生成 wheel 前校验并清理仓库根目录的 `build` 缓存，避免已经退役的模块被历史 setuptools 产物重新带入；正式 Release `ea6ac811d397` 已确认不含旧截图 Broker 和 `yuque_novnc_poc`。
 
 若以后再次出现 VNC 密码框或长期 `connecting`，应视为基础设施故障，不应让用户索要或输入临时密码。先重新发起新挑战，再检查 8781 网关、活动 Token 路由和回环 x11vnc 进程。
