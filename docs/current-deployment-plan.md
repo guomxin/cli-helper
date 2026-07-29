@@ -1314,6 +1314,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 正式 Release `871db364eba0` 已部署。辛国茂语雀会话跨发布保持原 session ID `e943d17d-6413-4029-a7e6-e6be42cd0f80` 且为 active；跨库目录返回 146 篇，组织搜索“设备”返回 27 条；
 - 真实读取 `对接设备清单` 识别 1 个正文表格，`黄佳豪工作日报+周报` 以 Sheet 分页返回 2 行且有后续，`20250109照明对接测试` 以 Table 分页返回 2 行且有后续，`设备自注册` 识别 4 张图片；验收日志没有输出真实正文；
 - 发布门禁通过 Python `396 passed, 3 skipped, 168 subtests passed`、OpenClaw `71/71`、`compileall`、`pip check` 和 npm pack dry-run；本轮没有执行语雀、OA 或泰华业务写入。
+- OpenClaw 静态工具目录随读取契约更新，插件版本提升为 `0.2.18`；本机链接安装无需重装，Gateway 重启后深度 RPC 正常并确认 `agentbridge-interactions` `0.2.18` 已加载。
 
 ## 16. 后续演进顺序
 
