@@ -26,7 +26,43 @@ const CHECKS = new Map([
     "TaihuaMyLogs",
     { tool: "taihua_work_log_my_list", arguments: { limit: 1 }, kind: "list" },
   ],
+  [
+    "YuqueSessionStatus",
+    { tool: "yuque_session_status", arguments: {}, kind: "session" },
+  ],
+  [
+    "YuquePublicBooks",
+    { tool: "yuque_public_books_list", arguments: {}, kind: "list" },
+  ],
+  [
+    "YuqueDocumentCatalog",
+    {
+      tool: "yuque_document_catalog",
+      arguments: { book: "", limit: 20 },
+      kind: "list",
+    },
+  ],
+  [
+    "YuqueDocumentSearch",
+    {
+      tool: "yuque_document_search",
+      arguments: { query: "AI", book: "", page: 1, limit: 20 },
+      kind: "list",
+    },
+  ],
+  [
+    "YuqueDocumentRead",
+    {
+      tool: "yuque_document_read",
+      arguments: { document: "", book: "", max_chars: 4000 },
+      kind: "yuqueDocument",
+    },
+  ],
   ["LoginReuse", { tool: "oa_session_login", arguments: {}, kind: "login" }],
+  [
+    "YuqueLoginReuse",
+    { tool: "yuque_session_login", arguments: {}, kind: "login" },
+  ],
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
@@ -65,6 +101,12 @@ const REQUIRED_RELEASE_TOOLS = [
   "taihua_work_log_create",
   "taihua_session_status",
   "taihua_session_login",
+  "yuque_public_books_list",
+  "yuque_document_catalog",
+  "yuque_document_search",
+  "yuque_document_read",
+  "yuque_session_status",
+  "yuque_session_login",
 ];
 
 function argument(name, fallback) {
@@ -116,6 +158,41 @@ try {
         "--certificate-document-type",
         check.arguments.document_type,
       ),
+    };
+  }
+  if (
+    ["YuqueDocumentCatalog", "YuqueDocumentSearch", "YuqueDocumentRead"].includes(
+      checkName,
+    )
+  ) {
+    check.arguments = {
+      ...check.arguments,
+      book: argument("--yuque-book", check.arguments.book),
+    };
+  }
+  if (checkName === "YuqueDocumentSearch") {
+    check.arguments = {
+      ...check.arguments,
+      query: argument("--yuque-query", check.arguments.query),
+    };
+  }
+  if (checkName === "YuqueDocumentRead") {
+    const document = argument("--yuque-document", "");
+    const maxChars = Number(argument("--yuque-max-chars", "4000"));
+    if (!document) {
+      throw Object.assign(new Error("Yuque document is required"), {
+        code: "YUQUE_DOCUMENT_REQUIRED",
+      });
+    }
+    if (!Number.isInteger(maxChars) || maxChars < 500 || maxChars > 50000) {
+      throw Object.assign(new Error("Yuque max chars is invalid"), {
+        code: "YUQUE_MAX_CHARS_INVALID",
+      });
+    }
+    check.arguments = {
+      ...check.arguments,
+      document,
+      max_chars: maxChars,
     };
   }
 
@@ -206,7 +283,7 @@ try {
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
     const result = payload?.result ?? payload;
     const summary =
-      checkName === "LoginReuse"
+      effectiveCheck.kind === "login"
         ? {
             status: "succeeded",
             check: checkName,
@@ -236,6 +313,14 @@ try {
               total: Number(result?.total ?? result?.count ?? result?.items?.length ?? 0),
               errorCode,
             }
+          : effectiveCheck.kind === "yuqueDocument"
+          ? yuqueDocumentSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : {
               status: "succeeded",
               check: checkName,
@@ -260,6 +345,33 @@ try {
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
   );
   process.exitCode = 1;
+}
+
+function yuqueDocumentSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Yuque document read failed"), {
+      code: errorCode || "YUQUE_DOCUMENT_READ_FAILED",
+    });
+  }
+  const content = String(result?.content ?? "");
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    title: String(result?.document?.title ?? "").slice(0, 300),
+    book: String(result?.document?.book?.name ?? "").slice(0, 300),
+    contentCharacters: content.length,
+    truncated: Boolean(result?.truncated),
+    redactionApplied: Boolean(result?.redaction?.applied),
+    redactionCount: Number(result?.redaction?.count ?? 0),
+    errorCode: null,
+  };
 }
 
 function certificateSearchSummary({

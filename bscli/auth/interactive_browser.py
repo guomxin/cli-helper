@@ -256,9 +256,9 @@ def _render_interactive_card(
     .screen-wrap {{
       position: relative;
       overflow: hidden;
-      width: 100%;
+      width: min(100%, calc(70vh * 430 / 760));
       aspect-ratio: 430 / 760;
-      max-height: 70vh;
+      margin: 0 auto;
       border: 1px solid var(--line);
       background: #e7ebe8;
       touch-action: none;
@@ -346,13 +346,20 @@ def _render_interactive_card(
       let frameUrl = "";
       let pointerActive = false;
       let eventChain = Promise.resolve();
+      let pendingPointerMove = null;
+      let pointerMovePump = null;
       let stopped = false;
 
       const coordinates = (event) => {{
         const box = screen.getBoundingClientRect();
+        const scale = Math.min(box.width / viewport.width, box.height / viewport.height);
+        const renderedWidth = viewport.width * scale;
+        const renderedHeight = viewport.height * scale;
+        const renderedLeft = box.left + (box.width - renderedWidth) / 2;
+        const renderedTop = box.top + (box.height - renderedHeight) / 2;
         return {{
-          x: Math.max(0, Math.min(viewport.width, (event.clientX - box.left) * viewport.width / box.width)),
-          y: Math.max(0, Math.min(viewport.height, (event.clientY - box.top) * viewport.height / box.height)),
+          x: Math.max(0, Math.min(viewport.width, (event.clientX - renderedLeft) * viewport.width / renderedWidth)),
+          y: Math.max(0, Math.min(viewport.height, (event.clientY - renderedTop) * viewport.height / renderedHeight)),
         }};
       }};
       const sendEvent = (type, payload = {{}}) => {{
@@ -370,6 +377,21 @@ def _render_interactive_card(
           status.textContent = "浏览器控制暂时不可用，请稍后重试。";
         }});
         return eventChain;
+      }};
+      const queuePointerMove = (payload) => {{
+        pendingPointerMove = payload;
+        if (pointerMovePump) return pointerMovePump;
+        pointerMovePump = (async () => {{
+          while (pendingPointerMove) {{
+            const latest = pendingPointerMove;
+            pendingPointerMove = null;
+            await sendEvent("pointer_move", latest);
+          }}
+        }})().finally(() => {{
+          pointerMovePump = null;
+          if (pendingPointerMove) queuePointerMove(pendingPointerMove);
+        }});
+        return pointerMovePump;
       }};
       const pollFrame = async () => {{
         while (!stopped) {{
@@ -433,6 +455,7 @@ def _render_interactive_card(
           controlToken = result.controlToken;
           viewport = result.viewport || viewport;
           screenWrap.style.aspectRatio = `${{viewport.width}} / ${{viewport.height}}`;
+          screenWrap.style.width = `min(100%, calc(70vh * ${{viewport.width}} / ${{viewport.height}}))`;
           startButton.hidden = true;
           workspace.style.display = "block";
           status.textContent = "请在上方受控页面完成滑块和短信验证。";
@@ -454,13 +477,16 @@ def _render_interactive_card(
       screen.addEventListener("pointermove", (event) => {{
         if (!pointerActive) return;
         event.preventDefault();
-        sendEvent("pointer_move", coordinates(event));
+        queuePointerMove(coordinates(event));
       }});
       const releasePointer = (event) => {{
         if (!pointerActive) return;
         event.preventDefault();
         pointerActive = false;
-        sendEvent("pointer_up", coordinates(event));
+        const finalCoordinates = coordinates(event);
+        queuePointerMove(finalCoordinates).then(() => {{
+          sendEvent("pointer_up", finalCoordinates);
+        }});
       }};
       screen.addEventListener("pointerup", releasePointer);
       screen.addEventListener("pointercancel", releasePointer);

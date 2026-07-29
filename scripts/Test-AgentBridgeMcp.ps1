@@ -6,7 +6,13 @@ param(
         "OaPendingRead",
         "CertificateSearch",
         "TaihuaMyLogs",
+        "YuqueSessionStatus",
+        "YuquePublicBooks",
+        "YuqueDocumentCatalog",
+        "YuqueDocumentSearch",
+        "YuqueDocumentRead",
         "LoginReuse",
+        "YuqueLoginReuse",
         "Release",
         "WorkflowCollections"
     )]
@@ -21,7 +27,12 @@ param(
     [string]$CertificateName = "",
     [string[]]$CertificateNames = @(),
     [ValidateSet("all", "patent_certificate", "software_copyright_certificate")]
-    [string]$CertificateDocumentType = ""
+    [string]$CertificateDocumentType = "",
+    [string]$YuqueBook = "",
+    [string]$YuqueQuery = "AI",
+    [string]$YuqueDocument = "",
+    [ValidateRange(500, 50000)]
+    [int]$YuqueMaxChars = 4000
 )
 
 Set-StrictMode -Version Latest
@@ -228,6 +239,20 @@ try {
     }
     if ($Check -eq "CertificateSearch" -and $CertificateDocumentType) {
         $nodeArguments += @("--certificate-document-type", $CertificateDocumentType)
+    }
+    if ($Check -in @("YuqueDocumentCatalog", "YuqueDocumentSearch", "YuqueDocumentRead") -and $YuqueBook) {
+        $nodeArguments += @("--yuque-book", $YuqueBook)
+    }
+    if ($Check -eq "YuqueDocumentSearch") {
+        $nodeArguments += @("--yuque-query", $YuqueQuery)
+    }
+    if ($Check -eq "YuqueDocumentRead") {
+        $nodeArguments += @(
+            "--yuque-document",
+            $YuqueDocument,
+            "--yuque-max-chars",
+            [string]$YuqueMaxChars
+        )
     }
     $serverJson | & $node.Source @nodeArguments
     if ($LASTEXITCODE -ne 0) {

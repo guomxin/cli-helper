@@ -34,6 +34,13 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             self.assertIn("受控浏览器", html)
             self.assertIn("interactive/frame", html)
             self.assertIn("interactive/event", html)
+            self.assertIn("renderedLeft", html)
+            self.assertIn("pendingPointerMove", html)
+            self.assertIn("queuePointerMove(finalCoordinates)", html)
+            self.assertNotIn(
+                'sendEvent("pointer_move", coordinates(event))',
+                html,
+            )
             self.assertNotIn('name="password"', html)
             self.assertNotIn('name="otp"', html)
             self.assertIn("connect-src 'self'", page.headers["Content-Security-Policy"])
