@@ -445,11 +445,13 @@ class AdminStaticAssetTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         script = (root / "bscli/admin/static/admin.js").read_text(encoding="utf-8")
         page = (root / "bscli/admin/static/index.html").read_text(encoding="utf-8")
+        stylesheet = (root / "bscli/admin/static/admin.css").read_text(encoding="utf-8")
 
         self.assertIn("const loginForm = event.currentTarget;", script)
         self.assertIn("loginForm.reset();", script)
         self.assertNotIn("event.currentTarget.reset()", script)
         self.assertNotIn('style="', page)
+        self.assertNotIn("font-size: clamp(", stylesheet)
         self.assertNotIn("style='", page)
 
 

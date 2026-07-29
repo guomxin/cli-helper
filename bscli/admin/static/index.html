@@ -12,17 +12,20 @@
   <main id="login-view" class="login-shell">
     <section class="login-brand" aria-label="AgentBridge">
       <div class="brand-mark" aria-hidden="true">AB</div>
-      <p class="brand-kicker">AGENTBRIDGE CONTROL PLANE</p>
-      <h1>把运行边界<br>握在手里</h1>
-      <p class="brand-copy">集中管理身份、会话与写操作策略。业务凭据和表单内容不会进入管理界面。</p>
-      <div class="brand-rule"><span></span><span></span><span></span></div>
+      <p class="brand-kicker">AGENTBRIDGE</p>
+      <h1>管理控制台</h1>
+      <dl class="brand-meta">
+        <div><dt>部署</dt><dd>内网中心</dd></div>
+        <div><dt>连接</dt><dd>HTTPS</dd></div>
+        <div><dt>认证</dt><dd>独立管理员账户</dd></div>
+      </dl>
     </section>
     <section class="login-panel">
       <form id="login-form" class="login-form">
         <div>
           <p class="eyebrow">管理员入口</p>
           <h2>登录控制台</h2>
-          <p class="muted">使用独立管理员账户，不接受 MCP Token。</p>
+          <p class="muted">MCP Token 不能用于此处登录。</p>
         </div>
         <label>用户名<input name="username" autocomplete="username" required></label>
         <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
