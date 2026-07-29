@@ -107,6 +107,17 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
 
 $releaseDirectory = Join-Path $repoRoot ("output\release\{0}-{1}" -f $releaseId, (Get-Date -Format "yyyyMMddHHmmss"))
 New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
+$buildDirectory = [IO.Path]::GetFullPath((Join-Path $repoRoot "build"))
+$buildParent = [IO.Directory]::GetParent($buildDirectory)
+if ($null -eq $buildParent -or -not [String]::Equals(
+    $buildParent.FullName, [IO.Path]::GetFullPath($repoRoot),
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "Refusing to clean a build directory outside the repository"
+}
+if (Test-Path -LiteralPath $buildDirectory) {
+    Remove-Item -LiteralPath $buildDirectory -Recurse -Force
+}
 & $venvPython -m pip wheel --disable-pip-version-check --no-deps --no-build-isolation --wheel-dir $releaseDirectory $repoRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Building the AgentBridge wheel failed"

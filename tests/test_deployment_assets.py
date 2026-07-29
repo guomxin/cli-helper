@@ -25,6 +25,17 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_deployment_cleans_stale_build_tree_before_wheel(self) -> None:
+        script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        cleanup = "Remove-Item -LiteralPath $buildDirectory -Recurse -Force"
+        wheel = "-m pip wheel"
+        self.assertIn("Refusing to clean a build directory outside", script)
+        self.assertIn(cleanup, script)
+        self.assertLess(script.index(cleanup), script.index(wheel))
+
     def test_yuque_remote_login_uses_challenge_isolation_and_native_novnc(self) -> None:
         service = (ROOT / "deploy/systemd/agentbridge.service").read_text(
             encoding="utf-8"
