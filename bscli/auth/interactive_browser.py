@@ -345,9 +345,10 @@ def _render_interactive_card(
       let viewport = {{ width: 430, height: 760 }};
       let frameUrl = "";
       let pointerActive = false;
+      let pointerId = null;
       let eventChain = Promise.resolve();
-      let pendingPointerMove = null;
-      let pointerMovePump = null;
+      let gestureStartedAt = 0;
+      let gesturePoints = [];
       let stopped = false;
 
       const coordinates = (event) => {{
@@ -378,20 +379,26 @@ def _render_interactive_card(
         }});
         return eventChain;
       }};
-      const queuePointerMove = (payload) => {{
-        pendingPointerMove = payload;
-        if (pointerMovePump) return pointerMovePump;
-        pointerMovePump = (async () => {{
-          while (pendingPointerMove) {{
-            const latest = pendingPointerMove;
-            pendingPointerMove = null;
-            await sendEvent("pointer_move", latest);
-          }}
-        }})().finally(() => {{
-          pointerMovePump = null;
-          if (pendingPointerMove) queuePointerMove(pendingPointerMove);
-        }});
-        return pointerMovePump;
+      const appendGesturePoint = (event) => {{
+        const point = coordinates(event);
+        point.t = Math.max(0, Math.min(5000, Math.round(performance.now() - gestureStartedAt)));
+        const previous = gesturePoints[gesturePoints.length - 1];
+        if (previous) {{
+          const distance = Math.hypot(point.x - previous.x, point.y - previous.y);
+          if (point.t - previous.t < 8 && distance < 1.5) return;
+        }}
+        if (gesturePoints.length >= 240) {{
+          gesturePoints[gesturePoints.length - 1] = point;
+          return;
+        }}
+        gesturePoints.push(point);
+      }};
+      const collectGesturePoints = (event) => {{
+        const samples = typeof event.getCoalescedEvents === "function"
+          ? event.getCoalescedEvents()
+          : [];
+        samples.forEach(appendGesturePoint);
+        appendGesturePoint(event);
       }};
       const pollFrame = async () => {{
         while (!stopped) {{
@@ -409,7 +416,7 @@ def _render_interactive_card(
               frameUrl = next;
             }}
           }} catch (_error) {{}}
-          await new Promise((resolve) => setTimeout(resolve, 650));
+          await new Promise((resolve) => setTimeout(resolve, 350));
         }}
       }};
       const pollStatus = async () => {{
@@ -471,21 +478,28 @@ def _render_interactive_card(
       screen.addEventListener("pointerdown", (event) => {{
         event.preventDefault();
         pointerActive = true;
+        pointerId = event.pointerId;
+        gestureStartedAt = performance.now();
+        gesturePoints = [];
         screen.setPointerCapture(event.pointerId);
-        sendEvent("pointer_down", coordinates(event));
+        appendGesturePoint(event);
       }});
       screen.addEventListener("pointermove", (event) => {{
-        if (!pointerActive) return;
+        if (!pointerActive || event.pointerId !== pointerId) return;
         event.preventDefault();
-        queuePointerMove(coordinates(event));
+        collectGesturePoints(event);
       }});
       const releasePointer = (event) => {{
-        if (!pointerActive) return;
+        if (!pointerActive || event.pointerId !== pointerId) return;
         event.preventDefault();
+        collectGesturePoints(event);
         pointerActive = false;
-        const finalCoordinates = coordinates(event);
-        queuePointerMove(finalCoordinates).then(() => {{
-          sendEvent("pointer_up", finalCoordinates);
+        pointerId = null;
+        const points = gesturePoints;
+        gesturePoints = [];
+        status.textContent = "正在执行本次操作。";
+        sendEvent("pointer_gesture", {{ points }}).then(() => {{
+          if (!stopped) status.textContent = "操作已执行，请继续完成认证。";
         }});
       }};
       screen.addEventListener("pointerup", releasePointer);

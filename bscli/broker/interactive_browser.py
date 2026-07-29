@@ -452,6 +452,30 @@ class _InteractiveRun:
     def _execute(self, page, kind: str, payload: dict):
         if kind == "screenshot":
             return page.screenshot(type="png")
+        if kind == "pointer_gesture":
+            points = _validated_pointer_gesture(payload, viewport=self.viewport)
+            duration_ms = points[-1]["t"] - points[0]["t"]
+            logger.info(
+                "Replaying trusted browser pointer gesture for challenge %s: "
+                "points=%s duration_ms=%s",
+                self.challenge["challenge_id"],
+                len(points),
+                duration_ms,
+            )
+            first = points[0]
+            page.mouse.move(first["x"], first["y"])
+            page.mouse.down()
+            try:
+                previous_t = first["t"]
+                for point in points[1:]:
+                    delay_seconds = (point["t"] - previous_t) / 1000
+                    if delay_seconds > 0:
+                        time.sleep(delay_seconds)
+                    page.mouse.move(point["x"], point["y"])
+                    previous_t = point["t"]
+            finally:
+                page.mouse.up()
+            return None
         if kind in {"pointer_down", "pointer_move", "pointer_up", "click"}:
             x = _bounded_coordinate(payload.get("x"), default=0, maximum=self.viewport["width"])
             y = _bounded_coordinate(payload.get("y"), default=0, maximum=self.viewport["height"])
@@ -487,6 +511,47 @@ def _bounded_coordinate(value: Any, *, default: int, maximum: int) -> int:
         return default
     parsed = int(round(float(value)))
     return max(0, min(maximum, parsed))
+
+
+def _validated_pointer_gesture(
+    payload: dict,
+    *,
+    viewport: dict,
+) -> list[dict[str, int]]:
+    points = payload.get("points")
+    if not isinstance(points, list) or not 1 <= len(points) <= 240:
+        raise ValueError("interactive browser pointer gesture is invalid")
+
+    normalized: list[dict[str, int]] = []
+    previous_t = -1
+    for raw_point in points:
+        if not isinstance(raw_point, dict):
+            raise ValueError("interactive browser pointer gesture point is invalid")
+        try:
+            point_t = int(round(float(raw_point.get("t"))))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "interactive browser pointer gesture timing is invalid"
+            ) from exc
+        if point_t < previous_t or point_t < 0 or point_t > 5000:
+            raise ValueError("interactive browser pointer gesture timing is invalid")
+        normalized.append(
+            {
+                "x": _bounded_coordinate(
+                    raw_point.get("x"),
+                    default=0,
+                    maximum=viewport["width"],
+                ),
+                "y": _bounded_coordinate(
+                    raw_point.get("y"),
+                    default=0,
+                    maximum=viewport["height"],
+                ),
+                "t": point_t,
+            }
+        )
+        previous_t = point_t
+    return normalized
 
 def _remaining_challenge_seconds(challenge: dict) -> float:
     try:

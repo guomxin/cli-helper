@@ -35,12 +35,11 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             self.assertIn("interactive/frame", html)
             self.assertIn("interactive/event", html)
             self.assertIn("renderedLeft", html)
-            self.assertIn("pendingPointerMove", html)
-            self.assertIn("queuePointerMove(finalCoordinates)", html)
-            self.assertNotIn(
-                'sendEvent("pointer_move", coordinates(event))',
-                html,
-            )
+            self.assertIn("getCoalescedEvents", html)
+            self.assertIn('sendEvent("pointer_gesture", { points })', html)
+            self.assertNotIn("pendingPointerMove", html)
+            self.assertNotIn('sendEvent("pointer_move"', html)
+            self.assertIn("setTimeout(resolve, 350)", html)
             self.assertNotIn('name="password"', html)
             self.assertNotIn('name="otp"', html)
             self.assertIn("connect-src 'self'", page.headers["Content-Security-Policy"])
@@ -103,20 +102,40 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
                 csrf_token=csrf,
                 csrf_cookie=csrf,
             )
+            with self.assertRaises(ValueError):
+                broker.send_event(
+                    challenge_id=challenge["challenge_id"],
+                    control_token=started["controlToken"],
+                    event={"type": "pointer_gesture", "payload": {"points": []}},
+                )
+            with self.assertRaises(ValueError):
+                broker.send_event(
+                    challenge_id=challenge["challenge_id"],
+                    control_token=started["controlToken"],
+                    event={
+                        "type": "pointer_gesture",
+                        "payload": {
+                            "points": [
+                                {"x": 40, "y": 80, "t": 20},
+                                {"x": 80, "y": 80, "t": 10},
+                            ]
+                        },
+                    },
+                )
             broker.send_event(
                 challenge_id=challenge["challenge_id"],
                 control_token=started["controlToken"],
-                event={"type": "pointer_down", "payload": {"x": 40, "y": 80}},
-            )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={"type": "pointer_move", "payload": {"x": 350, "y": 80}},
-            )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={"type": "pointer_up", "payload": {"x": 410, "y": 80}},
+                event={
+                    "type": "pointer_gesture",
+                    "payload": {
+                        "points": [
+                            {"x": 40, "y": 80, "t": 0},
+                            {"x": 150, "y": 82, "t": 16},
+                            {"x": 350, "y": 80, "t": 32},
+                            {"x": 410, "y": 80, "t": 48},
+                        ]
+                    },
+                },
             )
             broker.send_event(
                 challenge_id=challenge["challenge_id"],
@@ -135,7 +154,17 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             self.assertEqual(active["state"], "active")
             self.assertEqual(active["downstream_principal_ref"], "辛国茂")
             self.assertEqual(state_store.saved, {"cookies": [{"name": "session"}]})
-            self.assertTrue(worker.page.mouse.events)
+            self.assertEqual(
+                worker.page.mouse.events,
+                [
+                    ("move", 40, 80),
+                    ("down",),
+                    ("move", 150, 82),
+                    ("move", 350, 80),
+                    ("move", 410, 80),
+                    ("up",),
+                ],
+            )
             self.assertEqual(worker.page.keyboard.inserted, ["654321"])
             broker.shutdown()
 
