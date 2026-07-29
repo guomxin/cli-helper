@@ -120,3 +120,20 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
 8. 观察一次 10 分钟保活周期，确认语雀、OA、泰华会话仍按用户和系统隔离。
 
 真实验收阶段只执行读取，不创建、修改或删除语雀内容。
+
+## 7. 隔离 noVNC 登录 PoC
+
+在正式替换 8780 截图控制链路前，使用 `bscli.tools.yuque_novnc_poc` 做短期
+隔离验证。该 PoC 具备以下固定边界：
+
+- 使用独立 X11 显示号、独立 Chromium profile 和普通 Chromium 直接启动；
+- `x11vnc` 仅监听 `127.0.0.1`，不向内网暴露 RFB 端口；
+- `websockify` 仅在固定私网 IP 的 `8781` 提供现有内部 CA 签发的 HTTPS；
+- 8 位临时 VNC 密码只放在 URL fragment 和权限为 `0600` 的状态文件中，
+  不进入 HTTP 请求或服务日志；
+- 最长运行 30 分钟，当前实测窗口为 15 分钟；退出时删除 profile、Cookie、
+  Xauthority、密码和状态文件；
+- PoC 不调用 AgentBridge 会话保存，也不读取、创建或修改语雀文档。
+
+只有在用户确认画面延迟和滑块验证均通过后，才允许把普通 Chromium、原生 X11
+输入及登录后会话核验接入正式可信认证卡。
