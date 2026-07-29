@@ -2923,7 +2923,7 @@
       "inputSchema": {
         "properties": {
           "challenge_ttl_seconds": {
-            "default": 600,
+            "default": 900,
             "maximum": 900,
             "minimum": 30,
             "title": "Challenge Ttl Seconds",

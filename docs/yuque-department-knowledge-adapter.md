@@ -3,27 +3,26 @@
 > 目标系统：`https://tc-aiot.yuque.com/`  
 > 系统标识：`yuque`  
 > 当前范围：中央交互式登录与只读检索，不开放业务写入
+> 真实验收：2026-07-29 已通过
 
-## 1. 为什么认证方式不同
+## 1. 认证链路
 
-部门信息库使用语雀组织空间。登录页同时包含滑块验证和短信验证码，不能把它
-抽象成普通的“账号 + 密码”表单，也不应由 AgentBridge 自动绕过滑块。
+部门信息库使用语雀组织空间。登录页包含滑块验证和短信验证码，不能抽象成普通的“账号 + 密码”表单，也不应由 AgentBridge 自动绕过滑块。
 
-一期新增通用认证模式 `interactive_browser`：
+正式认证模式为 `interactive_browser`：
 
 1. 智能体调用 `yuque_session_login`；
-2. AgentBridge 创建与 `user_subject + system_id` 绑定的短期挑战；
-3. 用户在 8780 可信卡中启动 Xvfb 隔离显示中的完整中央 Chromium；
-4. 可信卡仅向用户显示中央浏览器截图，并以有序短轨迹段实时转发触控、键盘和滚动事件；
-5. 滑块、手机号和短信验证码不进入 MCP 参数、模型上下文或聊天记录；
-6. `/api/mine` 核验实际登录姓名与 Token 绑定姓名一致后，Credential Broker
-   保存加密 Cookie，销毁临时画面控制通道；
-7. OpenClaw 在模型循环外检测交互完成，并恢复原请求。
+2. AgentBridge 创建与 `user_subject + system_id + session_id` 绑定的短期挑战，默认有效期 15 分钟；
+3. 用户在 8780 可信卡中点击启动，服务端为该挑战分配独立 Xvfb 显示、Chromium Profile、回环 RFB 端口和回环 CDP 端口；
+4. 可信卡通过 8781 的 HTTPS noVNC 页面显示完整中央 Chromium，用户输入通过原生 X11/VNC 链路直达浏览器，不经过模型，也不使用 AgentBridge 合成指针事件；
+5. 每个挑战使用随机的一次性 VNC 密码和不透明路由 Token。密码由卡片自动带入 URL fragment，不进入 HTTP 查询参数、聊天或服务日志，用户不需要知道或手工输入；
+6. AgentBridge 通过回环 CDP 附着到同一 Chromium，并循环调用 `/api/mine` 核验登录状态；
+7. 实际登录姓名与 Token 绑定姓名一致后，Credential Broker 保存加密 Cookie，并销毁临时 Chromium、Xvfb、x11vnc、Profile、路由和密码文件；
+8. OpenClaw 在模型循环外检测交互完成，并恢复原请求。
 
-受控浏览器画面使用现有 HTTPS 可信卡来源，不安装 Chrome 扩展、VNC、
-noVNC 或用户端 CLI。Xvfb 只提供不对外监听的服务器内部显示；登录后的读取
-与保活仍使用无界面 worker。短期控制令牌只返回给卡片 JavaScript，不进入
-`agentbridge.interaction.v1` 的模型可见投影。
+浏览器端不安装 Chrome 扩展、VNC 客户端或 AgentBridge CLI。RFB 和 CDP 只监听回环地址；8781 只提供固定内网 IP、内部 CA 签发的 HTTPS noVNC 网关。网关可以常驻，但没有活动挑战时不存在可用路由。
+
+短期控制令牌和 `remoteUrl` 只返回给可信卡片 JavaScript，不进入 `agentbridge.interaction.v1` 的模型可见投影。滑块、手机号、密码、短信验证码、Cookie 和浏览器端点都不得进入 MCP 参数、模型上下文或聊天记录。
 
 ## 2. 一期 MCP 工具
 
@@ -43,23 +42,19 @@ noVNC 或用户端 CLI。Xvfb 只提供不对外监听的服务器内部显示�
 - `yuque.document.search`
 - `yuque.document.read`
 
-全部使用 `yuque:read`。当前没有 `yuque:write:*` scope，也没有文档创建、
-编辑、删除、评论或分享工具。
+全部使用 `yuque:read`。当前没有 `yuque:write:*` scope，也没有文档创建、编辑、删除、评论或分享工具。
 
 ## 3. 数据最小化与脱敏
 
-真实探索发现，全文检索命中摘要可能同时包含环境地址、账号、密码、SSH 信息
-或 API 密钥。因此适配器采用两级读取：
+真实探索发现，全文检索命中摘要可能同时包含环境地址、账号、密码、SSH 信息或 API 密钥。因此适配器采用两级读取：
 
 - 目录和搜索结果仅返回标题、文档标识、知识库及必要元数据，不返回目录描述或服务端搜索摘要；
 - 只有调用 `yuque_document_read` 明确选择文档后才读取正文；
-- 正文转为纯文本后，疑似账号密码、Token、API Key、URL 内嵌凭据和私钥
-  一律替换为 `[REDACTED]`；
+- 正文转为纯文本后，疑似账号密码、Token、API Key、URL 内嵌凭据和私钥一律替换为 `[REDACTED]`；
 - 返回 `redaction` 元数据说明是否脱敏、类别和数量；
 - 默认最多返回 12,000 字符，调用方可在 500 至 50,000 字符内调整。
 
-登录请求体、Cookie、短信验证码、页面截图和短期浏览器控制令牌不得写入日志、
-测试夹具、操作账本或模型结果。
+登录请求体、Cookie、短信验证码、页面画面和短期浏览器控制令牌不得写入日志、测试夹具、操作账本或模型结果。
 
 ## 4. 语雀 Web 接口
 
@@ -71,11 +66,9 @@ noVNC 或用户端 CLI。Xvfb 只提供不对外监听的服务器内部显示�
 - `GET /api/zsearch?...`
 - `GET /api/docs/{slug}?book_id=...`
 
-当前测试账号的个人 Access Token 页面需要额外会员能力，系统级应用也没有可用
-的创建入口，所以部署不能依赖 `X-Auth-Token`。如果后续由语雀管理员提供正式
-系统 AccessToken，可新增 Token 适配器并保留相同 MCP 工具契约。
+当前测试账号的个人 Access Token 页面需要额外会员能力，系统级应用也没有可用的创建入口，所以部署不能依赖 `X-Auth-Token`。如果后续由语雀管理员提供正式系统 AccessToken，可新增 Token 适配器并保留相同 MCP 工具契约。
 
-## 5. 部署参数
+## 5. 部署
 
 版本化 systemd unit 已包含：
 
@@ -84,19 +77,24 @@ noVNC 或用户端 CLI。Xvfb 只提供不对外监听的服务器内部显示�
 --yuque-organization-id 20020375
 ```
 
-首次启用语雀交互登录时，需要安装服务器内部虚拟显示依赖并同步两个 systemd
-unit：
+目标机首次启用交互式登录时执行一次：
 
 ```powershell
 .\scripts\Deploy-AgentBridge.ps1 -InstallSystemDependencies
 ```
 
-该开关只通过 Ubuntu 仓库安装 `xvfb`，不开放 VNC、WebSocket 或额外网络端口。
-后续普通发布继续使用不带该开关的部署命令；部署脚本会验证 `Xvfb` 已存在并
-确保 `agentbridge-xvfb.service` 先于 AgentBridge 启动。两个服务通过共享的
-私有 `/tmp` 命名空间和受限 Xauthority 通信，X11 TCP 监听被明确关闭。
+该开关安装 `xvfb`、`x11vnc`、`novnc`、`websockify` 和 `xauth`。正式运行只使用一个 `agentbridge.service`：每次挑战按需创建隔离显示和浏览器进程，结束后清理。旧的共享 `agentbridge-xvfb.service` 已退役，部署脚本会停止并移除遗留 unit。
 
-本地调试也可显式传入：
+服务端口边界：
+
+| 端口 | 范围 | 用途 |
+| --- | --- | --- |
+| 8780 | 固定内网 IP + HTTPS | 可信卡片 |
+| 8781 | 固定内网 IP + HTTPS | noVNC 网关，仅接受活动挑战的不透明 Token |
+| 8790 | 固定内网 IP + HTTPS | MCP |
+| RFB/CDP 动态端口 | `127.0.0.1` | 单挑战内部通道，不向内网暴露 |
+
+本地调试可显式传入：
 
 ```powershell
 python -m bscli.cli.main --home .bscli mcp central-serve `
@@ -104,52 +102,32 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
   --yuque-organization-id 20020375
 ```
 
-为 OpenClaw 身份签发权限时使用 `yuque:read`。Token 发放逻辑会同时创建该
-用户的 `yuque` 会话绑定。不要把一个用户的 Bearer Token 共享给另一位聊天
-用户。
+为 OpenClaw 身份签发权限时使用 `yuque:read`。Token 发放逻辑会同时创建该用户的 `yuque` 会话绑定。不要把一个用户的 Bearer Token 共享给另一位聊天用户。
 
 ## 6. 验收顺序
 
 1. 调用 `yuque_session_status`，确认返回未登录或已登录；
-2. 调用 `yuque_session_login`，在可信卡完成滑块和短信验证；
-3. 登录后自动续办或再次调用状态工具，核对姓名；
-4. 调用 `yuque_public_books_list`，应看到公共区的四个知识库；
-5. 调用 `yuque_document_catalog(book="共享文档")`，应返回完整目录；
+2. 调用 `yuque_session_login`，在 15 分钟内完成滑块和短信验证；卡片不应出现 VNC 密码框；
+3. 登录后自动续办或再次调用状态工具，核对实际姓名；
+4. 调用 `yuque_public_books_list`，确认公共区知识库可见；
+5. 调用 `yuque_document_catalog(book="共享文档")`，核对目录；
 6. 调用 `yuque_document_search(query="物联网平台")`，确认没有摘要字段泄露；
 7. 明确选择一篇非敏感文档调用 `yuque_document_read`，核对正文、截断和脱敏；
 8. 观察一次 10 分钟保活周期，确认语雀、OA、泰华会话仍按用户和系统隔离。
 
 真实验收阶段只执行读取，不创建、修改或删除语雀内容。
 
-## 7. 隔离 noVNC 登录 PoC
+## 7. 2026-07-29 真实验收结论
 
-在正式替换 8780 截图控制链路前，使用 `bscli.tools.yuque_novnc_poc` 做短期
-隔离验证。该 PoC 具备以下固定边界：
+隔离 noVNC PoC 先验证了原生 X11 输入能够流畅完成滑块；随后正式链路完成替换并在 `10.10.50.213` 验收：
 
-- 使用独立 X11 显示号、独立 Chromium profile 和普通 Chromium 直接启动；
-- `x11vnc` 仅监听 `127.0.0.1`，不向内网暴露 RFB 端口；
-- `websockify` 仅在固定私网 IP 的 `8781` 提供现有内部 CA 签发的 HTTPS；
-- 8 位临时 VNC 密码只放在 URL fragment 和权限为 `0600` 的状态文件中，
-  不进入 HTTP 请求或服务日志；
-- 最长运行 30 分钟，当前实测窗口为 15 分钟；退出时删除 profile、Cookie、
-  Xauthority、密码和状态文件；
-- PoC 不调用 AgentBridge 会话保存，也不读取、创建或修改语雀文档。
+- 普通 Chromium 直接启动，不使用 `--enable-automation` 或 CDP 启动管道；
+- 可信卡自动注入一次性 VNC 密码，用户不再看到密码框，页面不再停在 `connecting`；
+- 用户完成真实语雀登录后，`yuque_session_status` 返回 `active`，下游账号为“辛国茂”；
+- 登录 Cookie 已进入正式加密会话存储，可供后续读取和保活复用；
+- 完成后临时 sessions、Token 路由、Chromium、Xvfb、x11vnc、RFB 和 CDP 监听均已清理；
+- 8781 noVNC 网关保留按需常驻，但没有活动路由时不能访问任何浏览器；
+- 原截图轮询、CDP 指针注入、共享 Xvfb unit 和独立 `yuque_novnc_poc` 工具均已退役；
+- Python 全量测试 393 项通过（3 项跳过），OpenClaw 插件测试 71 项通过。
 
-只有在用户确认画面延迟和滑块验证均通过后，才允许把普通 Chromium、原生 X11
-输入及登录后会话核验接入正式可信认证卡。
-
-### 7.1 真实验收结论（2026-07-29）
-
-隔离 PoC 已在 `10.10.50.213` 完成一次真实语雀滑块验证：
-
-- 普通 Chromium 直接启动，空白页检查 `navigator.webdriver=false`；
-- noVNC 画面相较原 8780 截图轮询链路明显更流畅；
-- 用户使用原生 X11 输入一次通过语雀滑块；
-- PoC 未接入 AgentBridge 会话保存，未读取或修改语雀业务数据；
-- 验证后立即停止 transient systemd 单元，临时 profile 和密码目录已删除，
-  `8781` 与回环 RFB `5901` 监听均已关闭。
-
-因此正式认证链路采用“普通 Chromium + Xvfb + 回环 x11vnc + 限时 noVNC”；
-现有截图轮询和 CDP 指针注入只保留到正式替换完成，之后整体退役。正式实现仍须
-复用现有 challenge、用户身份绑定、HTTPS 内部 CA、登录后主体核验、加密 Cookie
-保存、自动续办和审计边界，不能把 PoC 的共享端口或临时密码直接升级为长期服务。
+若以后再次出现 VNC 密码框或长期 `connecting`，应视为基础设施故障，不应让用户索要或输入临时密码。先重新发起新挑战，再检查 8781 网关、活动 Token 路由和回环 x11vnc 进程。

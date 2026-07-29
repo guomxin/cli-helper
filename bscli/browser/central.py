@@ -307,6 +307,172 @@ class CentralBrowserWorker:
         return any(host == domain or host.endswith(f".{domain}") for host in allowed_hosts)
 
 
+class AttachedCentralBrowserWorker:
+    """Attach to a directly launched Chromium instance for session verification."""
+
+    def __init__(
+        self,
+        *,
+        cdp_endpoint: str,
+        allowed_origins: set[str],
+        playwright_starter: Callable[[], Any] | None = None,
+    ) -> None:
+        parsed = urlparse(cdp_endpoint)
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+            or not parsed.port
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("CDP endpoint must be an explicit loopback HTTP endpoint")
+        self.cdp_endpoint = cdp_endpoint.rstrip("/")
+        self.allowed_origins = {
+            _normalize_origin(origin) for origin in allowed_origins
+        }
+        self._playwright_starter = playwright_starter or _start_playwright
+        self._controller = None
+        self._browser = None
+        self._context = None
+
+    def __enter__(self) -> AttachedCentralBrowserWorker:
+        return self.start()
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.close()
+
+    def start(self) -> AttachedCentralBrowserWorker:
+        if self._context is not None:
+            return self
+        try:
+            self._controller = self._playwright_starter()
+            self._browser = self._controller.chromium.connect_over_cdp(
+                self.cdp_endpoint
+            )
+            contexts = list(self._browser.contexts)
+            if len(contexts) != 1:
+                raise RuntimeError(
+                    "direct Chromium must expose exactly one browser context"
+                )
+            self._context = contexts[0]
+        except Exception:
+            if self._controller is not None:
+                self._controller.stop()
+            self._controller = None
+            self._browser = None
+            self._context = None
+            raise
+        return self
+
+    def close(self) -> None:
+        browser, self._browser = self._browser, None
+        controller, self._controller = self._controller, None
+        self._context = None
+        try:
+            if browser is not None:
+                browser.close()
+        finally:
+            if controller is not None:
+                controller.stop()
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        self._require_started()
+        self._validate_url(url)
+        started_at = time.monotonic()
+        options: dict[str, Any] = {
+            "method": method.upper(),
+            "headers": headers or {},
+            "timeout": max(timeout_seconds, 0.1) * 1000,
+            "max_redirects": 0,
+        }
+        if body is not None:
+            options["data"] = body
+        response = self._context.request.fetch(url, **options)
+        try:
+            self._validate_url(response.url)
+            response_headers = response.headers
+            if callable(response_headers):
+                response_headers = response_headers()
+            content_type = str((response_headers or {}).get("content-type") or "")
+            text_value = response.text()
+            payload = None
+            if "json" in content_type.lower() or text_value.lstrip().startswith(("{", "[")):
+                try:
+                    payload = json.loads(text_value)
+                except (TypeError, json.JSONDecodeError):
+                    payload = None
+            return {
+                "status": response.status,
+                "url": response.url,
+                "content_type": content_type,
+                "json": payload,
+                "text": text_value,
+                "elapsed_ms": max(
+                    0,
+                    round((time.monotonic() - started_at) * 1000),
+                ),
+            }
+        finally:
+            dispose = getattr(response, "dispose", None)
+            if callable(dispose):
+                dispose()
+
+    @property
+    def page(self):
+        self._require_started()
+        pages = list(self._context.pages)
+        if not pages:
+            raise RuntimeError("direct Chromium has no interactive page")
+        return pages[0]
+
+    @property
+    def page_url(self) -> str:
+        return self.page.url
+
+    def capture_session_state(self) -> dict:
+        self._require_started()
+        cookies = self._context.cookies()
+        if any(not self._cookie_is_allowed(cookie) for cookie in cookies):
+            raise ValueError("direct Chromium produced a disallowed cookie")
+        return {"cookies": cookies}
+
+    def _require_started(self) -> None:
+        if self._context is None:
+            raise RuntimeError("attached central browser worker is not started")
+
+    def _validate_url(self, url: str) -> None:
+        origin = _origin_from_url(url)
+        if origin not in self.allowed_origins:
+            raise ValueError(f"request origin is not allowed: {origin}")
+
+    def _cookie_is_allowed(self, cookie: dict) -> bool:
+        cookie_url = cookie.get("url")
+        if isinstance(cookie_url, str) and cookie_url:
+            try:
+                return _origin_from_url(cookie_url) in self.allowed_origins
+            except ValueError:
+                return False
+        domain = str(cookie.get("domain") or "").lstrip(".").lower()
+        if not domain:
+            return False
+        allowed_hosts = {
+            urlparse(origin).hostname or "" for origin in self.allowed_origins
+        }
+        return any(
+            host == domain or host.endswith(f".{domain}")
+            for host in allowed_hosts
+        )
+
+
 class CentralBrowserPageWorker:
     """A worker-shaped view bound to one page in a central browser context."""
 

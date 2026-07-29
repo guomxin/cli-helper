@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from bscli.auth.interactive_browser import _challenge_ttl_seconds
-from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.auth_challenges import AuthChallengeStore
 
 
 class YuqueIntegrationContractTests(unittest.TestCase):
@@ -79,28 +79,6 @@ class YuqueIntegrationContractTests(unittest.TestCase):
             ),
             900,
         )
-
-    def test_only_interactive_yuque_login_uses_headed_browser(self):
-        class Adapter:
-            origin = "https://tc-aiot.yuque.com"
-            allowed_origins = {origin, "https://www.yuque.com"}
-
-        with TemporaryDirectory() as tmp:
-            session = {"profile_path": str(Path(tmp) / "profile")}
-            regular = CentralCapabilityService._default_browser_worker_factory(
-                session,
-                Adapter(),
-            )
-            interactive = (
-                CentralCapabilityService._default_interactive_browser_worker_factory(
-                    session,
-                    Adapter(),
-                )
-            )
-
-            self.assertTrue(regular.headless)
-            self.assertFalse(interactive.headless)
-            self.assertEqual(regular.allowed_origins, interactive.allowed_origins)
 
 
 if __name__ == "__main__":

@@ -121,12 +121,6 @@ def create_auth_http_server(
             if interactive_target is not None and interactive_application is not None:
                 challenge_id, action = interactive_target
                 control_token = self.headers.get("X-AgentBridge-Control-Token") or ""
-                if action == "frame":
-                    self._send(interactive_application.frame(
-                        challenge_id,
-                        control_token=control_token,
-                    ))
-                    return
                 if action == "status":
                     self._send(interactive_application.status(
                         challenge_id,
@@ -194,15 +188,6 @@ def create_auth_http_server(
                             body=body,
                             content_type=self.headers.get("Content-Type") or "",
                             csrf_cookie=csrf_cookie,
-                        )
-                    elif action == "event":
-                        response = interactive_application.event(
-                            challenge_id,
-                            body=body,
-                            content_type=self.headers.get("Content-Type") or "",
-                            control_token=(
-                                self.headers.get("X-AgentBridge-Control-Token") or ""
-                            ),
                         )
                     else:
                         response = application._message_response(
@@ -328,7 +313,7 @@ def serve_auth_cards(
 
 def _interactive_browser_target(path: str) -> tuple[str, str] | None:
     match = re.fullmatch(
-        r"/auth/([A-Za-z0-9_-]{32,128})/interactive/(start|frame|event|status)",
+        r"/auth/([A-Za-z0-9_-]{32,128})/interactive/(start|status)",
         path.split("?", 1)[0],
     )
     return (match.group(1), match.group(2)) if match else None

@@ -9,6 +9,7 @@ from bscli.adapters.seeyon_central import (
     SeeyonSessionCheckUnavailable,
 )
 from bscli.browser.central import (
+    AttachedCentralBrowserWorker,
     CentralBrowserWorker,
     CentralProfileInUseError,
     CentralProfileUnavailableError,
@@ -16,6 +17,35 @@ from bscli.browser.central import (
 
 
 class CentralBrowserTests(unittest.TestCase):
+    def test_attached_worker_accepts_only_loopback_cdp_and_captures_cookies(self):
+        controller = FakePlaywrightController()
+        controller.context.cookie_jar = [
+            {
+                "name": "yuque_session",
+                "value": "secret",
+                "domain": "tc-aiot.yuque.com",
+                "path": "/",
+            }
+        ]
+        worker = AttachedCentralBrowserWorker(
+            cdp_endpoint="http://127.0.0.1:9222",
+            allowed_origins={"https://tc-aiot.yuque.com"},
+            playwright_starter=lambda: controller,
+        )
+
+        with worker:
+            state = worker.capture_session_state()
+
+        self.assertEqual(state["cookies"][0]["name"], "yuque_session")
+        self.assertEqual(controller.chromium.cdp_endpoints, ["http://127.0.0.1:9222"])
+        self.assertTrue(controller.browser.closed)
+        self.assertTrue(controller.stopped)
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            AttachedCentralBrowserWorker(
+                cdp_endpoint="http://10.10.50.213:9222",
+                allowed_origins={"https://tc-aiot.yuque.com"},
+            )
+
     def test_worker_uses_persistent_profile_and_shared_context_request(self):
         with TemporaryDirectory() as tmp:
             controller = FakePlaywrightController()
@@ -636,15 +666,30 @@ class FakeChromium:
     def __init__(self, controller):
         self.controller = controller
         self.launches = []
+        self.cdp_endpoints = []
 
     def launch_persistent_context(self, user_data_dir, **kwargs):
         self.launches.append({"user_data_dir": user_data_dir, **kwargs})
         return self.controller.context
 
+    def connect_over_cdp(self, endpoint):
+        self.cdp_endpoints.append(endpoint)
+        return self.controller.browser
+
+
+class FakeBrowser:
+    def __init__(self, context):
+        self.contexts = [context]
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
 
 class FakePlaywrightController:
     def __init__(self):
         self.context = FakeBrowserContext()
+        self.browser = FakeBrowser(self.context)
         self.chromium = FakeChromium(self)
         self.stopped = False
 

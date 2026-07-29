@@ -1,9 +1,7 @@
 [Unit]
 Description=AgentBridge central MCP and trusted cards
-After=network-online.target agentbridge-xvfb.service
+After=network-online.target
 Wants=network-online.target
-Requires=agentbridge-xvfb.service
-JoinsNamespaceOf=agentbridge-xvfb.service
 
 [Service]
 Type=simple
@@ -13,8 +11,6 @@ WorkingDirectory=/home/guomao/agentbridge
 Environment=HOME=/home/guomao/agentbridge/data
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
-Environment=DISPLAY=:99
-Environment=XAUTHORITY=/home/guomao/agentbridge/data/.Xauthority
 ExecStart=/home/guomao/agentbridge/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve --host 10.10.50.213 --port 8790 --public-base-url https://10.10.50.213:8790 --tls-cert /home/guomao/agentbridge/config/tls/server.crt --tls-key /home/guomao/agentbridge/config/tls/server.key --auth-host 10.10.50.213 --auth-port 8780 --auth-public-base-url https://10.10.50.213:8780 --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt --auth-tls-key /home/guomao/agentbridge/config/tls/server.key --yuque-base-url https://tc-aiot.yuque.com --yuque-organization-id 20020375 --session-keepalive-interval 600 --session-keepalive-lease 604800
 Restart=on-failure
 RestartSec=5

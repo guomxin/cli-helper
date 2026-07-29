@@ -44,6 +44,7 @@
 以下名称虽然涉及浏览器或历史系统，但属于当前架构，不是旧桥残留：
 
 - `CentralBrowserWorker`：运行在中心服务身份下的受控 Playwright Worker；
+- `RemoteInteractiveBrowserBroker`：只用于登录挑战的中心端 noVNC 浏览器，按挑战隔离 Xvfb、Profile、回环 RFB/CDP 和临时路由；
 - `CentralHttpWorker`：保存每用户 HTTP Cookie 或 Token 状态的中心执行器；
 - 可信认证卡、字段卡、授权卡与 Credential Broker；
 - CLI、远程 MCP 和 OpenClaw 多用户身份路由；
@@ -70,6 +71,8 @@
 
 - 旧代理命令不能从 CLI 调用；
 - 旧扩展、bridge、daemon 和 MCP server 文件不存在；
+- 旧的截图轮询、浏览器事件转发 Broker、CDP 指针注入和共享 Xvfb unit 不得恢复；
+- 交互式登录只能通过绑定用户和挑战的中心 noVNC Broker，RFB/CDP 必须仅监听回环地址；
 - `bscli` 源码不再产生旧 bridge 结果字段；
 - 系统配置只接受中心认证模式；
 - systemd 服务只能从版本化 wheel 加载当前 `bscli`；

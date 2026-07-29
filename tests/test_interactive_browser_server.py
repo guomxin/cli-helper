@@ -15,7 +15,7 @@ from bscli.core.auth_challenges import AuthChallengeStore
 
 
 class InteractiveBrowserServerTests(unittest.TestCase):
-    def test_http_server_routes_interactive_card_start_and_frame(self):
+    def test_http_server_routes_remote_browser_card_start_and_status(self):
         with TemporaryDirectory() as tmp:
             store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
             challenge = store.create(
@@ -61,7 +61,10 @@ class InteractiveBrowserServerTests(unittest.TestCase):
                 cookie = response.getheader("Set-Cookie")
                 self.assertEqual(response.status, 200)
                 self.assertIn("启动安全登录", html)
-                self.assertIn("frame-ancestors 'none'", response.getheader("Content-Security-Policy"))
+                self.assertIn(
+                    "frame-src https://10.10.50.213:8781",
+                    response.getheader("Content-Security-Policy"),
+                )
                 self.assertIsNotNone(cookie)
                 csrf = cookie.split("agentbridge_csrf=", 1)[1].split(";", 1)[0]
                 connection.close()
@@ -82,19 +85,22 @@ class InteractiveBrowserServerTests(unittest.TestCase):
                 payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(response.status, 202)
                 self.assertEqual(payload["controlToken"], "control-token")
+                self.assertIn("vnc_lite.html", payload["remoteUrl"])
                 self.assertEqual(broker.started, challenge["challenge_id"])
                 connection.close()
 
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 connection.request(
                     "GET",
-                    f"/auth/{challenge['challenge_id']}/interactive/frame",
+                    f"/auth/{challenge['challenge_id']}/interactive/status",
                     headers={"X-AgentBridge-Control-Token": "control-token"},
                 )
                 response = connection.getresponse()
                 self.assertEqual(response.status, 200)
-                self.assertEqual(response.getheader("Content-Type"), "image/png")
-                self.assertEqual(response.read(), b"\x89PNG\r\n")
+                self.assertEqual(
+                    json.loads(response.read().decode("utf-8"))["verification"],
+                    "awaiting_login",
+                )
                 connection.close()
             finally:
                 server.shutdown()
@@ -103,6 +109,8 @@ class InteractiveBrowserServerTests(unittest.TestCase):
 
 
 class FakeInteractiveBroker:
+    public_origin = "https://10.10.50.213:8781"
+
     def __init__(self) -> None:
         self.started = None
 
@@ -114,13 +122,20 @@ class FakeInteractiveBroker:
             "status": "processing",
             "challengeId": challenge_id,
             "controlToken": "control-token",
-            "viewport": {"width": 430, "height": 760},
+            "remoteUrl": (
+                f"{self.public_origin}/vnc_lite.html?"
+                "path=websockify%3Ftoken%3Dopaque#agentbridge=1&password=temporary"
+            ),
         }
 
-    def frame(self, *, challenge_id, control_token):
+    def status(self, *, challenge_id, control_token):
         if challenge_id != self.started or control_token != "control-token":
-            raise AssertionError("interactive frame binding mismatch")
-        return b"\x89PNG\r\n"
+            raise AssertionError("interactive status binding mismatch")
+        return {
+            "status": "processing",
+            "challengeId": challenge_id,
+            "verification": "awaiting_login",
+        }
 
 
 class RejectingCredentialBroker:

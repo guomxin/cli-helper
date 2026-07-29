@@ -19,7 +19,10 @@ from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
-from bscli.broker.interactive_browser import InteractiveBrowserBroker
+from bscli.broker.remote_browser import (
+    RemoteBrowserConfig,
+    RemoteInteractiveBrowserBroker,
+)
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeNotFound
 from bscli.core.central_service import (
     CentralCapabilityService,
@@ -476,14 +479,27 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         login_timeout_seconds=args.login_timeout,
     )
     application = TrustedAuthApplication(challenge_store=challenge_store, broker=broker)
-    interactive_broker = InteractiveBrowserBroker(
+    auth_origin = urlparse(config.public_base_url)
+    remote_browser_base_url = (
+        f"{auth_origin.scheme}://{auth_origin.hostname}:8781"
+    )
+    interactive_broker = RemoteInteractiveBrowserBroker(
         challenge_store=challenge_store,
         session_registry=service.sessions,
         session_state_store=service.session_states,
         adapter_factory=lambda challenge: service.adapter_for_system(
             challenge["system_id"]
         ),
-        worker_factory=service.interactive_authentication_worker,
+        worker_factory=service.remote_authentication_worker,
+        config=RemoteBrowserConfig(
+            runtime_root=(home / "remote-browser").resolve(),
+            public_base_url=remote_browser_base_url,
+            listen_host=auth_origin.hostname or config.host,
+            listen_port=8781,
+            tls_cert=config.tls_cert,
+            tls_key=config.tls_key,
+            allow_insecure_private_http=config.insecure_private_http,
+        ),
         login_timeout_seconds=900,
     )
     interactive_application = TrustedInteractiveBrowserApplication(

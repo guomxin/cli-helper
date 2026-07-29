@@ -82,7 +82,10 @@ from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
-from bscli.broker.interactive_browser import InteractiveBrowserBroker
+from bscli.broker.remote_browser import (
+    RemoteBrowserConfig,
+    RemoteInteractiveBrowserBroker,
+)
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
@@ -1501,7 +1504,7 @@ def create_central_mcp_server(
     )
     async def yuque_session_login(
         ctx: Context,
-        challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 600,
+        challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 900,
     ) -> dict[str, Any]:
         identity = _request_identity(identity_store, required_scopes={"yuque:read"})
         response = await asyncio.to_thread(
@@ -1947,14 +1950,27 @@ def serve_central_mcp(
         challenge_store=service.challenges,
         broker=broker,
     )
-    interactive_broker = InteractiveBrowserBroker(
+    auth_origin = urlparse(auth_config.public_base_url)
+    remote_browser_base_url = (
+        f"{auth_origin.scheme}://{auth_origin.hostname}:8781"
+    )
+    interactive_broker = RemoteInteractiveBrowserBroker(
         challenge_store=service.challenges,
         session_registry=service.sessions,
         session_state_store=service.session_states,
         adapter_factory=lambda challenge: service.adapter_for_system(
             challenge["system_id"]
         ),
-        worker_factory=service.interactive_authentication_worker,
+        worker_factory=service.remote_authentication_worker,
+        config=RemoteBrowserConfig(
+            runtime_root=(service.home / "remote-browser").resolve(),
+            public_base_url=remote_browser_base_url,
+            listen_host=auth_origin.hostname or auth_config.host,
+            listen_port=8781,
+            tls_cert=auth_config.tls_cert,
+            tls_key=auth_config.tls_key,
+            allow_insecure_private_http=auth_config.insecure_private_http,
+        ),
         login_timeout_seconds=900,
     )
     interactive_application = TrustedInteractiveBrowserApplication(

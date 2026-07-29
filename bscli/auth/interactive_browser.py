@@ -9,9 +9,9 @@ from urllib.parse import parse_qs
 
 from bscli.auth.card import AuthCardResponse, MAX_AUTH_BODY_BYTES
 from bscli.auth.embedded import EMBEDDED_SAFE_AREA_CSS, render_embedded_web_app_bridge
-from bscli.broker.interactive_browser import (
-    InteractiveBrowserAccessDenied,
-    InteractiveBrowserUnavailable,
+from bscli.broker.remote_browser import (
+    RemoteBrowserAccessDenied,
+    RemoteBrowserUnavailable,
 )
 from bscli.core.auth_challenges import (
     AuthChallengeStore,
@@ -22,6 +22,8 @@ from bscli.core.auth_challenges import (
 
 
 class TrustedInteractiveBrowserApplication:
+    """Trusted card shell for the challenge-scoped native noVNC browser."""
+
     def __init__(self, *, challenge_store: AuthChallengeStore, broker) -> None:
         self.challenge_store = challenge_store
         self.broker = broker
@@ -48,7 +50,7 @@ class TrustedInteractiveBrowserApplication:
             nonce = secrets.token_urlsafe(18)
             response = AuthCardResponse(
                 200,
-                _security_headers(nonce),
+                _security_headers(nonce, frame_origin=self.broker.public_origin),
                 _render_interactive_card(
                     challenge,
                     csrf_token=csrf_token,
@@ -74,7 +76,7 @@ class TrustedInteractiveBrowserApplication:
             return _message_response(
                 status=200,
                 title="认证完成",
-                message="部门信息库会话已经建立。此页面可以关闭，智能体将继续操作。",
+                message="部门信息库会话已经建立。此页面可以关闭，智能体将继续原操作。",
                 tone="success",
                 close_when_complete=True,
             )
@@ -125,63 +127,15 @@ class TrustedInteractiveBrowserApplication:
         status = 202 if result.get("status") == "processing" else 500
         return _json_response(status, result)
 
-    def frame(self, challenge_id: str, *, control_token: str) -> AuthCardResponse:
-        try:
-            frame = self.broker.frame(
-                challenge_id=challenge_id,
-                control_token=control_token,
-            )
-        except InteractiveBrowserAccessDenied:
-            return _json_response(403, {"error": {"code": "CONTROL_DENIED"}})
-        except InteractiveBrowserUnavailable:
-            return _json_response(409, {"error": {"code": "BROWSER_UNAVAILABLE"}})
-        return AuthCardResponse(
-            200,
-            {
-                "Content-Type": "image/png",
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "default-src 'none'",
-            },
-            frame,
-        )
-
-    def event(
-        self,
-        challenge_id: str,
-        *,
-        body: bytes,
-        content_type: str,
-        control_token: str,
-    ) -> AuthCardResponse:
-        if not _valid_body(body, content_type, "application/json"):
-            return _json_response(400, {"error": {"code": "INVALID_REQUEST"}})
-        try:
-            event = json.loads(body.decode("utf-8"))
-            if not isinstance(event, dict):
-                raise ValueError("event must be an object")
-            result = self.broker.send_event(
-                challenge_id=challenge_id,
-                control_token=control_token,
-                event=event,
-            )
-        except InteractiveBrowserAccessDenied:
-            return _json_response(403, {"error": {"code": "CONTROL_DENIED"}})
-        except InteractiveBrowserUnavailable:
-            return _json_response(409, {"error": {"code": "BROWSER_UNAVAILABLE"}})
-        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-            return _json_response(400, {"error": {"code": "INVALID_EVENT"}})
-        return _json_response(202, result)
-
     def status(self, challenge_id: str, *, control_token: str) -> AuthCardResponse:
         try:
             result = self.broker.status(
                 challenge_id=challenge_id,
                 control_token=control_token,
             )
-        except InteractiveBrowserAccessDenied:
+        except RemoteBrowserAccessDenied:
             return _json_response(403, {"error": {"code": "CONTROL_DENIED"}})
-        except (InteractiveBrowserUnavailable, ChallengeNotFound):
+        except (RemoteBrowserUnavailable, ChallengeNotFound):
             return _json_response(409, {"error": {"code": "BROWSER_UNAVAILABLE"}})
         return _json_response(200, result)
 
@@ -209,126 +163,108 @@ def _render_interactive_card(
       --surface: #fff;
       --ink: #17201d;
       --muted: #65716c;
-      --line: #d4dad6;
+      --line: #cbd3ce;
       --teal: #087d72;
       --teal-dark: #075f58;
-      --amber: #b86c13;
+      --amber: #a96313;
     }}
     * {{ box-sizing: border-box; }}
     html, body {{ min-height: 100%; }}
     body {{
       margin: 0;
-      padding: 18px;
+      padding: 16px;
       background: var(--paper);
       color: var(--ink);
       font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
       letter-spacing: 0;
     }}
-    .shell {{ width: min(100%, 560px); margin: 0 auto; }}
-    header {{ margin-bottom: 14px; }}
-    .eyebrow {{ margin: 0 0 5px; color: var(--teal-dark); font-size: 11px; font-weight: 700; }}
-    h1 {{ margin: 0; font-size: 22px; line-height: 1.3; }}
-    .identity {{ margin: 7px 0 0; color: var(--muted); font-size: 13px; }}
+    .shell {{ width: min(100%, 760px); margin: 0 auto; }}
+    header {{ margin-bottom: 12px; }}
+    .eyebrow {{
+      margin: 0 0 5px;
+      color: var(--teal-dark);
+      font-size: 11px;
+      font-weight: 700;
+    }}
+    h1 {{ margin: 0; font-size: 21px; line-height: 1.3; }}
+    .identity {{ margin: 6px 0 0; color: var(--muted); font-size: 13px; }}
     .notice {{
-      margin: 0 0 14px;
-      padding: 11px 12px;
+      margin: 0 0 12px;
+      padding: 10px 12px;
       border-left: 3px solid var(--amber);
       background: #fffaf1;
       font-size: 13px;
-      line-height: 1.6;
+      line-height: 1.55;
     }}
-    button, input {{
+    button, a.command {{
       min-height: 44px;
+      border: 0;
       border-radius: 5px;
       font: inherit;
-    }}
-    button {{
-      border: 0;
-      padding: 0 15px;
-      background: var(--teal);
-      color: #fff;
       font-weight: 700;
       cursor: pointer;
     }}
-    button:disabled {{ opacity: .55; cursor: wait; }}
-    #start {{ width: 100%; }}
-    #workspace {{ display: none; }}
-    .screen-wrap {{
-      position: relative;
-      overflow: hidden;
-      width: min(100%, calc(70vh * 430 / 760));
-      aspect-ratio: 430 / 760;
-      margin: 0 auto;
-      border: 1px solid var(--line);
-      background: #e7ebe8;
-      touch-action: none;
-      user-select: none;
-    }}
-    #screen {{
-      display: block;
+    button {{
       width: 100%;
-      height: 100%;
-      object-fit: contain;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-drag: none;
+      padding: 0 15px;
+      background: var(--teal);
+      color: #fff;
     }}
-    .toolbar {{
+    button:disabled {{ opacity: .58; cursor: wait; }}
+    #workspace {{ display: none; }}
+    .viewer {{
+      overflow: hidden;
+      width: 100%;
+      height: clamp(470px, 72vh, 880px);
+      border: 1px solid var(--line);
+      background: #dfe5e1;
+    }}
+    iframe {{ display: block; width: 100%; height: 100%; border: 0; }}
+    .actions {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
-      margin-top: 10px;
+      align-items: center;
+      margin-top: 9px;
     }}
-    .toolbar input {{
-      min-width: 0;
-      width: 100%;
-      border: 1px solid #abb6b0;
-      padding: 9px 11px;
+    a.command {{
+      display: inline-grid;
+      place-items: center;
+      padding: 0 14px;
+      border: 1px solid var(--line);
       background: var(--surface);
-      color: var(--ink);
+      color: var(--teal-dark);
+      text-decoration: none;
     }}
-    .keys {{
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 7px;
-      margin-top: 8px;
+    #status {{
+      min-height: 22px;
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
     }}
-    .keys button {{
-      min-width: 0;
-      padding: 0;
-      background: #3f514a;
-    }}
-    #status {{ min-height: 22px; margin: 10px 0 0; color: var(--muted); font-size: 13px; }}
     {EMBEDDED_SAFE_AREA_CSS}
   </style>
 </head>
 <body>
   <main class="shell">
     <header>
-      <p class="eyebrow">AGENTBRIDGE TRUSTED INTERACTIVE AUTH</p>
+      <p class="eyebrow">AGENTBRIDGE TRUSTED REMOTE AUTH</p>
       <h1>{system_name}</h1>
       <p class="identity">认证身份：{principal}</p>
     </header>
-    <p class="notice">滑块和短信验证只发生在此可信页面。浏览器会话由 AgentBridge 保存，页面画面和输入不会进入智能体上下文。</p>
+    <p class="notice">滑块、短信验证码和密码只在下方受控浏览器中处理。画面与输入不会进入智能体上下文，登录结果会由 AgentBridge 自动核验。</p>
     <button id="start" type="button">启动安全登录</button>
-    <section id="workspace" aria-label="受控浏览器">
-      <div class="screen-wrap" id="screen-wrap">
-        <img id="screen" alt="受控登录页面">
+    <section id="workspace" aria-label="受控远程浏览器">
+      <div class="viewer">
+        <iframe id="remote" title="受控远程登录页面"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock"></iframe>
       </div>
-      <div class="toolbar">
-        <input id="text-entry" type="text" inputmode="text" autocomplete="off"
-               placeholder="点选上方输入框后，在这里输入并发送">
-        <button id="send-text" type="button">输入</button>
-      </div>
-      <div class="keys" aria-label="浏览器按键">
-        <button type="button" data-key="Backspace" title="退格">⌫</button>
-        <button type="button" data-key="Tab" title="切换焦点">Tab</button>
-        <button type="button" data-key="Enter" title="确认">↵</button>
-        <button type="button" data-wheel="-650" title="向上滚动">↑</button>
-        <button type="button" data-wheel="650" title="向下滚动">↓</button>
+      <div class="actions">
+        <p id="status" role="status">正在启动隔离浏览器。</p>
+        <a id="external" class="command" target="_blank" rel="noopener noreferrer">浏览器打开</a>
       </div>
     </section>
-    <p id="status" role="status">准备启动中央受控浏览器。</p>
   </main>
   <script nonce="{nonce}">
     (() => {{
@@ -336,219 +272,78 @@ def _render_interactive_card(
       const csrfToken = "{escape(csrf_token)}";
       const startButton = document.getElementById("start");
       const workspace = document.getElementById("workspace");
-      const screen = document.getElementById("screen");
-      const screenWrap = document.getElementById("screen-wrap");
+      const remote = document.getElementById("remote");
+      const external = document.getElementById("external");
       const status = document.getElementById("status");
-      const textEntry = document.getElementById("text-entry");
-      const sendText = document.getElementById("send-text");
       let controlToken = "";
-      let viewport = {{ width: 430, height: 760 }};
-      let frameUrl = "";
-      let pointerActive = false;
-      let pointerId = null;
-      let eventChain = Promise.resolve();
-      let pointerStartedAt = 0;
-      let pointerSegmentPoints = [];
-      let pointerFlushTimer = null;
-      let lastPointerPoint = null;
       let stopped = false;
 
-      const coordinates = (event) => {{
-        const box = screen.getBoundingClientRect();
-        const scale = Math.min(box.width / viewport.width, box.height / viewport.height);
-        const renderedWidth = viewport.width * scale;
-        const renderedHeight = viewport.height * scale;
-        const renderedLeft = box.left + (box.width - renderedWidth) / 2;
-        const renderedTop = box.top + (box.height - renderedHeight) / 2;
-        return {{
-          x: Math.max(0, Math.min(viewport.width, (event.clientX - renderedLeft) * viewport.width / renderedWidth)),
-          y: Math.max(0, Math.min(viewport.height, (event.clientY - renderedTop) * viewport.height / renderedHeight)),
-        }};
-      }};
-      const sendEvent = (type, payload = {{}}) => {{
-        eventChain = eventChain.then(() => fetch(`/auth/${{challengeId}}/interactive/event`, {{
-          method: "POST",
-          credentials: "same-origin",
-          headers: {{
-            "Content-Type": "application/json",
-            "X-AgentBridge-Control-Token": controlToken,
-          }},
-          body: JSON.stringify({{ type, payload }}),
-        }})).then((response) => {{
-          if (!response.ok) throw new Error("event rejected");
-          return true;
-        }}).catch(() => {{
-          status.textContent = "浏览器控制暂时不可用，请稍后重试。";
-          return false;
-        }});
-        return eventChain;
-      }};
-      const appendPointerPoint = (event, force = false) => {{
-        const point = coordinates(event);
-        point.t = Math.max(0, Math.min(5000, Math.round(performance.now() - pointerStartedAt)));
-        if (lastPointerPoint && !force) {{
-          const distance = Math.hypot(point.x - lastPointerPoint.x, point.y - lastPointerPoint.y);
-          if (point.t - lastPointerPoint.t < 8 && distance < 1.5) return;
-        }}
-        lastPointerPoint = point;
-        if (pointerSegmentPoints.length >= 80) {{
-          pointerSegmentPoints[pointerSegmentPoints.length - 1] = point;
-          return;
-        }}
-        pointerSegmentPoints.push(point);
-      }};
-      const collectPointerPoints = (event, forceFinal = false) => {{
-        const samples = typeof event.getCoalescedEvents === "function"
-          ? event.getCoalescedEvents()
-          : [];
-        samples.forEach((sample) => appendPointerPoint(sample));
-        appendPointerPoint(event, forceFinal);
-      }};
-      const flushPointerSegment = ({{ start = false, end = false }} = {{}}) => {{
-        if (!pointerSegmentPoints.length) return Promise.resolve(false);
-        const points = pointerSegmentPoints;
-        pointerSegmentPoints = [];
-        return sendEvent("pointer_stream", {{ points, start, end }});
-      }};
-      const schedulePointerFlush = () => {{
-        if (pointerFlushTimer) return;
-        pointerFlushTimer = window.setTimeout(() => {{
-          pointerFlushTimer = null;
-          flushPointerSegment();
-        }}, 32);
-      }};
-      const pollFrame = async () => {{
-        while (!stopped) {{
-          try {{
-            const response = await fetch(`/auth/${{challengeId}}/interactive/frame`, {{
-              cache: "no-store",
-              credentials: "same-origin",
-              headers: {{ "X-AgentBridge-Control-Token": controlToken }},
-            }});
-            if (response.ok) {{
-              const blob = await response.blob();
-              const next = URL.createObjectURL(blob);
-              screen.src = next;
-              if (frameUrl) URL.revokeObjectURL(frameUrl);
-              frameUrl = next;
-            }}
-          }} catch (_error) {{}}
-          await new Promise((resolve) => setTimeout(resolve, 350));
-        }}
-      }};
+      const messageForVerification = (value) => ({{
+        starting: "正在启动隔离浏览器。",
+        awaiting_login: "请在上方完成登录，AgentBridge 会自动识别登录结果。",
+        verification_deferred: "登录结果暂时无法核验，浏览器仍可继续操作。",
+        verified: "身份已核验，正在保存加密会话。",
+      }}[value] || "正在等待登录完成。");
+
       const pollStatus = async () => {{
-        while (!stopped) {{
-          try {{
-            const response = await fetch(`/auth/${{challengeId}}/interactive/status`, {{
+        if (stopped || !controlToken) return;
+        try {{
+          const response = await fetch(
+            `/auth/${{challengeId}}/interactive/status`,
+            {{
               cache: "no-store",
-              credentials: "same-origin",
               headers: {{ "X-AgentBridge-Control-Token": controlToken }},
-            }});
-            const result = await response.json();
-            if (result.status === "succeeded") {{
-              stopped = true;
-              status.textContent = "认证完成，正在返回智能体。";
-              window.setTimeout(() => window.location.reload(), 250);
-              return;
-            }}
-            if (["failed", "expired", "superseded"].includes(result.status)) {{
-              stopped = true;
-              status.textContent = "认证未完成，请返回智能体重新发起。";
-              startButton.disabled = true;
-              return;
-            }}
-          }} catch (_error) {{}}
-          await new Promise((resolve) => setTimeout(resolve, 900));
+            }},
+          );
+          const result = await response.json();
+          if (result.status === "succeeded") {{
+            stopped = true;
+            status.textContent = "认证完成，正在返回智能体继续执行。";
+            window.setTimeout(() => window.location.reload(), 350);
+            return;
+          }}
+          if (["failed", "expired", "superseded"].includes(result.status)) {{
+            stopped = true;
+            status.textContent = "认证未完成，请返回智能体重新发起。";
+            window.setTimeout(() => window.location.reload(), 500);
+            return;
+          }}
+          status.textContent = messageForVerification(result.verification);
+        }} catch (_error) {{
+          status.textContent = "正在重新连接 AgentBridge 状态通道。";
         }}
+        window.setTimeout(pollStatus, 1500);
       }};
 
       startButton.addEventListener("click", async () => {{
         startButton.disabled = true;
         startButton.textContent = "正在启动";
-        status.textContent = "正在创建隔离的中央浏览器会话。";
+        status.textContent = "正在分配独立浏览器会话。";
         try {{
-          const body = new URLSearchParams({{ csrf_token: csrfToken }});
-          const response = await fetch(`/auth/${{challengeId}}/interactive/start`, {{
-            method: "POST",
-            credentials: "same-origin",
-            headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
-            body,
-          }});
+          const response = await fetch(
+            `/auth/${{challengeId}}/interactive/start`,
+            {{
+              method: "POST",
+              headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
+              body: new URLSearchParams({{ csrf_token: csrfToken }}),
+            }},
+          );
           const result = await response.json();
-          if (!response.ok || result.status !== "processing") throw new Error("start failed");
+          if (!response.ok || !result.controlToken || !result.remoteUrl) {{
+            throw new Error("remote browser did not start");
+          }}
           controlToken = result.controlToken;
-          viewport = result.viewport || viewport;
-          screenWrap.style.aspectRatio = `${{viewport.width}} / ${{viewport.height}}`;
-          screenWrap.style.width = `min(100%, calc(70vh * ${{viewport.width}} / ${{viewport.height}}))`;
-          startButton.hidden = true;
+          remote.src = result.remoteUrl;
+          external.href = result.remoteUrl;
+          startButton.style.display = "none";
           workspace.style.display = "block";
-          status.textContent = "请在上方受控页面完成滑块和短信验证。";
-          pollFrame();
+          status.textContent = "请完成滑块、账号和短信验证。";
           pollStatus();
         }} catch (_error) {{
           startButton.disabled = false;
           startButton.textContent = "重新启动安全登录";
-          status.textContent = "受控浏览器启动失败，请返回智能体重新发起。";
+          status.textContent = "隔离浏览器启动失败，请返回智能体重新发起。";
         }}
-      }});
-
-      screen.addEventListener("pointerdown", (event) => {{
-        event.preventDefault();
-        pointerActive = true;
-        pointerId = event.pointerId;
-        pointerStartedAt = performance.now();
-        pointerSegmentPoints = [];
-        lastPointerPoint = null;
-        screen.setPointerCapture(event.pointerId);
-        appendPointerPoint(event, true);
-        flushPointerSegment({{ start: true }});
-      }});
-      screen.addEventListener("pointermove", (event) => {{
-        if (!pointerActive || event.pointerId !== pointerId) return;
-        event.preventDefault();
-        collectPointerPoints(event);
-        schedulePointerFlush();
-      }});
-      const releasePointer = (event) => {{
-        if (!pointerActive || event.pointerId !== pointerId) return;
-        event.preventDefault();
-        if (pointerFlushTimer) {{
-          window.clearTimeout(pointerFlushTimer);
-          pointerFlushTimer = null;
-        }}
-        collectPointerPoints(event, true);
-        pointerActive = false;
-        pointerId = null;
-        status.textContent = "正在执行本次操作。";
-        flushPointerSegment({{ end: true }}).then((accepted) => {{
-          lastPointerPoint = null;
-          if (accepted && !stopped) status.textContent = "操作已执行，请继续完成认证。";
-        }});
-      }};
-      screen.addEventListener("pointerup", releasePointer);
-      screen.addEventListener("pointercancel", releasePointer);
-
-      sendText.addEventListener("click", () => {{
-        const text = textEntry.value;
-        if (!text) return;
-        sendEvent("type_text", {{ text }}).then(() => {{
-          textEntry.value = "";
-          textEntry.focus();
-        }});
-      }});
-      textEntry.addEventListener("keydown", (event) => {{
-        if (event.key === "Enter") {{
-          event.preventDefault();
-          sendText.click();
-        }}
-      }});
-      document.querySelectorAll("[data-key]").forEach((button) => {{
-        button.addEventListener("click", () => sendEvent("key", {{ key: button.dataset.key }}));
-      }});
-      document.querySelectorAll("[data-wheel]").forEach((button) => {{
-        button.addEventListener("click", () => sendEvent("wheel", {{
-          deltaY: Number(button.dataset.wheel),
-        }}));
       }});
     }})();
   </script>
@@ -566,7 +361,13 @@ def _message_response(
     close_when_complete: bool = False,
 ) -> AuthCardResponse:
     nonce = secrets.token_urlsafe(18)
-    color = "#087d72" if tone == "success" else "#b23a3a" if tone == "error" else "#b86c13"
+    color = (
+        "#087d72"
+        if tone == "success"
+        else "#b23a3a"
+        if tone == "error"
+        else "#b86c13"
+    )
     html = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -596,7 +397,12 @@ def _json_response(status: int, value: dict) -> AuthCardResponse:
     )
 
 
-def _security_headers(nonce: str) -> dict[str, str]:
+def _security_headers(
+    nonce: str,
+    *,
+    frame_origin: str | None = None,
+) -> dict[str, str]:
+    frame_policy = f" frame-src {frame_origin};" if frame_origin else ""
     return {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
@@ -609,7 +415,8 @@ def _security_headers(nonce: str) -> dict[str, str]:
             "default-src 'none'; "
             f"style-src 'nonce-{nonce}'; "
             f"script-src 'nonce-{nonce}'; "
-            "connect-src 'self'; img-src blob:; "
+            "connect-src 'self';"
+            f"{frame_policy} "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         ),
     }

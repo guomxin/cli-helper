@@ -741,6 +741,36 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["card_base_url"], "http://127.0.0.1:8780")
         self.assertEqual(call["ttl_seconds"], 600)
 
+    def test_yuque_login_defaults_to_fifteen_minute_challenge(self):
+        with self._server() as (service, store, _token, client):
+            yuque_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["yuque:read"],
+                ttl_seconds=3600,
+            )
+            service.start_login.return_value = {
+                "protocolVersion": "0.1",
+                "status": "requires_user_action",
+                "nextAction": {"cardUrl": "http://127.0.0.1:8780/auth/challenge"},
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=31,
+                token=yuque_identity["token"],
+                params={
+                    "name": "yuque_session_login",
+                    "arguments": {},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        call = service.start_login.call_args.kwargs
+        self.assertEqual(call["user_subject"], "user-a")
+        self.assertEqual(call["system_id"], "yuque")
+        self.assertEqual(call["ttl_seconds"], 900)
+
     def test_interaction_resume_requires_write_scope_for_business_input(self):
         with self._server() as (service, store, read_token, client):
             write_identity = store.issue(
@@ -891,6 +921,9 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_runtime_starts_and_stops_auth_card_with_mcp_server(self):
         service = MagicMock()
+        home = TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        service.home = Path(home.name)
         identity_store = MagicMock()
         mcp_config = validate_central_mcp_server_config(
             host="127.0.0.1",
@@ -934,6 +967,9 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_runtime_closes_auth_card_if_mcp_initialization_fails(self):
         service = MagicMock()
+        home = TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        service.home = Path(home.name)
         mcp_config = validate_central_mcp_server_config(
             host="127.0.0.1",
             port=8790,

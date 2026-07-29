@@ -25,38 +25,44 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
-    def test_yuque_interactive_display_is_private_and_reproducible(self) -> None:
+    def test_yuque_remote_login_uses_challenge_isolation_and_native_novnc(self) -> None:
         service = (ROOT / "deploy/systemd/agentbridge.service").read_text(
-            encoding="utf-8"
-        )
-        xvfb = (ROOT / "deploy/systemd/agentbridge-xvfb.service").read_text(
             encoding="utf-8"
         )
         deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"
         )
+        broker = (ROOT / "bscli/broker/remote_browser.py").read_text(
+            encoding="utf-8"
+        )
 
-        for marker in (
+        for retired in (
             "Requires=agentbridge-xvfb.service",
             "JoinsNamespaceOf=agentbridge-xvfb.service",
             "Environment=DISPLAY=:99",
             "Environment=XAUTHORITY=",
         ):
-            self.assertIn(marker, service)
+            self.assertNotIn(retired, service)
+        self.assertFalse(
+            (ROOT / "deploy/systemd/agentbridge-xvfb.service").exists()
+        )
         for marker in (
-            "ExecStart=/usr/bin/Xvfb :99",
-            "-nolisten tcp",
-            "-auth /home/guomao/agentbridge/data/.Xauthority",
-            "PrivateTmp=true",
-        ):
-            self.assertIn(marker, xvfb)
-        for marker in (
-            "InstallSystemDependencies",
-            "apt-get install -y --no-install-recommends xvfb",
-            "agentbridge-xvfb.service",
-            "systemctl enable --now",
+            "xvfb x11vnc novnc websockify xauth",
+            "systemctl disable --now agentbridge-xvfb.service",
+            "test -d /usr/share/novnc",
         ):
             self.assertIn(marker, deploy)
+        for marker in (
+            "-nolisten",
+            '"tcp"',
+            '"-localhost"',
+            '"--token-plugin=TokenFile"',
+            '"--remote-debugging-address=127.0.0.1"',
+            'f"--remote-debugging-port={self.allocation.cdp_port}"',
+        ):
+            self.assertIn(marker, broker)
+        for retired in ("--enable-automation", "--remote-debugging-pipe"):
+            self.assertNotIn(retired, broker)
 
     def test_release_smoke_requires_new_write_tools(self) -> None:
         smoke = (ROOT / "scripts/agentbridge-mcp-smoke.mjs").read_text(encoding="utf-8")

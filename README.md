@@ -105,9 +105,10 @@ Published Yuque capabilities:
 
 Yuque uses a per-user central browser session because its current account cannot
 create a Personal Access Token and login requires a slider plus SMS verification.
-The trusted interactive login card forwards only the dedicated login page's pixels
-and user input; cookies, browser endpoints, and control tokens stay outside the
-model. Search results omit server snippets, and explicitly selected document bodies
+The trusted interactive login card embeds a challenge-scoped noVNC surface backed
+by isolated Xvfb, Chromium profile, loopback RFB, and loopback CDP resources. Native
+browser input, cookies, endpoints, temporary VNC credentials, and control tokens
+stay outside the model. Search results omit server snippets, and explicitly selected document bodies
 are redacted for likely credentials and tokens. See the
 [Yuque department knowledge adapter guide](docs/yuque-department-knowledge-adapter.md).
 

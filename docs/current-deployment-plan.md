@@ -1294,6 +1294,15 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 提交 `f23034f` 已推送 GitHub，Linux Release `f23034f24f69` 已部署，47 个 MCP
   工具发布烟测成功；OpenClaw 插件未修改，Windows Gateway 未重启；
 - 本轮没有执行 OA 或泰华业务写入。
+## 15.30 2026-07-29 语雀正式 noVNC 登录链路验收
+
+- 以 `RemoteInteractiveBrowserBroker` 替换 8780 截图轮询和合成指针输入。每个登录挑战使用独立 Xvfb、Chromium Profile、回环 x11vnc、回环 CDP 和不透明 websockify Token 路由；
+- 8781 使用现有内部 CA 提供 HTTPS noVNC。一次性 VNC 密码仅存在于浏览器 URL fragment 和 `0600` 临时文件中，由可信卡自动带入，不进入聊天、HTTP 查询参数或服务日志；
+- 实测发现 Debian noVNC 的 `vnc_lite.html` 只有在密码前存在片段参数时才能识别。正式 URL 增加非敏感占位参数，解决长期 `connecting` 和手工密码提示；语雀挑战默认有效期同时提高到 15 分钟；
+- 共享 `agentbridge-xvfb.service`、旧截图 Broker、CDP 指针注入和独立 `yuque_novnc_poc` 工具已退役。部署只保留一个 AgentBridge unit，登录资源按挑战创建并在成功、失败或超时后回收；
+- Python 全量测试 `393 passed, 3 skipped`，OpenClaw 插件测试 `71/71`。开发 Release `2a49df77dbab-dirty` 已部署到 `10.10.50.213`，服务重启和 55 个 MCP 工具烟测成功；
+- 用户完成真实语雀滑块登录后，正式 MCP 状态确认会话为 active、下游账号为“辛国茂”。临时 sessions、路由、Chromium、Xvfb、x11vnc、RFB 和 CDP 监听均已清理，仅保留无活动路由的 8781 网关；
+- 本轮仅建立语雀读取会话，没有创建、修改或删除语雀内容，也没有执行 OA 或泰华业务写入。
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；

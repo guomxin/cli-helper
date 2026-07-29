@@ -133,7 +133,7 @@ from bscli.adapters.seeyon_workflow_revoke import (
     prepare_workflow_revoke,
     revoke_workflow,
 )
-from bscli.browser.central import CentralBrowserWorker
+from bscli.browser.central import AttachedCentralBrowserWorker, CentralBrowserWorker
 from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
@@ -1082,23 +1082,28 @@ class CentralCapabilityService:
                 yield worker
 
     @contextmanager
-    def interactive_authentication_worker(
+    def remote_authentication_worker(
         self,
         session: dict,
         adapter: object,
+        cdp_endpoint: str,
     ) -> Iterator[object]:
         runtime = self._runtime_for_system(session["system_id"])
         if runtime is None:
             raise KeyError(
                 f"central runtime is not configured for {session['system_id']}"
             )
-        registered_adapter, worker_factory = runtime
+        registered_adapter, _worker_factory = runtime
         if registered_adapter is not adapter:
             raise ValueError("authentication adapter does not match the session system")
-        if session["system_id"] == YUQUE_SYSTEM_ID:
-            worker_factory = self._default_interactive_browser_worker_factory
+        contract = adapter.authentication_contract()
+        allowed_origins = set(contract.get("allowed_origins") or ())
+        allowed_origins.add(contract["origin"])
         with self._session_lock(session["session_id"]):
-            with worker_factory(session, adapter) as worker:
+            with AttachedCentralBrowserWorker(
+                cdp_endpoint=cdp_endpoint,
+                allowed_origins=allowed_origins,
+            ) as worker:
                 yield worker
 
     def _invoke_adapter(
@@ -1803,16 +1808,6 @@ class CentralCapabilityService:
                 getattr(adapter, "allowed_origins", None) or {adapter.origin}
             ),
             headless=True,
-        )
-
-    @staticmethod
-    def _default_interactive_browser_worker_factory(session: dict, adapter: object):
-        return CentralBrowserWorker(
-            profile_path=session["profile_path"],
-            allowed_origins=set(
-                getattr(adapter, "allowed_origins", None) or {adapter.origin}
-            ),
-            headless=False,
         )
 
     @staticmethod

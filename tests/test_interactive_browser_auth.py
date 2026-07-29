@@ -4,23 +4,19 @@ import json
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
-import time
 import unittest
 from urllib.parse import urlencode
 
-from bscli.adapters.base import AdapterLoginRequired
 from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
-from bscli.broker.interactive_browser import InteractiveBrowserBroker
 from bscli.core.auth_challenges import AuthChallengeStore
-from bscli.core.sessions import SessionRegistry
 
 
 class TrustedInteractiveBrowserTests(unittest.TestCase):
-    def test_card_starts_data_blind_remote_browser_ui(self):
+    def test_card_embeds_native_novnc_without_model_side_input_relay(self):
         with TemporaryDirectory() as tmp:
             store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
             challenge = _challenge(store)
-            broker = StubInteractiveBroker()
+            broker = StubRemoteBrowserBroker()
             app = TrustedInteractiveBrowserApplication(
                 challenge_store=store,
                 broker=broker,
@@ -31,27 +27,26 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             html = page.body.decode("utf-8")
             self.assertEqual(page.status, 200)
             self.assertIn("启动安全登录", html)
-            self.assertIn("受控浏览器", html)
-            self.assertIn("interactive/frame", html)
-            self.assertIn("interactive/event", html)
-            self.assertIn("renderedLeft", html)
-            self.assertIn("getCoalescedEvents", html)
-            self.assertIn('sendEvent("pointer_stream", { points, start, end })', html)
-            self.assertIn("pointerFlushTimer", html)
-            self.assertIn("}, 32)", html)
-            self.assertNotIn('sendEvent("pointer_gesture"', html)
-            self.assertIn("setTimeout(resolve, 350)", html)
-            self.assertNotIn('name="password"', html)
-            self.assertNotIn('name="otp"', html)
-            self.assertIn("connect-src 'self'", page.headers["Content-Security-Policy"])
-            self.assertIn("img-src blob:", page.headers["Content-Security-Policy"])
+            self.assertIn("<iframe", html)
+            self.assertIn("result.remoteUrl", html)
+            self.assertIn("登录结果会由 AgentBridge 自动核验", html)
+            self.assertNotIn("interactive/frame", html)
+            self.assertNotIn("interactive/event", html)
+            self.assertNotIn("pointer_stream", html)
+            self.assertNotIn("type_text", html)
+            self.assertNotIn("name=\"password\"", html)
+            self.assertNotIn("temporary-vnc-password", html)
+            self.assertIn(
+                "frame-src https://10.10.50.213:8781",
+                page.headers["Content-Security-Policy"],
+            )
             self.assertIn("Secure", page.headers["Set-Cookie"])
 
-    def test_start_claims_csrf_and_returns_control_token_only_to_card(self):
+    def test_start_claims_csrf_and_returns_private_remote_url_to_card(self):
         with TemporaryDirectory() as tmp:
             store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
             challenge = _challenge(store)
-            broker = StubInteractiveBroker()
+            broker = StubRemoteBrowserBroker()
             app = TrustedInteractiveBrowserApplication(
                 challenge_store=store,
                 broker=broker,
@@ -71,126 +66,41 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             payload = json.loads(response.body)
             self.assertEqual(response.status, 202)
             self.assertEqual(payload["controlToken"], "short-lived-control")
+            self.assertTrue(payload["remoteUrl"].startswith(broker.public_origin))
+            self.assertIn("&password=", payload["remoteUrl"])
             self.assertEqual(broker.started["challenge_id"], challenge["challenge_id"])
             self.assertEqual(broker.started["csrf_token"], csrf)
 
-    def test_broker_executes_events_on_owner_thread_and_saves_verified_session(self):
+    def test_status_requires_the_challenge_control_token(self):
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            store = AuthChallengeStore(root / "agentbridge.db")
-            sessions = SessionRegistry(root / "agentbridge.db", root / "profiles")
-            session = sessions.get_or_create(
-                user_subject="user-a",
-                system_id="yuque",
-                expected_principal_ref="辛国茂",
-            )
-            challenge = _challenge(store, session_id=session["session_id"])
-            state_store = FakeStateStore()
-            adapter = FakeInteractiveAdapter()
-            worker = FakeInteractiveWorker()
-            broker = InteractiveBrowserBroker(
+            store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
+            challenge = _challenge(store)
+            broker = StubRemoteBrowserBroker()
+            app = TrustedInteractiveBrowserApplication(
                 challenge_store=store,
-                session_registry=sessions,
-                session_state_store=state_store,
-                adapter_factory=lambda _challenge: adapter,
-                worker_factory=lambda _session, _adapter: worker,
-                login_timeout_seconds=30,
+                broker=broker,
             )
-            csrf = store.issue_csrf(challenge["challenge_id"])
 
-            started = broker.start(
-                challenge_id=challenge["challenge_id"],
-                csrf_token=csrf,
-                csrf_cookie=csrf,
+            denied = app.status(
+                challenge["challenge_id"],
+                control_token="wrong",
             )
-            with self.assertRaises(ValueError):
-                broker.send_event(
-                    challenge_id=challenge["challenge_id"],
-                    control_token=started["controlToken"],
-                    event={"type": "pointer_stream", "payload": {"points": []}},
-                )
-            with self.assertRaises(ValueError):
-                broker.send_event(
-                    challenge_id=challenge["challenge_id"],
-                    control_token=started["controlToken"],
-                    event={
-                        "type": "pointer_stream",
-                        "payload": {
-                            "points": [
-                                {"x": 40, "y": 80, "t": 20},
-                                {"x": 80, "y": 80, "t": 10},
-                            ]
-                        },
-                    },
-                )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={
-                    "type": "pointer_stream",
-                    "payload": {
-                        "points": [{"x": 40, "y": 80, "t": 0}],
-                        "start": True,
-                    },
-                },
+            accepted = app.status(
+                challenge["challenge_id"],
+                control_token="short-lived-control",
             )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={
-                    "type": "pointer_stream",
-                    "payload": {
-                        "points": [
-                            {"x": 150, "y": 82, "t": 16},
-                            {"x": 350, "y": 80, "t": 32},
-                        ]
-                    },
-                },
-            )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={
-                    "type": "pointer_stream",
-                    "payload": {
-                        "points": [{"x": 410, "y": 80, "t": 48}],
-                        "end": True,
-                    },
-                },
-            )
-            broker.send_event(
-                challenge_id=challenge["challenge_id"],
-                control_token=started["controlToken"],
-                event={"type": "type_text", "payload": {"text": "654321"}},
-            )
-            deadline = time.monotonic() + 5
-            while store.get(challenge["challenge_id"])["state"] == "processing":
-                if time.monotonic() >= deadline:
-                    self.fail("interactive login did not complete")
-                time.sleep(0.05)
 
-            completed = store.get(challenge["challenge_id"])
-            active = sessions.get(session["session_id"])
-            self.assertEqual(completed["state"], "succeeded")
-            self.assertEqual(active["state"], "active")
-            self.assertEqual(active["downstream_principal_ref"], "辛国茂")
-            self.assertEqual(state_store.saved, {"cookies": [{"name": "session"}]})
+            self.assertEqual(denied.status, 403)
+            self.assertEqual(accepted.status, 200)
             self.assertEqual(
-                worker.page.mouse.events,
-                [
-                    ("move", 40, 80),
-                    ("down",),
-                    ("move", 150, 82),
-                    ("move", 350, 80),
-                    ("move", 410, 80),
-                    ("up",),
-                ],
+                json.loads(accepted.body)["verification"],
+                "awaiting_login",
             )
-            self.assertEqual(worker.page.keyboard.inserted, ["654321"])
-            broker.shutdown()
 
 
-class StubInteractiveBroker:
+class StubRemoteBrowserBroker:
+    public_origin = "https://10.10.50.213:8781"
+
     def __init__(self) -> None:
         self.started = None
 
@@ -200,147 +110,30 @@ class StubInteractiveBroker:
             "status": "processing",
             "challengeId": kwargs["challenge_id"],
             "controlToken": "short-lived-control",
-            "viewport": {"width": 430, "height": 760},
+            "remoteUrl": (
+                f"{self.public_origin}/vnc_lite.html?"
+                "path=websockify%3Ftoken%3Dopaque"
+                "#agentbridge=1&password=temporary-vnc-password"
+            ),
         }
 
+    def status(self, *, challenge_id, control_token):
+        from bscli.broker.remote_browser import RemoteBrowserAccessDenied
 
-class FakeStateStore:
-    def __init__(self) -> None:
-        self.saved = None
-
-    def delete(self, _session_id: str) -> None:
-        self.saved = None
-
-    def save(self, _session_id: str, value: dict) -> None:
-        self.saved = value
-
-
-class FakeInteractiveAdapter:
-    def authentication_contract(self) -> dict:
+        if control_token != "short-lived-control":
+            raise RemoteBrowserAccessDenied("wrong token")
         return {
-            "system_id": "yuque",
-            "system_name": "部门信息库",
-            "origin": "https://tc-aiot.yuque.com",
-            "page_fingerprint": "yuque-interactive-login-v1",
-            "authentication_mode": "interactive_browser",
-            "fields": [],
-            "interactive": {"viewport": {"width": 430, "height": 760}},
-        }
-
-    def begin_interactive_login(self, worker, *, timeout_seconds: float) -> dict:
-        del timeout_seconds
-        worker.page_url = "https://tc-aiot.yuque.com/login"
-        return {"url": worker.page_url}
-
-    def probe_session(self, worker) -> dict:
-        if not worker.page.logged_in:
-            raise AdapterLoginRequired("not logged in")
-        return {
-            "authenticated": True,
-            "observed_principal_ref": "辛国茂",
-            "transport": "central_browser_cookie",
+            "status": "processing",
+            "challengeId": challenge_id,
+            "verification": "awaiting_login",
         }
 
 
-class FakeInteractiveWorker:
-    def __init__(self) -> None:
-        self.page = FakePage()
-        self.page_url = "about:blank"
-        self.owner_thread = None
-
-    def __enter__(self):
-        import threading
-
-        self.owner_thread = threading.get_ident()
-        self.page.owner_thread = self.owner_thread
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-    def clear_session_state(self) -> None:
-        return None
-
-    def capture_session_state(self) -> dict:
-        return {"cookies": [{"name": "session"}]}
-
-
-class FakePage:
-    def __init__(self) -> None:
-        self.logged_in = False
-        self.owner_thread = None
-        self.mouse = FakeMouse(self)
-        self.keyboard = FakeKeyboard(self)
-        self.viewport = None
-
-    def set_viewport_size(self, viewport: dict) -> None:
-        self._assert_owner()
-        self.viewport = viewport
-
-    def screenshot(self, *, type: str) -> bytes:
-        self._assert_owner()
-        if type != "png":
-            raise AssertionError("unexpected screenshot type")
-        return b"\x89PNG\r\n\x1a\n"
-
-    def _assert_owner(self) -> None:
-        import threading
-
-        if threading.get_ident() != self.owner_thread:
-            raise AssertionError("browser action did not run on the owner thread")
-
-
-class FakeMouse:
-    def __init__(self, page: FakePage) -> None:
-        self.page = page
-        self.events = []
-
-    def move(self, x: int, y: int) -> None:
-        self.page._assert_owner()
-        self.events.append(("move", x, y))
-
-    def down(self) -> None:
-        self.page._assert_owner()
-        self.events.append(("down",))
-
-    def up(self) -> None:
-        self.page._assert_owner()
-        self.events.append(("up",))
-
-    def click(self, x: int, y: int) -> None:
-        self.page._assert_owner()
-        self.events.append(("click", x, y))
-
-    def wheel(self, x: int, y: int) -> None:
-        self.page._assert_owner()
-        self.events.append(("wheel", x, y))
-
-
-class FakeKeyboard:
-    def __init__(self, page: FakePage) -> None:
-        self.page = page
-        self.inserted = []
-
-    def insert_text(self, value: str) -> None:
-        self.page._assert_owner()
-        self.inserted.append(value)
-        if value == "654321":
-            self.page.logged_in = True
-
-    def press(self, key: str) -> None:
-        self.page._assert_owner()
-        self.inserted.append(f"<{key}>")
-
-
-def _challenge(
-    store: AuthChallengeStore,
-    *,
-    session_id: str = "session-a",
-) -> dict:
+def _challenge(store: AuthChallengeStore) -> dict:
     return store.create(
         user_subject="user-a",
         system_id="yuque",
-        session_id=session_id,
+        session_id="session-a",
         origin="https://tc-aiot.yuque.com",
         page_fingerprint="yuque-interactive-login-v1",
         nonce="nonce",
