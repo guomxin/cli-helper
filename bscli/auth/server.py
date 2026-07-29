@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import MAX_AUTH_BODY_BYTES, AuthCardResponse, TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
+from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 
@@ -88,6 +89,7 @@ def create_auth_http_server(
     action_application: TrustedActionApplication | None = None,
     field_application: TrustedFieldApplication | None = None,
     download_application: TrustedDocumentDownloadApplication | None = None,
+    interactive_application: TrustedInteractiveBrowserApplication | None = None,
 ) -> ThreadingHTTPServer:
     expected_scheme = urlparse(config.public_base_url).scheme.lower()
     allowed_hosts = {_hostname(config.public_base_url)}
@@ -114,6 +116,29 @@ def create_auth_http_server(
                 self.send_response(204)
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
+                return
+            interactive_target = _interactive_browser_target(self.path)
+            if interactive_target is not None and interactive_application is not None:
+                challenge_id, action = interactive_target
+                control_token = self.headers.get("X-AgentBridge-Control-Token") or ""
+                if action == "frame":
+                    self._send(interactive_application.frame(
+                        challenge_id,
+                        control_token=control_token,
+                    ))
+                    return
+                if action == "status":
+                    self._send(interactive_application.status(
+                        challenge_id,
+                        control_token=control_token,
+                    ))
+                    return
+                self._send(application._message_response(
+                    status=405,
+                    title="请求方法不支持",
+                    message="请返回安全登录卡片继续操作。",
+                    tone="error",
+                ))
                 return
             document_file_id = _document_file_id_from_path(self.path)
             if document_file_id is not None and download_application is not None:
@@ -144,6 +169,52 @@ def create_auth_http_server(
                     tone="error",
                 ))
                 return
+            try:
+                content_length = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                content_length = -1
+            if content_length < 0 or content_length > MAX_AUTH_BODY_BYTES:
+                self.close_connection = True
+                self._send(application._message_response(
+                    status=413,
+                    title="请求过大",
+                    message="认证请求已被拒绝。",
+                    tone="error",
+                ))
+                return
+            body = self.rfile.read(content_length)
+            csrf_cookie = _csrf_cookie(self.headers.get("Cookie") or "")
+            interactive_target = _interactive_browser_target(self.path)
+            if interactive_target is not None and interactive_application is not None:
+                challenge_id, action = interactive_target
+                try:
+                    if action == "start":
+                        response = interactive_application.start(
+                            challenge_id,
+                            body=body,
+                            content_type=self.headers.get("Content-Type") or "",
+                            csrf_cookie=csrf_cookie,
+                        )
+                    elif action == "event":
+                        response = interactive_application.event(
+                            challenge_id,
+                            body=body,
+                            content_type=self.headers.get("Content-Type") or "",
+                            control_token=(
+                                self.headers.get("X-AgentBridge-Control-Token") or ""
+                            ),
+                        )
+                    else:
+                        response = application._message_response(
+                            status=405,
+                            title="请求方法不支持",
+                            message="请返回安全登录卡片继续操作。",
+                            tone="error",
+                        )
+                finally:
+                    body = b""
+                self._send(response)
+                return
             card_application, card_id = self._card_target()
             if card_application is None or card_id is None:
                 self._send(application._message_response(
@@ -153,21 +224,6 @@ def create_auth_http_server(
                     tone="error",
                 ))
                 return
-            try:
-                content_length = int(self.headers.get("Content-Length") or "0")
-            except ValueError:
-                content_length = -1
-            if content_length < 0 or content_length > MAX_AUTH_BODY_BYTES:
-                self.close_connection = True
-                self._send(card_application.submit_card(
-                    card_id,
-                    body=b"x" * (MAX_AUTH_BODY_BYTES + 1),
-                    content_type=self.headers.get("Content-Type") or "",
-                    csrf_cookie="",
-                ))
-                return
-            body = self.rfile.read(content_length)
-            csrf_cookie = _csrf_cookie(self.headers.get("Cookie") or "")
             try:
                 response = card_application.submit_card(
                     card_id,
@@ -205,6 +261,17 @@ def create_auth_http_server(
         def _card_target(self):
             challenge_id = _challenge_id_from_path(self.path)
             if challenge_id is not None:
+                if interactive_application is not None:
+                    try:
+                        challenge = application.challenge_store.get(challenge_id)
+                    except Exception:
+                        challenge = None
+                    if (
+                        challenge is not None
+                        and challenge.get("challenge_type")
+                        == "interactive_browser_login"
+                    ):
+                        return interactive_application, challenge_id
                 return application, challenge_id
             authorization_id = _authorization_id_from_path(self.path)
             if authorization_id is not None and action_application is not None:
@@ -243,6 +310,7 @@ def serve_auth_cards(
     action_application: TrustedActionApplication | None = None,
     field_application: TrustedFieldApplication | None = None,
     download_application: TrustedDocumentDownloadApplication | None = None,
+    interactive_application: TrustedInteractiveBrowserApplication | None = None,
 ) -> None:
     server = create_auth_http_server(
         config=config,
@@ -250,11 +318,20 @@ def serve_auth_cards(
         action_application=action_application,
         field_application=field_application,
         download_application=download_application,
+        interactive_application=interactive_application,
     )
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
         server.server_close()
+
+
+def _interactive_browser_target(path: str) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"/auth/([A-Za-z0-9_-]{32,128})/interactive/(start|frame|event|status)",
+        path.split("?", 1)[0],
+    )
+    return (match.group(1), match.group(2)) if match else None
 
 
 def _challenge_id_from_path(path: str) -> str | None:

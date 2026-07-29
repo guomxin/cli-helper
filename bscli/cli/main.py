@@ -16,8 +16,10 @@ from bscli.adapters.seeyon_system import SEEYON_OA_URL, build_seeyon_profile
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
+from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.server import serve_auth_cards, validate_auth_server_config
 from bscli.broker.credential import CredentialBroker
+from bscli.broker.interactive_browser import InteractiveBrowserBroker
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeNotFound
 from bscli.core.central_service import (
     CentralCapabilityService,
@@ -100,6 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     capability_invoke.add_argument("--request-id")
     capability_invoke.add_argument("--base-url")
     capability_invoke.add_argument("--taihua-base-url")
+    capability_invoke.add_argument("--yuque-base-url")
+    capability_invoke.add_argument("--yuque-organization-id", type=int)
     capability_invoke.add_argument("--card-base-url", default="http://127.0.0.1:8780")
 
     session = subparsers.add_parser("session")
@@ -108,12 +112,16 @@ def build_parser() -> argparse.ArgumentParser:
     session_status.add_argument("--system", required=True)
     session_status.add_argument("--user-subject", required=True)
     session_status.add_argument("--taihua-base-url")
+    session_status.add_argument("--yuque-base-url")
+    session_status.add_argument("--yuque-organization-id", type=int)
     session_login = session_sub.add_parser("login")
     session_login.add_argument("--system", required=True)
     session_login.add_argument("--user-subject", required=True)
     session_login.add_argument("--expected-principal", required=True)
     session_login.add_argument("--base-url")
     session_login.add_argument("--taihua-base-url")
+    session_login.add_argument("--yuque-base-url")
+    session_login.add_argument("--yuque-organization-id", type=int)
     session_login.add_argument("--card-base-url", default="http://127.0.0.1:8780")
     session_login.add_argument("--challenge-ttl", type=int, default=300)
 
@@ -134,6 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_serve.add_argument("--base-url")
     auth_serve.add_argument("--taihua-base-url")
+    auth_serve.add_argument("--yuque-base-url")
+    auth_serve.add_argument("--yuque-organization-id", type=int)
     auth_serve.add_argument("--login-timeout", type=float, default=45)
 
     operation = subparsers.add_parser("operation")
@@ -151,6 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_get.add_argument("--user-subject", required=True)
     interaction_get.add_argument("--base-url")
     interaction_get.add_argument("--taihua-base-url")
+    interaction_get.add_argument("--yuque-base-url")
+    interaction_get.add_argument("--yuque-organization-id", type=int)
     interaction_get.add_argument("--card-base-url", default="http://127.0.0.1:8780")
     interaction_resume = interaction_sub.add_parser("resume")
     interaction_resume.add_argument("interaction_id")
@@ -158,6 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_resume.add_argument("--idempotency-key")
     interaction_resume.add_argument("--base-url")
     interaction_resume.add_argument("--taihua-base-url")
+    interaction_resume.add_argument("--yuque-base-url")
+    interaction_resume.add_argument("--yuque-organization-id", type=int)
     interaction_resume.add_argument(
         "--card-base-url",
         default="http://127.0.0.1:8780",
@@ -212,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_central_serve.add_argument("--base-url")
     mcp_central_serve.add_argument("--taihua-base-url")
+    mcp_central_serve.add_argument("--yuque-base-url")
+    mcp_central_serve.add_argument("--yuque-organization-id", type=int)
     mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
     mcp_central_serve.add_argument(
         "--session-keepalive-interval",
@@ -244,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
             "oa:write:revoke",
             "taihua:read",
             "taihua:write:worklog",
+            "yuque:read",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")
@@ -320,6 +337,14 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
             home,
             getattr(args, "taihua_base_url", None),
         ),
+        yuque_base_url=(yuque_url := _yuque_base_url(
+            home,
+            getattr(args, "yuque_base_url", None),
+        )),
+        yuque_organization_id=_yuque_organization_id(
+            yuque_url,
+            getattr(args, "yuque_organization_id", None),
+        ),
         trusted_card_base_url=getattr(args, "card_base_url", "http://127.0.0.1:8780"),
     )
     if args.action == "list":
@@ -370,6 +395,14 @@ def handle_central_session(args: argparse.Namespace, home: Path) -> int:
         taihua_base_url=_taihua_base_url(
             home,
             getattr(args, "taihua_base_url", None),
+        ),
+        yuque_base_url=(yuque_url := _yuque_base_url(
+            home,
+            getattr(args, "yuque_base_url", None),
+        )),
+        yuque_organization_id=_yuque_organization_id(
+            yuque_url,
+            getattr(args, "yuque_organization_id", None),
         ),
     )
     if args.action == "status":
@@ -425,6 +458,10 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
+        yuque_organization_id=_yuque_organization_id(
+            yuque_url, args.yuque_organization_id
+        ),
         trusted_card_base_url=config.public_base_url,
     )
     challenge_store = service.challenges
@@ -439,6 +476,20 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         login_timeout_seconds=args.login_timeout,
     )
     application = TrustedAuthApplication(challenge_store=challenge_store, broker=broker)
+    interactive_broker = InteractiveBrowserBroker(
+        challenge_store=challenge_store,
+        session_registry=service.sessions,
+        session_state_store=service.session_states,
+        adapter_factory=lambda challenge: service.adapter_for_system(
+            challenge["system_id"]
+        ),
+        worker_factory=service.authentication_worker,
+        login_timeout_seconds=900,
+    )
+    interactive_application = TrustedInteractiveBrowserApplication(
+        challenge_store=challenge_store,
+        broker=interactive_broker,
+    )
     action_application = TrustedActionApplication(
         authorization_store=service.write_authorizations
     )
@@ -466,9 +517,12 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
             application=application,
             action_application=action_application,
             field_application=field_application,
+            interactive_application=interactive_application,
         )
     except KeyboardInterrupt:
         return 0
+    finally:
+        interactive_broker.shutdown()
     return 0
 
 
@@ -500,6 +554,10 @@ def handle_interaction(args: argparse.Namespace, home: Path) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
+        yuque_organization_id=_yuque_organization_id(
+            yuque_url, args.yuque_organization_id
+        ),
         trusted_card_base_url=args.card_base_url,
     )
     try:
@@ -551,10 +609,12 @@ def handle_mcp(args: argparse.Namespace) -> int:
                     scopes.add("oa:read")
                 if any(scope.startswith("taihua:") for scope in scopes):
                     scopes.add("taihua:read")
+                if any(scope.startswith("yuque:") for scope in scopes):
+                    scopes.add("yuque:read")
                 system_ids = {
                     scope.split(":", 1)[0]
                     for scope in scopes
-                    if scope.startswith(("oa:", "taihua:"))
+                    if scope.startswith(("oa:", "taihua:", "yuque:"))
                 }
                 for system_id in sorted(system_ids):
                     sessions.get_or_create(
@@ -665,6 +725,10 @@ def handle_mcp(args: argparse.Namespace) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
+        yuque_organization_id=_yuque_organization_id(
+            yuque_url, args.yuque_organization_id
+        ),
         trusted_card_base_url=auth_config.public_base_url,
         session_keepalive_lease_seconds=args.session_keepalive_lease,
     )
@@ -766,6 +830,27 @@ def _taihua_base_url(home: Path, explicit: str | None) -> str | None:
         return ConfigStore(home).load_system("taihua").base_url
     except KeyError:
         return None
+
+
+def _yuque_base_url(home: Path, explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    try:
+        return ConfigStore(home).load_system("yuque").base_url
+    except KeyError:
+        return None
+
+
+def _yuque_organization_id(
+    base_url: str | None,
+    explicit: int | None,
+) -> int | None:
+    if base_url is None:
+        return None
+    organization_id = explicit if explicit is not None else 20020375
+    if organization_id <= 0:
+        raise ValueError("Yuque organization id must be positive")
+    return organization_id
 
 
 def _central_cli_error(code: str, message: str) -> dict:

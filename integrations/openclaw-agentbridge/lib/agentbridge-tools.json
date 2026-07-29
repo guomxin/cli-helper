@@ -2650,6 +2650,304 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "List knowledge bases visible in the authenticated department public area.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "title": "yuque_public_books_listArguments",
+        "type": "object"
+      },
+      "name": "yuque_public_books_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_public_books_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Yuque Public Knowledge Bases"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List or filter document titles in one department knowledge base.",
+      "inputSchema": {
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Book"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "yuque_document_catalogArguments",
+        "type": "object"
+      },
+      "name": "yuque_document_catalog",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_document_catalogDictOutput",
+        "type": "object"
+      },
+      "title": "List Yuque Documents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Search one department knowledge base. Search snippets are deliberately omitted so credentials in incidental matches do not enter agent context.",
+      "inputSchema": {
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Book"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 1000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "yuque_document_searchArguments",
+        "type": "object"
+      },
+      "name": "yuque_document_search",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_document_searchDictOutput",
+        "type": "object"
+      },
+      "title": "Search Yuque Documents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Read one explicitly selected document as plain text. Likely passwords, tokens, API keys, URL credentials, and private keys are always redacted.",
+      "inputSchema": {
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Book"
+          },
+          "document": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Document",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "max_chars": {
+            "default": 12000,
+            "maximum": 50000,
+            "minimum": 500,
+            "title": "Max Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "title": "yuque_document_readArguments",
+        "type": "object"
+      },
+      "name": "yuque_document_read",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_document_readDictOutput",
+        "type": "object"
+      },
+      "title": "Read One Yuque Document"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Verify the caller's isolated central Yuque browser session.",
+      "inputSchema": {
+        "properties": {},
+        "title": "yuque_session_statusArguments",
+        "type": "object"
+      },
+      "name": "yuque_session_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_session_statusDictOutput",
+        "type": "object"
+      },
+      "title": "Verify Yuque Session Status"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Reuse a valid Yuque session or open a trusted interactive browser card. Slider and SMS verification stay outside the model context.",
+      "inputSchema": {
+        "properties": {
+          "challenge_ttl_seconds": {
+            "default": 600,
+            "maximum": 900,
+            "minimum": 30,
+            "title": "Challenge Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "yuque_session_loginArguments",
+        "type": "object"
+      },
+      "name": "yuque_session_login",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "yuque_session_loginDictOutput",
+        "type": "object"
+      },
+      "title": "Ensure Yuque Session Login"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "List the authenticated user's Taihua work logs in one date range.",
       "inputSchema": {
         "properties": {

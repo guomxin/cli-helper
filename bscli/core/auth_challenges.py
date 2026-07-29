@@ -102,6 +102,7 @@ class AuthChallengeStore:
         system_name: str = "Legacy system",
         expected_principal_ref: str | None = None,
         ttl_seconds: int = 300,
+        challenge_type: str = "legacy_form_login",
     ) -> dict:
         challenge, _reused = self._create(
             user_subject=user_subject,
@@ -115,6 +116,7 @@ class AuthChallengeStore:
             system_name=system_name,
             expected_principal_ref=expected_principal_ref,
             ttl_seconds=ttl_seconds,
+            challenge_type=challenge_type,
             reuse_active=False,
         )
         return challenge
@@ -133,6 +135,7 @@ class AuthChallengeStore:
         system_name: str = "Legacy system",
         expected_principal_ref: str | None = None,
         ttl_seconds: int = 300,
+        challenge_type: str = "legacy_form_login",
     ) -> tuple[dict, bool]:
         return self._create(
             user_subject=user_subject,
@@ -146,6 +149,7 @@ class AuthChallengeStore:
             system_name=system_name,
             expected_principal_ref=expected_principal_ref,
             ttl_seconds=ttl_seconds,
+            challenge_type=challenge_type,
             reuse_active=True,
         )
 
@@ -163,13 +167,19 @@ class AuthChallengeStore:
         system_name: str,
         expected_principal_ref: str | None,
         ttl_seconds: int,
+        challenge_type: str,
         reuse_active: bool,
     ) -> tuple[dict, bool]:
         if not user_subject or not system_id or not session_id:
             raise ValueError("challenge user, system, and session are required")
         normalized_origin = _validate_origin(origin)
         normalized_card_base_url = _validate_card_base_url(card_base_url)
-        normalized_fields = _validate_fields(fields)
+        if challenge_type not in {"legacy_form_login", "interactive_browser_login"}:
+            raise ValueError("unsupported authentication challenge type")
+        normalized_fields = _validate_fields(
+            fields,
+            allow_empty=challenge_type == "interactive_browser_login",
+        )
         fields_json = _canonical_json(normalized_fields)
         if not page_fingerprint:
             raise ValueError("challenge page fingerprint is required")
@@ -213,6 +223,7 @@ class AuthChallengeStore:
                         page_fingerprint=page_fingerprint,
                         fields_json=fields_json,
                         card_base_url=normalized_card_base_url,
+                        challenge_type=challenge_type,
                     )
                 ),
                 None,
@@ -243,11 +254,12 @@ class AuthChallengeStore:
                     system_name, session_id, expected_principal_ref, origin,
                     page_fingerprint, nonce, fields_json, card_url, state,
                     created_at, updated_at, expires_at
-                ) VALUES (?, 'legacy_form_login', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           'pending', ?, ?, ?)
                 """,
                 (
                     challenge_id,
+                    challenge_type,
                     user_subject,
                     system_id,
                     system_name,
@@ -431,12 +443,13 @@ def _challenge_contract_matches(
     page_fingerprint: str,
     fields_json: str,
     card_base_url: str,
+    challenge_type: str,
 ) -> bool:
     expected_card_parent = f"{card_base_url}/auth"
     actual_card_parent = str(row["card_url"]).rsplit("/", 1)[0]
     return all(
         (
-            row["challenge_type"] == "legacy_form_login",
+            row["challenge_type"] == challenge_type,
             row["user_subject"] == user_subject,
             row["system_id"] == system_id,
             row["system_name"] == system_name,
@@ -464,8 +477,12 @@ def _challenge_from_row(row: sqlite3.Row) -> dict:
     return value
 
 
-def _validate_fields(fields: list[dict]) -> list[dict]:
-    if not isinstance(fields, list) or not fields:
+def _validate_fields(
+    fields: list[dict],
+    *,
+    allow_empty: bool = False,
+) -> list[dict]:
+    if not isinstance(fields, list) or (not fields and not allow_empty):
         raise ValueError("authentication challenge fields are required")
     normalized: list[dict] = []
     seen: set[str] = set()

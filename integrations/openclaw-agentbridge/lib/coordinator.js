@@ -53,6 +53,22 @@ const LOGIN_READ_TOOLS = new Map([
     "taihua_project_search",
     { kind: "taihua_project", system: "泰华日志系统", label: "项目" },
   ],
+  [
+    "yuque_public_books_list",
+    { kind: "yuque_book", system: "部门信息库", label: "公共区知识库" },
+  ],
+  [
+    "yuque_document_catalog",
+    { kind: "yuque_document_list", system: "部门信息库", label: "文档目录" },
+  ],
+  [
+    "yuque_document_search",
+    { kind: "yuque_document_list", system: "部门信息库", label: "搜索结果" },
+  ],
+  [
+    "yuque_document_read",
+    { kind: "yuque_document", system: "部门信息库", label: "文档正文" },
+  ],
 ]);
 
 export function createInteractionSharedState() {
@@ -1249,7 +1265,8 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
     arguments_.keyword = source.keyword.trim().slice(0, 200);
   }
   const maximumLimit =
-    descriptor.kind === "taihua_project"
+    descriptor.kind === "taihua_project" ||
+    normalizedToolName === "yuque_document_search"
       ? 50
       : descriptor.kind === "oa_workflow"
         ? 100
@@ -1290,6 +1307,27 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
       if (Number.isInteger(source[name]) && source[name] >= 1) {
         arguments_[name] = source[name];
       }
+    }
+  }
+  if (descriptor.kind.startsWith("yuque_")) {
+    for (const name of ["book", "query", "document"]) {
+      if (typeof source[name] === "string" && source[name].trim()) {
+        arguments_[name] = source[name].trim().slice(0, 500);
+      }
+    }
+    if (
+      Number.isInteger(source.page) &&
+      source.page >= 1 &&
+      source.page <= 1000
+    ) {
+      arguments_.page = source.page;
+    }
+    if (
+      Number.isInteger(source.max_chars) &&
+      source.max_chars >= 500 &&
+      source.max_chars <= 50000
+    ) {
+      arguments_.max_chars = source.max_chars;
     }
   }
   return Object.freeze({
@@ -1359,6 +1397,19 @@ function formatReadContinuation(continuation, response) {
     response?.result && typeof response.result === "object"
       ? response.result
       : {};
+  if (descriptor.kind === "yuque_document") {
+    const title = safeDisplayText(result?.document?.title, 300) || "(未命名文档)";
+    const book = safeDisplayText(result?.document?.book?.name, 160);
+    const content = safeDisplayText(result?.content, 3200) || "(正文为空)";
+    const suffix = result?.truncated === true ? "\n\n正文已按安全上限截断。" : "";
+    return [
+      `${descriptor.system} 登录已恢复，已自动继续读取文档：${title}`,
+      book ? `知识库：${book}` : "",
+      content + suffix,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
   const items = Array.isArray(result.items) ? result.items : [];
   const count = Number.isInteger(result.count) ? result.count : items.length;
   const lines = [
@@ -1383,6 +1434,35 @@ function formatReadContinuation(continuation, response) {
 }
 
 function formatReadItem(descriptor, item, index) {
+  if (descriptor.kind === "yuque_book") {
+    const name = safeDisplayText(item?.name, 300) || "(未命名知识库)";
+    const count = Number.isInteger(item?.documentCount)
+      ? `${item.documentCount} 篇`
+      : "";
+    const description = safeDisplayText(item?.description, 500);
+    return [
+      `${index}. ${name}`,
+      count ? `   ${count}` : "",
+      description ? `   ${description}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (descriptor.kind === "yuque_document_list") {
+    const title = safeDisplayText(item?.title, 300) || "(未命名文档)";
+    const type = safeDisplayText(item?.type, 80);
+    const book = safeDisplayText(item?.book?.name, 160);
+    const slug = safeDisplayText(item?.slug, 160);
+    return [
+      `${index}. ${title}`,
+      [book, type].filter(Boolean).join(" | ")
+        ? `   ${[book, type].filter(Boolean).join(" | ")}`
+        : "",
+      slug ? `   文档标识：${slug}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   if (descriptor.kind === "taihua_work_log") {
     const date = safeDisplayText(item?.logDate, 40);
     const person = safeDisplayText(item?.fullname || item?.username, 120);

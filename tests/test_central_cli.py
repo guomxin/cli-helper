@@ -17,7 +17,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 39)
+        self.assertEqual(len(payload["capabilities"]), 43)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -26,6 +26,13 @@ class CentralCliTests(unittest.TestCase):
         self.assertIn("taihua.work_log.my.list", capabilities)
         self.assertIn("taihua.work_log.team.list", capabilities)
         self.assertIn("taihua.project.search", capabilities)
+        for capability_name in (
+            "yuque.public_books.list",
+            "yuque.document.catalog",
+            "yuque.document.search",
+            "yuque.document.read",
+        ):
+            self.assertEqual(capabilities[capability_name]["effect"], "read")
         self.assertEqual(
             capabilities["taihua.work_log.create"]["effect"],
             "controlled_write",

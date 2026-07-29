@@ -10,7 +10,7 @@ The active runtime is central AgentBridge:
 - Trusted authentication, business-field, and write-authorization cards
 - A Credential Broker that keeps credentials outside model-visible channels
 - A durable operation ledger with idempotency and explicit outcome states
-- Seeyon OA plus API-first Taihua work-log support under one multi-system runtime
+- Seeyon OA, API-first Taihua work logs, and trusted-browser Yuque knowledge access under one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
@@ -95,6 +95,22 @@ Published Taihua capabilities:
 Taihua uses central HTTP token sessions with refresh, exact-origin enforcement,
 and no browser during normal reads or writes. See the
 [Taihua adapter guide](docs/taihua-log-system-adapter.md).
+
+Published Yuque capabilities:
+
+- `yuque.public_books.list`
+- `yuque.document.catalog`
+- `yuque.document.search`
+- `yuque.document.read`
+
+Yuque uses a per-user central browser session because its current account cannot
+create a Personal Access Token and login requires a slider plus SMS verification.
+The trusted interactive login card forwards only the dedicated login page's pixels
+and user input; cookies, browser endpoints, and control tokens stay outside the
+model. Search results omit server snippets, and explicitly selected document bodies
+are redacted for likely credentials and tokens. See the
+[Yuque department knowledge adapter guide](docs/yuque-department-knowledge-adapter.md).
+
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
 form fields.
@@ -150,11 +166,14 @@ starting a browser. A temporary HTTP error or an unexpected non-login response
 returns `SESSION_CHECK_UNAVAILABLE` and preserves the encrypted session state;
 only an explicit login response expires and deletes that state.
 
-Open that URL in a trusted browser only when it is returned. Credentials are
-submitted directly to the Credential Broker. They are never CLI parameters,
-MCP tool arguments, operation-ledger values, or model-visible fields. Card
-expiry applies to that one authentication challenge, not to an already active
-OA session.
+Open that URL in a trusted browser only when it is returned. Ordinary login
+fields are submitted directly to the Credential Broker. Systems that require
+human page interaction, such as Yuque's slider and SMS flow, use the same trusted
+origin to display a short-lived, login-only central browser surface. Neither mode
+puts credentials, OTP values, cookies, browser endpoints, or control tokens in CLI
+parameters, MCP tool arguments, the operation ledger, or model-visible fields.
+Card expiry applies to that one authentication challenge, not to an active target
+system session.
 
 After login, invoke a read capability:
 
@@ -330,8 +349,8 @@ python -m bscli.cli.main --home .bscli mcp token issue \
 
 Choose only the scopes required by that client. OA scopes (`oa:read`,
 `oa:write:draft`, `oa:write:approval`, `oa:write:meeting`, `oa:write:submit`,
-`and `oa:write:revoke`) are independent from Taihua scopes (`taihua:read` and
-`taihua:write:worklog`).
+and `oa:write:revoke`) are independent from Taihua scopes (`taihua:read` and
+`taihua:write:worklog`) and the Yuque read scope (`yuque:read`).
 The token command adds the corresponding system's base read scope when any
 write scope for that system is requested, and only creates session bindings for
 systems represented by the final scope set.

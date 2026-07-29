@@ -872,6 +872,133 @@ test("replays a filtered Taihua team work-log read after credential login", asyn
     true,
   );
 });
+test("replays a Yuque document search after interactive credential login", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:wechat:direct:yuque-user";
+  const calls = [];
+  const completed = JSON.parse(toolResult().content[0].text).interaction;
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        return {
+          status: "succeeded",
+          result: { authenticated: true },
+          nextAction: { type: "retry_original_request" },
+        };
+      }
+      assert.equal(name, "yuque_document_search");
+      return {
+        status: "succeeded",
+        result: {
+          count: 1,
+          items: [
+            {
+              id: "262116028",
+              slug: "xc22kk0yg6ovnaht",
+              title: "物联网平台对接说明",
+              type: "Doc",
+              book: { name: "共享文档" },
+              snippet: null,
+            },
+          ],
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "yuque-user", channel: "wechat" });
+
+  const loginRequired = {
+    protocolVersion: "0.1",
+    status: "requires_user_action",
+    error: { code: "LOGIN_REQUIRED" },
+    nextAction: { type: "session_login", system: "yuque" },
+  };
+  bindToolCall(harness, {
+    toolCallId: "tool-yuque-before-login",
+    runId: "run-yuque-before-login",
+    sessionKey,
+    toolName: "yuque_document_search",
+    params: {
+      query: "物联网平台",
+      book: "共享文档",
+      page: 2,
+      limit: 15,
+      idempotency_key: "must-not-be-replayed",
+    },
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-yuque-before-login",
+      toolName: "yuque_document_search",
+      result: {
+        content: [{ type: "text", text: JSON.stringify(loginRequired) }],
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "yuque_document_search",
+          structuredContent: loginRequired,
+        },
+      },
+    },
+    { runtime: "openclaw" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-login-for-yuque",
+    runId: "run-yuque-before-login",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-login-for-yuque",
+      toolName: "yuque_session_login",
+      result: toolResult(),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    [
+      "agentbridge_interaction_get",
+      "agentbridge_interaction_resume",
+      "yuque_document_search",
+    ],
+  );
+  assert.deepEqual(calls.at(-1).arguments_, {
+    query: "物联网平台",
+    book: "共享文档",
+    page: 2,
+    limit: 15,
+  });
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("部门信息库 登录已恢复"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[0].payload.text.includes("物联网平台对接说明"),
+    true,
+  );
+});
 test("infers a sent-list continuation when login is the first tool", async () => {
   const harness = fakeApi({
     autoPoll: true,

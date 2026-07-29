@@ -37,12 +37,12 @@ Security behavior is intentionally fail closed:
 - cards are not rendered in group, channel, or room sessions;
 - credentials, business fields, cookies, and authorization decisions remain in
   AgentBridge trusted pages;
-- repeated OA or Taihua session-login calls for the same bound session and unchanged
+- repeated OA, Taihua, or Yuque session-login calls for the same bound session and unchanged
   authentication contract reuse the existing unexpired credential card and
   interaction, including while the trusted page is processing;
 - after a successful credential resume that explicitly returns
   `nextAction.type=retry_original_request`, a login-blocked OA workflow-list or
-  Taihua log/project read is replayed once through the same per-user MCP client
+  Taihua log/project or Yuque knowledge read is replayed once through the same per-user MCP client
   and delivered directly to the originating private channel; login-first
   requests can infer only the registered read intents from the current user message;
 - write tools are never captured or replayed by login continuation;
@@ -85,7 +85,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.2.15, ...)
+AgentBridge interaction plugin registered (version=0.2.17, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
@@ -154,13 +154,15 @@ as fixed host-owned status text through the same adapter.
 
 A successful credential resume with
 `nextAction.type=retry_original_request` is the deliberate exception to the
-model-free terminal path. Registered OA workflow-list reads and Taihua
-`my/team work logs` or `project search` reads retain only their allowlisted
-filters, dates, and pagination values, drop the old idempotency key, and replay
-once through the same identity-bound MCP client after login. Login-first intent
-inference is likewise restricted to these named read collections. A successful
-replay is formatted for the corresponding business object and delivered
-directly to the original channel; a failed replay reports its error code.
+model-free terminal path. Registered OA workflow-list reads, Taihua
+`my/team work logs` or `project search` reads, and Yuque public-book, catalog,
+search, or selected-document reads retain only their allowlisted selectors,
+filters, dates, and pagination values. They drop the old idempotency key and
+replay once through the same identity-bound MCP client after login. Login-first
+intent inference is likewise restricted to named read collections that do not
+require unsafe parameter guessing. A successful replay is formatted for the
+corresponding business object and delivered directly to the original channel;
+a failed replay reports its error code.
 
 No draft, approval, submission, meeting, revoke, or other write tool is eligible
 for automatic replay. Other credential continuations retain the one-time opaque

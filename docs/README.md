@@ -35,6 +35,7 @@
   提升流程。
 - [OA 证书扫描件检索与下载](./oa-certificate-document-download.md)：文档中心目录、按名称检索和短时可信下载边界。
 - [泰华日志系统适配](./taihua-log-system-adapter.md)：API、会话和日志能力说明。
+- [部门信息库（语雀）适配](./yuque-department-knowledge-adapter.md)：交互式登录、只读检索与敏感内容脱敏。
 
 ## 退役与归档
 

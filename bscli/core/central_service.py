@@ -30,6 +30,12 @@ from bscli.adapters.taihua import (
     commit_taihua_work_log_create,
     prepare_taihua_work_log_create,
 )
+from bscli.adapters.yuque import (
+    YUQUE_ADAPTER_ID,
+    YUQUE_SYSTEM_ID,
+    YuqueCentralAdapter,
+    build_yuque_capability_registry,
+)
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_FIELD_CARD_SCHEMA,
     BUSINESS_TRIP_PREPARE_CAPABILITY,
@@ -406,6 +412,8 @@ class CentralCapabilityService:
         home: Path | str,
         base_url: str,
         taihua_base_url: str | None = None,
+        yuque_base_url: str | None = None,
+        yuque_organization_id: int | None = None,
         registry: CapabilityRegistry | None = None,
         worker_factory: WorkerFactory | None = None,
         session_state_store: SessionStateStore | None = None,
@@ -417,6 +425,8 @@ class CentralCapabilityService:
         if registry is None:
             self.registry = build_central_capability_registry()
             for spec in build_taihua_capability_registry().list():
+                self.registry.register(spec)
+            for spec in build_yuque_capability_registry().list():
                 self.registry.register(spec)
         else:
             self.registry = registry
@@ -444,6 +454,16 @@ class CentralCapabilityService:
                 self._default_http_worker_factory
             )
             self._adapter_systems[TAIHUA_ADAPTER_ID] = TAIHUA_SYSTEM_ID
+        if yuque_base_url and yuque_organization_id:
+            yuque_adapter = YuqueCentralAdapter(
+                base_url=yuque_base_url,
+                organization_id=yuque_organization_id,
+            )
+            self._adapters_by_system[YUQUE_SYSTEM_ID] = yuque_adapter
+            self._worker_factories_by_system[YUQUE_SYSTEM_ID] = (
+                self._default_browser_worker_factory
+            )
+            self._adapter_systems[YUQUE_ADAPTER_ID] = YUQUE_SYSTEM_ID
         self.trusted_card_base_url = trusted_card_base_url
         if (
             session_keepalive_lease_seconds is not None
@@ -786,6 +806,11 @@ class CentralCapabilityService:
             fields=contract["fields"],
             card_base_url=card_base_url,
             ttl_seconds=ttl_seconds,
+            challenge_type=(
+                "interactive_browser_login"
+                if contract.get("authentication_mode") == "interactive_browser"
+                else "legacy_form_login"
+            ),
         )
         interaction = self._credential_interaction(challenge)
         return {
@@ -843,7 +868,7 @@ class CentralCapabilityService:
         )
         resume_spec = record.get("resume_spec")
         if not isinstance(resume_spec, dict) or resume_spec.get("kind") != "capability":
-            return frozenset({"oa:read"})
+            return frozenset({f"{record['system_id']}:read"})
         capability_name = str(resume_spec.get("capability") or "")
         try:
             spec = self.registry.get(capability_name)
@@ -852,7 +877,7 @@ class CentralCapabilityService:
                 "interaction resume capability is not registered"
             ) from exc
         if spec.effect == "read":
-            return frozenset({"oa:read"})
+            return frozenset({f"{spec.system}:read"})
         try:
             return capability_required_scopes(capability_name)
         except KeyError as exc:
@@ -1747,6 +1772,16 @@ class CentralCapabilityService:
         return CentralBrowserWorker(
             profile_path=session["profile_path"],
             allowed_origins={adapter.origin},
+            headless=True,
+        )
+
+    @staticmethod
+    def _default_browser_worker_factory(session: dict, adapter: object):
+        return CentralBrowserWorker(
+            profile_path=session["profile_path"],
+            allowed_origins=set(
+                getattr(adapter, "allowed_origins", None) or {adapter.origin}
+            ),
             headless=True,
         )
 

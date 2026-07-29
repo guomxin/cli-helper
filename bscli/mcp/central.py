@@ -69,12 +69,20 @@ from bscli.adapters.taihua import (
     TAIHUA_WORK_LOG_CREATE_CAPABILITY,
     TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
 )
+from bscli.adapters.yuque import (
+    YUQUE_DOCUMENT_CATALOG_CAPABILITY,
+    YUQUE_DOCUMENT_READ_CAPABILITY,
+    YUQUE_DOCUMENT_SEARCH_CAPABILITY,
+    YUQUE_PUBLIC_BOOKS_CAPABILITY,
+)
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
+from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
+from bscli.broker.interactive_browser import InteractiveBrowserBroker
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
@@ -1355,6 +1363,157 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="yuque_public_books_list",
+        title="List Yuque Public Knowledge Bases",
+        description="List knowledge bases visible in the authenticated department public area.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def yuque_public_books_list(
+        ctx: Context,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            YUQUE_PUBLIC_BOOKS_CAPABILITY,
+            {},
+            idempotency_key,
+            {"yuque:read"},
+        )
+
+    @mcp.tool(
+        name="yuque_document_catalog",
+        title="List Yuque Documents",
+        description="List or filter document titles in one department knowledge base.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def yuque_document_catalog(
+        ctx: Context,
+        book: Annotated[str | None, Field(max_length=200)] = None,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        if book is not None:
+            arguments["book"] = book
+        if keyword is not None:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            YUQUE_DOCUMENT_CATALOG_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"yuque:read"},
+        )
+
+    @mcp.tool(
+        name="yuque_document_search",
+        title="Search Yuque Documents",
+        description=(
+            "Search one department knowledge base. Search snippets are deliberately "
+            "omitted so credentials in incidental matches do not enter agent context."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def yuque_document_search(
+        ctx: Context,
+        query: Annotated[str, Field(min_length=1, max_length=500)],
+        book: Annotated[str | None, Field(max_length=200)] = None,
+        page: Annotated[int, Field(ge=1, le=1000)] = 1,
+        limit: Annotated[int, Field(ge=1, le=50)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"query": query, "page": page, "limit": limit}
+        if book is not None:
+            arguments["book"] = book
+        return await invoke(
+            ctx,
+            YUQUE_DOCUMENT_SEARCH_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"yuque:read"},
+        )
+
+    @mcp.tool(
+        name="yuque_document_read",
+        title="Read One Yuque Document",
+        description=(
+            "Read one explicitly selected document as plain text. Likely passwords, "
+            "tokens, API keys, URL credentials, and private keys are always redacted."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def yuque_document_read(
+        ctx: Context,
+        document: Annotated[str, Field(min_length=1, max_length=500)],
+        book: Annotated[str | None, Field(max_length=200)] = None,
+        max_chars: Annotated[int, Field(ge=500, le=50000)] = 12000,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "document": document,
+            "max_chars": max_chars,
+        }
+        if book is not None:
+            arguments["book"] = book
+        return await invoke(
+            ctx,
+            YUQUE_DOCUMENT_READ_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"yuque:read"},
+        )
+
+    @mcp.tool(
+        name="yuque_session_status",
+        title="Verify Yuque Session Status",
+        description="Verify the caller's isolated central Yuque browser session.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def yuque_session_status() -> dict[str, Any]:
+        identity = _request_identity(identity_store, required_scopes={"yuque:read"})
+        return await asyncio.to_thread(
+            service.session_status,
+            user_subject=identity["user_subject"],
+            system_id="yuque",
+        )
+
+    @mcp.tool(
+        name="yuque_session_login",
+        title="Ensure Yuque Session Login",
+        meta=interaction_tool_meta(),
+        description=(
+            "Reuse a valid Yuque session or open a trusted interactive browser card. "
+            "Slider and SMS verification stay outside the model context."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def yuque_session_login(
+        ctx: Context,
+        challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 600,
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store, required_scopes={"yuque:read"})
+        response = await asyncio.to_thread(
+            service.start_login,
+            user_subject=identity["user_subject"],
+            expected_principal_ref=identity["expected_principal_ref"],
+            card_base_url=auth_card_base_url,
+            ttl_seconds=challenge_ttl_seconds,
+            system_id="yuque",
+        )
+        return package_interaction_result(response)
+    @mcp.tool(
         name="taihua_work_log_my_list",
         title="List My Taihua Work Logs",
         description="List the authenticated user's Taihua work logs in one date range.",
@@ -1788,6 +1947,20 @@ def serve_central_mcp(
         challenge_store=service.challenges,
         broker=broker,
     )
+    interactive_broker = InteractiveBrowserBroker(
+        challenge_store=service.challenges,
+        session_registry=service.sessions,
+        session_state_store=service.session_states,
+        adapter_factory=lambda challenge: service.adapter_for_system(
+            challenge["system_id"]
+        ),
+        worker_factory=service.authentication_worker,
+        login_timeout_seconds=900,
+    )
+    interactive_application = TrustedInteractiveBrowserApplication(
+        challenge_store=service.challenges,
+        broker=interactive_broker,
+    )
     action_application = TrustedActionApplication(
         authorization_store=service.write_authorizations,
     )
@@ -1804,6 +1977,7 @@ def serve_central_mcp(
         action_application=action_application,
         field_application=field_application,
         download_application=download_application,
+        interactive_application=interactive_application,
     )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,
@@ -1835,6 +2009,7 @@ def serve_central_mcp(
         )
     finally:
         keepalive.stop()
+        interactive_broker.shutdown()
         auth_server.shutdown()
         auth_server.server_close()
         auth_thread.join(timeout=5)
