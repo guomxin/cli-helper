@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AgentBridge 管理控制台</title>
+  <link rel="stylesheet" href="/assets/admin.css">
+  <script src="/assets/admin.js" defer></script>
+</head>
+<body>
+  <main id="login-view" class="login-shell">
+    <section class="login-brand" aria-label="AgentBridge">
+      <div class="brand-mark" aria-hidden="true">AB</div>
+      <p class="brand-kicker">AGENTBRIDGE CONTROL PLANE</p>
+      <h1>把运行边界<br>握在手里</h1>
+      <p class="brand-copy">集中管理身份、会话与写操作策略。业务凭据和表单内容不会进入管理界面。</p>
+      <div class="brand-rule"><span></span><span></span><span></span></div>
+    </section>
+    <section class="login-panel">
+      <form id="login-form" class="login-form">
+        <div>
+          <p class="eyebrow">管理员入口</p>
+          <h2>登录控制台</h2>
+          <p class="muted">使用独立管理员账户，不接受 MCP Token。</p>
+        </div>
+        <label>用户名<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button type="submit" class="button primary">登录</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small">AB</div>
+        <div><strong>AgentBridge</strong><span>管理控制台</span></div>
+      </div>
+      <nav id="nav" class="nav" aria-label="主导航">
+        <button data-view="overview" class="active"><span class="nav-code">01</span>总览</button>
+        <button data-view="users"><span class="nav-code">02</span>用户与令牌</button>
+        <button data-view="sessions"><span class="nav-code">03</span>系统会话</button>
+        <button data-view="capabilities"><span class="nav-code">04</span>能力与策略</button>
+        <button data-view="operations"><span class="nav-code">05</span>操作记录</button>
+        <button data-view="interactions"><span class="nav-code">06</span>可信交互</button>
+        <button data-view="runtime"><span class="nav-code">07</span>系统运行</button>
+        <button data-view="audit"><span class="nav-code">08</span>管理审计</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="status-dot"></span><span>中心服务</span><strong id="sidebar-release">--</strong>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p id="view-kicker" class="eyebrow">CONTROL PLANE</p>
+          <h1 id="view-title">运行总览</h1>
+        </div>
+        <div class="top-actions">
+          <span id="freshness" class="freshness">尚未刷新</span>
+          <button id="refresh-button" class="button secondary" type="button">刷新</button>
+          <button id="account-button" class="account-button" type="button" aria-haspopup="menu">
+            <span id="account-initial">A</span><span id="account-name">admin</span>
+          </button>
+          <div id="account-menu" class="account-menu hidden" role="menu">
+            <button id="change-password-button" role="menuitem">修改密码</button>
+            <button id="logout-button" role="menuitem">退出登录</button>
+          </div>
+        </div>
+      </header>
+      <div id="password-banner" class="notice critical hidden">
+        <div><strong>需要修改初始密码</strong><span>完成改密后才能读取运行数据或执行管理动作。</span></div>
+        <button id="banner-password-button" class="button danger" type="button">立即修改</button>
+      </div>
+      <section id="content" class="content" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <form id="modal-form" method="dialog">
+      <header><div><p id="modal-kicker" class="eyebrow">管理操作</p><h2 id="modal-title">确认</h2></div><button id="modal-close" class="icon-button" type="button" aria-label="关闭">×</button></header>
+      <div id="modal-body" class="modal-body"></div>
+      <p id="modal-error" class="form-error" role="alert"></p>
+      <footer><button id="modal-cancel" class="button secondary" type="button">取消</button><button id="modal-submit" class="button primary" type="submit">确认</button></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+</body>
+</html>

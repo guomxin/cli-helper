@@ -340,6 +340,29 @@ side effects.
 
 The pair requires the independent `oa:write:revoke` scope. Existing identity
 tokens are not widened when the capability is deployed.
+## Admin Control Plane
+
+AgentBridge includes an independent administration surface for multi-user runtime
+visibility and write governance. It uses separate administrator accounts and
+sessions; it never exposes credentials, cookies, trusted-card URLs, business
+field values, or issued Token secrets.
+
+For the current intranet deployment, open
+`https://10.10.50.213:8782`. Bootstrap the first administrator from a trusted
+server terminal with a password supplied only on standard input:
+
+~~~bash
+sudo -u agentbridge /home/guomao/agentbridge/venv/bin/python -P \
+  -m bscli.cli.main --home /home/guomao/agentbridge/data \
+  admin account bootstrap --username admin --password-stdin
+~~~
+
+The first login requires an immediate password change. Administrators can issue
+or revoke MCP Tokens, inspect or invalidate downstream sessions, and pause write
+capabilities globally or by system, user, capability, and version. Auditors are
+read-only. Every control action requires a reason and is written to an
+append-only audit ledger. See the
+[administration guide](docs/agentbridge-admin-console.md).
 ## Streamable HTTP MCP
 
 Issue a short-lived identity token from a trusted administrator terminal:

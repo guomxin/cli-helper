@@ -75,6 +75,11 @@ from bscli.adapters.yuque import (
     YUQUE_DOCUMENT_SEARCH_CAPABILITY,
     YUQUE_PUBLIC_BOOKS_CAPABILITY,
 )
+from bscli.admin.application import AdminControlPlane
+from bscli.admin.server import (
+    AdminServerConfig,
+    create_admin_http_server,
+)
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
@@ -1959,6 +1964,7 @@ def serve_central_mcp(
     identity_store: McpIdentityTokenStore,
     mcp_config: CentralMcpServerConfig,
     auth_config: AuthServerConfig,
+    admin_config: AdminServerConfig | None = None,
     login_timeout_seconds: float = 45,
     keepalive_interval_seconds: float = 0,
     keepalive_activity_lease_seconds: float = 604_800,
@@ -2022,6 +2028,23 @@ def serve_central_mcp(
         download_application=download_application,
         interactive_application=interactive_application,
     )
+    admin_server = None
+    admin_thread = None
+    if admin_config is not None:
+        control_plane = AdminControlPlane(
+            service=service,
+            identity_store=identity_store,
+        )
+        admin_server = create_admin_http_server(
+            config=admin_config,
+            control_plane=control_plane,
+        )
+        admin_thread = threading.Thread(
+            target=admin_server.serve_forever,
+            kwargs={"poll_interval": 0.25},
+            name="agentbridge-admin",
+            daemon=True,
+        )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,
         kwargs={"poll_interval": 0.25},
@@ -2034,6 +2057,8 @@ def serve_central_mcp(
         activity_lease_seconds=keepalive_activity_lease_seconds,
     )
     auth_thread.start()
+    if admin_thread is not None:
+        admin_thread.start()
     keepalive.start()
     try:
         mcp = create_central_mcp_server(
@@ -2053,6 +2078,11 @@ def serve_central_mcp(
     finally:
         keepalive.stop()
         interactive_broker.shutdown()
+        if admin_server is not None:
+            admin_server.shutdown()
+            admin_server.server_close()
+        if admin_thread is not None:
+            admin_thread.join(timeout=5)
         auth_server.shutdown()
         auth_server.server_close()
         auth_thread.join(timeout=5)

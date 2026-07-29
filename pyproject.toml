@@ -21,3 +21,4 @@ include = ["bscli*"]
 
 [tool.setuptools.package-data]
 "bscli.mcp" = ["static/*.html"]
+"bscli.admin" = ["static/*.html", "static/*.css", "static/*.js"]

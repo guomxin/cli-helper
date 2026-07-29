@@ -25,6 +25,29 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_admin_console_is_deployed_with_tls_and_release_metadata(self) -> None:
+        unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
+            encoding="utf-8"
+        )
+        script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        for marker in (
+            "EnvironmentFile=-/home/guomao/agentbridge/config/release.env",
+            "--admin-host 10.10.50.213",
+            "--admin-port 8782",
+            "--admin-public-base-url https://10.10.50.213:8782",
+            "--admin-tls-cert /home/guomao/agentbridge/config/tls/server.crt",
+            "--admin-tls-key /home/guomao/agentbridge/config/tls/server.key",
+        ):
+            self.assertIn(marker, unit)
+        for marker in (
+            "AGENTBRIDGE_RELEASE_ID",
+            'chmod 0640 "$root/config/release.env"',
+        ):
+            self.assertIn(marker, script)
+
     def test_deployment_cleans_stale_build_tree_before_wheel(self) -> None:
         script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"

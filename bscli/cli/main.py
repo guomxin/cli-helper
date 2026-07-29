@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 from urllib.parse import urlparse
 
+from bscli.admin.server import validate_admin_server_config
+from bscli.admin.stores import AdminAccountStore, AdminAuditStore
+
 from bscli.adapters.seeyon_home import (
     parse_navigation_inventory,
     parse_pending_list,
@@ -48,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     home = Path(args.home)
 
+    if args.area == "admin":
+        return handle_admin(args, home)
     if args.area == "system":
         return handle_system(args, ConfigStore(home))
     if args.area == "capability":
@@ -79,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="area", required=True)
 
+    admin = subparsers.add_parser("admin")
+    admin_sub = admin.add_subparsers(dest="action", required=True)
+    admin_account = admin_sub.add_parser("account")
+    admin_account_sub = admin_account.add_subparsers(dest="account_action", required=True)
+    admin_bootstrap = admin_account_sub.add_parser("bootstrap")
+    admin_bootstrap.add_argument("--username", default="admin")
+    admin_bootstrap.add_argument("--password-stdin", action="store_true", required=True)
     system = subparsers.add_parser("system")
     system_sub = system.add_subparsers(dest="action", required=True)
     add = system_sub.add_parser("add")
@@ -222,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_central_serve.add_argument("--auth-public-base-url")
     mcp_central_serve.add_argument("--auth-tls-cert")
     mcp_central_serve.add_argument("--auth-tls-key")
+    mcp_central_serve.add_argument("--admin-host", default="127.0.0.1")
+    mcp_central_serve.add_argument("--admin-port", type=int, default=0)
+    mcp_central_serve.add_argument("--admin-public-base-url")
+    mcp_central_serve.add_argument("--admin-tls-cert")
+    mcp_central_serve.add_argument("--admin-tls-key")
     mcp_central_serve.add_argument(
         "--allow-insecure-private-http",
         action="store_true",
@@ -274,6 +291,46 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
+def handle_admin(args: argparse.Namespace, home: Path) -> int:
+    if args.action != "account" or args.account_action != "bootstrap":
+        raise ValueError("unknown admin action")
+    if not args.password_stdin:
+        print_json(_central_cli_error("INVALID_INPUT", "--password-stdin is required"))
+        return 2
+    password = sys.stdin.readline().rstrip("\r\n")
+    try:
+        store = AdminAccountStore(_central_db_path(home))
+        if store.count() != 0:
+            raise ValueError("an administrator account already exists")
+        account = store.create(
+            username=args.username,
+            password=password,
+            role="admin",
+            must_change_password=True,
+        )
+        AdminAuditStore(_central_db_path(home)).append(
+            actor=account,
+            action="admin.account.bootstrap",
+            target_type="admin_account",
+            target_id=account["account_id"],
+            result="succeeded",
+            after=account,
+        )
+    except ValueError as exc:
+        print_json(_central_cli_error("ADMIN_BOOTSTRAP_FAILED", str(exc)))
+        return 2
+    finally:
+        password = ""
+    print_json(
+        {
+            "protocolVersion": "0.1",
+            "status": "created",
+            "account": account,
+            "warning": "The bootstrap password must be changed after first sign-in.",
+        }
+    )
+    return 0
 
 def handle_pki(args: argparse.Namespace) -> int:
     if args.action != "issue-server":
@@ -694,6 +751,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
 
     if args.action != "central-serve":
         raise ValueError(f"unknown mcp action: {args.action}")
+    admin_config = None
     try:
         if args.login_timeout < 1 or args.login_timeout > 300:
             raise ValueError("--login-timeout must be between 1 and 300 seconds")
@@ -734,6 +792,16 @@ def handle_mcp(args: argparse.Namespace) -> int:
         )
         if mcp_config.port == auth_config.port:
             raise ValueError("central MCP and authentication card services must use different ports")
+        if args.admin_port:
+            admin_config = validate_admin_server_config(
+                host=args.admin_host,
+                port=args.admin_port,
+                public_base_url=args.admin_public_base_url,
+                tls_cert=args.admin_tls_cert,
+                tls_key=args.admin_tls_key,
+            )
+            if admin_config.port in {mcp_config.port, auth_config.port}:
+                raise ValueError("admin, MCP, and authentication services must use different ports")
     except ValueError as exc:
         print_json(_central_cli_error("CENTRAL_MCP_CONFIG_INVALID", str(exc)))
         return 2
@@ -758,6 +826,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
         "service": "agentbridge_central_mcp",
         "mcpUrl": mcp_config.mcp_url,
         "authCardBaseUrl": auth_config.public_base_url,
+        "adminBaseUrl": admin_config.public_base_url if admin_config else None,
         "transport": "streamable_http",
         "stateless": True,
         "authentication": "bearer_identity_token",
@@ -779,6 +848,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
             identity_store=identity_store,
             mcp_config=mcp_config,
             auth_config=auth_config,
+            admin_config=admin_config,
             login_timeout_seconds=args.login_timeout,
             keepalive_interval_seconds=args.session_keepalive_interval,
             keepalive_activity_lease_seconds=args.session_keepalive_lease,

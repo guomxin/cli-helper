@@ -133,6 +133,10 @@ from bscli.adapters.seeyon_workflow_revoke import (
     prepare_workflow_revoke,
     revoke_workflow,
 )
+from bscli.admin.stores import (
+    GovernancePolicyDenied,
+    GovernancePolicyStore,
+)
 from bscli.browser.central import AttachedCentralBrowserWorker, CentralBrowserWorker
 from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
@@ -440,6 +444,7 @@ class CentralCapabilityService:
         self.document_downloads = DocumentDownloadStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
+        self.governance_policies = GovernancePolicyStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
         self._adapters_by_system: dict[str, object] = {"oa": self.adapter}
@@ -598,6 +603,49 @@ class CentralCapabilityService:
             "checkedAt": checked_at,
         }
 
+    def inspect_session(self, *, user_subject: str, system_id: str) -> dict:
+        """Run a live session check without extending the user's activity lease."""
+        session = self.sessions.find(user_subject=user_subject, system_id=system_id)
+        if session is None:
+            return {
+                "protocolVersion": "0.1",
+                "status": "not_found",
+                "systemId": system_id,
+                "userSubject": user_subject,
+                "statusSource": "registry",
+                "checkedAt": None,
+            }
+        if session["state"] != "active":
+            return {
+                **self._session_response(session),
+                "statusSource": "registry",
+                "checkedAt": None,
+            }
+        live_check = self._reuse_active_session(
+            user_subject=user_subject,
+            session=session,
+            record_verification=False,
+            record_activity=False,
+        )
+        checked_at = _utc_now()
+        if live_check is None:
+            return {
+                **self._session_response(self.sessions.get(session["session_id"])),
+                "statusSource": "live",
+                "checkedAt": checked_at,
+            }
+        if live_check.get("status") == "succeeded":
+            return {
+                **live_check["session"],
+                "statusSource": "live",
+                "checkedAt": checked_at,
+            }
+        return {
+            **live_check,
+            "session": self._session_response(self.sessions.get(session["session_id"])),
+            "statusSource": "live",
+            "checkedAt": checked_at,
+        }
     def start_login(
         self,
         *,
@@ -1117,6 +1165,7 @@ class CentralCapabilityService:
         capability_name: str,
         arguments: dict,
     ) -> dict:
+        self._assert_write_allowed(context=context, system_id=system_id)
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)
         if session is None or session["state"] != "active":
             raise login_required_action(user_subject, system_id, session)
@@ -1375,6 +1424,7 @@ class CentralCapabilityService:
         prepare_function = globals().get(str(definition["prepare_function"]))
         if not callable(prepare_function):
             raise RuntimeError("trusted write prepare function is unavailable")
+        self._assert_write_allowed(context=context, system_id=session["system_id"])
         prepared = prepare_function(adapter, worker, arguments)
         resume_arguments = dict(
             field_submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
@@ -1619,6 +1669,8 @@ class CentralCapabilityService:
                 "the downstream session changed after the write plan was authorized"
             )
 
+        self._assert_write_allowed(context=context, system_id=session["system_id"])
+
         def enter_commit_boundary() -> None:
             self.write_authorizations.consume(
                 authorization_id,
@@ -1738,6 +1790,24 @@ class CentralCapabilityService:
         except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:
             raise ValueError(str(exc)) from exc
 
+    def _assert_write_allowed(self, *, context: CapabilityContext, system_id: str) -> None:
+        if context.spec.effect == "read":
+            return
+        try:
+            self.governance_policies.assert_write_allowed(
+                system_id=system_id,
+                user_subject=context.user_subject,
+                capability_name=context.spec.name,
+                capability_version=context.spec.version,
+            )
+        except GovernancePolicyDenied as exc:
+            policy = exc.policy
+            raise CapabilityRejected(
+                "WRITE_PAUSED",
+                "Write operation is paused by governance policy "
+                f"{policy['scope_type']}:{policy['scope_value']}. "
+                f"Reason: {policy['reason']}",
+            ) from exc
     @staticmethod
     def _trusted_write_session_binding_matches(plan: dict, session: dict) -> bool:
         binding = plan.get("session_binding") if isinstance(plan.get("session_binding"), dict) else {}

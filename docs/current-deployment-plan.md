@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-26
+> 文档日期：2026-07-29
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
 >
@@ -28,7 +28,7 @@
 - 登录、业务字段填写和写操作授权通过 AgentBridge 可信卡片完成；
 - Telegram 对三类 HTTPS 卡片使用原生 Web App 按钮，在应用内 WebView 中展示；
 - 当前 PoC 使用固定私网 IP、HTTPS 和专用内部 CA，不要求域名或公网证书；
-- 已部署服务不启用 `--allow-insecure-private-http`，8780/8790 的明文 HTTP 均被拒绝。
+- 已部署服务不启用 `--allow-insecure-private-http`，8780/8782/8790 的明文 HTTP 均被拒绝。
 
 当前目标服务器为 `10.10.50.213`：
 
@@ -36,6 +36,7 @@
 | --- | --- | --- |
 | AgentBridge MCP | `https://10.10.50.213:8790/mcp` | 用户电脑上的 OpenClaw |
 | 可信卡片服务 | `https://10.10.50.213:8780` | Telegram 应用内 WebView；普通浏览器仅作兼容入口 |
+| 管理控制台 | `https://10.10.50.213:8782` | 受信管理员与审计员浏览器 |
 | OA | 由 `oa` 系统配置确定 | AgentBridge 中心 Worker |
 
 ## 2. 部署拓扑
@@ -365,6 +366,11 @@ sudo -u agentbridge env \
   --auth-public-base-url "https://${AB_IP}:8780" \
   --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
   --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
+  --admin-host "$AB_IP" \
+  --admin-port 8782 \
+  --admin-public-base-url "https://${AB_IP}:8782" \
+  --admin-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --admin-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
   --session-keepalive-lease 604800
 ```
@@ -376,6 +382,7 @@ sudo -u agentbridge env \
   "status": "serving",
   "mcpUrl": "https://10.10.50.213:8790/mcp",
   "authCardBaseUrl": "https://10.10.50.213:8780",
+  "adminBaseUrl": "https://10.10.50.213:8782",
   "insecurePrivateHttp": false,
   "sessionKeepalive": {
     "enabled": true,
@@ -385,7 +392,7 @@ sudo -u agentbridge env \
 }
 ```
 
-启动输出中的 MCP 与卡片地址必须都是 HTTPS，且不得再出现私网明文警告。
+启动输出中的 MCP、卡片与管理台地址必须都是 HTTPS，且不得再出现私网明文警告。
 
 ### 8.2 systemd 托管
 
@@ -406,6 +413,7 @@ WorkingDirectory=/home/guomao/agentbridge
 Environment=HOME=/home/guomao/agentbridge/data
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
+EnvironmentFile=-/home/guomao/agentbridge/config/release.env
 ExecStart=/home/guomao/agentbridge/venv/bin/python \
   -P -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve \
   --host 10.10.50.213 --port 8790 \
@@ -416,6 +424,10 @@ ExecStart=/home/guomao/agentbridge/venv/bin/python \
   --auth-public-base-url https://10.10.50.213:8780 \
   --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
   --auth-tls-key /home/guomao/agentbridge/config/tls/server.key \
+  --admin-host 10.10.50.213 --admin-port 8782 \
+  --admin-public-base-url https://10.10.50.213:8782 \
+  --admin-tls-cert /home/guomao/agentbridge/config/tls/server.crt \
+  --admin-tls-key /home/guomao/agentbridge/config/tls/server.key \
   --session-keepalive-interval 600 \
   --session-keepalive-lease 604800
 Restart=on-failure

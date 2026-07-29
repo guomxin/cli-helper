@@ -156,6 +156,31 @@ class SessionRegistry:
             raise KeyError(f"session not found: {session_id}")
         return _session_from_row(row)
 
+    def list(
+        self,
+        *,
+        user_subject: str | None = None,
+        system_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("session list limit must be between 1 and 1000")
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if user_subject is not None:
+            clauses.append("user_subject = ?")
+            parameters.append(user_subject)
+        if system_id is not None:
+            clauses.append("system_id = ?")
+            parameters.append(system_id)
+        query = "SELECT * FROM sessions"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC, session_id LIMIT ?"
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [_session_from_row(row) for row in rows]
     def list_active(self, *, system_id: str | None = None) -> list[dict]:
         query = "SELECT * FROM sessions WHERE state = 'active'"
         parameters: tuple[str, ...] = ()

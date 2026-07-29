@@ -25,6 +25,7 @@
 ## 部署与运维
 
 - [当前内网部署](./current-deployment-plan.md)：10.10.50.213 的运行架构和部署记录。
+- [管理控制台](./agentbridge-admin-console.md)：管理员身份、运行总览、会话、Token、写暂停与追加式审计。
 - [开发验证与发布](./development-and-release-workflow.md)：测试、构建、部署和冒烟流程。
 - [远程 MCP 接入](./remote-mcp-onboarding.md)：OpenClaw 等宿主的低安装接入方式。
 

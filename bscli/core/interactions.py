@@ -218,6 +218,20 @@ class InteractionStore:
             ).fetchall()
         return [_interaction_from_row(row) for row in rows]
 
+    def list_all(self, *, limit: int = 100) -> list[dict]:
+        if limit < 1 or limit > 500:
+            raise ValueError("interaction list limit must be between 1 and 500")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM interactions
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_interaction_from_row(row) for row in rows]
+
     @staticmethod
     def _verify_existing(
         row: sqlite3.Row,
