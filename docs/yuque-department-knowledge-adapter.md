@@ -1,8 +1,8 @@
-# 部门信息库（语雀）适配一期
+# 部门信息库（语雀）适配与读取能力
 
 > 目标系统：`https://tc-aiot.yuque.com/`  
 > 系统标识：`yuque`  
-> 当前范围：中央交互式登录与只读检索，不开放业务写入
+> 当前范围：中央交互式登录、跨库检索与结构化只读，不开放业务写入
 > 真实验收：2026-07-29 已通过
 
 ## 1. 认证链路
@@ -31,9 +31,9 @@
 | `yuque_session_status` | 实时核验当前调用者的独立语雀会话 |
 | `yuque_session_login` | 复用会话，失效时打开交互式登录卡 |
 | `yuque_public_books_list` | 列出公共区知识库 |
-| `yuque_document_catalog` | 按知识库列出或按标题筛选文档 |
-| `yuque_document_search` | 在指定知识库中全文检索 |
-| `yuque_document_read` | 明确选择一篇文档后读取正文 |
+| `yuque_document_catalog` | 默认跨全部知识库列目录；支持知识库、标题、文档类型、更新时间、排序和分页筛选 |
+| `yuque_document_search` | 默认组织范围全文检索；可限定知识库、文档类型和分页 |
+| `yuque_document_read` | 按标题、Slug 或 ID 读取 Doc、Sheet、Table；支持表格行分页与正文长度限制 |
 
 一期能力注册为：
 
@@ -53,6 +53,9 @@
 - 正文转为纯文本后，疑似账号密码、Token、API Key、URL 内嵌凭据和私钥一律替换为 `[REDACTED]`；
 - 返回 `redaction` 元数据说明是否脱敏、类别和数量；
 - 默认最多返回 12,000 字符，调用方可在 500 至 50,000 字符内调整。
+- 普通 Doc 保留标题大纲、HTML 表格、链接、图片尺寸和图片 OCR 文本；不把图片源地址暴露给模型；
+- Sheet 和 Table 转为可读表格文本，并通过 `row_offset`、`max_rows` 分页，默认最多 100 行、单次最多 500 行；
+- 文件卡只返回名称、大小和格式等安全元数据。当前真实样本中未发现可验收的独立附件卡，因此 `downloadSupported=false`，本期不宣称支持语雀附件下载。
 
 登录请求体、Cookie、短信验证码、页面画面和短期浏览器控制令牌不得写入日志、测试夹具、操作账本或模型结果。
 
@@ -65,6 +68,7 @@
 - `GET /api/docs?book_id=...`
 - `GET /api/zsearch?...`
 - `GET /api/docs/{slug}?book_id=...`
+- `GET /api/modules/table/doc/TableRecordController/show?...`（Table 行数据只读接口）
 
 当前测试账号的个人 Access Token 页面需要额外会员能力，系统级应用也没有可用的创建入口，所以部署不能依赖 `X-Auth-Token`。如果后续由语雀管理员提供正式系统 AccessToken，可新增 Token 适配器并保留相同 MCP 工具契约。
 
@@ -110,10 +114,11 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
 2. 调用 `yuque_session_login`，在 15 分钟内完成滑块和短信验证；卡片不应出现 VNC 密码框；
 3. 登录后自动续办或再次调用状态工具，核对实际姓名；
 4. 调用 `yuque_public_books_list`，确认公共区知识库可见；
-5. 调用 `yuque_document_catalog(book="共享文档")`，核对目录；
-6. 调用 `yuque_document_search(query="物联网平台")`，确认没有摘要字段泄露；
-7. 明确选择一篇非敏感文档调用 `yuque_document_read`，核对正文、截断和脱敏；
-8. 观察一次 10 分钟保活周期，确认语雀、OA、泰华会话仍按用户和系统隔离。
+5. 不传 `book` 调用 `yuque_document_catalog`，核对跨库目录、文档类型、更新时间、排序和分页；
+6. 不传 `book` 调用 `yuque_document_search(query="物联网平台")`，确认执行组织范围检索且没有摘要字段泄露；
+7. 依次选择非敏感 Doc、Sheet、Table 和含图片文档调用 `yuque_document_read`，核对结构类型、表格、图片 OCR、行分页、截断和脱敏；
+8. 若真实文档包含独立附件卡，只核对附件元数据；附件下载必须另立能力并完成安全验收；
+9. 观察一次 10 分钟保活周期，确认语雀、OA、泰华会话仍按用户和系统隔离。
 
 真实验收阶段只执行读取，不创建、修改或删除语雀内容。
 
@@ -132,3 +137,18 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
 - 部署打包会在生成 wheel 前校验并清理仓库根目录的 `build` 缓存，避免已经退役的模块被历史 setuptools 产物重新带入；正式 Release `ea6ac811d397` 已确认不含旧截图 Broker 和 `yuque_novnc_poc`。
 
 若以后再次出现 VNC 密码框或长期 `connecting`，应视为基础设施故障，不应让用户索要或输入临时密码。先重新发起新挑战，再检查 8781 网关、活动 Token 路由和回环 x11vnc 进程。
+
+## 8. 2026-07-29 结构化读取扩展验收
+
+Release `871db364eba0` 已部署至 `10.10.50.213`，复用了登录账号为“辛国茂”的活动语雀会话。真实只读验收结果：
+
+- 跨库目录返回 146 篇可见文档；组织范围检索“设备”返回 27 条命中，服务端摘要仍不进入结果；
+- `对接设备清单` 解析为普通 Doc，保留 1 个正文表格；
+- `黄佳豪工作日报+周报` 解析为 Sheet，按 `max_rows=2` 返回 2 行并正确标记还有后续；
+- `20250109照明对接测试` 解析为 Table，通过只读记录接口返回 2 行并正确标记还有后续；
+- `设备自注册` 解析为普通 Doc，识别 4 张图片及其安全结构元数据；
+- 验收摘要只记录格式、结构计数、分页和脱敏状态，不打印真实正文；
+- 完整门禁通过 Python `396 passed, 3 skipped, 168 subtests passed`、OpenClaw `71/71`、`compileall`、`pip check` 和 npm pack dry-run；
+- 本轮没有创建、修改、删除或下载语雀内容，也没有执行 OA、泰华业务写入。
+
+本期仍保持 4 个语雀业务能力和统一 `yuque:read` scope，不为 Doc、Sheet、Table 分裂页面型命令；格式差异由 `yuque_document_read` 在适配器内部吸收。

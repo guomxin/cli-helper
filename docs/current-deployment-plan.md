@@ -1305,6 +1305,16 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 用户完成真实语雀滑块登录后，正式 MCP 状态确认会话为 active、下游账号为“辛国茂”。临时 sessions、路由、Chromium、Xvfb、x11vnc、RFB 和 CDP 监听均已清理，仅保留无活动路由的 8781 网关；
 - 正式 Release 重启后，语雀会话仍以原 session ID `e943d17d-6413-4029-a7e6-e6be42cd0f80` 恢复为 active，证明加密 Cookie 会话可跨服务发布复用；
 - 本轮仅建立语雀读取会话，没有创建、修改或删除语雀内容，也没有执行 OA 或泰华业务写入。
+
+## 15.31 2026-07-29 语雀结构化读取扩展验收
+
+- `yuque_document_catalog` 默认聚合全部可见知识库，增加知识库、标题、文档类型、更新时间、排序和分页筛选；`yuque_document_search` 默认使用组织级搜索 scope，可选知识库和类型；工具数量和 `yuque:read` 权限均未扩大；
+- `yuque_document_read` 在适配器内部统一处理 Doc、Sheet 和 Table。普通 Doc 保留大纲、正文表格、链接、图片尺寸及 OCR；Sheet 解压 Lake 工作表；Table 调用只读记录接口；两类表格均支持 `row_offset` 和 `max_rows`；
+- 搜索摘要继续省略，正文与嵌套结构统一执行凭据脱敏；图片源地址不返回。独立附件卡只保留安全元数据且标记 `downloadSupported=false`，当前没有真实附件样本可做下载验收；
+- 正式 Release `871db364eba0` 已部署。辛国茂语雀会话跨发布保持原 session ID `e943d17d-6413-4029-a7e6-e6be42cd0f80` 且为 active；跨库目录返回 146 篇，组织搜索“设备”返回 27 条；
+- 真实读取 `对接设备清单` 识别 1 个正文表格，`黄佳豪工作日报+周报` 以 Sheet 分页返回 2 行且有后续，`20250109照明对接测试` 以 Table 分页返回 2 行且有后续，`设备自注册` 识别 4 张图片；验收日志没有输出真实正文；
+- 发布门禁通过 Python `396 passed, 3 skipped, 168 subtests passed`、OpenClaw `71/71`、`compileall`、`pip check` 和 npm pack dry-run；本轮没有执行语雀、OA 或泰华业务写入。
+
 ## 16. 后续演进顺序
 
 1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；

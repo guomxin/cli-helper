@@ -108,8 +108,12 @@ create a Personal Access Token and login requires a slider plus SMS verification
 The trusted interactive login card embeds a challenge-scoped noVNC surface backed
 by isolated Xvfb, Chromium profile, loopback RFB, and loopback CDP resources. Native
 browser input, cookies, endpoints, temporary VNC credentials, and control tokens
-stay outside the model. Search results omit server snippets, and explicitly selected document bodies
-are redacted for likely credentials and tokens. See the
+stay outside the model. Catalog and search work across all visible knowledge bases by default, while optional
+book, type, date, sort, and pagination arguments narrow the result. Explicit reads
+normalize Doc, Sheet, and Table content into structured text with row paging, outline,
+table, link, image OCR, and attachment metadata. Search snippets remain omitted, and
+selected content is redacted for likely credentials and tokens. Attachment download is
+not claimed until a real independent file card is available for acceptance. See the
 [Yuque department knowledge adapter guide](docs/yuque-department-knowledge-adapter.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not

@@ -31,6 +31,10 @@ param(
     [string]$YuqueBook = "",
     [string]$YuqueQuery = "AI",
     [string]$YuqueDocument = "",
+    [ValidateRange(0, 100000)]
+    [int]$YuqueRowOffset = 0,
+    [ValidateRange(1, 500)]
+    [int]$YuqueMaxRows = 100,
     [ValidateRange(500, 50000)]
     [int]$YuqueMaxChars = 4000
 )
@@ -250,6 +254,10 @@ try {
         $nodeArguments += @(
             "--yuque-document",
             $YuqueDocument,
+            "--yuque-row-offset",
+            [string]$YuqueRowOffset,
+            "--yuque-max-rows",
+            [string]$YuqueMaxRows,
             "--yuque-max-chars",
             [string]$YuqueMaxChars
         )

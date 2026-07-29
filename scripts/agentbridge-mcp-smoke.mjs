@@ -178,6 +178,8 @@ try {
   }
   if (checkName === "YuqueDocumentRead") {
     const document = argument("--yuque-document", "");
+    const rowOffset = Number(argument("--yuque-row-offset", "0"));
+    const maxRows = Number(argument("--yuque-max-rows", "100"));
     const maxChars = Number(argument("--yuque-max-chars", "4000"));
     if (!document) {
       throw Object.assign(new Error("Yuque document is required"), {
@@ -189,9 +191,21 @@ try {
         code: "YUQUE_MAX_CHARS_INVALID",
       });
     }
+    if (!Number.isInteger(rowOffset) || rowOffset < 0 || rowOffset > 100000) {
+      throw Object.assign(new Error("Yuque row offset is invalid"), {
+        code: "YUQUE_ROW_OFFSET_INVALID",
+      });
+    }
+    if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 500) {
+      throw Object.assign(new Error("Yuque max rows is invalid"), {
+        code: "YUQUE_MAX_ROWS_INVALID",
+      });
+    }
     check.arguments = {
       ...check.arguments,
       document,
+      row_offset: rowOffset,
+      max_rows: maxRows,
       max_chars: maxChars,
     };
   }
@@ -360,6 +374,13 @@ function yuqueDocumentSummary({
     });
   }
   const content = String(result?.content ?? "");
+  const structure = result?.structure ?? {};
+  const sheets = Array.isArray(structure?.sheets) ? structure.sheets : [];
+  const tables = Array.isArray(structure?.tables) ? structure.tables : [];
+  const images = Array.isArray(structure?.images) ? structure.images : [];
+  const attachments = Array.isArray(structure?.attachments)
+    ? structure.attachments
+    : [];
   return {
     status: "succeeded",
     check: checkName,
@@ -367,6 +388,17 @@ function yuqueDocumentSummary({
     title: String(result?.document?.title ?? "").slice(0, 300),
     book: String(result?.document?.book?.name ?? "").slice(0, 300),
     contentCharacters: content.length,
+    contentFormat: String(result?.contentFormat ?? "").slice(0, 100),
+    structureKind: String(structure?.kind ?? "").slice(0, 100),
+    sheetCount: sheets.length,
+    tableCount: tables.length,
+    imageCount: images.length,
+    attachmentCount: attachments.length,
+    rowsReturned: sheets.reduce(
+      (total, sheet) => total + Number(sheet?.returnedRows ?? 0),
+      0,
+    ),
+    hasMoreRows: sheets.some((sheet) => Boolean(sheet?.hasMore)),
     truncated: Boolean(result?.truncated),
     redactionApplied: Boolean(result?.redaction?.applied),
     redactionCount: Number(result?.redaction?.count ?? 0),
