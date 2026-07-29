@@ -1081,6 +1081,26 @@ class CentralCapabilityService:
             with worker_factory(session, adapter) as worker:
                 yield worker
 
+    @contextmanager
+    def interactive_authentication_worker(
+        self,
+        session: dict,
+        adapter: object,
+    ) -> Iterator[object]:
+        runtime = self._runtime_for_system(session["system_id"])
+        if runtime is None:
+            raise KeyError(
+                f"central runtime is not configured for {session['system_id']}"
+            )
+        registered_adapter, worker_factory = runtime
+        if registered_adapter is not adapter:
+            raise ValueError("authentication adapter does not match the session system")
+        if session["system_id"] == YUQUE_SYSTEM_ID:
+            worker_factory = self._default_interactive_browser_worker_factory
+        with self._session_lock(session["session_id"]):
+            with worker_factory(session, adapter) as worker:
+                yield worker
+
     def _invoke_adapter(
         self,
         *,
@@ -1783,6 +1803,16 @@ class CentralCapabilityService:
                 getattr(adapter, "allowed_origins", None) or {adapter.origin}
             ),
             headless=True,
+        )
+
+    @staticmethod
+    def _default_interactive_browser_worker_factory(session: dict, adapter: object):
+        return CentralBrowserWorker(
+            profile_path=session["profile_path"],
+            allowed_origins=set(
+                getattr(adapter, "allowed_origins", None) or {adapter.origin}
+            ),
+            headless=False,
         )
 
     @staticmethod

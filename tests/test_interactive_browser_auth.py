@@ -36,9 +36,10 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
             self.assertIn("interactive/event", html)
             self.assertIn("renderedLeft", html)
             self.assertIn("getCoalescedEvents", html)
-            self.assertIn('sendEvent("pointer_gesture", { points })', html)
-            self.assertNotIn("pendingPointerMove", html)
-            self.assertNotIn('sendEvent("pointer_move"', html)
+            self.assertIn('sendEvent("pointer_stream", { points, start, end })', html)
+            self.assertIn("pointerFlushTimer", html)
+            self.assertIn("}, 32)", html)
+            self.assertNotIn('sendEvent("pointer_gesture"', html)
             self.assertIn("setTimeout(resolve, 350)", html)
             self.assertNotIn('name="password"', html)
             self.assertNotIn('name="otp"', html)
@@ -106,14 +107,14 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
                 broker.send_event(
                     challenge_id=challenge["challenge_id"],
                     control_token=started["controlToken"],
-                    event={"type": "pointer_gesture", "payload": {"points": []}},
+                    event={"type": "pointer_stream", "payload": {"points": []}},
                 )
             with self.assertRaises(ValueError):
                 broker.send_event(
                     challenge_id=challenge["challenge_id"],
                     control_token=started["controlToken"],
                     event={
-                        "type": "pointer_gesture",
+                        "type": "pointer_stream",
                         "payload": {
                             "points": [
                                 {"x": 40, "y": 80, "t": 20},
@@ -126,14 +127,34 @@ class TrustedInteractiveBrowserTests(unittest.TestCase):
                 challenge_id=challenge["challenge_id"],
                 control_token=started["controlToken"],
                 event={
-                    "type": "pointer_gesture",
+                    "type": "pointer_stream",
+                    "payload": {
+                        "points": [{"x": 40, "y": 80, "t": 0}],
+                        "start": True,
+                    },
+                },
+            )
+            broker.send_event(
+                challenge_id=challenge["challenge_id"],
+                control_token=started["controlToken"],
+                event={
+                    "type": "pointer_stream",
                     "payload": {
                         "points": [
-                            {"x": 40, "y": 80, "t": 0},
                             {"x": 150, "y": 82, "t": 16},
                             {"x": 350, "y": 80, "t": 32},
-                            {"x": 410, "y": 80, "t": 48},
                         ]
+                    },
+                },
+            )
+            broker.send_event(
+                challenge_id=challenge["challenge_id"],
+                control_token=started["controlToken"],
+                event={
+                    "type": "pointer_stream",
+                    "payload": {
+                        "points": [{"x": 410, "y": 80, "t": 48}],
+                        "end": True,
                     },
                 },
             )

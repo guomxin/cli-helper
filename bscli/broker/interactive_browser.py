@@ -275,6 +275,7 @@ class _InteractiveRun:
             "height": _bounded_coordinate(viewport.get("height"), default=760, maximum=1200),
         }
         self._queue: Queue[tuple[str, dict, Future] | None] = Queue(maxsize=100)
+        self._pointer_pressed = False
         self._ready = threading.Event()
         self._done = threading.Event()
         self._stop = threading.Event()
@@ -452,6 +453,43 @@ class _InteractiveRun:
     def _execute(self, page, kind: str, payload: dict):
         if kind == "screenshot":
             return page.screenshot(type="png")
+        if kind == "pointer_stream":
+            points = _validated_pointer_gesture(payload, viewport=self.viewport)
+            starts = payload.get("start") is True
+            ends = payload.get("end") is True
+            logger.debug(
+                "Streaming trusted browser pointer segment for challenge %s: "
+                "points=%s start=%s end=%s",
+                self.challenge["challenge_id"],
+                len(points),
+                starts,
+                ends,
+            )
+            try:
+                first_index = 0
+                if starts:
+                    if self._pointer_pressed:
+                        page.mouse.up()
+                    first = points[0]
+                    page.mouse.move(first["x"], first["y"])
+                    page.mouse.down()
+                    self._pointer_pressed = True
+                    first_index = 1
+                elif not self._pointer_pressed:
+                    raise ValueError("interactive browser pointer stream is not active")
+                for point in points[first_index:]:
+                    page.mouse.move(point["x"], point["y"])
+                if ends:
+                    page.mouse.up()
+                    self._pointer_pressed = False
+            except Exception:
+                if self._pointer_pressed:
+                    try:
+                        page.mouse.up()
+                    finally:
+                        self._pointer_pressed = False
+                raise
+            return None
         if kind == "pointer_gesture":
             points = _validated_pointer_gesture(payload, viewport=self.viewport)
             duration_ms = points[-1]["t"] - points[0]["t"]

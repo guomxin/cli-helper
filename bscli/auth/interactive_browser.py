@@ -347,8 +347,10 @@ def _render_interactive_card(
       let pointerActive = false;
       let pointerId = null;
       let eventChain = Promise.resolve();
-      let gestureStartedAt = 0;
-      let gesturePoints = [];
+      let pointerStartedAt = 0;
+      let pointerSegmentPoints = [];
+      let pointerFlushTimer = null;
+      let lastPointerPoint = null;
       let stopped = false;
 
       const coordinates = (event) => {{
@@ -374,31 +376,46 @@ def _render_interactive_card(
           body: JSON.stringify({{ type, payload }}),
         }})).then((response) => {{
           if (!response.ok) throw new Error("event rejected");
+          return true;
         }}).catch(() => {{
           status.textContent = "浏览器控制暂时不可用，请稍后重试。";
+          return false;
         }});
         return eventChain;
       }};
-      const appendGesturePoint = (event) => {{
+      const appendPointerPoint = (event, force = false) => {{
         const point = coordinates(event);
-        point.t = Math.max(0, Math.min(5000, Math.round(performance.now() - gestureStartedAt)));
-        const previous = gesturePoints[gesturePoints.length - 1];
-        if (previous) {{
-          const distance = Math.hypot(point.x - previous.x, point.y - previous.y);
-          if (point.t - previous.t < 8 && distance < 1.5) return;
+        point.t = Math.max(0, Math.min(5000, Math.round(performance.now() - pointerStartedAt)));
+        if (lastPointerPoint && !force) {{
+          const distance = Math.hypot(point.x - lastPointerPoint.x, point.y - lastPointerPoint.y);
+          if (point.t - lastPointerPoint.t < 8 && distance < 1.5) return;
         }}
-        if (gesturePoints.length >= 240) {{
-          gesturePoints[gesturePoints.length - 1] = point;
+        lastPointerPoint = point;
+        if (pointerSegmentPoints.length >= 80) {{
+          pointerSegmentPoints[pointerSegmentPoints.length - 1] = point;
           return;
         }}
-        gesturePoints.push(point);
+        pointerSegmentPoints.push(point);
       }};
-      const collectGesturePoints = (event) => {{
+      const collectPointerPoints = (event, forceFinal = false) => {{
         const samples = typeof event.getCoalescedEvents === "function"
           ? event.getCoalescedEvents()
           : [];
-        samples.forEach(appendGesturePoint);
-        appendGesturePoint(event);
+        samples.forEach((sample) => appendPointerPoint(sample));
+        appendPointerPoint(event, forceFinal);
+      }};
+      const flushPointerSegment = ({{ start = false, end = false }} = {{}}) => {{
+        if (!pointerSegmentPoints.length) return Promise.resolve(false);
+        const points = pointerSegmentPoints;
+        pointerSegmentPoints = [];
+        return sendEvent("pointer_stream", {{ points, start, end }});
+      }};
+      const schedulePointerFlush = () => {{
+        if (pointerFlushTimer) return;
+        pointerFlushTimer = window.setTimeout(() => {{
+          pointerFlushTimer = null;
+          flushPointerSegment();
+        }}, 32);
       }};
       const pollFrame = async () => {{
         while (!stopped) {{
@@ -479,27 +496,33 @@ def _render_interactive_card(
         event.preventDefault();
         pointerActive = true;
         pointerId = event.pointerId;
-        gestureStartedAt = performance.now();
-        gesturePoints = [];
+        pointerStartedAt = performance.now();
+        pointerSegmentPoints = [];
+        lastPointerPoint = null;
         screen.setPointerCapture(event.pointerId);
-        appendGesturePoint(event);
+        appendPointerPoint(event, true);
+        flushPointerSegment({{ start: true }});
       }});
       screen.addEventListener("pointermove", (event) => {{
         if (!pointerActive || event.pointerId !== pointerId) return;
         event.preventDefault();
-        collectGesturePoints(event);
+        collectPointerPoints(event);
+        schedulePointerFlush();
       }});
       const releasePointer = (event) => {{
         if (!pointerActive || event.pointerId !== pointerId) return;
         event.preventDefault();
-        collectGesturePoints(event);
+        if (pointerFlushTimer) {{
+          window.clearTimeout(pointerFlushTimer);
+          pointerFlushTimer = null;
+        }}
+        collectPointerPoints(event, true);
         pointerActive = false;
         pointerId = null;
-        const points = gesturePoints;
-        gesturePoints = [];
         status.textContent = "正在执行本次操作。";
-        sendEvent("pointer_gesture", {{ points }}).then(() => {{
-          if (!stopped) status.textContent = "操作已执行，请继续完成认证。";
+        flushPointerSegment({{ end: true }}).then((accepted) => {{
+          lastPointerPoint = null;
+          if (accepted && !stopped) status.textContent = "操作已执行，请继续完成认证。";
         }});
       }};
       screen.addEventListener("pointerup", releasePointer);

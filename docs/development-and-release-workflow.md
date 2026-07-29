@@ -115,13 +115,22 @@ MCP App 改动：
 .\scripts\Deploy-AgentBridge.ps1
 ```
 
+目标机首次启用语雀完整 Chromium 交互登录时执行一次：
+
+```powershell
+.\scripts\Deploy-AgentBridge.ps1 -InstallSystemDependencies
+```
+
+它会额外安装 `xvfb` 并启用版本化的 `agentbridge-xvfb.service`；不新增对外
+端口。后续发布不再使用该开关，但会校验 Xvfb 依赖并同步两个 systemd unit。
+
 脚本会：
 
 1. 默认拒绝存在已跟踪未提交修改的工作区；
 2. 运行发布验证；
 3. 使用持久环境构建标准 wheel；
 4. 单次 SCP 上传；
-5. 单次 SSH 完成版本化留存、安装、`compileall`、`pip check`，并安装受版本控制的 systemd unit；
+5. 单次 SSH 完成版本化留存、安装、`compileall`、`pip check`，并安装受版本控制的 AgentBridge 与 Xvfb systemd unit；
 6. 校验服务工作目录、Python `-P` 安全路径和 `bscli` 的 site-packages 来源后重启；
 7. 通过正式 HTTPS MCP 自动执行 `Release` 工具目录与会话联合冒烟；
    服务重启后若首次探针抢在 Uvicorn 就绪前失败，会以 5 秒间隔最多重试 6 次，仍失败才终止发布。

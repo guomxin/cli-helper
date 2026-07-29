@@ -13,15 +13,16 @@
 
 1. 智能体调用 `yuque_session_login`；
 2. AgentBridge 创建与 `user_subject + system_id` 绑定的短期挑战；
-3. 用户在 8780 可信卡中启动中央 Chromium；
-4. 可信卡仅向用户显示中央浏览器截图，并转发触控、键盘和滚动事件；
+3. 用户在 8780 可信卡中启动 Xvfb 隔离显示中的完整中央 Chromium；
+4. 可信卡仅向用户显示中央浏览器截图，并以有序短轨迹段实时转发触控、键盘和滚动事件；
 5. 滑块、手机号和短信验证码不进入 MCP 参数、模型上下文或聊天记录；
 6. `/api/mine` 核验实际登录姓名与 Token 绑定姓名一致后，Credential Broker
    保存加密 Cookie，销毁临时画面控制通道；
 7. OpenClaw 在模型循环外检测交互完成，并恢复原请求。
 
 受控浏览器画面使用现有 HTTPS 可信卡来源，不安装 Chrome 扩展、VNC、
-noVNC 或用户端 CLI。短期控制令牌只返回给卡片 JavaScript，不进入
+noVNC 或用户端 CLI。Xvfb 只提供不对外监听的服务器内部显示；登录后的读取
+与保活仍使用无界面 worker。短期控制令牌只返回给卡片 JavaScript，不进入
 `agentbridge.interaction.v1` 的模型可见投影。
 
 ## 2. 一期 MCP 工具
@@ -82,6 +83,18 @@ noVNC 或用户端 CLI。短期控制令牌只返回给卡片 JavaScript，不�
 --yuque-base-url https://tc-aiot.yuque.com
 --yuque-organization-id 20020375
 ```
+
+首次启用语雀交互登录时，需要安装服务器内部虚拟显示依赖并同步两个 systemd
+unit：
+
+```powershell
+.\scripts\Deploy-AgentBridge.ps1 -InstallSystemDependencies
+```
+
+该开关只通过 Ubuntu 仓库安装 `xvfb`，不开放 VNC、WebSocket 或额外网络端口。
+后续普通发布继续使用不带该开关的部署命令；部署脚本会验证 `Xvfb` 已存在并
+确保 `agentbridge-xvfb.service` 先于 AgentBridge 启动。两个服务通过共享的
+私有 `/tmp` 命名空间和受限 Xauthority 通信，X11 TCP 监听被明确关闭。
 
 本地调试也可显式传入：
 

@@ -25,6 +25,39 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_yuque_interactive_display_is_private_and_reproducible(self) -> None:
+        service = (ROOT / "deploy/systemd/agentbridge.service").read_text(
+            encoding="utf-8"
+        )
+        xvfb = (ROOT / "deploy/systemd/agentbridge-xvfb.service").read_text(
+            encoding="utf-8"
+        )
+        deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        for marker in (
+            "Requires=agentbridge-xvfb.service",
+            "JoinsNamespaceOf=agentbridge-xvfb.service",
+            "Environment=DISPLAY=:99",
+            "Environment=XAUTHORITY=",
+        ):
+            self.assertIn(marker, service)
+        for marker in (
+            "ExecStart=/usr/bin/Xvfb :99",
+            "-nolisten tcp",
+            "-auth /home/guomao/agentbridge/data/.Xauthority",
+            "PrivateTmp=true",
+        ):
+            self.assertIn(marker, xvfb)
+        for marker in (
+            "InstallSystemDependencies",
+            "apt-get install -y --no-install-recommends xvfb",
+            "agentbridge-xvfb.service",
+            "systemctl enable --now",
+        ):
+            self.assertIn(marker, deploy)
+
     def test_release_smoke_requires_new_write_tools(self) -> None:
         smoke = (ROOT / "scripts/agentbridge-mcp-smoke.mjs").read_text(encoding="utf-8")
 

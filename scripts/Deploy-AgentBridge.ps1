@@ -10,6 +10,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$IncludeLoginReuseSmoke,
     [switch]$RestartOpenClaw,
+    [switch]$InstallSystemDependencies,
     [switch]$AllowDirty,
     [switch]$PlanOnly
 )
@@ -36,6 +37,10 @@ if ($RemoteRoot -notmatch '^/home/[A-Za-z0-9._/-]+$' -or $RemoteRoot.Contains(".
 $systemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName.service"
 if (-not (Test-Path -LiteralPath $systemdUnit -PathType Leaf)) {
     throw "Version-controlled systemd unit was not found: $systemdUnit"
+}
+$xvfbSystemdUnit = Join-Path $repoRoot "deploy\systemd\agentbridge-xvfb.service"
+if (-not (Test-Path -LiteralPath $xvfbSystemdUnit -PathType Leaf)) {
+    throw "Version-controlled Xvfb systemd unit was not found: $xvfbSystemdUnit"
 }
 
 if (-not $IdentityFile) {
@@ -77,7 +82,9 @@ $plan = [ordered]@{
     smoke = -not $SkipSmoke
     loginReuseSmoke = [bool]$IncludeLoginReuseSmoke
     restartOpenClaw = [bool]$RestartOpenClaw
+    installSystemDependencies = [bool]$InstallSystemDependencies
     systemdUnit = $systemdUnit
+    xvfbSystemdUnit = $xvfbSystemdUnit
 }
 if ($PlanOnly) {
     $plan | ConvertTo-Json -Compress
@@ -130,6 +137,7 @@ $target = "$SshUser@$HostName"
 $remoteWheel = "/tmp/$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
 $systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
+$xvfbSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($xvfbSystemdUnit))
 
 & $scp.Source @connectionArguments $wheel.FullName $remoteDestination
 if ($LASTEXITCODE -ne 0) {
@@ -148,7 +156,14 @@ $remoteTemplate = @(
     'unit_tmp="/tmp/$service-$release_id.service"',
     'unit_path="/etc/systemd/system/$service.service"',
     'unit_b64=''__SYSTEMD_UNIT_BASE64__''',
-    'trap ''rm -f -- "$wheel" "$unit_tmp"'' EXIT',
+    'xvfb_service="agentbridge-xvfb"',
+    'xvfb_unit_tmp="/tmp/$xvfb_service-$release_id.service"',
+    'xvfb_unit_path="/etc/systemd/system/$xvfb_service.service"',
+    'xvfb_unit_b64=''__XVFB_SYSTEMD_UNIT_BASE64__''',
+    'install_system_dependencies=''__INSTALL_SYSTEM_DEPENDENCIES__''',
+    'trap ''rm -f -- "$wheel" "$unit_tmp" "$xvfb_unit_tmp"'' EXIT',
+    'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get update -q; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb; fi',
+    'command -v Xvfb >/dev/null || { printf ''Xvfb is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
     '"$python" -m pip install --disable-pip-version-check --no-deps --force-reinstall "$release_wheel"',
@@ -157,9 +172,13 @@ $remoteTemplate = @(
     '"$python" -m compileall -q "$site_dir"',
     '"$python" -m pip check',
     'printf ''%s'' "$unit_b64" | base64 --decode > "$unit_tmp"',
+    'printf ''%s'' "$xvfb_unit_b64" | base64 --decode > "$xvfb_unit_tmp"',
     'systemd-analyze verify "$unit_tmp"',
+    'systemd-analyze verify "$xvfb_unit_tmp"',
     'install -m 0644 -o root -g root "$unit_tmp" "$unit_path"',
+    'install -m 0644 -o root -g root "$xvfb_unit_tmp" "$xvfb_unit_path"',
     'systemctl daemon-reload',
+    'systemctl enable --now "$xvfb_service"',
     'systemctl restart "$service"',
     'release_process_ready=0',
     'for attempt in $(seq 1 30); do',
@@ -178,7 +197,7 @@ $remoteTemplate = @(
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"
-$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64)
+$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__XVFB_SYSTEMD_UNIT_BASE64__", $xvfbSystemdUnitBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"
@@ -219,4 +238,5 @@ if (-not $SkipSmoke) {
     service = $ServiceName
     smoke = -not $SkipSmoke
     restartOpenClaw = [bool]$RestartOpenClaw
+    installSystemDependencies = [bool]$InstallSystemDependencies
 } | ConvertTo-Json -Compress

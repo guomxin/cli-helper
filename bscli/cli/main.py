@@ -483,7 +483,7 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         adapter_factory=lambda challenge: service.adapter_for_system(
             challenge["system_id"]
         ),
-        worker_factory=service.authentication_worker,
+        worker_factory=service.interactive_authentication_worker,
         login_timeout_seconds=900,
     )
     interactive_application = TrustedInteractiveBrowserApplication(
