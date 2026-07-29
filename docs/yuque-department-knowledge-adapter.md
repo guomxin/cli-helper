@@ -137,3 +137,19 @@ python -m bscli.cli.main --home .bscli mcp central-serve `
 
 只有在用户确认画面延迟和滑块验证均通过后，才允许把普通 Chromium、原生 X11
 输入及登录后会话核验接入正式可信认证卡。
+
+### 7.1 真实验收结论（2026-07-29）
+
+隔离 PoC 已在 `10.10.50.213` 完成一次真实语雀滑块验证：
+
+- 普通 Chromium 直接启动，空白页检查 `navigator.webdriver=false`；
+- noVNC 画面相较原 8780 截图轮询链路明显更流畅；
+- 用户使用原生 X11 输入一次通过语雀滑块；
+- PoC 未接入 AgentBridge 会话保存，未读取或修改语雀业务数据；
+- 验证后立即停止 transient systemd 单元，临时 profile 和密码目录已删除，
+  `8781` 与回环 RFB `5901` 监听均已关闭。
+
+因此正式认证链路采用“普通 Chromium + Xvfb + 回环 x11vnc + 限时 noVNC”；
+现有截图轮询和 CDP 指针注入只保留到正式替换完成，之后整体退役。正式实现仍须
+复用现有 challenge、用户身份绑定、HTTPS 内部 CA、登录后主体核验、加密 Cookie
+保存、自动续办和审计边界，不能把 PoC 的共享端口或临时密码直接升级为长期服务。
