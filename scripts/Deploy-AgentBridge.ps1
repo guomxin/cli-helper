@@ -162,7 +162,7 @@ $remoteTemplate = @(
     'xvfb_unit_b64=''__XVFB_SYSTEMD_UNIT_BASE64__''',
     'install_system_dependencies=''__INSTALL_SYSTEM_DEPENDENCIES__''',
     'trap ''rm -f -- "$wheel" "$unit_tmp" "$xvfb_unit_tmp"'' EXIT',
-    'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get update -q; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb; fi',
+    'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb; fi',
     'command -v Xvfb >/dev/null || { printf ''Xvfb is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
