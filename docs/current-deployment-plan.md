@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-29
+> 文档日期：2026-07-30
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
 >
@@ -9,8 +9,9 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.2.16 为当前发布版本。
-> 中心端当前注册 33 个 OA 能力并发布 40 个 MCP 工具。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.3.0 为当前发布版本。
+> 中心端当前发布 59 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
+> 插件另提供 1 个身份状态工具；4 个任务治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
@@ -1327,6 +1328,25 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 真实读取 `对接设备清单` 识别 1 个正文表格，`黄佳豪工作日报+周报` 以 Sheet 分页返回 2 行且有后续，`20250109照明对接测试` 以 Table 分页返回 2 行且有后续，`设备自注册` 识别 4 张图片；验收日志没有输出真实正文；
 - 发布门禁通过 Python `396 passed, 3 skipped, 168 subtests passed`、OpenClaw `71/71`、`compileall`、`pip check` 和 npm pack dry-run；本轮没有执行语雀、OA 或泰华业务写入。
 - OpenClaw 静态工具目录随读取契约更新，插件版本提升为 `0.2.18`；本机链接安装无需重装，Gateway 重启后深度 RPC 正常并确认 `agentbridge-interactions` `0.2.18` 已加载。
+
+## 15.32 2026-07-30 跨端任务连续性骨架一期
+
+- 中心端新增持久化 Task Hub，使用独立的终端、任务、事件、操作关联、交互关联、订阅和通知
+  Outbox 表管理智能体任务。既有 operation 与 interaction 账本保持不可变，通过关联表纳入任务；
+- MCP 新增 4 个宿主私有任务工具，用于幂等创建任务、关联 operation/interaction、列出任务和
+  Gateway 重启恢复。工具要求可信宿主元数据并从 Bearer Token 推导用户身份，OpenClaw 静态模型
+  工具目录明确排除这些治理工具；
+- OpenClaw 插件升级至 `0.3.0`。同一轮 agent run 的多个业务工具复用一个任务；登录卡、字段卡和
+  授权卡沿用同一任务；Gateway 启动后按每个身份独立恢复未完成交互和原投递路由。恢复过程遇到
+  单个身份故障时隔离处理，不阻断其他用户；
+- Task Hub 协调不可用时，原业务工具仍正常执行，并记录可诊断告警。任务归属按
+  `userSubject + agentHost + endpoint` 校验，跨用户关联、恢复和路由冲突均失败关闭；
+- 完整发布门禁通过 Python `422 passed, 3 skipped, 183 subtests passed`、OpenClaw `77/77`、
+  `compileall`、`pip check` 和 npm pack dry-run。验证脚本把 pytest 发现范围收敛到 `tests/`，
+  并复用现有构建依赖，避免扫描浏览器产物或无意义联网升级；
+- 提交 `ba736b7` 已推送 GitHub，Linux Release `ba736b7a2193` 已部署。服务重启、59 个 MCP
+  工具发布烟测和 OpenClaw Gateway 深度 RPC 检查通过；发布后辛国茂 OA 会话仍为 active；
+- 本轮没有执行 OA、泰华或语雀业务写入，也没有发起新的真实登录。
 
 ## 16. 后续演进顺序
 
