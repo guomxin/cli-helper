@@ -11,9 +11,10 @@ import { createAgentBridgeMcpClient } from "./mcp-client.js";
 import {
   AGENTBRIDGE_PROXY_TOOL_NAMES,
   createAgentBridgeProxyTools,
+  hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.2.18";
+const PLUGIN_VERSION = "0.3.0";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -54,6 +55,11 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           context,
           identityRouter,
           serverName: config.mcpServerName,
+          taskIdResolver: (sessionKey) =>
+            coordinator.activeTaskForSession(sessionKey),
+          taskRunRefResolver: (toolCallId, sessionKey) =>
+            coordinator.taskRunRefForToolCall(toolCallId, sessionKey),
+          logger: api.logger,
         }),
       { names: AGENTBRIDGE_PROXY_TOOL_NAMES },
     );
@@ -192,6 +198,14 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     }
   });
 
+  api.on("gateway_start", async () => {
+    await recoverHostTasks({
+      coordinator,
+      identityRouter,
+      logger: api.logger,
+    });
+  });
+
   api.on("gateway_stop", () => {
     coordinator.stopAll();
   });
@@ -245,6 +259,101 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+async function recoverHostTasks({ coordinator, identityRouter, logger }) {
+  if (!identityRouter.enabled) {
+    return;
+  }
+  let recovered = 0;
+  for (const { binding, client } of identityRouter.configuredIdentities()) {
+    let response;
+    try {
+      response = await client.callTool(
+        "agentbridge_host_task_recovery_list",
+        {
+          agent_host: "openclaw",
+          endpoint_key: binding.key,
+          limit: 50,
+        },
+        { meta: hostContextMeta() },
+      );
+    } catch (error) {
+      logger.warn(
+        `AgentBridge task recovery unavailable for one identity (${safeErrorCode(error)})`,
+      );
+      continue;
+    }
+    for (const item of Array.isArray(response?.recoveries)
+      ? response.recoveries
+      : []) {
+      const taskId = safeText(item?.task?.taskId, 128);
+      const interaction = item?.interaction;
+      const endpoint = item?.endpoint;
+      const sessionKey = safeText(endpoint?.conversationRef, 1024);
+      const route = endpoint?.route;
+      if (
+        !taskId ||
+        !interaction ||
+        !sessionKey ||
+        endpoint?.clientType !== binding.channel ||
+        endpoint?.externalSubject !== binding.senderId ||
+        (binding.accountId !== null &&
+          endpoint?.accountId !== binding.accountId) ||
+        !route ||
+        typeof route !== "object" ||
+        Array.isArray(route)
+      ) {
+        logger.warn("AgentBridge discarded an invalid task recovery record");
+        continue;
+      }
+      if (
+        !identityRouter.restoreSessionBinding({
+          sessionKey,
+          bindingKey: binding.key,
+        })
+      ) {
+        logger.warn(
+          "AgentBridge task recovery could not restore its private identity binding",
+        );
+        continue;
+      }
+      coordinator.bindDeliveryRoute({
+        sessionKey,
+        channel: route.channel || binding.channel,
+        to: route.to || binding.senderId,
+        accountId: route.accountId || binding.accountId,
+        threadId: route.threadId,
+      });
+      if (
+        await coordinator.restoreRecoveredInteraction({
+          taskId,
+          interaction,
+          sessionKey,
+        })
+      ) {
+        recovered += 1;
+      }
+    }
+  }
+  logger.info(
+    `AgentBridge task recovery completed (recovered=${recovered})`,
+  );
+}
+
+function safeText(value, maximum) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, maximum) : null;
+}
+
+function safeErrorCode(error) {
+  return String(error?.code || error?.name || "TASK_RECOVERY_ERROR")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_.-]/g, "_")
+    .slice(0, 80);
 }
 
 function bindTrustedDeliveryRoute(coordinator, identityRouter, event, context) {

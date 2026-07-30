@@ -110,7 +110,8 @@ $currentStamp = if (Test-Path -LiteralPath $stampPath) {
 
 if ($currentStamp -ne $dependencyStamp) {
     Invoke-External -FilePath $venvPython -Arguments @(
-        "-m", "pip", "install", "--disable-pip-version-check", "--upgrade",
+        "-m", "pip", "install", "--disable-pip-version-check",
+        "--no-build-isolation",
         "-e", $repoRoot, "pytest", "setuptools>=77"
     ) -Label "Install validation dependencies" -WorkingDirectory $repoRoot
     [IO.File]::WriteAllText($stampPath, $dependencyStamp, [Text.UTF8Encoding]::new($false))

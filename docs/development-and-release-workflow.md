@@ -89,7 +89,10 @@ MCP App 改动：
 .\scripts\Test-AgentBridgeMcp.ps1 -Check Release
 ```
 
-它先要求公开 MCP 工具目录包含当前补签和会议工具，再调用 `oa_session_status`。工具目录缺失时以 `MCP_TOOL_CATALOG_INCOMPLETE` 失败，防止“新 wheel 已安装、systemd 仍从旧源码启动”被普通会话探针掩盖。
+它先要求公开 MCP 工具目录包含当前业务工具，以及
+`agentbridge_host_task_ensure/observe/recovery_list/list` 四个宿主私有任务协调工具，
+再调用 `oa_session_status`。工具目录缺失时以 `MCP_TOOL_CATALOG_INCOMPLETE`
+失败，防止“新 wheel 已安装、systemd 仍从旧源码启动”被普通会话探针掩盖。
 
 登录复用探针：
 
@@ -180,7 +183,8 @@ MCP 工具运行时缓存，不能替换长驻进程已经读取的环境变量�
 
 ## 7. 安全边界
 
-- 自动冒烟只包含 `oa_session_status`；可选登录复用只包含 `oa_session_login`。
+- 自动冒烟只读取 MCP 工具目录并调用 `oa_session_status`；可选登录复用只调用
+  `oa_session_login`。
 - 脚本不包含待办审批、草稿保存、会议预订或任何 OA 业务写工具。
 - 真实 OA 写操作仍必须走 prepare、可信字段卡、执行授权、commit、回读验证，并由用户针对具体事项确认。
 - OpenClaw Bearer、Cookie、密码、卡片 URL 和业务字段不得写入仓库、命令行或普通日志。

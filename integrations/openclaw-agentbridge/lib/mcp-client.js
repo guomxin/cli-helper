@@ -34,17 +34,17 @@ export function createAgentBridgeMcpClient({
       const result = await request("tools/list", {}, { signal });
       return Array.isArray(result?.tools) ? result.tools : [];
     },
-    async callToolResult(name, arguments_, { signal } = {}) {
+    async callToolResult(name, arguments_, { signal, meta } = {}) {
       return request(
         "tools/call",
-        { name, arguments: arguments_ },
+        toolCallParams(name, arguments_, meta),
         { signal },
       );
     },
-    async callTool(name, arguments_, { signal } = {}) {
+    async callTool(name, arguments_, { signal, meta } = {}) {
       const result = await request(
         "tools/call",
-        { name, arguments: arguments_ },
+        toolCallParams(name, arguments_, meta),
         { signal },
       );
       return extractToolPayload(result);
@@ -94,6 +94,14 @@ export function createAgentBridgeMcpClient({
     }
     return rpc.result;
   }
+}
+
+function toolCallParams(name, arguments_, meta) {
+  const params = { name, arguments: arguments_ };
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    params._meta = meta;
+  }
+  return params;
 }
 
 function resolveConnection({ hostConfig, serverName, endpoint, tokenEnv, env }) {

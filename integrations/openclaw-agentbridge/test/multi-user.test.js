@@ -366,6 +366,132 @@ test("exposes the full catalog and proxies raw MCP metadata for a bound user", a
   });
 });
 
+test("creates and observes one host-owned task without model task arguments", async () => {
+  const requests = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_task_ensure") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            task: { taskId: "task-1234567890-abcdef" },
+          },
+        };
+      }
+      if (name === "agentbridge_host_task_observe") {
+        return { structuredContent: { status: "succeeded" } };
+      }
+      return {
+        structuredContent: {
+          status: "requires_user_action",
+          operationId: "operation-123",
+          interaction: {
+            interactionId: "interaction-1234567890",
+          },
+        },
+      };
+    },
+  });
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      ...toolContext("1001"),
+      runId: "run-42",
+      deliveryContext: {
+        channel: "telegram",
+        to: "1001",
+      },
+    },
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+
+  const tool = tools.find((item) => item.name === "oa_workflow_pending_list");
+  const result = await tool.execute("tool-call-42", { limit: 5 });
+
+  assert.deepEqual(
+    requests.map((request) => request.body.params.name),
+    [
+      "agentbridge_host_task_ensure",
+      "oa_workflow_pending_list",
+      "agentbridge_host_task_observe",
+    ],
+  );
+  assert.equal(
+    requests[0].body.params.arguments.host_task_key,
+    "agent:main:telegram:direct:1001|run-42",
+  );
+  assert.equal(
+    Object.hasOwn(
+      requests[1].body.params.arguments,
+      "task_id",
+    ),
+    false,
+  );
+  assert.deepEqual(requests[1].body.params._meta, {
+    "io.agentbridge/task": {
+      taskId: "task-1234567890-abcdef",
+    },
+  });
+  assert.deepEqual(
+    requests[2].body.params.arguments.operation_ids,
+    ["operation-123"],
+  );
+  assert.deepEqual(
+    requests[2].body.params.arguments.interaction_ids,
+    ["interaction-1234567890"],
+  );
+  assert.equal(
+    result.details.agentbridgeTaskId,
+    "task-1234567890-abcdef",
+  );
+});
+
+test("preserves the business result when task coordination is unavailable", async () => {
+  const requests = [];
+  const warnings = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_task_ensure") {
+        return {
+          structuredContent: {
+            status: "failed",
+            error: { code: "TASK_HUB_UNAVAILABLE" },
+          },
+        };
+      }
+      return {
+        structuredContent: {
+          status: "succeeded",
+          result: { count: 2, items: [] },
+        },
+      };
+    },
+  });
+  const tools = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+    logger: { warn(message) { warnings.push(message); } },
+  });
+
+  const tool = tools.find((item) => item.name === "oa_workflow_pending_list");
+  const result = await tool.execute("tool-call-no-task", { limit: 2 });
+
+  assert.deepEqual(
+    requests.map((request) => request.body.params.name),
+    ["agentbridge_host_task_ensure", "oa_workflow_pending_list"],
+  );
+  assert.equal(result.structuredContent.status, "succeeded");
+  assert.equal(result.details.agentbridgeTaskId, undefined);
+  assert.deepEqual(warnings, [
+    "AgentBridge task creation returned no task ID; business call continues",
+  ]);
+});
+
 test("pins coordinator records to their originating session clients", () => {
   const clients = {
     "session-a": { name: "client-a" },
@@ -434,6 +560,7 @@ function createRouter({
   requests,
   env,
   responseResult = null,
+  responseForTool = null,
   config = multiUserConfig(),
 }) {
   return new AgentBridgeIdentityRouter({
@@ -441,15 +568,21 @@ function createRouter({
     hostConfig: {},
     env,
     fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
       requests.push({
         authorization: options.headers.Authorization,
-        body: JSON.parse(options.body),
+        body,
       });
+      const selectedResult =
+        typeof responseForTool === "function"
+          ? responseForTool(body.params?.name, body)
+          : null;
       return new Response(
         JSON.stringify({
           jsonrpc: "2.0",
           id: "response",
           result:
+            selectedResult ||
             responseResult || {
               content: [
                 {

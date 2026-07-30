@@ -79,6 +79,54 @@ test("lists tools through the same authenticated MCP transport", async () => {
   assert.equal(requestBody.method, "tools/list");
   assert.deepEqual(requestBody.params, {});
 });
+
+test("places trusted host metadata beside tool arguments", async () => {
+  let requestBody;
+  const client = createAgentBridgeMcpClient({
+    endpoint: {
+      url: "https://agentbridge.example.test/mcp",
+      timeoutSeconds: 5,
+    },
+    tokenEnv: "TOKEN",
+    env: { TOKEN: "secret-token" },
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "response-id",
+          result: {
+            structuredContent: { status: "succeeded" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  await client.callTool(
+    "agentbridge_host_task_ensure",
+    { agent_host: "openclaw" },
+    {
+      meta: {
+        "io.agentbridge/host": {
+          version: "1",
+          agentHost: "openclaw",
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(requestBody.params._meta, {
+    "io.agentbridge/host": {
+      version: "1",
+      agentHost: "openclaw",
+    },
+  });
+  assert.deepEqual(requestBody.params.arguments, {
+    agent_host: "openclaw",
+  });
+});
 test("does not create a polling client when the bearer environment value is absent", () => {
   const client = createAgentBridgeMcpClient({
     hostConfig: {

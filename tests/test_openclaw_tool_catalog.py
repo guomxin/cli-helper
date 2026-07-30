@@ -22,6 +22,12 @@ class OpenClawToolCatalogTests(unittest.TestCase):
         committed = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
         self.assertEqual(committed, build_catalog())
+        self.assertFalse(
+            any(
+                tool["name"].startswith("agentbridge_host_")
+                for tool in committed["tools"]
+            )
+        )
 
 
 if __name__ == "__main__":

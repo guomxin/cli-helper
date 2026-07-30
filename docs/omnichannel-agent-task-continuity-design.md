@@ -1,13 +1,38 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Proposed v0.1
+> 文档状态：Approved v0.2，一期任务骨架已实现
 >
 > 更新日期：2026-07-30
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.2.18、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.3.0、中心
 > AgentBridge MCP 与可信交互卡片
 >
-> 本文是后续实现依据，不表示当前运行环境已经具备跨端任务延续能力。
+> 本文是分期实现依据。第 15.1 节的一期任务骨架已进入代码和部署验收阶段；
+> 用户网页端、跨端 Claim 与多端通知仍属于后续阶段。
+
+## 0. 当前实施状态
+
+截至 2026-07-30，已实现：
+
+- 中心端持久化 `ClientEndpoint`、`AgentTask`、`TaskEvent`、
+  `TaskSubscription`、`NotificationOutbox`；
+- 通过独立关联表把 Operation 和 Interaction 绑定到 `taskId`，不修改既有
+  Interaction 不可变可信合同；
+- OpenClaw 在第一次调用 AgentBridge 业务工具时惰性建任务，同一 agent run
+  复用任务；
+- `taskId` 由宿主通过 MCP 私有 `_meta` 传递，不进入模型可填写的工具参数；
+- 插件把可信业务结果中的 Operation/Interaction ID 回写 Task Hub；
+- OpenClaw 使用正式 `gateway_start` Hook，按独立身份恢复未完成 Interaction、
+  原私聊路由、轮询和卡片投递；
+- Task Hub 协调故障不覆盖已经成功返回的业务工具结果；
+- 双用户隔离、任务幂等、迁移建表和 Gateway 重启恢复已纳入自动化测试。
+
+尚未实现：
+
+- 普通用户 Agent Workspace 网页客户端；
+- 跨端 Interaction Claim、首选确认端和多端订阅投递；
+- 浏览器端短期会话、WebSocket/SSE 时间线；
+- 跨客户端继续任务和 OBO 执行委托。
 
 ## 1. 结论
 
@@ -742,6 +767,8 @@ eventId + endpointId + payloadType
 ## 15. 分期实施
 
 ### 15.1 一期：任务骨架与原渠道兼容
+
+实施状态：代码已完成，正在执行发布验收。
 
 目标是不改变用户现有使用方式，先建立持久化基础：
 

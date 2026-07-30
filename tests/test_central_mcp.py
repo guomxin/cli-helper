@@ -167,6 +167,10 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_operation_list", names)
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)
+        self.assertIn("agentbridge_host_task_ensure", names)
+        self.assertIn("agentbridge_host_task_observe", names)
+        self.assertIn("agentbridge_host_task_recovery_list", names)
+        self.assertIn("agentbridge_host_task_list", names)
         self.assertIn("agentbridge_server_profile", names)
         self.assertIn("oa_business_trip_prepare", names)
         self.assertIn("oa_business_trip_save_draft", names)
@@ -716,6 +720,61 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["arguments"], {"limit": 5})
         self.assertEqual(call["idempotency_key"], "mcp-pending-1")
 
+    def test_private_task_metadata_is_validated_before_and_observed_after_call(self):
+        with self._server() as (service, _store, token, client):
+            service.observe_host_task.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "task": {"taskId": "task-1234567890-abcdef"},
+            }
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "mcp-request",
+                "operationId": "operation-1",
+                "status": "succeeded",
+                "result": {"collection": "pending", "count": 0, "items": []},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=21,
+                token=token,
+                params={
+                    "name": "oa_workflow_pending_list",
+                    "arguments": {"limit": 5},
+                    "_meta": {
+                        "io.agentbridge/task": {
+                            "taskId": "task-1234567890-abcdef",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        self.assertEqual(service.observe_host_task.call_count, 2)
+        self.assertEqual(
+            service.observe_host_task.call_args_list[0].kwargs,
+            {
+                "user_subject": "user-a",
+                "task_id": "task-1234567890-abcdef",
+                "operation_ids": [],
+                "interaction_ids": [],
+            },
+        )
+        self.assertEqual(
+            service.observe_host_task.call_args_list[1].kwargs,
+            {
+                "user_subject": "user-a",
+                "task_id": "task-1234567890-abcdef",
+                "operation_ids": ["operation-1"],
+                "interaction_ids": [],
+            },
+        )
+
     def test_login_card_defers_principal_resolution_to_system_session(self):
         with self._server() as (service, _store, token, client):
             service.start_login.return_value = {
@@ -868,6 +927,82 @@ class CentralMcpTests(unittest.TestCase):
         service.session_status.assert_called_once_with(
             user_subject="user-b",
             system_id="oa",
+        )
+
+    def test_host_task_tools_require_private_host_metadata(self):
+        with self._server() as (service, _store, token, client):
+            denied = self._request(
+                client,
+                "tools/call",
+                request_id=61,
+                token=token,
+                params={
+                    "name": "agentbridge_host_task_ensure",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "host_task_key": "session|run",
+                        "endpoint_key": "telegram:*:1001",
+                        "client_type": "telegram",
+                        "external_subject": "1001",
+                        "conversation_ref": "agent:main:telegram:direct:1001",
+                        "title": "OA task",
+                    },
+                },
+            )
+
+        self.assertTrue(denied.json()["result"]["isError"])
+        service.ensure_host_task.assert_not_called()
+
+    def test_host_task_ensure_uses_token_identity_and_private_metadata(self):
+        with self._server() as (service, store, token, client):
+            identity = store.verify(token)
+            service.ensure_host_task.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "task": {"taskId": "task-1234567890-abcdef"},
+                "endpoint": {"endpointId": "endpoint-123"},
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=62,
+                token=token,
+                params={
+                    "name": "agentbridge_host_task_ensure",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "host_task_key": "session|run",
+                        "endpoint_key": "telegram:*:1001",
+                        "client_type": "telegram",
+                        "external_subject": "1001",
+                        "conversation_ref": "agent:main:telegram:direct:1001",
+                        "title": "OA task",
+                        "route": {"channel": "telegram", "to": "1001"},
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.ensure_host_task.assert_called_once_with(
+            user_subject="user-a",
+            token_id=identity["token_id"],
+            agent_host="openclaw",
+            host_task_key="session|run",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="OA task",
+            account_id=None,
+            label=None,
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=None,
         )
 
     def test_mcp_and_direct_service_share_idempotent_operation(self):

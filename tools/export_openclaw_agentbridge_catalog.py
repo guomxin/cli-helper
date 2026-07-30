@@ -62,7 +62,11 @@ def build_catalog() -> dict:
                 },
             )
             response.raise_for_status()
-            tools = response.json()["result"]["tools"]
+            tools = [
+                tool
+                for tool in response.json()["result"]["tools"]
+                if not str(tool.get("name") or "").startswith("agentbridge_host_")
+            ]
 
     return {
         "schemaVersion": "agentbridge.openclaw-tool-catalog.v1",

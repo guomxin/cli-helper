@@ -174,6 +174,7 @@ from bscli.core.session_secrets import (
     SessionStateStore,
 )
 from bscli.core.sessions import SessionRegistry
+from bscli.core.tasks import TaskHubStore
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
     WriteAuthorizationNotFound,
@@ -444,6 +445,7 @@ class CentralCapabilityService:
         self.document_downloads = DocumentDownloadStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
+        self.tasks = TaskHubStore(self.db_path)
         self.governance_policies = GovernancePolicyStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
@@ -881,9 +883,16 @@ class CentralCapabilityService:
         operation = self.operations.get(operation_id)
         if operation["user_subject"] != user_subject:
             raise KeyError(f"operation not found: {operation_id}")
+        task_id = self.tasks.task_id_for_operation(
+            operation_id,
+            user_subject=user_subject,
+        )
         return {
             "protocolVersion": "0.1",
-            "operation": operation_response(operation),
+            "operation": {
+                **operation_response(operation),
+                "taskId": task_id,
+            },
         }
 
     def list_operations(self, *, user_subject: str, limit: int = 100) -> dict:
@@ -891,7 +900,16 @@ class CentralCapabilityService:
         return {
             "protocolVersion": "0.1",
             "count": len(operations),
-            "operations": [operation_response(operation) for operation in operations],
+            "operations": [
+                {
+                    **operation_response(operation),
+                    "taskId": self.tasks.task_id_for_operation(
+                        operation["operation_id"],
+                        user_subject=user_subject,
+                    ),
+                }
+                for operation in operations
+            ],
         }
 
     def get_interaction(self, *, user_subject: str, interaction_id: str) -> dict:
@@ -899,9 +917,181 @@ class CentralCapabilityService:
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
+        task_id = self.tasks.task_id_for_interaction(
+            interaction_id,
+            user_subject=user_subject,
+        )
         return {
             "protocolVersion": "0.1",
-            "interaction": interaction,
+            "interaction": {
+                **interaction,
+                "taskId": task_id,
+            },
+        }
+
+    def ensure_host_task(
+        self,
+        *,
+        user_subject: str,
+        token_id: str,
+        agent_host: str,
+        host_task_key: str,
+        endpoint_key: str,
+        client_type: str,
+        external_subject: str,
+        conversation_ref: str,
+        title: str,
+        account_id: str | None = None,
+        label: str | None = None,
+        route: dict | None = None,
+        capabilities: list[str] | None = None,
+    ) -> dict:
+        endpoint, endpoint_reused = self.tasks.ensure_endpoint(
+            user_subject=user_subject,
+            token_id=token_id,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            account_id=account_id,
+            conversation_ref=conversation_ref,
+            label=label,
+            route=route,
+            capabilities=capabilities,
+        )
+        task, task_reused = self.tasks.ensure_task(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            host_task_key=host_task_key,
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref=conversation_ref,
+            title=title,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "task": task_response(task),
+            "endpoint": endpoint_response(endpoint),
+            "reused": {
+                "task": task_reused,
+                "endpoint": endpoint_reused,
+            },
+        }
+
+    def observe_host_task(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        operation_ids: list[str] | None = None,
+        interaction_ids: list[str] | None = None,
+    ) -> dict:
+        task = self.tasks.get_task(task_id, user_subject=user_subject)
+        linked_operations: list[str] = []
+        linked_interactions: list[str] = []
+        for operation_id in dict.fromkeys(operation_ids or []):
+            operation = self.operations.get(operation_id)
+            if operation["user_subject"] != user_subject:
+                raise KeyError(f"operation not found: {operation_id}")
+            task = self.tasks.link_operation(
+                task_id=task_id,
+                user_subject=user_subject,
+                operation=operation,
+            )
+            linked_operations.append(operation_id)
+        for interaction_id in dict.fromkeys(interaction_ids or []):
+            record, _resource, interaction = self._load_interaction(
+                user_subject=user_subject,
+                interaction_id=interaction_id,
+            )
+            task = self.tasks.link_interaction(
+                task_id=task_id,
+                user_subject=user_subject,
+                interaction_record=record,
+                interaction=interaction,
+            )
+            linked_interactions.append(interaction_id)
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "task": task_response(task),
+            "linked": {
+                "operationIds": linked_operations,
+                "interactionIds": linked_interactions,
+            },
+        }
+
+    def recover_host_tasks(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        limit: int = 100,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        recoveries = []
+        for candidate in self.tasks.recovery_candidates(
+            user_subject=user_subject,
+            endpoint_id=endpoint["endpoint_id"],
+            limit=limit,
+        ):
+            try:
+                _record, _resource, interaction = self._load_interaction(
+                    user_subject=user_subject,
+                    interaction_id=candidate["interaction_id"],
+                )
+            except (KeyError, InteractionIntegrityError):
+                continue
+            if interaction["state"] not in {"pending", "processing"}:
+                continue
+            recoveries.append(
+                {
+                    "task": task_response(candidate["task"]),
+                    "endpoint": endpoint_response(candidate["endpoint"]),
+                    "interaction": {
+                        **interaction,
+                        "taskId": candidate["task"]["task_id"],
+                    },
+                }
+            )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "count": len(recoveries),
+            "recoveries": recoveries,
+        }
+
+    def list_host_tasks(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        active_only: bool = False,
+        limit: int = 100,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        tasks = self.tasks.list_tasks(
+            user_subject=user_subject,
+            endpoint_id=endpoint["endpoint_id"],
+            active_only=active_only,
+            limit=limit,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "count": len(tasks),
+            "endpoint": endpoint_response(endpoint),
+            "tasks": [task_response(task) for task in tasks],
         }
 
     def interaction_required_scopes(
@@ -992,9 +1182,28 @@ class CentralCapabilityService:
             idempotency_key=idempotency_key
             or f"interaction-resume:{record['interaction_id']}:{resume_epoch}",
         )
+        task_id = self.tasks.task_id_for_interaction(
+            record["interaction_id"],
+            user_subject=user_subject,
+        )
+        if task_id:
+            operation_id = response.get("operationId")
+            next_interaction = response.get("interaction")
+            self.observe_host_task(
+                user_subject=user_subject,
+                task_id=task_id,
+                operation_ids=[operation_id] if operation_id else [],
+                interaction_ids=(
+                    [next_interaction["interactionId"]]
+                    if isinstance(next_interaction, dict)
+                    and next_interaction.get("interactionId")
+                    else []
+                ),
+            )
         return {
             **response,
             "resumedFromInteractionId": record["interaction_id"],
+            "taskId": task_id,
         }
 
     def _load_interaction(
@@ -2161,6 +2370,44 @@ def operation_response(operation: dict) -> dict:
         "createdAt": operation["created_at"],
         "updatedAt": operation["updated_at"],
         "finishedAt": operation.get("finished_at"),
+    }
+
+
+def task_response(task: dict) -> dict:
+    return {
+        "taskId": task["task_id"],
+        "userSubject": task["user_subject"],
+        "agentHost": task["agent_host"],
+        "title": task["title"],
+        "status": task["status"],
+        "summary": task.get("summary") or {},
+        "originEndpointId": task["origin_endpoint_id"],
+        "currentOperationId": task.get("current_operation_id"),
+        "currentInteractionId": task.get("current_interaction_id"),
+        "activeConversationRef": task["active_conversation_ref"],
+        "version": task["version"],
+        "createdAt": task["created_at"],
+        "updatedAt": task["updated_at"],
+        "finishedAt": task.get("finished_at"),
+    }
+
+
+def endpoint_response(endpoint: dict) -> dict:
+    return {
+        "endpointId": endpoint["endpoint_id"],
+        "userSubject": endpoint["user_subject"],
+        "agentHost": endpoint["agent_host"],
+        "clientType": endpoint["client_type"],
+        "externalSubject": endpoint["external_subject"],
+        "accountId": endpoint.get("account_id"),
+        "conversationRef": endpoint["conversation_ref"],
+        "label": endpoint.get("label"),
+        "capabilities": endpoint.get("capabilities") or [],
+        "route": endpoint.get("route") or {},
+        "state": endpoint["state"],
+        "createdAt": endpoint["created_at"],
+        "updatedAt": endpoint["updated_at"],
+        "lastSeenAt": endpoint["last_seen_at"],
     }
 
 

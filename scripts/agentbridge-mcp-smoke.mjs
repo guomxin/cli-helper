@@ -66,6 +66,10 @@ const CHECKS = new Map([
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
+  "agentbridge_host_task_ensure",
+  "agentbridge_host_task_observe",
+  "agentbridge_host_task_recovery_list",
+  "agentbridge_host_task_list",
   "oa_certificate_search",
   "oa_certificate_prepare_download",
   "oa_business_trip_prepare",

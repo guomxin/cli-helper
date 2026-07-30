@@ -11,6 +11,11 @@ import {
   isPrivateSessionKey,
   processToolResult,
 } from "./interaction.js";
+import {
+  collectTaskReferences,
+  hostContextMeta,
+  TASK_CONTEXT_META_KEY,
+} from "./proxy-tools.js";
 
 const TERMINAL_STATES = new Set([
   "declined",
@@ -194,6 +199,15 @@ export class InteractionCoordinator {
     this.pruneToolBindings();
   }
 
+  taskRunRefForToolCall(toolCallId, sessionKey) {
+    const normalized = normalizeToolCallId(toolCallId);
+    const binding = normalized ? this.toolBindings.get(normalized) : null;
+    if (!binding || (binding.sessionKey && binding.sessionKey !== sessionKey)) {
+      return normalized;
+    }
+    return binding.runId || normalized;
+  }
+
   deliverPreparedDocumentResult(event, context) {
     const payload = trustedAgentBridgeStructuredContent(
       event.result,
@@ -226,12 +240,13 @@ export class InteractionCoordinator {
 
   captureToolResult(event, context) {
     const binding = this.takeToolBinding(event.toolCallId);
+    const taskId = taskIdFromToolResult(event.result);
     const processed = processToolResult(
       event.result,
       this.config.allowedCardOrigins,
     );
     if (processed.sanitized) {
-      this.captureInteractions(processed.interactions, binding, context);
+      this.captureInteractions(processed.interactions, binding, context, taskId);
       return { result: processed.result };
     }
 
@@ -254,6 +269,7 @@ export class InteractionCoordinator {
       references,
       binding,
       context,
+      taskId,
     );
   }
 
@@ -282,7 +298,7 @@ export class InteractionCoordinator {
     return inferReadContinuation(recent.text, this.now());
   }
 
-  captureInteractions(interactions, binding, context) {
+  captureInteractions(interactions, binding, context, taskId = null) {
     const sessionKey = binding?.sessionKey || context.sessionKey;
     const runId = binding?.runId || context.runId;
     const privateSession = isPrivateSessionKey(sessionKey);
@@ -304,6 +320,7 @@ export class InteractionCoordinator {
         sessionKey,
         runId,
         readContinuation,
+        taskId,
       });
       this.api.logger.info(
         `AgentBridge interaction captured for private session (type=${interaction.type}, state=${interaction.state})`,
@@ -312,7 +329,12 @@ export class InteractionCoordinator {
     }
   }
 
-  async hydratePublicInteractionReferences(references, binding, context) {
+  async hydratePublicInteractionReferences(
+    references,
+    binding,
+    context,
+    taskId = null,
+  ) {
     const sessionKey = binding?.sessionKey || context.sessionKey;
     if (!isPrivateSessionKey(sessionKey)) {
       this.api.logger.warn(
@@ -365,8 +387,44 @@ export class InteractionCoordinator {
       );
       return undefined;
     }
-    this.captureInteractions(interactions, binding, context);
+    this.captureInteractions(interactions, binding, context, taskId);
     return undefined;
+  }
+
+  activeTaskForSession(sessionKey) {
+    this.prune();
+    if (!isPrivateSessionKey(sessionKey)) {
+      return null;
+    }
+    const matches = [...this.records.values()]
+      .filter(
+        (record) =>
+          record.sessionKey === sessionKey &&
+          record.taskId &&
+          ["pending", "processing"].includes(record.interaction.state),
+      )
+      .sort((left, right) => right.capturedAt - left.capturedAt);
+    return matches[0]?.taskId || null;
+  }
+
+  async restoreRecoveredInteraction({
+    taskId,
+    interaction,
+    sessionKey,
+    runId = null,
+  }) {
+    if (!isPrivateSessionKey(sessionKey) || !taskId || !interaction) {
+      return false;
+    }
+    const record = this.upsert({
+      interaction,
+      sessionKey,
+      runId,
+      taskId,
+    });
+    this.startPolling(record);
+    await this.deliverInteractionsDirect(sessionKey, [interaction]);
+    return true;
   }
   takeForDelivery({ sessionKey }) {
     this.prune();
@@ -461,12 +519,19 @@ export class InteractionCoordinator {
     await Promise.allSettled([...this.polls.values()]);
   }
 
-  upsert({ interaction, sessionKey, runId, readContinuation = null }) {
+  upsert({
+    interaction,
+    sessionKey,
+    runId,
+    readContinuation = null,
+    taskId = null,
+  }) {
     const existing = this.records.get(interaction.interactionId);
     if (existing) {
       existing.interaction = interaction;
       existing.sessionKey = sessionKey || existing.sessionKey;
       existing.runId = runId || existing.runId;
+      existing.taskId ||= taskId;
       existing.readContinuation ||= readContinuation;
       existing.mcpClient ||= this.clientForSession(existing.sessionKey);
       return existing;
@@ -475,6 +540,7 @@ export class InteractionCoordinator {
       interaction,
       sessionKey,
       runId,
+      taskId,
       readContinuation,
       mcpClient: this.clientForSession(sessionKey),
       delivered: false,
@@ -580,7 +646,16 @@ export class InteractionCoordinator {
           interaction_id: record.interaction.interactionId,
           idempotency_key: `openclaw:${record.interaction.interactionId}`,
         },
-        { signal },
+        {
+          signal,
+          meta: record.taskId
+            ? {
+                [TASK_CONTEXT_META_KEY]: {
+                  taskId: record.taskId,
+                },
+              }
+            : undefined,
+        },
       );
     } catch (error) {
       await this.notify(record, "resume_failed", safeErrorCode(error));
@@ -599,6 +674,7 @@ export class InteractionCoordinator {
         interaction,
         sessionKey: record.sessionKey,
         runId: null,
+        taskId: record.taskId,
       });
       this.startPolling(next);
     }
@@ -728,7 +804,17 @@ export class InteractionCoordinator {
       response = await record.mcpClient.callTool(
         continuation.toolName,
         continuation.arguments,
+        {
+          meta: record.taskId
+            ? {
+                [TASK_CONTEXT_META_KEY]: {
+                  taskId: record.taskId,
+                },
+              }
+            : undefined,
+        },
       );
+      await this.observeTaskResponse(record, response);
     } catch (error) {
       const system =
         LOGIN_READ_TOOLS.get(continuation.toolName)?.system || "下游系统";
@@ -780,6 +866,35 @@ export class InteractionCoordinator {
       "hook:agentbridge-read-continuation-completed",
     );
     return true;
+  }
+
+  async observeTaskResponse(record, response) {
+    if (!record.taskId || !record.mcpClient) {
+      return;
+    }
+    const references = collectTaskReferences(response);
+    if (
+      references.operationIds.length === 0 &&
+      references.interactionIds.length === 0
+    ) {
+      return;
+    }
+    try {
+      await record.mcpClient.callTool(
+        "agentbridge_host_task_observe",
+        {
+          agent_host: "openclaw",
+          task_id: record.taskId,
+          operation_ids: references.operationIds,
+          interaction_ids: references.interactionIds,
+        },
+        { meta: hostContextMeta() },
+      );
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge continued task observation failed: ${safeErrorCode(error)}`,
+      );
+    }
   }
 
   async materializePreparedDocument(file) {
@@ -1157,6 +1272,17 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
     return null;
   }
   return details.structuredContent;
+}
+
+function taskIdFromToolResult(result) {
+  const taskId = result?.details?.agentbridgeTaskId;
+  if (typeof taskId !== "string") {
+    return null;
+  }
+  const normalized = taskId.trim();
+  return normalized.length >= 16 && normalized.length <= 128
+    ? normalized
+    : null;
 }
 
 async function saveOpenClawMediaBuffer(

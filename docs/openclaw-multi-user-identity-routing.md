@@ -1,8 +1,9 @@
 # OpenClaw 多用户身份路由方案
 
 > 本文记录当前已经运行的“一个聊天身份绑定一个 AgentBridge 身份”的实现与验收。
-> 网页、Telegram、微信之间共享 `taskId`、跨端领取可信交互和多端状态通知的目标
-> 架构见 [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
+> Telegram、微信当前已通过一期 Task Hub 共享持久任务骨架并支持 Gateway
+> 重启恢复；网页、跨端领取可信交互和多端状态通知的后续架构见
+> [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
 > 目标设计不改变本文的用户隔离规则，也不要求修改 OpenClaw 核心源码。
 
 ## 1. 目标与当前状态
@@ -19,6 +20,9 @@ Profile。
 - 插件把当前 40 个 AgentBridge MCP 工具注册为 OpenClaw 原生代理工具；
 - 同一会话一旦绑定身份便不可切换，发生身份变化时按冲突拒绝；
 - 卡片轮询、交互恢复和自动续办固定使用最初触发操作的用户客户端；
+- 每个身份在首次调用业务工具时建立持久 `ClientEndpoint` 和 `AgentTask`，
+  `taskId` 只通过宿主私有 MCP 元数据传递；
+- Gateway 重启时按每个身份独立恢复其未完成 Interaction、原私聊路由和轮询；
 - 未配置身份的用户只能看到身份状态工具，不能看到或调用 OA 工具；
 - 已用两个虚拟消息用户完成 Token 隔离、并发请求、未知用户拒绝和
   会话串号测试。
@@ -167,7 +171,10 @@ python tools\export_openclaw_agentbridge_catalog.py
 python tools\export_openclaw_agentbridge_catalog.py --check
 ```
 
-当前目录包含 40 个工具。Python 端新增或修改 MCP 工具后，CI/发布检查应先运行
+当前目录包含 55 个模型可见的 AgentBridge 代理工具，插件再增加 1 个身份状态
+工具。`agentbridge_host_task_*` 属于宿主私有协调面，保留在远程 MCP 服务中，
+但导出脚本明确排除它们，模型工具目录不可见。Python 端新增或修改 MCP 工具后，
+CI/发布检查应先运行
 `--check`；失败时重新导出目录并审查差异，防止 OpenClaw 能力面悄悄落后。
 
 ## 7. 真实双用户验收

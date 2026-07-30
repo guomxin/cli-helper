@@ -10,6 +10,8 @@ The active runtime is central AgentBridge:
 - Trusted authentication, business-field, and write-authorization cards
 - A Credential Broker that keeps credentials outside model-visible channels
 - A durable operation ledger with idempotency and explicit outcome states
+- A persistent Task Hub that links host tasks, operations, trusted interactions,
+  client endpoints, subscriptions, and notification outbox records
 - Seeyon OA, API-first Taihua work logs, and trusted-browser Yuque knowledge access under one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
@@ -237,6 +239,25 @@ only in private sessions, and polls/resumes outside the model loop. The Python
 renderer remains a host-adapter reference. See the
 [agent interaction protocol](docs/agent-interaction-protocol.md) and the
 [remote MCP low-install onboarding guide](docs/remote-mcp-onboarding.md).
+
+## Task Continuity
+
+The first Task Hub phase is active for identity-routed OpenClaw calls. A private
+host adapter creates an opaque task on the first AgentBridge business tool call
+and associates subsequent Operation and Interaction IDs without accepting a
+model-supplied user identity or task argument. `ClientEndpoint`, `AgentTask`,
+append-only `TaskEvent`, subscription, and notification-outbox records share the
+central SQLite ledger, while credentials, cookies, submitted field values,
+authorization secrets, and trusted-card URLs remain outside it.
+
+The OpenClaw plugin keeps the existing Telegram and WeChat behavior. It uses the
+official `gateway_start` hook to restore each configured identity's pending
+interaction, original private route, polling, and card delivery after a Gateway
+restart. The host-only MCP coordination tools require private request metadata
+and are deliberately absent from the plugin's model-visible native tool
+catalog. This phase does not yet expose the end-user web workspace or
+cross-endpoint claim UI described in the
+[multi-end task design](docs/omnichannel-agent-task-continuity-design.md).
 
 ## Governed OA Writes
 

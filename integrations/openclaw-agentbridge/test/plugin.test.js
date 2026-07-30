@@ -123,6 +123,145 @@ test("binds a real Telegram direct session before middleware and injects its car
   assert.deepEqual(harness.middlewareOptions, { runtimes: ["openclaw"] });
 });
 
+test("remembers the host task attached to a pending trusted interaction", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindToolCall(harness, {
+    toolCallId: "tool-task-binding",
+    runId: "run-task-binding",
+    sessionKey,
+  });
+  const result = toolResult();
+  result.details.agentbridgeTaskId = "task-1234567890-abcdef";
+
+  harness.middleware(
+    {
+      toolCallId: "tool-task-binding",
+      toolName: "oa_session_login",
+      result,
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(
+    coordinator.activeTaskForSession(sessionKey),
+    "task-1234567890-abcdef",
+  );
+});
+
+test("uses one host task run reference for multiple tools in the same agent run", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindToolCall(harness, {
+    toolCallId: "tool-run-a",
+    runId: "run-shared",
+    sessionKey,
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-run-b",
+    runId: "run-shared",
+    sessionKey,
+  });
+
+  assert.equal(
+    coordinator.taskRunRefForToolCall("tool-run-a", sessionKey),
+    "run-shared",
+  );
+  assert.equal(
+    coordinator.taskRunRefForToolCall("tool-run-b", sessionKey),
+    "run-shared",
+  );
+});
+
+test("restores a pending interaction and its original route on gateway start", async () => {
+  const requests = [];
+  const senderId = "7052061588";
+  const sessionKey = `agent:main:telegram:direct:${senderId}`;
+  const recoveredInteraction = interaction({
+    interactionId: "interaction-recovered-1234567890",
+  });
+  const harness = fakeApi({
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+        label: "User A",
+      },
+    ],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            structuredContent: {
+              status: "succeeded",
+              count: 1,
+              recoveries: [
+                {
+                  task: { taskId: "task-recovered-1234567890" },
+                  endpoint: {
+                    clientType: "telegram",
+                    externalSubject: senderId,
+                    accountId: null,
+                    conversationRef: sessionKey,
+                    route: {
+                      channel: "telegram",
+                      to: senderId,
+                      accountId: null,
+                      threadId: null,
+                    },
+                  },
+                  interaction: recoveredInteraction,
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  await harness.hooks.gateway_start();
+
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0].params.name,
+    "agentbridge_host_task_recovery_list",
+  );
+  assert.deepEqual(requests[0].params._meta, {
+    "io.agentbridge/host": {
+      version: "1",
+      agentHost: "openclaw",
+    },
+  });
+  assert.equal(coordinator.pendingForSession(sessionKey).length, 1);
+  assert.equal(
+    coordinator.activeTaskForSession(sessionKey),
+    "task-recovered-1234567890",
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.presentation.blocks.at(-1).buttons[0].url,
+    CARD_URL,
+  );
+});
+
 test("uses the bound WeChat route when the final reply omits channel metadata", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
@@ -2359,6 +2498,7 @@ function fakeApi(pluginConfig) {
     middleware: null,
     middlewareOptions: null,
     command: null,
+    toolFactory: null,
   };
   const api = {
     pluginConfig: {
@@ -2414,6 +2554,9 @@ function fakeApi(pluginConfig) {
       state.middleware = handler;
       state.middlewareOptions = options;
     },
+    registerTool(factory) {
+      state.toolFactory = factory;
+    },
     on(name, handler) {
       hooks[name] = handler;
     },
@@ -2437,6 +2580,9 @@ function fakeApi(pluginConfig) {
     },
     get command() {
       return state.command;
+    },
+    get toolFactory() {
+      return state.toolFactory;
     },
   };
 }

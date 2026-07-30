@@ -7,7 +7,7 @@ import ipaddress
 import logging
 from pathlib import Path
 import threading
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlparse
 
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -107,6 +107,8 @@ from bscli.mcp.presentation import (
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
+HOST_CONTEXT_META_KEY = "io.agentbridge/host"
+TASK_CONTEXT_META_KEY = "io.agentbridge/task"
 
 
 @dataclass(frozen=True)
@@ -426,6 +428,15 @@ def create_central_mcp_server(
             identity_store,
             required_scopes=required_scopes or {"oa:read"},
         )
+        task_id = _request_task_id(ctx)
+        if task_id:
+            await asyncio.to_thread(
+                service.observe_host_task,
+                user_subject=identity["user_subject"],
+                task_id=task_id,
+                operation_ids=[],
+                interaction_ids=[],
+            )
         response = await asyncio.to_thread(
             service.invoke,
             user_subject=identity["user_subject"],
@@ -434,6 +445,21 @@ def create_central_mcp_server(
             idempotency_key=idempotency_key,
             request_id=str(ctx.request_id),
         )
+        if task_id:
+            operation_id = response.get("operationId")
+            interaction = response.get("interaction")
+            await asyncio.to_thread(
+                service.observe_host_task,
+                user_subject=identity["user_subject"],
+                task_id=task_id,
+                operation_ids=[operation_id] if operation_id else [],
+                interaction_ids=(
+                    [interaction["interactionId"]]
+                    if isinstance(interaction, dict)
+                    and interaction.get("interactionId")
+                    else []
+                ),
+            )
         return package_interaction_result(response)
 
     pending_action_tools = (
@@ -1955,6 +1981,137 @@ def create_central_mcp_server(
             limit=limit,
         )
 
+    @mcp.tool(
+        name="agentbridge_host_task_ensure",
+        title="Ensure Host-Owned AgentBridge Task",
+        description=(
+            "Host-private task continuity control. This tool requires trusted MCP "
+            "request metadata and is not a model business capability."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_task_ensure(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        host_task_key: Annotated[str, Field(min_length=1, max_length=1024)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        client_type: Annotated[str, Field(min_length=1, max_length=80)],
+        external_subject: Annotated[str, Field(min_length=1, max_length=768)],
+        conversation_ref: Annotated[str, Field(min_length=1, max_length=1024)],
+        title: Annotated[str, Field(min_length=1, max_length=240)],
+        account_id: Annotated[str | None, Field(max_length=512)] = None,
+        label: Annotated[str | None, Field(max_length=120)] = None,
+        route: dict[str, Any] | None = None,
+        capabilities: list[str] | None = None,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.ensure_host_task,
+            user_subject=identity["user_subject"],
+            token_id=identity["token_id"],
+            agent_host=agent_host,
+            host_task_key=host_task_key,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            conversation_ref=conversation_ref,
+            title=title,
+            account_id=account_id,
+            label=label,
+            route=route,
+            capabilities=capabilities,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_task_observe",
+        title="Observe Host-Owned AgentBridge Task",
+        description=(
+            "Host-private association control for trusted operation and interaction IDs."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_task_observe(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        operation_ids: list[str] | None = None,
+        interaction_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.observe_host_task,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            operation_ids=operation_ids,
+            interaction_ids=interaction_ids,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_task_recovery_list",
+        title="List Recoverable Host-Owned AgentBridge Tasks",
+        description=(
+            "Host-private restart recovery for pending trusted interactions."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_host_task_recovery_list(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.recover_host_tasks,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            limit=limit,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_task_list",
+        title="List Host-Owned AgentBridge Tasks",
+        description=(
+            "Host-private read-only diagnostics for tasks owned by one bound endpoint."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_host_task_list(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        active_only: bool = False,
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.list_host_tasks,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            active_only=active_only,
+            limit=limit,
+        )
+
     return mcp
 
 
@@ -2100,6 +2257,40 @@ def _request_identity(
         access_token.client_id,
         required_scopes=required_scopes,
     )
+
+
+def _request_meta(ctx: Context) -> Mapping[str, Any]:
+    value = getattr(ctx.request_context, "meta", None)
+    if isinstance(value, Mapping):
+        return value
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(by_alias=True)
+        if isinstance(dumped, Mapping):
+            return dumped
+    return {}
+
+
+def _require_host_context(ctx: Context, *, agent_host: str) -> None:
+    host_context = _request_meta(ctx).get(HOST_CONTEXT_META_KEY)
+    if not isinstance(host_context, Mapping):
+        raise PermissionError("trusted AgentBridge host context is required")
+    if host_context.get("version") != "1":
+        raise PermissionError("trusted AgentBridge host context version is invalid")
+    if host_context.get("agentHost") != agent_host:
+        raise PermissionError("trusted AgentBridge host context does not match")
+
+
+def _request_task_id(ctx: Context) -> str | None:
+    task_context = _request_meta(ctx).get(TASK_CONTEXT_META_KEY)
+    if not isinstance(task_context, Mapping):
+        return None
+    task_id = task_context.get("taskId")
+    if not isinstance(task_id, str):
+        return None
+    normalized = task_id.strip()
+    if len(normalized) < 16 or len(normalized) > 128:
+        return None
+    return normalized
 
 
 def _is_loopback_host(host: str) -> bool:

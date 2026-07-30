@@ -79,6 +79,32 @@ export class AgentBridgeIdentityRouter {
     return this.clientForBinding(this.bindingsByKey.get(bindingKey));
   }
 
+  configuredIdentities() {
+    return this.config.identityBindings
+      .map((binding) => ({
+        binding,
+        client: this.clientForBinding(binding),
+      }))
+      .filter((item) => item.client);
+  }
+
+  restoreSessionBinding({ sessionKey, bindingKey }) {
+    if (!isPrivateSessionKey(sessionKey)) {
+      return false;
+    }
+    const binding = this.bindingsByKey.get(bindingKey);
+    if (!binding || !this.clientForBinding(binding)) {
+      return false;
+    }
+    const existing = this.sessionBindings.get(sessionKey);
+    if (existing === "conflict" || (existing && existing !== bindingKey)) {
+      this.sessionBindings.set(sessionKey, "conflict");
+      return false;
+    }
+    this.sessionBindings.set(sessionKey, bindingKey);
+    return true;
+  }
+
   statusForSession(sessionKey) {
     const bindingKey = this.sessionBindings.get(sessionKey);
     const binding = this.bindingsByKey.get(bindingKey);
