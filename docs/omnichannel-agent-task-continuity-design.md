@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-07-30
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.0、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.1、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。第 15.1 节任务骨架和第 15.2 节只读网页端已进入代码与

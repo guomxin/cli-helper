@@ -13,6 +13,110 @@ import {
   toolResult,
 } from "./fixtures.js";
 
+test("confirms a workspace link from the authenticated command sender after restart", async () => {
+  const requests = [];
+  const senderId = "7052061588";
+  const sessionKey = `agent:main:telegram:direct:${senderId}`;
+  const harness = fakeApi({
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+        label: "User A",
+      },
+    ],
+  });
+  registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push({
+        authorization: options.headers.Authorization,
+        body,
+      });
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            structuredContent: { status: "succeeded" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  const result = await harness.command.handler({
+    args: "link ABCDEFGH",
+    senderId,
+    channel: "telegram",
+    channelId: "telegram",
+    isAuthorizedSender: true,
+    sessionKey,
+  });
+
+  assert.match(result.text, /身份配对已确认/);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].authorization, "Bearer token-a");
+  assert.equal(
+    requests[0].body.params.name,
+    "agentbridge_host_workspace_link_confirm",
+  );
+  assert.deepEqual(requests[0].body.params.arguments, {
+    agent_host: "openclaw",
+    endpoint_key: "telegram:*:7052061588",
+    client_type: "telegram",
+    external_subject: senderId,
+    account_id: null,
+    conversation_ref: sessionKey,
+    label: "User A",
+    route: {
+      channel: "telegram",
+      to: senderId,
+      accountId: null,
+    },
+    link_code: "ABCDEFGH",
+  });
+});
+
+test("rejects a workspace link command from an unprovisioned sender", async () => {
+  const requests = [];
+  const harness = fakeApi({
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId: "7052061588",
+        tokenEnv: "USER_TOKEN",
+      },
+    ],
+  });
+  registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (...args) => {
+      requests.push(args);
+      throw new Error("not called");
+    },
+  });
+
+  const result = await harness.command.handler({
+    args: "link ABCDEFGH",
+    senderId: "9999999999",
+    channel: "telegram",
+    channelId: "telegram",
+    isAuthorizedSender: true,
+    sessionKey: "agent:main:telegram:direct:9999999999",
+  });
+
+  assert.match(result.text, /尚未绑定 AgentBridge/);
+  assert.equal(requests.length, 0);
+});
+
 test("registers and enforces the one-use workspace Gateway binding", async () => {
   const attempts = [];
   const restored = [];

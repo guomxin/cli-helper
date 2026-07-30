@@ -14,7 +14,7 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.4.0";
+const PLUGIN_VERSION = "0.4.1";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -299,10 +299,11 @@ async function confirmWorkspaceLink({
   if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) {
     return { text: "配对码格式无效，请输入网页显示的 8 位配对码。" };
   }
-  const resolved = identityRouter.resolvePinnedSession({
+  const resolved = identityRouter.resolveToolContext({
     sessionKey,
-    channel: context.channelId || context.channel,
-    accountId: context.accountId,
+    messageChannel: context.channelId || context.channel,
+    requesterSenderId: context.senderId || context.from,
+    agentAccountId: context.accountId,
   });
   if (!resolved?.bound) {
     return {
