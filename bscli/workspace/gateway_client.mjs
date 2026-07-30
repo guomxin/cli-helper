@@ -21,13 +21,32 @@ const gatewayToken = requiredEnv("AB_GATEWAY_TOKEN");
 const identityPath = requiredEnv("AB_GATEWAY_IDENTITY_PATH");
 const input = JSON.parse(readFileSync(0, "utf8"));
 const timeoutMs = clampInteger(input.timeoutMs, 1_000, 180_000, 30_000);
-const mode = input.mode === "stream" ? "stream" : "call";
+const mode = ["stream", "send-stream"].includes(input.mode)
+  ? input.mode
+  : "call";
+const streamingMode = mode !== "call";
 const method =
   mode === "call" ? requiredText(input.method, "method", 160) : null;
 const params = isRecord(input.params) ? input.params : {};
 const streamSessionKey =
-  mode === "stream"
+  streamingMode
     ? requiredText(input.sessionKey, "sessionKey", 1_024)
+    : null;
+const endpointKey =
+  mode === "send-stream"
+    ? requiredText(input.endpointKey, "endpointKey", 768)
+    : null;
+const grant =
+  mode === "send-stream"
+    ? requiredText(input.grant, "grant", 256)
+    : null;
+const message =
+  mode === "send-stream"
+    ? requiredText(input.message, "message", 20_000)
+    : null;
+const idempotencyKey =
+  mode === "send-stream"
+    ? requiredText(input.idempotencyKey, "idempotencyKey", 128)
     : null;
 const identity = loadOrCreateIdentity(identityPath);
 const scopes = ["operator.read", "operator.write"];
@@ -40,7 +59,9 @@ let settled = false;
 let connectSent = false;
 let methodSent = false;
 let connected = false;
+let streamRunId = mode === "send-stream" ? idempotencyKey : null;
 const connectId = `connect-${randomUUID()}`;
+const bindRequestId = `bind-${randomUUID()}`;
 const requestId = `rpc-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
 const timer = setTimeout(
@@ -78,10 +99,20 @@ socket.addEventListener("message", (event) => {
     );
     return;
   }
-  if (frame?.type === "event" && connected && mode === "stream") {
-    const normalized = normalizeGatewayEvent(frame, streamSessionKey);
+  if (frame?.type === "event" && connected && streamingMode) {
+    const normalized = normalizeGatewayEvent(
+      frame,
+      streamSessionKey,
+      streamRunId,
+    );
     if (normalized) {
       process.stdout.write(`${JSON.stringify(normalized)}\n`);
+      if (
+        normalized.type === "chat" &&
+        ["final", "error", "aborted"].includes(normalized.state)
+      ) {
+        finish();
+      }
     }
     return;
   }
@@ -100,6 +131,19 @@ socket.addEventListener("message", (event) => {
     connected = true;
     if (mode === "stream") {
       process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
+    } else if (mode === "send-stream") {
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id: bindRequestId,
+          method: "agentbridge.workspace.bind",
+          params: {
+            sessionKey: streamSessionKey,
+            endpointKey,
+            grant,
+          },
+        }),
+      );
     } else if (!methodSent) {
       methodSent = true;
       socket.send(
@@ -113,6 +157,31 @@ socket.addEventListener("message", (event) => {
     }
     return;
   }
+  if (frame.id === bindRequestId && mode === "send-stream") {
+    if (!frame.ok) {
+      finishError(
+        safeCode(frame?.error?.details?.code || frame?.error?.code),
+        safeMessage(frame?.error?.message),
+        frame?.error?.details,
+      );
+      return;
+    }
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: requestId,
+        method: "chat.send",
+        params: {
+          sessionKey: streamSessionKey,
+          message,
+          deliver: false,
+          idempotencyKey,
+          timeoutMs: Math.min(timeoutMs, 120_000),
+        },
+      }),
+    );
+    return;
+  }
   if (frame.id !== requestId) {
     return;
   }
@@ -121,6 +190,26 @@ socket.addEventListener("message", (event) => {
       safeCode(frame?.error?.details?.code || frame?.error?.code),
       safeMessage(frame?.error?.message),
       frame?.error?.details,
+    );
+    return;
+  }
+  if (mode === "send-stream") {
+    const payload = isRecord(frame.payload) ? frame.payload : {};
+    streamRunId =
+      requiredText(
+        payload.runId || payload.run_id || idempotencyKey,
+        "runId",
+        256,
+      );
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "accepted",
+        runId: streamRunId,
+        status:
+          typeof payload.status === "string"
+            ? payload.status.slice(0, 80)
+            : "accepted",
+      })}\n`,
     );
     return;
   }
@@ -229,7 +318,7 @@ function finish(payload) {
   if (settled) return;
   settled = true;
   clearTimeout(timer);
-  if (mode === "stream") {
+  if (streamingMode) {
     process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
   } else {
     process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -245,7 +334,7 @@ function finishError(code, message, details = undefined) {
     message: safeMessage(message),
     ...(isRecord(details) ? { details } : {}),
   };
-  if (mode === "stream") {
+  if (streamingMode) {
     if (!settled) {
       process.stdout.write(
         `${JSON.stringify({ type: "error", error })}\n`,

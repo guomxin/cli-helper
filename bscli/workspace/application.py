@@ -210,6 +210,28 @@ class WorkspaceApplication:
             timeout_seconds=timeout_seconds,
         )
 
+    def send_chat_stream(
+        self,
+        account: dict,
+        *,
+        message: str,
+        idempotency_key: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        message = str(message or "").strip()
+        if not message or len(message) > 20_000:
+            raise ValueError("chat message is empty or too long")
+        grant = self.store.issue_gateway_grant(account["account_id"])
+        return self._gateway().send_stream(
+            session_key=grant["session_key"],
+            endpoint_key=grant["endpoint_key"],
+            grant=grant["grant"],
+            message=message,
+            idempotency_key=(
+                _safe_text(idempotency_key, 128) or str(uuid4())
+            ),
+            timeout_seconds=150,
+        )
+
     def send_chat(
         self,
         account: dict,

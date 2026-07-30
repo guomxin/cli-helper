@@ -6,7 +6,6 @@ const state = {
   enrollmentTimer: null,
   chatTimer: null,
   eventSource: null,
-  chatEventSource: null,
   liveMessages: new Map(),
 };
 
@@ -187,7 +186,6 @@ function enterWorkspace(account) {
   loadTasks();
   loadChat();
   openEventStream();
-  openChatEventStream();
 }
 
 async function logout() {
@@ -195,7 +193,6 @@ async function logout() {
     await api("/api/logout", { method: "POST", body: {}, csrf: true });
   } catch {}
   state.eventSource?.close();
-  state.chatEventSource?.close();
   clearTimeout(state.chatTimer);
   state.account = null;
   location.reload();
@@ -282,20 +279,13 @@ async function sendChat(event) {
   $("#chat-messages").append(messageElement({ role: "user", text: message }));
   $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight;
   setBusy(form, true);
+  const idempotencyKey = crypto.randomUUID();
+  addLiveProgress(idempotencyKey, "正在连接智能体", "active");
   try {
-    const accepted = await api("/api/chat/send", {
-      method: "POST",
-      csrf: true,
-      body: {
-        message,
-        idempotencyKey: crypto.randomUUID(),
-      },
-    });
-    if (accepted.runId) {
-      addLiveProgress(accepted.runId, "请求已交给智能体", "active");
-    }
-    scheduleChatRefresh(30000, 1);
+    await consumeChatStream({ message, idempotencyKey });
+    scheduleChatRefresh(500, 1);
   } catch (error) {
+    addLiveProgress(idempotencyKey, "处理失败", "failed");
     toast(friendlyError(error), true);
   } finally {
     setBusy(form, false);
@@ -311,27 +301,79 @@ function scheduleChatRefresh(delay, attempts) {
   }, delay);
 }
 
-function openChatEventStream() {
-  state.chatEventSource?.close();
-  const source = new EventSource("/api/chat/stream");
-  source.addEventListener("progress", (event) => {
-    const payload = parseStreamEvent(event);
-    if (payload) handleChatProgress(payload);
+async function consumeChatStream({ message, idempotencyKey }) {
+  const response = await fetch("/api/chat/send-stream", {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-AgentBridge-CSRF": cookieValue(
+        "agentbridge_workspace_csrf",
+      ),
+    },
+    credentials: "same-origin",
+    body: JSON.stringify({ message, idempotencyKey }),
   });
-  source.addEventListener("chat", (event) => {
-    const payload = parseStreamEvent(event);
-    if (payload) handleChatDelta(payload);
-  });
-  source.addEventListener("stream-error", () => {
-    scheduleChatRefresh(2000, 1);
-  });
-  state.chatEventSource = source;
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const error = new Error(
+      payload?.error?.message || payload?.error?.code || "请求失败",
+    );
+    error.code = payload?.error?.code;
+    throw error;
+  }
+  if (!response.body) {
+    const error = new Error("浏览器不支持流式响应");
+    error.code = "STREAM_UNAVAILABLE";
+    throw error;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamError = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = done ? "" : blocks.pop() || "";
+    for (const block of blocks) {
+      const event = parseSseBlock(block);
+      if (!event) continue;
+      if (event.name === "accepted" && event.data.runId) {
+        addLiveProgress(event.data.runId, "请求已交给智能体", "active");
+      } else if (event.name === "progress") {
+        handleChatProgress(event.data);
+      } else if (event.name === "chat") {
+        handleChatDelta(event.data);
+      } else if (event.name === "stream-error") {
+        streamError = event.data.code || "GATEWAY_STREAM_FAILED";
+      }
+    }
+    if (done) break;
+  }
+  if (streamError) {
+    const error = new Error(streamError);
+    error.code = streamError;
+    throw error;
+  }
 }
 
-function parseStreamEvent(event) {
+function parseSseBlock(block) {
+  let name = "message";
+  const data = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      name = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice(5).trimStart());
+    }
+  }
+  if (data.length === 0) return null;
   try {
-    const value = JSON.parse(event.data);
-    return value && typeof value === "object" ? value : null;
+    const value = JSON.parse(data.join("\n"));
+    return value && typeof value === "object"
+      ? { name, data: value }
+      : null;
   } catch {
     return null;
   }

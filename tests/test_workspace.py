@@ -104,6 +104,40 @@ class FakeGateway:
         )
         return iter(self.stream_events)
 
+    def send_stream(
+        self,
+        *,
+        session_key: str,
+        endpoint_key: str,
+        grant: str,
+        message: str,
+        idempotency_key: str,
+        timeout_seconds: float = 150,
+    ):
+        self.calls.append(
+            (
+                "send_stream",
+                {
+                    "sessionKey": session_key,
+                    "endpointKey": endpoint_key,
+                    "grant": grant,
+                    "message": message,
+                    "idempotencyKey": idempotency_key,
+                    "timeoutSeconds": timeout_seconds,
+                },
+            )
+        )
+        return iter(
+            [
+                {
+                    "type": "accepted",
+                    "runId": idempotency_key,
+                    "status": "started",
+                },
+                *self.stream_events,
+            ]
+        )
+
 
 class WorkspaceStoreTests(unittest.TestCase):
     def test_identity_link_account_session_and_one_use_gateway_grant(self) -> None:
@@ -368,6 +402,13 @@ class WorkspaceApplicationTests(unittest.TestCase):
 
             history = app.chat_history(account)
             streamed = list(app.chat_stream(account))
+            send_streamed = list(
+                app.send_chat_stream(
+                    account,
+                    message="读取我的 OA 待办",
+                    idempotency_key="web-message-stream-1",
+                )
+            )
             result = app.send_chat(
                 account,
                 message="读取我的 OA 待办",
@@ -380,18 +421,29 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )
             self.assertEqual(result.run_id, "run-web-1")
             self.assertEqual(streamed[-1]["state"], "final")
+            self.assertEqual(send_streamed[0]["type"], "accepted")
             methods = [method for method, _params in gateway.calls]
             self.assertEqual(
                 methods,
                 [
                     "chat.history",
                     "stream",
+                    "send_stream",
                     "agentbridge.workspace.bind",
                     "chat.send",
                 ],
             )
-            bind = gateway.calls[2][1]
-            sent = gateway.calls[3][1]
+            streamed_send = gateway.calls[2][1]
+            bind = gateway.calls[3][1]
+            sent = gateway.calls[4][1]
+            self.assertEqual(
+                streamed_send["sessionKey"],
+                account["openclaw_session_key"],
+            )
+            self.assertEqual(
+                streamed_send["idempotencyKey"],
+                "web-message-stream-1",
+            )
             self.assertEqual(bind["sessionKey"], account["openclaw_session_key"])
             self.assertEqual(sent["sessionKey"], account["openclaw_session_key"])
             self.assertFalse(sent["deliver"])
@@ -469,7 +521,7 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 str(caught.exception),
             )
 
-    def test_gateway_stream_yields_only_normalized_events(self) -> None:
+    def test_gateway_send_stream_keeps_secrets_out_of_child_arguments(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             token_file = root / "gateway.token"
@@ -490,7 +542,8 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 process.stdin = input_pipe
                 process.stdout = iter(
                     [
-                        '{"type":"ready"}\n',
+                        '{"type":"accepted","runId":"run-1",'
+                        '"status":"started"}\n',
                         '{"type":"progress","runId":"run-1",'
                         '"kind":"tool","phase":"start",'
                         '"label":"正在检查 OA 登录状态"}\n',
@@ -502,20 +555,25 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 process.poll.return_value = 0
 
                 events = list(
-                    client.stream(
+                    client.send_stream(
                         session_key=(
                             "agent:main:agentbridge-workspace:direct:account-a"
                         ),
-                        timeout_seconds=25,
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="检查 OA 登录状态",
+                        idempotency_key="run-1",
+                        timeout_seconds=150,
                     )
                 )
 
             self.assertEqual(
                 [event["type"] for event in events],
-                ["progress", "chat"],
+                ["accepted", "progress", "chat"],
             )
             request = json.loads(input_pipe.value)
-            self.assertEqual(request["mode"], "stream")
+            self.assertEqual(request["mode"], "send-stream")
+            self.assertEqual(request["idempotencyKey"], "run-1")
             self.assertNotIn("gateway-secret-token-value", input_pipe.value)
             command = popen.call_args.args[0]
             self.assertNotIn("gateway-secret-token-value", command)
@@ -622,9 +680,15 @@ class WorkspaceHttpServerTests(unittest.TestCase):
 
                 status, response_headers, stream = _raw_request(
                     port,
-                    "GET",
-                    "/api/chat/stream",
+                    "POST",
+                    "/api/chat/send-stream",
+                    body={
+                        "message": "读取待办",
+                        "idempotencyKey": "web-stream-1",
+                    },
+                    origin=origin,
                     cookies=cookies,
+                    csrf=cookies["agentbridge_workspace_csrf"],
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(
@@ -674,7 +738,9 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("const enrollmentForm = event.currentTarget;", script)
         self.assertIn("页面已刷新，请重新生成配对码。", script)
         self.assertNotIn("setBusy(event.currentTarget", script)
-        self.assertIn('new EventSource("/api/chat/stream")', script)
+        self.assertIn('fetch("/api/chat/send-stream"', script)
+        self.assertIn("response.body.getReader()", script)
+        self.assertIn("parseSseBlock", script)
         self.assertIn("handleChatProgress", script)
         self.assertIn("handleChatDelta", script)
 
@@ -759,15 +825,26 @@ def _raw_request(
     method: str,
     path: str,
     *,
+    body: dict | None = None,
+    origin: str | None = None,
     cookies: dict[str, str] | None = None,
+    csrf: str | None = None,
 ) -> tuple[int, http.client.HTTPMessage, str]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     headers = {"Host": f"127.0.0.1:{port}"}
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if origin:
+        headers["Origin"] = origin
     if cookies:
         headers["Cookie"] = "; ".join(
             f"{name}={value}" for name, value in cookies.items()
         )
-    connection.request(method, path, headers=headers)
+    if csrf:
+        headers["X-AgentBridge-CSRF"] = csrf
+    connection.request(method, path, body=payload, headers=headers)
     response = connection.getresponse()
     raw = response.read().decode("utf-8")
     result = (response.status, response.headers, raw)

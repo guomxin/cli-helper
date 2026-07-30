@@ -86,13 +86,18 @@ agent:main:agentbridge-workspace:direct:<workspace-account-id>
 OpenClaw 核心源码没有修改。接入只使用正式插件 API、Gateway WebSocket 协议和
 自定义 Gateway Method，因此 OpenClaw 升级后只需执行插件兼容测试。
 
-网页对话使用独立 SSE 流接收 OpenClaw Gateway 的 `agent` 和 `chat` 事件：
+网页发送消息时使用一个流式 HTTPS POST。BFF 在同一个 OpenClaw Gateway
+WebSocket 上依次完成一次性身份绑定、`chat.send` 和 `agent` / `chat` 事件接收，
+再把脱敏结果编码为 SSE 返回浏览器：
 
 - `agent` 事件只显示模型提供的用户可读进度、脱敏后的业务能力名称和执行阶段；
 - 工具参数、工具结果、Bearer Token、`userSubject` 和其他会话事件不会进入浏览器；
 - `chat` 增量实时更新当前回答，最终事件到达后再读取一次正式聊天历史进行对账；
-- SSE 每 25 秒正常断开并自动重连，浏览器断开时对应 Gateway 子进程立即结束；
-- 每条流在 Node 侧先按网页账号专属 Session Key 过滤，避免跨用户事件进入 Python。
+- 最终事件到达、超时或浏览器断开时，对应 Gateway 子进程立即结束；
+- 每条流在 Node 侧同时按网页账号专属 Session Key 和本次 Run ID 过滤，避免其他
+  用户或同一用户的并发任务事件进入 Python；
+- 发送与监听不能拆成两个 Gateway 连接；OpenClaw 会把完整工具流和回答流优先投递
+  给发起 `chat.send` 的连接。
 
 ## 4. 网络与部署
 

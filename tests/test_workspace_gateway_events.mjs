@@ -28,6 +28,28 @@ test("filters events from other Workspace sessions", () => {
   assert.equal(event, null);
 });
 
+test("filters another run in the same Workspace session", () => {
+  const event = normalizeGatewayEvent(
+    {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey,
+        runId: "run-b",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "another run" }],
+        },
+      },
+    },
+    sessionKey,
+    "run-a",
+  );
+
+  assert.equal(event, null);
+});
+
 test("keeps public chat text and strips message metadata", () => {
   const event = normalizeGatewayEvent(
     {

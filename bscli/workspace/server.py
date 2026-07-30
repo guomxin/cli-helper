@@ -240,9 +240,6 @@ def create_workspace_http_server(
                         ),
                     )
                     return
-                if route.path == "/api/chat/stream":
-                    self._chat_event_stream(account)
-                    return
                 self._json(404, {"error": {"code": "NOT_FOUND"}})
             except Exception as exc:
                 self._handle_error(exc)
@@ -300,6 +297,9 @@ def create_workspace_http_server(
                             "runId": result.run_id,
                         },
                     )
+                    return
+                if route.path == "/api/chat/send-stream":
+                    self._chat_send_stream(account, body)
                     return
                 self._json(404, {"error": {"code": "NOT_FOUND"}})
             except Exception as exc:
@@ -434,7 +434,9 @@ def create_workspace_http_server(
             except (BrokenPipeError, ConnectionResetError):
                 return
 
-        def _chat_event_stream(self, account: dict) -> None:
+        def _chat_send_stream(self, account: dict, body: dict) -> None:
+            message = _required_string(body, "message")
+            idempotency_key = _optional_string(body, "idempotencyKey")
             self.close_connection = True
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -447,14 +449,16 @@ def create_workspace_http_server(
             try:
                 self.wfile.write(b"retry: 1000\n\n")
                 self.wfile.flush()
-                stream = application.chat_stream(
+                stream = application.send_chat_stream(
                     account,
-                    timeout_seconds=25,
+                    message=message,
+                    idempotency_key=idempotency_key,
                 )
                 for item in stream:
-                    event_name = (
-                        "chat" if item.get("type") == "chat" else "progress"
-                    )
+                    event_name = {
+                        "accepted": "accepted",
+                        "chat": "chat",
+                    }.get(item.get("type"), "progress")
                     payload = json.dumps(
                         item,
                         ensure_ascii=False,

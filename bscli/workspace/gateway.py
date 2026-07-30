@@ -103,6 +103,46 @@ class OpenClawGatewayClient:
                 180_000,
             ),
         }
+        return self._stream_payload(payload)
+
+    def send_stream(
+        self,
+        *,
+        session_key: str,
+        endpoint_key: str,
+        grant: str,
+        message: str,
+        idempotency_key: str,
+        timeout_seconds: float = 150,
+    ) -> Iterator[dict[str, Any]]:
+        values = {
+            "sessionKey": (session_key, 16, 1_024),
+            "endpointKey": (endpoint_key, 1, 768),
+            "grant": (grant, 32, 256),
+            "message": (message, 1, 20_000),
+            "idempotencyKey": (idempotency_key, 1, 128),
+        }
+        normalized: dict[str, str] = {}
+        for name, (value, minimum, maximum) in values.items():
+            text = str(value or "").strip()
+            if len(text) < minimum or len(text) > maximum:
+                raise ValueError(f"OpenClaw {name} is invalid")
+            normalized[name] = text
+        return self._stream_payload(
+            {
+                "mode": "send-stream",
+                **normalized,
+                "timeoutMs": min(
+                    max(int(timeout_seconds * 1000), 1_000),
+                    180_000,
+                ),
+            }
+        )
+
+    def _stream_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> Iterator[dict[str, Any]]:
         try:
             process = subprocess.Popen(
                 [
@@ -153,7 +193,7 @@ class OpenClawGatewayClient:
                             or "OpenClaw Gateway stream failed."
                         ),
                     )
-                if item.get("type") in {"progress", "chat"}:
+                if item.get("type") in {"accepted", "progress", "chat"}:
                     yield item
         finally:
             if process.poll() is None:

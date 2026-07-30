@@ -1,13 +1,18 @@
 const MAX_CHAT_TEXT = 50_000;
 const MAX_PROGRESS_TEXT = 2_000;
 
-export function normalizeGatewayEvent(frame, expectedSessionKey) {
+export function normalizeGatewayEvent(
+  frame,
+  expectedSessionKey,
+  expectedRunId = null,
+) {
   if (
     !isRecord(frame) ||
     frame.type !== "event" ||
     !["agent", "chat"].includes(frame.event) ||
     !isRecord(frame.payload) ||
-    frame.payload.sessionKey !== expectedSessionKey
+    frame.payload.sessionKey !== expectedSessionKey ||
+    (expectedRunId && frame.payload.runId !== expectedRunId)
   ) {
     return null;
   }
