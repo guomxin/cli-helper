@@ -1405,10 +1405,30 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   发布烟测通过。网页账号原有 5 条误标 `active` 的任务均已迁移为 `succeeded`，
   且完成时间与对应成功 Operation 一致。
 
+## 15.35 2026-07-31 Agent Workspace 身份回源与流式输出
+
+- 中央服务新增按网页 Session Key 和当前 Bearer 身份精确解析 Workspace 会话的
+  宿主私有只读能力。OpenClaw 插件在进程内绑定缓存缺失时向中央服务回源，只有该
+  Token 的 `userSubject` 确实拥有目标 active 网页端点时才恢复身份；普通未绑定
+  Telegram 或微信用户仍按原规则拒绝。
+- 网页对话改为一个流式 HTTPS POST。AgentBridge 在同一个 Gateway WebSocket 上
+  完成一次性身份绑定、`chat.send` 和 `agent` / `chat` 事件接收，再按 Session Key
+  与 Run ID 过滤并编码为 SSE。拆分发送连接和监听连接的方案已通过真实运行排除。
+- Gateway 握手声明 OpenClaw 官方 `tool-events` 能力。浏览器可看到智能体生命周期、
+  脱敏工具名称与阶段、回答增量和最终结果，但不会收到工具参数、工具结果、Token、
+  `userSubject` 或其他用户事件。
+- 功能提交 `9285044`、同连接修复 `2230958` 和工具事件修复 `c3c675e` 均已推送
+  GitHub。最终门禁通过 Python `441 passed, 3 skipped`、OpenClaw 插件 `84/84`、
+  Gateway 事件测试 `4/4`、`compileall` 和 `pip check`。
+- Linux Release `c3c675e6e4f0` 已部署，发布冒烟确认 62 个 MCP 工具完整、辛国茂
+  OA 会话 active，OpenClaw Gateway 无需再次重启。真实只读探针依次收到
+  `accepted`、生命周期开始、`正在检查 OA 登录状态` 工具开始与结果、多个回答增量、
+  生命周期结束和最终回答“当前 OA 已登录，账号为辛国茂。”。
+
 ## 16. 后续演进顺序
 
-1. 由用户完成 Agent Workspace 首个真实账号绑定和只读任务验收；
-2. 实现 Interaction Claim、首选确认端和“网页发起、手机确认”三期样板；
-3. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
-4. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
-5. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。
+1. 实现 Interaction Claim、首选确认端和“网页发起、手机确认”三期样板；
+2. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
+3. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
+4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA
+   迁移到企业 PKI。

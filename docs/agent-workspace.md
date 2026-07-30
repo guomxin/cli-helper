@@ -209,3 +209,13 @@ openclaw devices approve <requestId> --json
 3. 网页任务、原聊天端和下游 Session 按同一 `userSubject` 关联；
 4. 插件 `0.4.3` 已验证 Gateway 身份绑定可被 Agent Runtime 复用并在缓存丢失后回源恢复；
 5. 成功结束的网页任务显示为“已完成”，不再滞留为“进行中”。
+
+2026-07-31 流式输出真实验收已完成：
+
+1. 未预先调用网页绑定 RPC 的新 Workspace 会话能够从中央服务恢复正确身份，并以
+   辛国茂身份调用只读 `oa_session_status`，不再返回 `identity_not_provisioned`；
+2. 网页发送、身份绑定、`chat.send` 和事件接收共用同一个 Gateway WebSocket；
+3. Gateway 客户端声明官方 `tool-events` 能力后，真实事件流依次出现智能体开始、
+   “正在检查 OA 登录状态”、工具结果、回答增量、智能体结束和最终回答；
+4. 事件清洗层未向浏览器输出工具参数、工具结果、Token、`userSubject` 或其他会话；
+5. Linux Release `c3c675e6e4f0` 已部署，62 个 MCP 工具完整，OA 会话保持 active。
