@@ -78,6 +78,11 @@ organization namespace + userSubject
 
 默认不包含 clientId/deviceId，避免同一用户从手机和桌面恢复时生成两个写操作。客户端和设备只进入审计链。跨设备继续操作时，按策略重新认证和执行授权。
 
+网页、Telegram、微信之间的任务主键、Endpoint 绑定、可信交互领取、通知 Outbox
+和 OpenClaw 外置插件演进已形成
+[多端智能体任务延续设计](./docs/omnichannel-agent-task-continuity-design.md)。
+该设计仍按阶段实施，不能据此把跨客户端生产化事项视为已完成。
+
 ### 2.7 Worker 租约的真实执行边界
 
 - 当前 PoC 只实现单机、单进程层面的 Profile 租约，能够拒绝同一 Profile 的并发启动；这不是跨主机 fencing，也不能自动证明强制终止后的 Chromium 子进程已经消失；

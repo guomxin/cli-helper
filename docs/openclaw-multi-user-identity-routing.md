@@ -1,5 +1,10 @@
 # OpenClaw 多用户身份路由方案
 
+> 本文记录当前已经运行的“一个聊天身份绑定一个 AgentBridge 身份”的实现与验收。
+> 网页、Telegram、微信之间共享 `taskId`、跨端领取可信交互和多端状态通知的目标
+> 架构见 [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
+> 目标设计不改变本文的用户隔离规则，也不要求修改 OpenClaw 核心源码。
+
 ## 1. 目标与当前状态
 
 目标是在同一个 OpenClaw Gateway 中，让 Telegram、微信等不同私聊身份使用各自的

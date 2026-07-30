@@ -240,6 +240,12 @@ with three lifecycle hooks, the `/agentbridge` command, and the OpenClaw tool
 result middleware contract. Gateway RPC and the live startup log both confirmed
 the plugin was active alongside Telegram.
 
+Originating-channel delivery is the current v1 runtime behavior, not the target
+cross-device routing model. The planned evolution keeps this envelope and its
+single-use security ledgers, adds a channel-independent `taskId`, and lets any
+verified private endpoint for the same `userSubject` claim an interaction once.
+See [Omnichannel agent task continuity](./omnichannel-agent-task-continuity-design.md).
+
 Polling remains the universal completion mechanism. Until an authenticated,
 anti-replay callback path exists, execution authorization stays inside the
 trusted AgentBridge web surface rather than becoming a model-visible chat

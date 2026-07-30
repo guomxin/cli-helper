@@ -16,6 +16,8 @@
 
 - [智能体交互协议](./agent-interaction-protocol.md)：认证卡、字段卡、授权卡及恢复协议。
 - [受控写模型](./governed-write-model.md)：写操作的信任边界、状态机和验收要求。
+- [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)：独立用户网页端、
+  Telegram、微信之间的任务延续、手机确认与状态通知目标设计。
 - [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)：聊天身份到
   AgentBridge Token 和用户会话的隔离。
 - [会话稳定性与多用户隔离验收](./session-stability-and-isolation-acceptance.md)：

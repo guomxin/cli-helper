@@ -8,6 +8,10 @@
 
 管理控制台是 AgentBridge 的独立运行治理面，用于查看多用户、多系统的运行状态，并在异常或维护期间控制写能力。它不代替 OpenClaw，不直接操作 OA、泰华或语雀业务，也不展示登录凭据、Cookie、可信卡片 URL、业务字段值或 MCP Token 密钥。
 
+普通用户使用的 Agent Workspace 是与 Telegram、微信同层的独立智能体客户端，
+不复用管理端账户、页面或会话。其目标边界见
+[多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
+
 管理端与 MCP、可信卡片共用一个 AgentBridge 进程和 SQLite 状态库，但使用独立的 HTTPS 监听端口、管理员账户、会话 Cookie、CSRF 校验和追加式管理审计。
 
 ## 2. 角色
