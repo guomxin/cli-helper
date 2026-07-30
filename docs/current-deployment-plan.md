@@ -1375,13 +1375,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   超时、CSRF、密码与 Token 哈希、Gateway Token 不进入命令行、网页只读工具范围和
   插件 Gateway Method；
 - Playwright 已完成桌面 `1440x900` 和移动端 `390x844` 的登录、对话、任务列表、
-  任务详情与返回路径验收，浏览器控制台 0 错误。内网正式部署和一次真实网页账号
-  绑定仍待本节发布收尾后补记；
+  任务详情与返回路径验收，浏览器控制台 0 错误；
+- 提交 `caaeac5` 已作为发布 `caaeac5e2857` 部署到 Linux。8783 的健康端点和首页均
+  返回 200，CSP 与 HSTS 响应头正确；OpenClaw 插件 `0.4.0` 已加载并注册
+  `agentbridge.workspace.bind`；
+- `AgentBridge Workspace` Linux 设备已在 OpenClaw 中完成配对。服务器使用持久
+  `0600` 设备私钥成功调用只读 `system.info`，Gateway 仍同时监听回环和内网地址；
+  Telegram、微信通道在 Gateway 重启后均保持运行；
+- 首个真实网页账号绑定和网页只读业务查询仍需由用户在可信 Telegram 或微信私聊发送
+  一次配对命令完成，自动化和管理员不能代替该身份确认；
 - 本轮实现与本地验收没有执行 OA、泰华或语雀业务写入。
 
 ## 16. 后续演进顺序
 
-1. 完成 Agent Workspace 内网真实账号绑定和只读任务验收；
+1. 由用户完成 Agent Workspace 首个真实账号绑定和只读任务验收；
 2. 实现 Interaction Claim、首选确认端和“网页发起、手机确认”三期样板；
 3. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
 4. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；

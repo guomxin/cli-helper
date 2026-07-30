@@ -173,10 +173,16 @@ openclaw devices approve <requestId> --json
 - 桌面 `1440x900` 与移动端 `390x844` 的登录、对话、任务列表、详情和返回；
 - 浏览器控制台 0 错误。
 
-真实部署验收还需要：
+2026-07-30 已完成的真实部署验收：
 
-1. 完成 Linux 设备的一次 OpenClaw 配对；
-2. 使用现有可信聊天身份完成一个网页账号绑定；
-3. 网页发起只读 OA 或泰华查询；
-4. 核对网页与原聊天端使用同一 `userSubject` 和下游 Session；
-5. 确认 Telegram、微信既有链路无退化。
+1. 发布 `caaeac5e2857` 已部署，8783 健康端点和首页均返回 200；
+2. Linux 设备 `AgentBridge Workspace` 已完成 OpenClaw 配对；
+3. 服务器持久设备身份已成功调用只读 `system.info`；
+4. OpenClaw 插件 `0.4.0` 和 `agentbridge.workspace.bind` 已加载；
+5. Telegram、微信通道在 Gateway 重启后均保持运行。
+
+仍需用户参与完成：
+
+1. 使用现有可信聊天身份完成一个网页账号绑定；
+2. 网页发起只读 OA 或泰华查询；
+3. 核对网页与原聊天端使用同一 `userSubject` 和下游 Session。
