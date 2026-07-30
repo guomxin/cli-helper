@@ -209,6 +209,89 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
   ]);
 });
 
+test("shares a workspace identity binding with the agent runtime instance", async () => {
+  const sharedState = createInteractionSharedState();
+  const requests = [];
+  const pluginConfig = {
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId: "7052061588",
+        tokenEnv: "USER_TOKEN",
+        label: "User A",
+      },
+    ],
+  };
+  const fetchImpl = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({
+      authorization: options.headers.Authorization,
+      body,
+    });
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          structuredContent: { status: "succeeded" },
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  const gateway = fakeApi(pluginConfig);
+  const runtime = fakeApi(pluginConfig);
+  registerAgentBridgeInteractions(gateway.api, {
+    sharedState,
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl,
+  });
+  registerAgentBridgeInteractions(runtime.api, {
+    sharedState,
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl,
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const responses = [];
+
+  await gateway.gatewayMethods.get("agentbridge.workspace.bind").handler({
+    params: {
+      sessionKey,
+      endpointKey: "workspace:account-123",
+      grant: "abwg_1234567890123456789012345678901234567890",
+    },
+    respond(ok, payload, error) {
+      responses.push({ ok, payload, error });
+    },
+  });
+  const tools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+  });
+  const statusTool = tools.find((tool) => tool.name === "oa_session_status");
+  const result = await statusTool.execute("workspace-status", {});
+
+  assert.equal(responses[0].ok, true);
+  assert.equal(result.details.structuredContent.status, "succeeded");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(
+    requests.map((request) => request.body.params.name),
+    [
+      "agentbridge_host_workspace_session_bind",
+      "oa_session_status",
+    ],
+  );
+  assert.equal(
+    requests.every(
+      (request) => request.authorization === "Bearer token-a",
+    ),
+    true,
+  );
+});
+
 test("leaves an ordinary non-interaction tool result untouched", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });

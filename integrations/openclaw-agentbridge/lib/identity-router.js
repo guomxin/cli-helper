@@ -8,6 +8,7 @@ export class AgentBridgeIdentityRouter {
     hostConfig,
     env = process.env,
     fetchImpl = globalThis.fetch,
+    sessionBindings = new Map(),
   }) {
     this.config = config;
     this.endpoint = resolveMcpEndpoint(config, hostConfig);
@@ -17,7 +18,7 @@ export class AgentBridgeIdentityRouter {
       config.identityBindings.map((binding) => [binding.key, binding]),
     );
     this.clients = new Map();
-    this.sessionBindings = new Map();
+    this.sessionBindings = sessionBindings;
   }
 
   get enabled() {

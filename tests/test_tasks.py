@@ -156,6 +156,87 @@ class TaskHubStoreTests(unittest.TestCase):
 
         self.assertEqual(task["status"], "outcome_unknown")
 
+    def test_successful_operation_finishes_task_and_leaves_active_view(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+
+        task = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-succeeded",
+                "user_subject": "user-a",
+                "capability_name": "oa.workflow.pending.list",
+                "status": "succeeded",
+                "error": None,
+            },
+        )
+
+        self.assertEqual(task["status"], "succeeded")
+        self.assertIsNotNone(task["finished_at"])
+        self.assertEqual(
+            self.store.list_tasks(
+                user_subject="user-a",
+                active_only=True,
+            ),
+            [],
+        )
+
+    def test_initialization_repairs_legacy_active_successful_tasks(self):
+        db_path = Path(self.temp.name) / "repair-agentbridge.db"
+        operations = OperationStore(db_path)
+        operation, _ = operations.create(
+            user_subject="user-a",
+            capability_name="oa.workflow.pending.list",
+            capability_version="1",
+            input_summary={"limit": 20},
+        )
+        operation = operations.mark_succeeded(
+            operation["operation_id"],
+            {"count": 0},
+        )
+        task_store = TaskHubStore(db_path)
+        endpoint, _ = task_store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="workspace",
+            external_subject="account-a",
+            conversation_ref="agent:main:workspace:account-a",
+        )
+        task, _ = task_store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="agent:main:workspace:account-a|run-1",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref="agent:main:workspace:account-a",
+            title="List Pending OA Workflows",
+        )
+        task_store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation=operation,
+        )
+        with task_store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = 'active', finished_at = NULL
+                WHERE task_id = ?
+                """,
+                (task["task_id"],),
+            )
+
+        repaired_store = TaskHubStore(db_path)
+        repaired = repaired_store.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+
+        self.assertEqual(repaired["status"], "succeeded")
+        self.assertIsNotNone(repaired["finished_at"])
+
     def test_central_service_recovers_only_the_bound_users_pending_interaction(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),

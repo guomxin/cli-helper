@@ -5,7 +5,7 @@
 > 更新日期：2026-07-30
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.1
+> `agentbridge-interactions` 0.4.2
 
 ## 1. 定位
 
@@ -178,7 +178,7 @@ openclaw devices approve <requestId> --json
 1. 发布 `caaeac5e2857` 已部署，8783 健康端点和首页均返回 200；
 2. Linux 设备 `AgentBridge Workspace` 已完成 OpenClaw 配对；
 3. 服务器持久设备身份已成功调用只读 `system.info`；
-4. OpenClaw 插件 `0.4.1` 和 `agentbridge.workspace.bind` 已加载；
+4. OpenClaw 插件 `0.4.2` 和 `agentbridge.workspace.bind` 已加载；
 5. Telegram、微信通道在 Gateway 重启后均保持运行。
 
 仍需用户参与完成：

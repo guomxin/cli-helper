@@ -162,6 +162,44 @@ class TaskHubStore:
                 ON notification_outbox (endpoint_id, state, next_attempt_at);
                 """
             )
+            self._repair_terminal_task_statuses(connection)
+
+    @staticmethod
+    def _repair_terminal_task_statuses(
+        connection: sqlite3.Connection,
+    ) -> None:
+        operations_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'operations'
+            """
+        ).fetchone()
+        if operations_table is None:
+            return
+        connection.execute(
+            """
+            UPDATE agent_tasks
+            SET status = 'succeeded',
+                version = version + 1,
+                finished_at = COALESCE(
+                    (
+                        SELECT operations.finished_at
+                        FROM operations
+                        WHERE operations.operation_id =
+                            agent_tasks.current_operation_id
+                    ),
+                    updated_at
+                )
+            WHERE status = 'active'
+              AND current_operation_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM operations
+                  WHERE operations.operation_id =
+                        agent_tasks.current_operation_id
+                    AND operations.status = 'succeeded'
+              )
+            """
+        )
 
     def ensure_endpoint(
         self,
@@ -888,7 +926,7 @@ def _task_status_for_operation(status: str) -> str:
         "pending": "running",
         "running": "running",
         "requires_user_action": "waiting_user",
-        "succeeded": "active",
+        "succeeded": "succeeded",
         "failed": "failed",
         "unknown": "outcome_unknown",
     }.get(status, "active")

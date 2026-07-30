@@ -9,7 +9,7 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.1 为当前代码版本。
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.2 为当前代码版本。
 > 中心端当前定义 61 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
 > 插件另提供 1 个身份状态工具；6 个任务与 Workspace 治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
@@ -1365,7 +1365,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 网页浏览器不持有 MCP Token 或 OpenClaw Gateway Token。BFF 在每次发送前签发
   90 秒一次性凭证，通过插件私有 RPC `agentbridge.workspace.bind` 固定正确 MCP
   身份，再调用正式 `chat.send`；
-- OpenClaw 插件升级为 `0.4.1`，新增网页配对命令和 Gateway 绑定方法。网页 Session
+- OpenClaw 插件升级为 `0.4.2`，新增网页配对命令和 Gateway 绑定方法。网页 Session
   只注册 `readOnlyHint=true` 的 AgentBridge 工具；Telegram 和微信的既有受治理写
   工具与卡片链路不变；
 - OpenClaw Gateway 使用 `gateway.bind=lan`，同时保留本机
@@ -1377,7 +1377,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - Playwright 已完成桌面 `1440x900` 和移动端 `390x844` 的登录、对话、任务列表、
   任务详情与返回路径验收，浏览器控制台 0 错误；
 - 提交 `caaeac5` 已作为发布 `caaeac5e2857` 部署到 Linux。8783 的健康端点和首页均
-  返回 200，CSP 与 HSTS 响应头正确；OpenClaw 插件 `0.4.1` 已加载并注册
+  返回 200，CSP 与 HSTS 响应头正确；OpenClaw 插件 `0.4.2` 已加载并注册
   `agentbridge.workspace.bind`；
 - `AgentBridge Workspace` Linux 设备已在 OpenClaw 中完成配对。服务器使用持久
   `0600` 设备私钥成功调用只读 `system.info`，Gateway 仍同时监听回环和内网地址；
@@ -1387,6 +1387,19 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 插件 `0.4.1` 修复 Gateway 重启后 `/agentbridge link` 忽略宿主已认证
   `senderId`、误报身份未绑定的问题；命令现在重新执行精确身份匹配，未配置用户仍拒绝；
 - 本轮实现与本地验收没有执行 OA、泰华或语雀业务写入。
+
+## 15.34 2026-07-30 Agent Workspace 身份续接与任务终态修复
+
+- OpenClaw 插件升级为 `0.4.2`。Gateway 收到
+  `agentbridge.workspace.bind` 后，把一次性网页身份绑定保存到进程级共享状态；
+  同一进程内随后创建的 Agent Runtime 插件实例复用该绑定，避免网页已配对但模型工具
+  返回 `identity_not_provisioned`。
+- Task Hub 将已成功的 Operation 映射为 `succeeded`，不再误标为 `active`。服务启动时
+  只修复“当前关联 Operation 已确认成功、任务仍为 active”的历史记录；等待用户、
+  失败、取消、过期和结果未知状态不受影响。
+- 回归门禁通过 Python `436 passed, 3 skipped, 194 subtests passed`、OpenClaw
+  `83/83`、`compileall`、`pip check` 和 npm pack dry-run。本轮没有执行 OA、泰华
+  或语雀业务写入。
 
 ## 16. 后续演进顺序
 
