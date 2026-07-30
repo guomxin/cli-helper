@@ -67,6 +67,11 @@ Version 0.4 adds two host-only web integration controls. The
 enrollment through the already trusted Telegram or WeChat identity. The
 `agentbridge.workspace.bind` Gateway method redeems a one-use server grant and
 pins the synthetic web session to the only MCP identity that can redeem it.
+Version 0.4.3 also treats that process-level pin as a cache: if Agent Runtime
+starts after the pin has disappeared, the plugin calls the host-private,
+read-only `agentbridge_host_workspace_session_resolve` tool with each
+configured Bearer identity and restores only the identity that centrally owns
+the exact web session. Browser or model input cannot select the identity.
 Agent Workspace sessions receive only catalog entries whose MCP annotations
 declare `readOnlyHint=true`; messaging sessions keep their existing governed
 write tools.
@@ -105,7 +110,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.2, ...)
+AgentBridge interaction plugin registered (version=0.4.3, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

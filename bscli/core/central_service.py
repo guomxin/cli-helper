@@ -1201,6 +1201,38 @@ class CentralCapabilityService:
             },
         }
 
+    def resolve_workspace_gateway_session(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        session_key: str,
+    ) -> dict:
+        account = self.workspace.resolve_gateway_session(
+            user_subject=user_subject,
+            session_key=session_key,
+        )
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=account["endpoint_key"],
+        )
+        if (
+            endpoint["client_type"] != "web"
+            or endpoint["endpoint_id"] != account["endpoint_id"]
+        ):
+            raise PermissionError(
+                "workspace gateway session is not linked to an active web endpoint"
+            )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "binding": {
+                "endpointKey": account["endpoint_key"],
+                "sessionKey": account["openclaw_session_key"],
+            },
+        }
+
     def interaction_required_scopes(
         self,
         *,

@@ -2195,6 +2195,35 @@ def create_central_mcp_server(
             grant=grant,
         )
 
+    @mcp.tool(
+        name="agentbridge_host_workspace_session_resolve",
+        title="Resolve an Agent Workspace Gateway Session",
+        description=(
+            "Host-private read-only recovery of a web chat session binding "
+            "from the authenticated AgentBridge identity."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_workspace_session_resolve(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        session_key: Annotated[str, Field(min_length=16, max_length=1024)],
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.resolve_workspace_gateway_session,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            session_key=session_key,
+        )
+
     return mcp
 
 

@@ -21,11 +21,24 @@ export function createAgentBridgeProxyTools({
   logger = null,
 }) {
   const identity = identityRouter.resolveToolContext(context);
-  const statusTool = createIdentityStatusTool(identity);
-  if (!identity.bound) {
+  const workspaceSession = isWorkspaceSession(context.sessionKey);
+  const resolveIdentity = async (signal) => {
+    if (identity.bound) {
+      return identity;
+    }
+    if (!workspaceSession) {
+      return identity;
+    }
+    return identityRouter.resolveWorkspaceSession(
+      context.sessionKey,
+      { signal },
+    );
+  };
+  const statusTool = createIdentityStatusTool(resolveIdentity);
+  if (!identity.bound && !workspaceSession) {
     return [statusTool];
   }
-  const catalog = isWorkspaceSession(context.sessionKey)
+  const catalog = workspaceSession
     ? AGENTBRIDGE_TOOL_CATALOG.filter(
         (descriptor) => descriptor.annotations?.readOnlyHint === true,
       )
@@ -35,7 +48,7 @@ export function createAgentBridgeProxyTools({
     ...catalog.map((descriptor) =>
       createProxyTool({
         descriptor,
-        identity,
+        resolveIdentity,
         context,
         serverName,
         taskIdResolver,
@@ -53,7 +66,7 @@ function isWorkspaceSession(sessionKey) {
   );
 }
 
-function createIdentityStatusTool(identity) {
+function createIdentityStatusTool(resolveIdentity) {
   return {
     name: IDENTITY_STATUS_TOOL_NAME,
     label: "AgentBridge Identity Status",
@@ -65,21 +78,23 @@ function createIdentityStatusTool(identity) {
       properties: {},
       additionalProperties: false,
     },
-    execute: async () =>
-      jsonToolResult({
+    execute: async (_toolCallId, _rawParams, signal) => {
+      const identity = await resolveIdentity(signal);
+      return jsonToolResult({
         status: identity.bound ? "bound" : "unbound",
         identityLabel: identity.binding?.label || null,
         reason: identity.reason,
         nextAction: identity.bound
           ? null
-          : "Ask the AgentBridge administrator to provision this Telegram identity.",
-      }),
+          : "Ask the AgentBridge administrator to provision this client identity.",
+      });
+    },
   };
 }
 
 function createProxyTool({
   descriptor,
-  identity,
+  resolveIdentity,
   context,
   serverName,
   taskIdResolver,
@@ -93,6 +108,18 @@ function createProxyTool({
     parameters: descriptor.inputSchema || emptyObjectSchema(),
     ...(descriptor.annotations ? { annotations: descriptor.annotations } : {}),
     execute: async (toolCallId, rawParams, signal) => {
+      const identity = await resolveIdentity(signal);
+      if (!identity.bound) {
+        return jsonToolResult({
+          status: "unbound",
+          reason: identity.reason,
+          error: {
+            code: "IDENTITY_NOT_PROVISIONED",
+            message:
+              "This AgentBridge client identity is not provisioned.",
+          },
+        });
+      }
       const taskId = await resolveTaskId({
         descriptor,
         identity,

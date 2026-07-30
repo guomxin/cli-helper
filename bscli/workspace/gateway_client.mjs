@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { normalizeGatewayEvent } from "./gateway_events.mjs";
 
 
 const gatewayUrl = requiredEnv("AB_GATEWAY_URL");
@@ -20,8 +21,14 @@ const gatewayToken = requiredEnv("AB_GATEWAY_TOKEN");
 const identityPath = requiredEnv("AB_GATEWAY_IDENTITY_PATH");
 const input = JSON.parse(readFileSync(0, "utf8"));
 const timeoutMs = clampInteger(input.timeoutMs, 1_000, 180_000, 30_000);
-const method = requiredText(input.method, "method", 160);
+const mode = input.mode === "stream" ? "stream" : "call";
+const method =
+  mode === "call" ? requiredText(input.method, "method", 160) : null;
 const params = isRecord(input.params) ? input.params : {};
+const streamSessionKey =
+  mode === "stream"
+    ? requiredText(input.sessionKey, "sessionKey", 1_024)
+    : null;
 const identity = loadOrCreateIdentity(identityPath);
 const scopes = ["operator.read", "operator.write"];
 
@@ -32,11 +39,18 @@ if (typeof WebSocket !== "function") {
 let settled = false;
 let connectSent = false;
 let methodSent = false;
+let connected = false;
 const connectId = `connect-${randomUUID()}`;
 const requestId = `rpc-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
 const timer = setTimeout(
-  () => finishError("GATEWAY_TIMEOUT", "OpenClaw Gateway request timed out."),
+  () =>
+    mode === "stream" && connected
+      ? finish()
+      : finishError(
+          "GATEWAY_TIMEOUT",
+          "OpenClaw Gateway request timed out.",
+        ),
   timeoutMs,
 );
 
@@ -64,6 +78,13 @@ socket.addEventListener("message", (event) => {
     );
     return;
   }
+  if (frame?.type === "event" && connected && mode === "stream") {
+    const normalized = normalizeGatewayEvent(frame, streamSessionKey);
+    if (normalized) {
+      process.stdout.write(`${JSON.stringify(normalized)}\n`);
+    }
+    return;
+  }
   if (frame?.type !== "res") {
     return;
   }
@@ -76,7 +97,10 @@ socket.addEventListener("message", (event) => {
       );
       return;
     }
-    if (!methodSent) {
+    connected = true;
+    if (mode === "stream") {
+      process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
+    } else if (!methodSent) {
       methodSent = true;
       socket.send(
         JSON.stringify({
@@ -205,21 +229,32 @@ function finish(payload) {
   if (settled) return;
   settled = true;
   clearTimeout(timer);
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+  if (mode === "stream") {
+    process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
+  } else {
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+  }
   try {
     socket.close();
   } catch {}
 }
 
 function finishError(code, message, details = undefined) {
-  finish({
-    ok: false,
-    error: {
-      code: safeCode(code),
-      message: safeMessage(message),
-      ...(isRecord(details) ? { details } : {}),
-    },
-  });
+  const error = {
+    code: safeCode(code),
+    message: safeMessage(message),
+    ...(isRecord(details) ? { details } : {}),
+  };
+  if (mode === "stream") {
+    if (!settled) {
+      process.stdout.write(
+        `${JSON.stringify({ type: "error", error })}\n`,
+      );
+    }
+    finish();
+  } else {
+    finish({ ok: false, error });
+  }
 }
 
 function fail(code, message) {

@@ -80,6 +80,46 @@ export class AgentBridgeIdentityRouter {
     return this.clientForBinding(this.bindingsByKey.get(bindingKey));
   }
 
+  async resolveWorkspaceSession(sessionKey, { signal } = {}) {
+    const pinned = this.resolvePinnedSession({ sessionKey });
+    if (pinned?.bound || !isWorkspaceSessionKey(sessionKey)) {
+      return pinned || unbound("identity_not_provisioned");
+    }
+    for (const { binding, client } of this.configuredIdentities()) {
+      try {
+        const result = await client.callTool(
+          "agentbridge_host_workspace_session_resolve",
+          {
+            agent_host: "openclaw",
+            session_key: sessionKey,
+          },
+          {
+            signal,
+            meta: {
+              "io.agentbridge/host": {
+                version: "1",
+                agentHost: "openclaw",
+              },
+            },
+          },
+        );
+        if (
+          result?.status === "succeeded" &&
+          result?.binding?.sessionKey === sessionKey &&
+          this.restoreSessionBinding({
+            sessionKey,
+            bindingKey: binding.key,
+          })
+        ) {
+          return this.resolvePinnedSession({ sessionKey });
+        }
+      } catch {
+        // Only the Bearer identity that owns this web session can resolve it.
+      }
+    }
+    return unbound("identity_not_provisioned");
+  }
+
   configuredIdentities() {
     return this.config.identityBindings
       .map((binding) => ({

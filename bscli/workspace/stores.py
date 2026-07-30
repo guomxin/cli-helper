@@ -441,6 +441,27 @@ class WorkspaceStore:
             raise KeyError(f"workspace account not found: {account_id}")
         return _account_from_row(row)
 
+    def resolve_gateway_session(
+        self,
+        *,
+        user_subject: str,
+        session_key: str,
+    ) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM workspace_accounts
+                WHERE user_subject = ? AND openclaw_session_key = ?
+                  AND state = 'active'
+                """,
+                (user_subject, session_key),
+            ).fetchone()
+        if row is None:
+            raise WorkspaceLinkError(
+                "workspace gateway session does not belong to this identity"
+            )
+        return _account_from_row(row)
+
     def create_session(self, account_id: str) -> dict:
         account = self.get_account(account_id)
         if account["state"] != "active":

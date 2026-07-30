@@ -14,7 +14,7 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.4.2";
+const PLUGIN_VERSION = "0.4.3";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);

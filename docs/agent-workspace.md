@@ -5,7 +5,7 @@
 > 更新日期：2026-07-30
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.2
+> `agentbridge-interactions` 0.4.3
 
 ## 1. 定位
 
@@ -67,6 +67,12 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 5. 插件把该网页 OpenClaw Session 固定到对应身份；
 6. BFF 再调用 `chat.send`。
 
+进程内绑定只作为缓存。若 OpenClaw 在 Gateway RPC 与 Agent Runtime 工具创建之间
+重建插件实例或清空缓存，插件会使用当前候选 Bearer Token 调用宿主私有只读工具
+`agentbridge_host_workspace_session_resolve`。中央服务只在该 Token 的
+`userSubject` 确实拥有目标网页 Session、且网页端点仍为 active 时恢复绑定。浏览器、
+模型参数和聊天文本均不能指定或覆盖身份。
+
 网页 Session Key 使用：
 
 ```text
@@ -79,6 +85,14 @@ agent:main:agentbridge-workspace:direct:<workspace-account-id>
 
 OpenClaw 核心源码没有修改。接入只使用正式插件 API、Gateway WebSocket 协议和
 自定义 Gateway Method，因此 OpenClaw 升级后只需执行插件兼容测试。
+
+网页对话使用独立 SSE 流接收 OpenClaw Gateway 的 `agent` 和 `chat` 事件：
+
+- `agent` 事件只显示模型提供的用户可读进度、脱敏后的业务能力名称和执行阶段；
+- 工具参数、工具结果、Bearer Token、`userSubject` 和其他会话事件不会进入浏览器；
+- `chat` 增量实时更新当前回答，最终事件到达后再读取一次正式聊天历史进行对账；
+- SSE 每 25 秒正常断开并自动重连，浏览器断开时对应 Gateway 子进程立即结束；
+- 每条流在 Node 侧先按网页账号专属 Session Key 过滤，避免跨用户事件进入 Python。
 
 ## 4. 网络与部署
 
@@ -178,7 +192,7 @@ openclaw devices approve <requestId> --json
 1. 发布 `caaeac5e2857` 已部署，8783 健康端点和首页均返回 200；
 2. Linux 设备 `AgentBridge Workspace` 已完成 OpenClaw 配对；
 3. 服务器持久设备身份已成功调用只读 `system.info`；
-4. OpenClaw 插件 `0.4.2` 和 `agentbridge.workspace.bind` 已加载；
+4. OpenClaw 插件 `0.4.3`、`agentbridge.workspace.bind` 和持久身份回源已加载；
 5. Telegram、微信通道在 Gateway 重启后均保持运行。
 
 真实用户验收已完成：
@@ -186,5 +200,5 @@ openclaw devices approve <requestId> --json
 1. 使用现有可信 Telegram 身份完成网页账号绑定；
 2. 网页成功发起只读 OA 与泰华查询；
 3. 网页任务、原聊天端和下游 Session 按同一 `userSubject` 关联；
-4. 插件 `0.4.2` 已验证 Gateway 身份绑定可被 Agent Runtime 复用；
+4. 插件 `0.4.3` 已验证 Gateway 身份绑定可被 Agent Runtime 复用并在缓存丢失后回源恢复；
 5. 成功结束的网页任务显示为“已完成”，不再滞留为“进行中”。

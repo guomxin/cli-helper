@@ -240,6 +240,9 @@ def create_workspace_http_server(
                         ),
                     )
                     return
+                if route.path == "/api/chat/stream":
+                    self._chat_event_stream(account)
+                    return
                 self._json(404, {"error": {"code": "NOT_FOUND"}})
             except Exception as exc:
                 self._handle_error(exc)
@@ -393,10 +396,11 @@ def create_workspace_http_server(
             *,
             after_event_id: str | None,
         ) -> None:
+            self.close_connection = True
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self._security_headers()
             self.end_headers()
             cursor = after_event_id
@@ -429,6 +433,63 @@ def create_workspace_http_server(
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return
+
+        def _chat_event_stream(self, account: dict) -> None:
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self._security_headers()
+            self.end_headers()
+            stream = None
+            try:
+                self.wfile.write(b"retry: 1000\n\n")
+                self.wfile.flush()
+                stream = application.chat_stream(
+                    account,
+                    timeout_seconds=25,
+                )
+                for item in stream:
+                    event_name = (
+                        "chat" if item.get("type") == "chat" else "progress"
+                    )
+                    payload = json.dumps(
+                        item,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    self.wfile.write(
+                        (
+                            f"event: {event_name}\n"
+                            f"data: {payload}\n\n"
+                        ).encode("utf-8")
+                    )
+                    self.wfile.flush()
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+            except GatewayRequestError as exc:
+                payload = json.dumps(
+                    {"code": exc.code},
+                    separators=(",", ":"),
+                )
+                try:
+                    self.wfile.write(
+                        (
+                            "event: stream-error\n"
+                            f"data: {payload}\n\n"
+                        ).encode("utf-8")
+                    )
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            finally:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
 
         def _read_json(self) -> dict[str, Any]:
             try:

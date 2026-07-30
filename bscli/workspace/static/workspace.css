@@ -456,6 +456,74 @@ code {
   font-size: 11px;
 }
 
+.live-message {
+  min-width: min(420px, 82%);
+}
+
+.live-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.live-progress:empty {
+  display: none;
+}
+
+.live-progress-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.live-progress-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border: 1px solid #5e7770;
+  border-radius: 50%;
+}
+
+.live-progress-row.active .live-progress-dot {
+  border-color: #0d7563;
+  background: #0d7563;
+  animation: live-pulse 1.2s ease-in-out infinite;
+}
+
+.live-progress-row.complete .live-progress-dot {
+  border-color: #477268;
+  background: #dcebe6;
+}
+
+.live-progress-row.failed,
+.message.failed .live-text {
+  color: #a23c3c;
+}
+
+.live-progress-row.failed .live-progress-dot {
+  border-color: #a23c3c;
+  background: #f5dede;
+}
+
+.live-text:not(:empty) {
+  margin-top: 10px;
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-progress-row.active .live-progress-dot {
+    animation: none;
+  }
+}
+
 .composer {
   width: min(850px, 100%);
   flex: 0 0 auto;

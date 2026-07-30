@@ -365,6 +365,64 @@ test("workspace sessions expose only read-only AgentBridge tools", () => {
   );
 });
 
+test("workspace sessions recover a missing in-memory identity binding", async () => {
+  const requests = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name, body) {
+      if (name === "agentbridge_host_workspace_session_resolve") {
+        return body.params?.arguments?.session_key?.endsWith("account-123")
+          ? {
+              structuredContent: {
+                status: "succeeded",
+                binding: {
+                  endpointKey: "workspace:account-123",
+                  sessionKey:
+                    "agent:main:agentbridge-workspace:direct:account-123",
+                },
+              },
+            }
+          : {
+              structuredContent: {
+                status: "failed",
+              },
+            };
+      }
+      return {
+        structuredContent: {
+          status: "succeeded",
+          authenticated: true,
+        },
+      };
+    },
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      sessionKey,
+      messageChannel: "webchat",
+    },
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+
+  assert.equal(tools.length > 1, true);
+  const tool = tools.find((item) => item.name === "oa_session_status");
+  const result = await tool.execute("workspace-call", {});
+
+  assert.equal(result.structuredContent.authenticated, true);
+  assert.equal(router.statusForSession(sessionKey).state, "bound");
+  assert.deepEqual(
+    requests.map((request) => request.body.params.name),
+    [
+      "agentbridge_host_workspace_session_resolve",
+      "oa_session_status",
+    ],
+  );
+});
+
 test("withholds OA tools from an unprovisioned Telegram user", async () => {
   const router = createRouter({
     requests: [],

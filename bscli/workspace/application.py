@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
 
 from bscli.core.central_service import CentralCapabilityService
@@ -198,6 +198,17 @@ class WorkspaceApplication:
                 else None
             ),
         }
+
+    def chat_stream(
+        self,
+        account: dict,
+        *,
+        timeout_seconds: float = 25,
+    ) -> Iterator[dict[str, Any]]:
+        return self._gateway().stream(
+            session_key=account["openclaw_session_key"],
+            timeout_seconds=timeout_seconds,
+        )
 
     def send_chat(
         self,

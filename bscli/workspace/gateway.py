@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import Any, Iterator
 
 
 class GatewayRequestError(RuntimeError):
@@ -41,18 +41,7 @@ class OpenClawGatewayClient:
         *,
         timeout_seconds: float = 30,
     ) -> Any:
-        token = self._read_token()
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "AB_GATEWAY_URL": self.url,
-                "AB_GATEWAY_TOKEN": token,
-                "AB_GATEWAY_IDENTITY_PATH": str(
-                    self.state_dir / "device-identity.json"
-                ),
-            }
-        )
+        environment = self._environment()
         payload = {
             "method": str(method),
             "params": params or {},
@@ -96,6 +85,99 @@ class OpenClawGatewayClient:
                 ) else None,
             )
         return result.get("payload")
+
+    def stream(
+        self,
+        *,
+        session_key: str,
+        timeout_seconds: float = 30,
+    ) -> Iterator[dict[str, Any]]:
+        session_key = str(session_key or "").strip()
+        if len(session_key) < 16 or len(session_key) > 1_024:
+            raise ValueError("OpenClaw session key is invalid")
+        payload = {
+            "mode": "stream",
+            "sessionKey": session_key,
+            "timeoutMs": min(
+                max(int(timeout_seconds * 1000), 1_000),
+                180_000,
+            ),
+        }
+        try:
+            process = subprocess.Popen(
+                [
+                    self.node_executable,
+                    "--experimental-websocket",
+                    str(self.script_path),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+                env=self._environment(),
+            )
+        except OSError as exc:
+            raise GatewayRequestError(
+                "GATEWAY_PROCESS_FAILED",
+                "OpenClaw Gateway stream process failed.",
+            ) from exc
+        try:
+            if process.stdin is None or process.stdout is None:
+                raise GatewayRequestError(
+                    "GATEWAY_PROCESS_FAILED",
+                    "OpenClaw Gateway stream process is unavailable.",
+                )
+            process.stdin.write(json.dumps(payload, ensure_ascii=False))
+            process.stdin.close()
+            for raw_line in process.stdout:
+                try:
+                    item = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in {"ready", "eof"}:
+                    continue
+                if item.get("type") == "error":
+                    error = (
+                        item.get("error")
+                        if isinstance(item.get("error"), dict)
+                        else {}
+                    )
+                    raise GatewayRequestError(
+                        str(error.get("code") or "GATEWAY_STREAM_FAILED"),
+                        str(
+                            error.get("message")
+                            or "OpenClaw Gateway stream failed."
+                        ),
+                    )
+                if item.get("type") in {"progress", "chat"}:
+                    yield item
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+
+    def _environment(self) -> dict[str, str]:
+        token = self._read_token()
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "AB_GATEWAY_URL": self.url,
+                "AB_GATEWAY_TOKEN": token,
+                "AB_GATEWAY_IDENTITY_PATH": str(
+                    self.state_dir / "device-identity.json"
+                ),
+            }
+        )
+        return environment
 
     def _read_token(self) -> str:
         try:

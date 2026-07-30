@@ -40,6 +40,21 @@ class MutableClock:
 class FakeGateway:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.stream_events = [
+            {
+                "type": "progress",
+                "runId": "run-web-1",
+                "kind": "tool",
+                "phase": "start",
+                "label": "正在检查 OA 登录状态",
+            },
+            {
+                "type": "chat",
+                "runId": "run-web-1",
+                "state": "final",
+                "text": "OA 登录状态有效。",
+            },
+        ]
 
     def call(
         self,
@@ -71,6 +86,23 @@ class FakeGateway:
         if method == "chat.send":
             return {"status": "accepted", "runId": "run-web-1"}
         raise AssertionError(f"unexpected Gateway method: {method}")
+
+    def stream(
+        self,
+        *,
+        session_key: str,
+        timeout_seconds: float = 30,
+    ):
+        self.calls.append(
+            (
+                "stream",
+                {
+                    "sessionKey": session_key,
+                    "timeoutSeconds": timeout_seconds,
+                },
+            )
+        )
+        return iter(self.stream_events)
 
 
 class WorkspaceStoreTests(unittest.TestCase):
@@ -138,6 +170,22 @@ class WorkspaceStoreTests(unittest.TestCase):
                 grant=grant["grant"],
             )
             self.assertEqual(redeemed["status"], "succeeded")
+            resolved = service.resolve_workspace_gateway_session(
+                user_subject="user-a",
+                agent_host="openclaw",
+                session_key=account_a["openclaw_session_key"],
+            )
+            self.assertEqual(resolved["status"], "succeeded")
+            self.assertEqual(
+                resolved["binding"]["endpointKey"],
+                account_a["endpoint_key"],
+            )
+            with self.assertRaises(WorkspaceLinkError):
+                service.resolve_workspace_gateway_session(
+                    user_subject="user-b",
+                    agent_host="openclaw",
+                    session_key=account_a["openclaw_session_key"],
+                )
             with self.assertRaises(WorkspaceLinkError):
                 service.workspace.redeem_gateway_grant(
                     grant=grant["grant"],
@@ -319,6 +367,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             app = WorkspaceApplication(service=service, gateway=gateway)
 
             history = app.chat_history(account)
+            streamed = list(app.chat_stream(account))
             result = app.send_chat(
                 account,
                 message="读取我的 OA 待办",
@@ -330,17 +379,19 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 ["user", "assistant"],
             )
             self.assertEqual(result.run_id, "run-web-1")
+            self.assertEqual(streamed[-1]["state"], "final")
             methods = [method for method, _params in gateway.calls]
             self.assertEqual(
                 methods,
                 [
                     "chat.history",
+                    "stream",
                     "agentbridge.workspace.bind",
                     "chat.send",
                 ],
             )
-            bind = gateway.calls[1][1]
-            sent = gateway.calls[2][1]
+            bind = gateway.calls[2][1]
+            sent = gateway.calls[3][1]
             self.assertEqual(bind["sessionKey"], account["openclaw_session_key"])
             self.assertEqual(sent["sessionKey"], account["openclaw_session_key"])
             self.assertFalse(sent["deliver"])
@@ -416,6 +467,61 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
             self.assertNotIn(
                 "gateway-secret-token-value",
                 str(caught.exception),
+            )
+
+    def test_gateway_stream_yields_only_normalized_events(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+            )
+            input_pipe = _CaptureInput()
+            with patch(
+                "bscli.workspace.gateway.subprocess.Popen"
+            ) as popen:
+                process = popen.return_value
+                process.stdin = input_pipe
+                process.stdout = iter(
+                    [
+                        '{"type":"ready"}\n',
+                        '{"type":"progress","runId":"run-1",'
+                        '"kind":"tool","phase":"start",'
+                        '"label":"正在检查 OA 登录状态"}\n',
+                        '{"type":"chat","runId":"run-1",'
+                        '"state":"final","text":"已完成"}\n',
+                        '{"type":"eof"}\n',
+                    ]
+                )
+                process.poll.return_value = 0
+
+                events = list(
+                    client.stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        timeout_seconds=25,
+                    )
+                )
+
+            self.assertEqual(
+                [event["type"] for event in events],
+                ["progress", "chat"],
+            )
+            request = json.loads(input_pipe.value)
+            self.assertEqual(request["mode"], "stream")
+            self.assertNotIn("gateway-secret-token-value", input_pipe.value)
+            command = popen.call_args.args[0]
+            self.assertNotIn("gateway-secret-token-value", command)
+            self.assertEqual(
+                popen.call_args.kwargs["env"]["AB_GATEWAY_TOKEN"],
+                "gateway-secret-token-value",
             )
 
 
@@ -514,6 +620,21 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertEqual(status, 202)
                 self.assertEqual(accepted["runId"], "run-web-1")
 
+                status, response_headers, stream = _raw_request(
+                    port,
+                    "GET",
+                    "/api/chat/stream",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    response_headers.get_content_type(),
+                    "text/event-stream",
+                )
+                self.assertIn("event: progress", stream)
+                self.assertIn("event: chat", stream)
+                self.assertNotIn("user_subject", stream)
+
                 status, _, endpoints = _request(
                     port,
                     "GET",
@@ -553,6 +674,9 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("const enrollmentForm = event.currentTarget;", script)
         self.assertIn("页面已刷新，请重新生成配对码。", script)
         self.assertNotIn("setBusy(event.currentTarget", script)
+        self.assertIn('new EventSource("/api/chat/stream")', script)
+        self.assertIn("handleChatProgress", script)
+        self.assertIn("handleChatDelta", script)
 
 
 def _service(tmp: str) -> CentralCapabilityService:
@@ -630,6 +754,27 @@ def _request(
     return result
 
 
+def _raw_request(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    cookies: dict[str, str] | None = None,
+) -> tuple[int, http.client.HTTPMessage, str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {"Host": f"127.0.0.1:{port}"}
+    if cookies:
+        headers["Cookie"] = "; ".join(
+            f"{name}={value}" for name, value in cookies.items()
+        )
+    connection.request(method, path, headers=headers)
+    response = connection.getresponse()
+    raw = response.read().decode("utf-8")
+    result = (response.status, response.headers, raw)
+    connection.close()
+    return result
+
+
 def _cookies(headers: http.client.HTTPMessage) -> dict[str, str]:
     result = {}
     for value in headers.get_all("Set-Cookie") or []:
@@ -637,6 +782,18 @@ def _cookies(headers: http.client.HTTPMessage) -> dict[str, str]:
         name, cookie_value = pair.split("=", 1)
         result[name] = cookie_value
     return result
+
+
+class _CaptureInput:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def write(self, value: str) -> int:
+        self.value += value
+        return len(value)
+
+    def close(self) -> None:
+        return None
 
 
 if __name__ == "__main__":

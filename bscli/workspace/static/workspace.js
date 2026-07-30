@@ -6,6 +6,8 @@ const state = {
   enrollmentTimer: null,
   chatTimer: null,
   eventSource: null,
+  chatEventSource: null,
+  liveMessages: new Map(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -185,6 +187,7 @@ function enterWorkspace(account) {
   loadTasks();
   loadChat();
   openEventStream();
+  openChatEventStream();
 }
 
 async function logout() {
@@ -192,6 +195,7 @@ async function logout() {
     await api("/api/logout", { method: "POST", body: {}, csrf: true });
   } catch {}
   state.eventSource?.close();
+  state.chatEventSource?.close();
   clearTimeout(state.chatTimer);
   state.account = null;
   location.reload();
@@ -230,6 +234,7 @@ async function loadChat() {
   const container = $("#chat-messages");
   try {
     const result = await api("/api/chat/history?limit=120");
+    state.liveMessages.clear();
     container.replaceChildren(
       ...result.messages.map((message) => messageElement(message)),
     );
@@ -278,7 +283,7 @@ async function sendChat(event) {
   $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight;
   setBusy(form, true);
   try {
-    await api("/api/chat/send", {
+    const accepted = await api("/api/chat/send", {
       method: "POST",
       csrf: true,
       body: {
@@ -286,7 +291,10 @@ async function sendChat(event) {
         idempotencyKey: crypto.randomUUID(),
       },
     });
-    scheduleChatRefresh(1200, 18);
+    if (accepted.runId) {
+      addLiveProgress(accepted.runId, "请求已交给智能体", "active");
+    }
+    scheduleChatRefresh(30000, 1);
   } catch (error) {
     toast(friendlyError(error), true);
   } finally {
@@ -301,6 +309,125 @@ function scheduleChatRefresh(delay, attempts) {
     await loadChat();
     if (attempts > 1) scheduleChatRefresh(1800, attempts - 1);
   }, delay);
+}
+
+function openChatEventStream() {
+  state.chatEventSource?.close();
+  const source = new EventSource("/api/chat/stream");
+  source.addEventListener("progress", (event) => {
+    const payload = parseStreamEvent(event);
+    if (payload) handleChatProgress(payload);
+  });
+  source.addEventListener("chat", (event) => {
+    const payload = parseStreamEvent(event);
+    if (payload) handleChatDelta(payload);
+  });
+  source.addEventListener("stream-error", () => {
+    scheduleChatRefresh(2000, 1);
+  });
+  state.chatEventSource = source;
+}
+
+function parseStreamEvent(event) {
+  try {
+    const value = JSON.parse(event.data);
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureLiveMessage(runId) {
+  let live = state.liveMessages.get(runId);
+  if (live?.item?.isConnected) return live;
+  const item = document.createElement("article");
+  item.className = "message assistant live-message";
+  const progress = document.createElement("div");
+  progress.className = "live-progress";
+  const text = document.createElement("div");
+  text.className = "live-text";
+  item.append(progress, text);
+  $("#chat-messages").append(item);
+  live = { item, progress, text, rows: new Map() };
+  state.liveMessages.set(runId, live);
+  scrollChat();
+  return live;
+}
+
+function handleChatProgress(payload) {
+  if (!payload.runId) return;
+  if (payload.kind === "preamble" && payload.text) {
+    addLiveProgress(payload.runId, payload.text, "active");
+    return;
+  }
+  if (payload.label) {
+    const complete =
+      payload.phase === "result" || payload.phase === "end";
+    addLiveProgress(
+      payload.runId,
+      complete
+        ? payload.label.replace(/^正在/, "已完成")
+        : payload.label,
+      complete
+        ? "complete"
+        : payload.phase === "error" || payload.phase === "aborted"
+          ? "failed"
+          : "active",
+    );
+  }
+}
+
+function addLiveProgress(runId, label, status) {
+  const live = ensureLiveMessage(runId);
+  const key = label.replace(/^(正在|已完成)/, "");
+  let row = live.rows.get(key);
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "live-progress-row";
+    const dot = document.createElement("span");
+    dot.className = "live-progress-dot";
+    const copy = document.createElement("span");
+    row.append(dot, copy);
+    live.progress.append(row);
+    live.rows.set(key, row);
+  }
+  row.className = `live-progress-row ${status}`;
+  row.lastElementChild.textContent = label;
+  while (live.progress.childElementCount > 8) {
+    const first = live.progress.firstElementChild;
+    const firstLabel = first?.lastElementChild?.textContent || "";
+    live.rows.delete(firstLabel.replace(/^(正在|已完成)/, ""));
+    first?.remove();
+  }
+  scrollChat();
+}
+
+function handleChatDelta(payload) {
+  if (!payload.runId) return;
+  const live = ensureLiveMessage(payload.runId);
+  if (typeof payload.text === "string") {
+    live.text.textContent = payload.text;
+  }
+  if (payload.state === "final") {
+    live.progress.replaceChildren();
+    live.item.classList.remove("live-message");
+    state.liveMessages.delete(payload.runId);
+    scheduleChatRefresh(500, 1);
+  } else if (["error", "aborted"].includes(payload.state)) {
+    live.item.classList.add("failed");
+    addLiveProgress(
+      payload.runId,
+      payload.state === "aborted" ? "处理已停止" : "处理失败",
+      "failed",
+    );
+    scheduleChatRefresh(1000, 1);
+  }
+  scrollChat();
+}
+
+function scrollChat() {
+  const container = $("#chat-messages");
+  container.scrollTop = container.scrollHeight;
 }
 
 async function loadTasks() {
