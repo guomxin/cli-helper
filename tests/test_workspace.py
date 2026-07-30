@@ -450,6 +450,16 @@ class WorkspaceApplicationTests(unittest.TestCase):
 
 
 class WorkspaceGatewayClientTests(unittest.TestCase):
+    def test_gateway_client_advertises_tool_event_streaming(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "bscli"
+            / "workspace"
+            / "gateway_client.mjs"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('caps: ["tool-events"]', source)
+
     def test_gateway_token_is_passed_only_through_the_child_environment(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

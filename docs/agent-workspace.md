@@ -2,7 +2,7 @@
 
 > 状态：二期只读版本已实现
 >
-> 更新日期：2026-07-30
+> 更新日期：2026-07-31
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
 > `agentbridge-interactions` 0.4.3
@@ -90,6 +90,8 @@ OpenClaw 核心源码没有修改。接入只使用正式插件 API、Gateway We
 WebSocket 上依次完成一次性身份绑定、`chat.send` 和 `agent` / `chat` 事件接收，
 再把脱敏结果编码为 SSE 返回浏览器：
 
+- Gateway 握手声明 OpenClaw 官方 `tool-events` 客户端能力，使发起本次运行的同一
+  连接能够接收工具开始、进度和结束事件；
 - `agent` 事件只显示模型提供的用户可读进度、脱敏后的业务能力名称和执行阶段；
 - 工具参数、工具结果、Bearer Token、`userSubject` 和其他会话事件不会进入浏览器；
 - `chat` 增量实时更新当前回答，最终事件到达后再读取一次正式聊天历史进行对账；

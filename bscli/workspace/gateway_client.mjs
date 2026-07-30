@@ -268,7 +268,7 @@ function connectParams(nonce) {
       deviceFamily,
       mode: clientMode,
     },
-    caps: [],
+    caps: ["tool-events"],
     role,
     scopes,
     device: {
