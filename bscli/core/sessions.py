@@ -138,6 +138,70 @@ class SessionRegistry:
             ).fetchone()
         return _session_from_row(row)
 
+    def ensure_principal_bindings(
+        self,
+        *,
+        user_subject: str,
+        system_ids: set[str],
+        principal_bindings: dict[str, str] | None = None,
+        fallback_principal_ref: str | None = None,
+    ) -> dict[str, str]:
+        if not user_subject:
+            raise ValueError("user_subject is required")
+        normalized_system_ids = {
+            str(system_id or "").strip()
+            for system_id in system_ids
+            if str(system_id or "").strip()
+        }
+        if not normalized_system_ids:
+            raise ValueError("at least one system identity binding is required")
+        requested = {
+            str(system_id or "").strip(): _validate_principal_ref(principal_ref)
+            for system_id, principal_ref in (principal_bindings or {}).items()
+            if str(system_id or "").strip() and str(principal_ref or "").strip()
+        }
+        unknown_systems = set(requested) - normalized_system_ids
+        if unknown_systems:
+            raise ValueError(
+                "principal binding contains systems outside the token scopes: "
+                + ", ".join(sorted(unknown_systems))
+            )
+        fallback = (
+            _validate_principal_ref(fallback_principal_ref)
+            if str(fallback_principal_ref or "").strip()
+            else None
+        )
+
+        resolved: dict[str, str] = {}
+        existing_by_system: dict[str, dict | None] = {}
+        for system_id in sorted(normalized_system_ids):
+            existing = self.find(user_subject=user_subject, system_id=system_id)
+            existing_by_system[system_id] = existing
+            bound = str((existing or {}).get("expected_principal_ref") or "").strip()
+            candidate = requested.get(system_id)
+            if bound and candidate and bound != candidate:
+                raise SessionPrincipalMismatch(
+                    f"{system_id} is already bound to a different expected principal"
+                )
+            resolved_principal = bound or candidate or fallback
+            if not resolved_principal:
+                raise ValueError(
+                    f"expected downstream principal is required for new {system_id} binding"
+                )
+            resolved[system_id] = resolved_principal
+
+        for system_id, principal_ref in resolved.items():
+            existing = existing_by_system[system_id]
+            if existing is None or not str(
+                existing.get("expected_principal_ref") or ""
+            ).strip():
+                self.get_or_create(
+                    user_subject=user_subject,
+                    system_id=system_id,
+                    expected_principal_ref=principal_ref,
+                )
+        return resolved
+
     def find(self, *, user_subject: str, system_id: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -230,6 +294,35 @@ class SessionRegistry:
 
     def quarantine(self, session_id: str, message: str) -> dict:
         return self._set_state(session_id, "quarantined", last_error=message)
+
+    def rebind_expected_principal(
+        self,
+        session_id: str,
+        *,
+        expected_principal_ref: str,
+        reason: str,
+    ) -> dict:
+        expected = _validate_principal_ref(expected_principal_ref)
+        reason = str(reason or "").strip()
+        if not reason:
+            raise ValueError("reason is required")
+        now = _utc_now()
+        message = f"Downstream principal binding changed; login required. Reason: {reason}"
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE sessions
+                SET expected_principal_ref = ?, downstream_principal_ref = NULL,
+                    state = 'expired', last_error = ?, updated_at = ?,
+                    last_verified_at = NULL, last_user_activity_at = NULL,
+                    last_keepalive_at = NULL, expired_at = ?
+                WHERE session_id = ?
+                """,
+                (expected, message, now, now, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"session not found: {session_id}")
+        return self.get(session_id)
 
     def activate(self, session_id: str, *, observed_principal_ref: str | None) -> dict:
         session = self.get(session_id)
@@ -354,6 +447,17 @@ def _session_from_row(row: sqlite3.Row | None) -> dict:
     if row is None:
         raise KeyError("session not found")
     return dict(row)
+
+
+def _validate_principal_ref(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if (
+        not normalized
+        or len(normalized) > 256
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise ValueError("expected_principal_ref is invalid")
+    return normalized
 
 
 def _utc_now() -> str:

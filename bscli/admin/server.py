@@ -275,7 +275,8 @@ def create_admin_http_server(
                         actor=actor,
                         request_ip=self.client_address[0],
                         user_subject=_required_string(body, "user_subject"),
-                        expected_principal_ref=_required_string(body, "expected_principal_ref"),
+                        expected_principal_ref=_optional_string(body, "expected_principal_ref"),
+                        principal_bindings=_optional_string_map(body, "principal_bindings"),
                         label=_optional_string(body, "label"),
                         scopes=_required_string_list(body, "scopes"),
                         ttl_hours=int(body.get("ttl_hours") or 0),
@@ -294,20 +295,27 @@ def create_admin_http_server(
                     self._json(200, token)
                     return
                 session_match = re.fullmatch(
-                    r"/api/sessions/([0-9a-f-]{36})/(invalidate|check)", route.path
+                    r"/api/sessions/([0-9a-f-]{36})/(invalidate|check|rebind)", route.path
                 )
                 if session_match:
+                    action = session_match.group(2)
                     kwargs = {
                         "actor": actor,
                         "request_ip": self.client_address[0],
                         "session_id": session_match.group(1),
                         "reason": _required_string(body, "reason"),
                     }
-                    result = (
-                        control_plane.invalidate_session(**kwargs)
-                        if session_match.group(2) == "invalidate"
-                        else control_plane.inspect_session(**kwargs)
-                    )
+                    if action == "invalidate":
+                        result = control_plane.invalidate_session(**kwargs)
+                    elif action == "check":
+                        result = control_plane.inspect_session(**kwargs)
+                    else:
+                        result = control_plane.rebind_session_principal(
+                            **kwargs,
+                            expected_principal_ref=_required_string(
+                                body, "expected_principal_ref"
+                            ),
+                        )
                     self._json(200, result)
                     return
                 if route.path == "/api/policies/pause":
@@ -595,6 +603,22 @@ def _required_string(body: dict, name: str) -> str:
 def _optional_string(body: dict, name: str) -> str | None:
     value = str(body.get(name) or "").strip()
     return value or None
+
+
+def _optional_string_map(body: dict, name: str) -> dict[str, str]:
+    value = body.get(name)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        normalized_key = str(key or "").strip()
+        normalized_value = str(item or "").strip()
+        if not normalized_key or not normalized_value:
+            continue
+        result[normalized_key] = normalized_value
+    return result
 
 
 def _required_string_list(body: dict, name: str) -> list[str]:

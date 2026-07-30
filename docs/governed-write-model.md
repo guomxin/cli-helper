@@ -47,8 +47,9 @@ AgentBridge 对外暴露工作流级业务能力，例如提交请假、审批�
 | Credential Broker | 临时凭据、预期身份、登录结果 | 普通聊天内容和业务决策 |
 | 中心 Worker | 绑定用户的加密会话、适配器计划、目标系统响应 | 其他用户会话和未授权能力 |
 
-每个 Telegram、微信或其他宿主身份都必须映射到独立 AgentBridge Token。Token 再绑定
-唯一 `userSubject`、预期下游身份和最小权限集合。
+每个 Telegram、微信或其他宿主身份都必须映射到独立 AgentBridge Token。Token 只绑定
+唯一 `userSubject` 和最小权限集合；每个下游系统的预期与已验证主体按 `(userSubject, systemId)` 独立保存。
+不同系统可以使用不同账号或显示名；任一系统的主体不匹配只隔离该系统会话。
 
 ## 4. 结果语义
 

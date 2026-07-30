@@ -716,7 +716,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["arguments"], {"limit": 5})
         self.assertEqual(call["idempotency_key"], "mcp-pending-1")
 
-    def test_login_card_uses_identity_bound_expected_principal(self):
+    def test_login_card_defers_principal_resolution_to_system_session(self):
         with self._server() as (service, _store, token, client):
             service.start_login.return_value = {
                 "protocolVersion": "0.1",
@@ -737,7 +737,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         call = service.start_login.call_args.kwargs
         self.assertEqual(call["user_subject"], "user-a")
-        self.assertEqual(call["expected_principal_ref"], "Alice")
+        self.assertIsNone(call["expected_principal_ref"])
         self.assertEqual(call["card_base_url"], "http://127.0.0.1:8780")
         self.assertEqual(call["ttl_seconds"], 600)
 

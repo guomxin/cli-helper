@@ -224,6 +224,119 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertNotIn("token_secret", control.list_tokens()[0])
             self.assertNotIn(issued["token_secret"], json.dumps(control.audit.list()))
 
+    def test_token_issue_supports_distinct_system_principal_bindings(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+                taihua_base_url="http://127.0.0.1:8001",
+            )
+            control = AdminControlPlane(
+                service=service,
+                identity_store=McpIdentityTokenStore(service.db_path),
+            )
+            issued = control.issue_token(
+                actor={"account_id": "a", "username": "admin", "role": "admin"},
+                request_ip="127.0.0.1",
+                user_subject="user-a",
+                expected_principal_ref=None,
+                principal_bindings={
+                    "oa": "Alice OA",
+                    "taihua": "alice.worklog",
+                },
+                label="OpenClaw",
+                scopes=["oa:read", "taihua:read"],
+                ttl_hours=24,
+                reason="multi-system onboarding",
+            )
+
+            self.assertEqual(
+                issued["principal_bindings"],
+                {"oa": "Alice OA", "taihua": "alice.worklog"},
+            )
+            self.assertEqual(issued["expected_principal_ref"], "Alice OA")
+            self.assertEqual(
+                service.sessions.find(
+                    user_subject="user-a", system_id="oa"
+                )["expected_principal_ref"],
+                "Alice OA",
+            )
+            self.assertEqual(
+                service.sessions.find(
+                    user_subject="user-a", system_id="taihua"
+                )["expected_principal_ref"],
+                "alice.worklog",
+            )
+            user = control.users()[0]
+            self.assertEqual(
+                user["principal_bindings"],
+                {
+                    "oa": {"expected": "Alice OA", "verified": None},
+                    "taihua": {"expected": "alice.worklog", "verified": None},
+                },
+            )
+
+            rotated = control.issue_token(
+                actor={"account_id": "a", "username": "admin", "role": "admin"},
+                request_ip="127.0.0.1",
+                user_subject="user-a",
+                expected_principal_ref=None,
+                principal_bindings={},
+                label="OpenClaw rotated",
+                scopes=["oa:read", "taihua:read"],
+                ttl_hours=24,
+                reason="credential rotation",
+            )
+            self.assertEqual(rotated["principal_bindings"], issued["principal_bindings"])
+
+    def test_admin_rebinds_only_one_system_and_clears_its_login_state(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+                taihua_base_url="http://127.0.0.1:8001",
+            )
+            control = AdminControlPlane(
+                service=service,
+                identity_store=McpIdentityTokenStore(service.db_path),
+            )
+            actor = {"account_id": "a", "username": "admin", "role": "admin"}
+            control.issue_token(
+                actor=actor,
+                request_ip="127.0.0.1",
+                user_subject="user-a",
+                expected_principal_ref=None,
+                principal_bindings={"oa": "Alice OA", "taihua": "alice.worklog"},
+                label="OpenClaw",
+                scopes=["oa:read", "taihua:read"],
+                ttl_hours=24,
+                reason="onboarding",
+            )
+            oa = service.sessions.find(user_subject="user-a", system_id="oa")
+            taihua = service.sessions.find(user_subject="user-a", system_id="taihua")
+            service.sessions.activate(oa["session_id"], observed_principal_ref="Alice OA")
+            service.sessions.activate(
+                taihua["session_id"], observed_principal_ref="alice.worklog"
+            )
+            service.session_states.save(
+                taihua["session_id"], {"cookies": [{"owner": "user-a"}]}
+            )
+
+            rebound = control.rebind_session_principal(
+                actor=actor,
+                request_ip="127.0.0.1",
+                session_id=taihua["session_id"],
+                expected_principal_ref="alice-new",
+                reason="account renamed",
+            )
+
+            self.assertEqual(rebound["expected_principal_ref"], "alice-new")
+            self.assertEqual(rebound["state"], "expired")
+            self.assertIsNone(rebound["downstream_principal_ref"])
+            self.assertIsNone(service.session_states.load(taihua["session_id"]))
+            self.assertEqual(service.sessions.get(oa["session_id"])["state"], "active")
+            self.assertEqual(control.audit.list()[0]["action"], "session.principal.rebind")
+
     def test_unknown_scope_is_rejected_before_identity_sessions_are_created(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(

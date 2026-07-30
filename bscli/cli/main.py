@@ -265,7 +265,16 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_token_sub = mcp_token.add_subparsers(dest="token_action", required=True)
     mcp_token_issue = mcp_token_sub.add_parser("issue")
     mcp_token_issue.add_argument("--user-subject", required=True)
-    mcp_token_issue.add_argument("--expected-principal", required=True)
+    mcp_token_issue.add_argument(
+        "--expected-principal",
+        help="legacy fallback principal for systems without an explicit binding",
+    )
+    mcp_token_issue.add_argument(
+        "--system-principal",
+        action="append",
+        metavar="SYSTEM=PRINCIPAL",
+        help="system-specific downstream principal; may be repeated",
+    )
     mcp_token_issue.add_argument("--label")
     mcp_token_issue.add_argument("--ttl-hours", type=int, default=24)
     mcp_token_issue.add_argument(
@@ -689,15 +698,23 @@ def handle_mcp(args: argparse.Namespace) -> int:
                     for scope in scopes
                     if scope.startswith(("oa:", "taihua:", "yuque:"))
                 }
-                for system_id in sorted(system_ids):
-                    sessions.get_or_create(
-                        user_subject=args.user_subject,
-                        system_id=system_id,
-                        expected_principal_ref=args.expected_principal,
-                    )
+                principal_bindings = _parse_system_principals(
+                    args.system_principal or []
+                )
+                resolved_bindings = sessions.ensure_principal_bindings(
+                    user_subject=args.user_subject,
+                    system_ids=system_ids,
+                    principal_bindings=principal_bindings,
+                    fallback_principal_ref=args.expected_principal,
+                )
+                token_principal = (
+                    str(args.expected_principal or "").strip()
+                    or resolved_bindings.get("oa")
+                    or resolved_bindings[sorted(resolved_bindings)[0]]
+                )
                 token = store.issue(
                     user_subject=args.user_subject,
-                    expected_principal_ref=args.expected_principal,
+                    expected_principal_ref=token_principal,
                     label=args.label,
                     scopes=sorted(scopes),
                     ttl_seconds=args.ttl_hours * 3600,
@@ -710,7 +727,10 @@ def handle_mcp(args: argparse.Namespace) -> int:
                 {
                     "protocolVersion": "0.1",
                     "status": "issued",
-                    "identityToken": _mcp_identity_response(token),
+                    "identityToken": {
+                        **_mcp_identity_response(token),
+                        "principalBindings": resolved_bindings,
+                    },
                     "bearerToken": secret,
                     "warning": (
                         "The bearer token is shown once. Store it only in the trusted "
@@ -871,6 +891,22 @@ def handle_adapter(args: argparse.Namespace) -> int:
             print_json(parse_template_list(html, base_url=args.base_url))
             return 0
     raise ValueError(f"unknown adapter action: {args.action}")
+
+
+def _parse_system_principals(values: list[str]) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    for value in values:
+        system_id, separator, principal_ref = str(value or "").partition("=")
+        system_id = system_id.strip()
+        principal_ref = principal_ref.strip()
+        if separator != "=" or system_id not in {"oa", "taihua", "yuque"} or not principal_ref:
+            raise ValueError(
+                "--system-principal must use oa|taihua|yuque=PRINCIPAL"
+            )
+        if system_id in bindings and bindings[system_id] != principal_ref:
+            raise ValueError(f"duplicate principal binding for {system_id}")
+        bindings[system_id] = principal_ref
+    return bindings
 
 
 def _mcp_identity_response(token: dict) -> dict:

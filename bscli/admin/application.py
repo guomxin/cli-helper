@@ -166,7 +166,6 @@ class AdminControlPlane:
         records: dict[str, dict] = {}
         for token in tokens:
             user = records.setdefault(token["user_subject"], _empty_user(token["user_subject"]))
-            user["principal_refs"].add(token["expected_principal_ref"])
             user["token_count"] += 1
             if token["state"] == "active" and _parse_time(token["expires_at"]) > datetime.now(timezone.utc):
                 user["active_token_count"] += 1
@@ -178,6 +177,10 @@ class AdminControlPlane:
             ):
                 if principal:
                     user["principal_refs"].add(principal)
+            user["principal_bindings"][session["system_id"]] = {
+                "expected": session.get("expected_principal_ref"),
+                "verified": session.get("downstream_principal_ref"),
+            }
             user["sessions"][session["system_id"]] = session["state"]
         return sorted(
             ({**item, "principal_refs": sorted(item["principal_refs"])} for item in records.values()),
@@ -193,7 +196,8 @@ class AdminControlPlane:
         actor: dict,
         request_ip: str,
         user_subject: str,
-        expected_principal_ref: str,
+        expected_principal_ref: str | None,
+        principal_bindings: dict[str, str] | None = None,
         label: str | None,
         scopes: list[str],
         ttl_hours: int,
@@ -217,22 +221,28 @@ class AdminControlPlane:
             if scope.startswith(("oa:", "taihua:", "yuque:"))
         }
         try:
-            for system_id in sorted(system_ids):
-                self.service.sessions.get_or_create(
-                    user_subject=user_subject,
-                    system_id=system_id,
-                    expected_principal_ref=expected_principal_ref,
-                )
+            resolved_bindings = self.service.sessions.ensure_principal_bindings(
+                user_subject=user_subject,
+                system_ids=system_ids,
+                principal_bindings=principal_bindings,
+                fallback_principal_ref=expected_principal_ref,
+            )
         except SessionPrincipalMismatch as exc:
             raise ValueError(str(exc)) from exc
+        token_principal = (
+            str(expected_principal_ref or "").strip()
+            or resolved_bindings.get("oa")
+            or resolved_bindings[sorted(resolved_bindings)[0]]
+        )
         issued = self.identity_store.issue(
             user_subject=user_subject,
-            expected_principal_ref=expected_principal_ref,
+            expected_principal_ref=token_principal,
             label=label,
             scopes=sorted(normalized_scopes),
             ttl_seconds=ttl_hours * 3600,
         )
         secret = issued.pop("token")
+        public_issued = {**issued, "principal_bindings": resolved_bindings}
         self.audit.append(
             actor=actor,
             action="mcp.token.issue",
@@ -241,9 +251,10 @@ class AdminControlPlane:
             request_ip=request_ip,
             reason=reason,
             result="succeeded",
-            after=issued,
+            after=public_issued,
         )
-        return {**issued, "token_secret": secret}
+        return {**public_issued, "token_secret": secret}
+
     def revoke_token(
         self,
         *,
@@ -291,6 +302,38 @@ class AdminControlPlane:
         self.audit.append(
             actor=actor,
             action="session.invalidate",
+            target_type="downstream_session",
+            target_id=session_id,
+            request_ip=request_ip,
+            reason=reason,
+            before=public_before,
+            after=public_after,
+            result="succeeded",
+        )
+        return public_after
+
+    def rebind_session_principal(
+        self,
+        *,
+        actor: dict,
+        request_ip: str,
+        session_id: str,
+        expected_principal_ref: str,
+        reason: str,
+    ) -> dict:
+        _require_admin(actor)
+        before = self.service.sessions.get(session_id)
+        self.service.session_states.delete(session_id)
+        after = self.service.sessions.rebind_expected_principal(
+            session_id,
+            expected_principal_ref=expected_principal_ref,
+            reason=reason,
+        )
+        public_before = self._session_projection(before)
+        public_after = self._session_projection(after)
+        self.audit.append(
+            actor=actor,
+            action="session.principal.rebind",
             target_type="downstream_session",
             target_id=session_id,
             request_ip=request_ip,
@@ -511,6 +554,7 @@ def _empty_user(user_subject: str) -> dict:
     return {
         "user_subject": user_subject,
         "principal_refs": set(),
+        "principal_bindings": {},
         "token_count": 0,
         "active_token_count": 0,
         "sessions": {},

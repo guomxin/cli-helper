@@ -152,20 +152,26 @@ async function renderOverview() {
 }
 function metric(label, value, hint, extra = "") { return `<div class="metric ${extra}"><span class="label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span class="hint">${escapeHtml(hint)}</span></div>`; }
 
+function principalBindingSummary(user) {
+  return Object.entries(user.principal_bindings || {}).map(([system, binding]) => {
+    const principal = binding.verified || binding.expected || "--";
+    return `${escapeHtml(system)}: ${escapeHtml(principal)}`;
+  }).join("<br>") || "--";
+}
 async function renderUsers() {
   const [users, tokens] = await Promise.all([api("/api/users"), api("/api/tokens")]);
-  const userRows = users.items.map(user => `<tr><td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${escapeHtml(user.principal_refs.join(" / ") || "--")}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td></tr>`);
+  const userRows = users.items.map(user => `<tr><td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td></tr>`);
   const tokenRows = tokens.items.map(token => `<tr><td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td class="truncate">${escapeHtml(token.scopes.join(", "))}</td><td>${badge(token.state)}</td><td>${fmtTime(token.expires_at)}</td><td><div class="actions">${state.account.role === "admin" && token.state === "active" ? `<button class="button secondary small" data-revoke-token="${token.token_id}">撤销</button>` : ""}</div></td></tr>`);
   content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
-    ${table(["用户标识", "下游主体", "有效 / 全部令牌", "系统会话", ""], userRows)}
+    ${table(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", ""], userRows)}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>管理员看不到任何已签发令牌的密钥。</p></div></div>
     ${table(["Token ID", "标签", "用户", "权限范围", "状态", "到期时间", ""], tokenRows)}`;
 }
 
 async function renderSessions() {
   const data = await api("/api/sessions");
-  const rows = data.items.map(session => `<tr><td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.downstream_principal_ref || session.expected_principal_ref || "--")}</td><td>${badge(session.state)}</td><td>${fmtTime(session.last_verified_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td class="truncate" title="${escapeHtml(session.last_error || "")}">${escapeHtml(session.last_error || "--")}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-check-session="${session.session_id}">实时检查</button>${session.state === "active" ? `<button class="button secondary small" data-invalidate-session="${session.session_id}">失效</button>` : ""}` : ""}</div></td></tr>`);
-  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>实时检查不会延长用户活动租约；失效会清除中心保存的会话状态。</p></div></div>${table(["用户", "系统", "已验证主体", "状态", "最近验证", "最近保活", "错误", ""], rows)}`;
+  const rows = data.items.map(session => `<tr><td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.expected_principal_ref || "--")}</td><td>${escapeHtml(session.downstream_principal_ref || "--")}</td><td>${badge(session.state)}</td><td>${fmtTime(session.last_verified_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td class="truncate" title="${escapeHtml(session.last_error || "")}">${escapeHtml(session.last_error || "--")}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-check-session="${session.session_id}">实时检查</button><button class="button secondary small" data-rebind-session="${session.session_id}" data-expected-principal="${escapeHtml(session.expected_principal_ref || "")}">修改绑定</button>${session.state === "active" ? `<button class="button secondary small" data-invalidate-session="${session.session_id}">失效</button>` : ""}` : ""}</div></td></tr>`);
+  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>身份按系统独立绑定。修改绑定会清除该系统登录态并要求重新登录，不影响其他系统。</p></div></div>${table(["用户", "系统", "预期主体", "已验证主体", "状态", "最近验证", "最近保活", "错误", ""], rows)}`;
 }
 
 async function renderCapabilities() {
@@ -248,13 +254,20 @@ function openAdminAccount() {
 }
 function openIssueToken() {
   const checks = ["oa:read","oa:write:draft","oa:write:approval","oa:write:meeting","oa:write:submit","oa:write:revoke","taihua:read","taihua:write:worklog","yuque:read"].map(scope => `<label class="check"><input type="checkbox" name="scope" value="${scope}" ${scope === "oa:read" ? "checked" : ""}>${scope}</label>`).join("");
-  openModal({ title: "签发 MCP Token", submit: "签发", body: `<label>用户标识<input name="user_subject" required></label><label>预期下游主体<input name="expected_principal_ref" required></label><label>标签<input name="label" maxlength="120"></label><label>有效小时数<input name="ttl_hours" type="number" min="1" max="2160" value="720" required></label><div><strong>权限范围</strong><div class="checkbox-grid checkbox-spaced">${checks}</div></div>${reasonField()}`,
+  openModal({ title: "签发 MCP Token", submit: "签发", body: `<label>用户标识<input name="user_subject" required></label><div><strong>各系统预期主体</strong><p class="muted">已有绑定可以留空；首次开通某个系统时必须填写该系统识别到的账号或主体。</p></div><label>OA 主体<input name="principal_oa" maxlength="256"></label><label>泰华主体<input name="principal_taihua" maxlength="256"></label><label>语雀主体<input name="principal_yuque" maxlength="256"></label><label>标签<input name="label" maxlength="120"></label><label>有效小时数<input name="ttl_hours" type="number" min="1" max="2160" value="720" required></label><div><strong>权限范围</strong><div class="checkbox-grid checkbox-spaced">${checks}</div></div>${reasonField()}`,
     action: async form => {
       const scopes = form.getAll("scope");
-      const issued = await api("/api/tokens", { method: "POST", body: JSON.stringify({ user_subject: form.get("user_subject"), expected_principal_ref: form.get("expected_principal_ref"), label: form.get("label"), ttl_hours: Number(form.get("ttl_hours")), scopes, reason: form.get("reason") }) });
+      const principal_bindings = Object.fromEntries(["oa", "taihua", "yuque"].map(system => [system, String(form.get(`principal_${system}`) || "").trim()]).filter(([, principal]) => principal));
+      const issued = await api("/api/tokens", { method: "POST", body: JSON.stringify({ user_subject: form.get("user_subject"), principal_bindings, label: form.get("label"), ttl_hours: Number(form.get("ttl_hours")), scopes, reason: form.get("reason") }) });
       openModal({ kicker: "只显示一次", title: "Token 已签发", submit: "完成", body: `<p>请将密钥配置到可信 MCP 客户端。关闭后无法再次查看。</p><div id="issued-secret" class="secret-box">${escapeHtml(issued.token_secret)}</div><button type="button" class="button secondary" data-copy-secret>复制密钥</button>`, action: async () => { closeModal(); await loadView("users"); } });
     }
   });
+}
+function openRebindSession(target) {
+  openModal({ title: "修改系统身份绑定", submit: "修改并清除登录态", danger: true, body: `<label>预期下游主体<input name="expected_principal_ref" maxlength="256" value="${escapeHtml(target.dataset.expectedPrincipal || "")}" required></label><p class="muted">只影响这一用户在当前系统中的会话。修改后必须重新登录。</p>${reasonField()}`, action: async form => {
+    await api(`/api/sessions/${target.dataset.rebindSession}/rebind`, { method: "POST", body: JSON.stringify({ expected_principal_ref: form.get("expected_principal_ref"), reason: form.get("reason") }) });
+    closeModal(); toast("系统身份绑定已更新"); await loadView("sessions");
+  } });
 }
 function openPause({ scopeType, scopeValue, version = "*", title }) {
   openModal({ title, submit: "暂停写入", danger: true, body: `<p>读取能力不受影响；新的准备动作和已经授权但尚未提交的写操作都会被阻断。</p>${reasonField()}`, action: async form => { await api("/api/policies/pause", { method: "POST", body: JSON.stringify({ scope_type: scopeType, scope_value: scopeValue, capability_version: version, reason: form.get("reason") }) }); closeModal(); toast("写暂停策略已生效"); await loadView(state.view); } });
@@ -299,6 +312,7 @@ content.addEventListener("click", async event => {
   else if (target.matches("[data-global-pause]")) openPause({ scopeType: "global", scopeValue: "*", title: "全局暂停所有写入" });
   else if (target.dataset.revokeToken) openReasonAction({ title: "撤销 Token", submit: "撤销", danger: true, request: reason => api(`/api/tokens/${target.dataset.revokeToken}/revoke`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.dataset.checkSession) openReasonAction({ title: "实时检查会话", submit: "检查", request: reason => api(`/api/sessions/${target.dataset.checkSession}/check`, { method: "POST", body: JSON.stringify({ reason }) }) });
+  else if (target.dataset.rebindSession) openRebindSession(target);
   else if (target.dataset.invalidateSession) openReasonAction({ title: "使会话失效", submit: "确认失效", danger: true, request: reason => api(`/api/sessions/${target.dataset.invalidateSession}/invalidate`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.dataset.resumePolicy) openReasonAction({ title: "恢复写入", submit: "恢复", request: reason => api(`/api/policies/${target.dataset.resumePolicy}/resume`, { method: "POST", body: JSON.stringify({ reason }) }) });
 });

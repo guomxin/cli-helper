@@ -46,24 +46,24 @@ Telegram 用户 A
 
 ## 3. AgentBridge 侧开户
 
-每个 OA 用户分别签发 Token，`user-subject` 和 `expected-principal` 必须对应真实人员。
-权限按用户最小化授予，示例：
+每个智能体用户分别签发 Token。`user-subject` 对应 AgentBridge 内部稳定用户；
+各下游系统的主体用 `--system-principal SYSTEM=PRINCIPAL` 分别绑定。权限按用户最小化授予，例如：
 
 ```bash
 python -m bscli.cli.main --home /home/guomao/agentbridge/.bscli mcp token issue \
   --user-subject <agentbridge-user-id> \
-  --expected-principal <OA显示姓名> \
+  --system-principal oa=<OA-principal> \
+  --system-principal taihua=<taihua-principal> \
   --label openclaw-telegram-<telegram-user-id> \
   --scope oa:write:draft \
+  --scope taihua:read \
   --ttl-hours 720
 ```
 
-`oa:read` 是 MCP Token 的基础权限。写权限
-`oa:write:draft`、`oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和
-`oa:write:revoke` 互相独立，只按实际需要增加。
+`oa:read` 是 MCP Token 的基础权限。写权限 `oa:write:draft`、`oa:write:approval`、
+`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke` 互相独立，只按实际需要增加。
 
-AgentBridge 在首次登录完成后校验实际 OA 用户是否等于 `expected-principal`。同一个
-OA principal 不能同时绑定给两个不同的活动 AgentBridge 用户。
+AgentBridge 在每个系统首次登录完成后，分别校验该系统的实际主体。同一系统中的同一主体不能同时绑定给两个不同的活动 AgentBridge 用户。
 
 ## 4. OpenClaw 侧配置
 

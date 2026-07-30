@@ -219,6 +219,85 @@ class AgentBridgeCoreTests(unittest.TestCase):
                 registry.activate(user_b["session_id"], observed_principal_ref="Mallory")
             self.assertEqual(registry.get(user_b["session_id"])["state"], "quarantined")
 
+    def test_session_registry_resolves_distinct_principals_per_system(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            resolved = registry.ensure_principal_bindings(
+                user_subject="user-a",
+                system_ids={"oa", "taihua", "yuque"},
+                principal_bindings={
+                    "oa": "Alice OA",
+                    "taihua": "alice.worklog",
+                    "yuque": "alice-docs",
+                },
+            )
+
+            self.assertEqual(
+                resolved,
+                {
+                    "oa": "Alice OA",
+                    "taihua": "alice.worklog",
+                    "yuque": "alice-docs",
+                },
+            )
+            for system_id, principal_ref in resolved.items():
+                session = registry.find(user_subject="user-a", system_id=system_id)
+                self.assertEqual(session["expected_principal_ref"], principal_ref)
+                active = registry.activate(
+                    session["session_id"],
+                    observed_principal_ref=principal_ref,
+                )
+                self.assertEqual(active["state"], "active")
+
+            reused = registry.ensure_principal_bindings(
+                user_subject="user-a",
+                system_ids={"oa", "taihua", "yuque"},
+            )
+            self.assertEqual(reused, resolved)
+            with self.assertRaises(SessionPrincipalMismatch):
+                registry.ensure_principal_bindings(
+                    user_subject="user-a",
+                    system_ids={"taihua"},
+                    principal_bindings={"taihua": "different-account"},
+                )
+            self.assertEqual(
+                registry.find(user_subject="user-a", system_id="taihua")["state"],
+                "active",
+            )
+
+    def test_session_registry_rebind_expires_only_the_selected_system(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            oa = registry.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice OA",
+            )
+            taihua = registry.get_or_create(
+                user_subject="user-a",
+                system_id="taihua",
+                expected_principal_ref="alice.worklog",
+            )
+            registry.activate(oa["session_id"], observed_principal_ref="Alice OA")
+            registry.activate(
+                taihua["session_id"],
+                observed_principal_ref="alice.worklog",
+            )
+
+            rebound = registry.rebind_expected_principal(
+                taihua["session_id"],
+                expected_principal_ref="alice-new",
+                reason="account renamed",
+            )
+
+            self.assertEqual(rebound["expected_principal_ref"], "alice-new")
+            self.assertIsNone(rebound["downstream_principal_ref"])
+            self.assertEqual(rebound["state"], "expired")
+            self.assertIsNone(rebound["last_verified_at"])
+            self.assertEqual(registry.get(oa["session_id"])["state"], "active")
+
     def test_session_registry_rejects_binding_changes_and_unverified_activation(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1542,7 +1542,7 @@ def create_central_mcp_server(
         response = await asyncio.to_thread(
             service.start_login,
             user_subject=identity["user_subject"],
-            expected_principal_ref=identity["expected_principal_ref"],
+            expected_principal_ref=None,
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="yuque",
@@ -1796,7 +1796,7 @@ def create_central_mcp_server(
         response = await asyncio.to_thread(
             service.start_login,
             user_subject=identity["user_subject"],
-            expected_principal_ref=identity["expected_principal_ref"],
+            expected_principal_ref=None,
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="taihua",
@@ -1853,7 +1853,7 @@ def create_central_mcp_server(
         response = await asyncio.to_thread(
             service.start_login,
             user_subject=identity["user_subject"],
-            expected_principal_ref=identity["expected_principal_ref"],
+            expected_principal_ref=None,
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
         )
