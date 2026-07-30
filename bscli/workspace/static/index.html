@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Agent Workspace</title>
+    <link rel="stylesheet" href="/assets/workspace.css">
+    <script src="/assets/workspace.js" defer></script>
+  </head>
+  <body>
+    <div id="auth-view" class="auth-shell" hidden>
+      <main class="auth-panel" aria-labelledby="auth-title">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>AGENTBRIDGE</span>
+        </div>
+        <h1 id="auth-title">Agent Workspace</h1>
+        <div class="segmented" role="tablist" aria-label="登录方式">
+          <button id="login-tab" class="segment active" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="enroll-tab" class="segment" type="button" role="tab" aria-selected="false">首次绑定</button>
+        </div>
+
+        <form id="login-form" class="auth-form">
+          <label>
+            <span>用户名</span>
+            <input name="username" autocomplete="username" required>
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button class="primary full" type="submit">进入工作台</button>
+        </form>
+
+        <section id="enroll-flow" class="enroll-flow" hidden>
+          <div id="enroll-start">
+            <p class="muted">使用已绑定的 Telegram 或微信身份确认本次网页端关联。</p>
+            <button id="start-link" class="primary full" type="button">生成配对码</button>
+          </div>
+          <div id="enroll-pending" hidden>
+            <p class="field-label">配对码</p>
+            <div class="link-code" id="link-code" aria-live="polite">--------</div>
+            <p class="command-line">在可信聊天中发送 <code id="link-command">/agentbridge link --------</code></p>
+            <div class="status-line">
+              <span class="status-dot waiting"></span>
+              <span id="link-status">等待可信端确认</span>
+            </div>
+          </div>
+          <form id="enroll-complete" class="auth-form" hidden>
+            <p class="success-line">身份已确认，请设置网页端登录信息。</p>
+            <label>
+              <span>用户名</span>
+              <input name="username" autocomplete="username" pattern="[A-Za-z][A-Za-z0-9_.-]{2,63}" required>
+            </label>
+            <label>
+              <span>密码</span>
+              <input name="password" type="password" autocomplete="new-password" minlength="12" required>
+            </label>
+            <label>
+              <span>再次输入密码</span>
+              <input name="passwordConfirm" type="password" autocomplete="new-password" minlength="12" required>
+            </label>
+            <button class="primary full" type="submit">创建并进入工作台</button>
+          </form>
+        </section>
+        <p id="auth-error" class="form-error" role="alert"></p>
+      </main>
+    </div>
+
+    <div id="app-view" class="app-shell" hidden>
+      <header class="topbar">
+        <div class="brand-lockup compact">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <strong>Agent Workspace</strong>
+        </div>
+        <div class="topbar-actions">
+          <span id="gateway-state" class="gateway-state"><span class="status-dot"></span>OpenClaw</span>
+          <span id="account-name" class="account-name"></span>
+          <button id="logout-button" class="icon-command" type="button" title="退出登录" aria-label="退出登录">退出</button>
+        </div>
+      </header>
+
+      <nav class="sidebar" aria-label="工作台导航">
+        <button class="nav-item active" type="button" data-view="chat"><span aria-hidden="true">⌁</span><span>对话</span></button>
+        <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">☷</span><span>任务</span><span id="active-task-count" class="count-badge">0</span></button>
+        <button class="nav-item" type="button" data-view="endpoints"><span aria-hidden="true">◎</span><span>端点</span></button>
+      </nav>
+
+      <main class="workspace-main">
+        <section id="view-chat" class="workspace-view chat-view">
+          <header class="view-header">
+            <div>
+              <p class="eyebrow">当前会话</p>
+              <h2>与智能体协作</h2>
+            </div>
+            <button id="refresh-chat" class="secondary" type="button" title="刷新对话">刷新</button>
+          </header>
+          <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+          <form id="chat-form" class="composer">
+            <textarea name="message" rows="2" maxlength="20000" placeholder="输入你的任务或问题" required></textarea>
+            <button class="primary send-button" type="submit">发送</button>
+          </form>
+        </section>
+
+        <section id="view-tasks" class="workspace-view task-view" hidden>
+          <header class="view-header">
+            <div>
+              <p class="eyebrow">Task Hub</p>
+              <h2>任务</h2>
+            </div>
+            <div class="header-controls">
+              <label class="toggle-label"><input id="active-only" type="checkbox">仅进行中</label>
+              <button id="refresh-tasks" class="secondary" type="button">刷新</button>
+            </div>
+          </header>
+          <div class="task-layout">
+            <div id="task-list" class="task-list" aria-label="任务列表"></div>
+            <aside id="task-detail" class="task-detail mobile-empty" aria-label="任务详情">
+              <div class="empty-state">选择一个任务查看进展</div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="view-endpoints" class="workspace-view" hidden>
+          <header class="view-header">
+            <div>
+              <p class="eyebrow">身份与设备</p>
+              <h2>已关联端点</h2>
+            </div>
+            <button id="refresh-endpoints" class="secondary" type="button">刷新</button>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>端点</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>最近活动</th>
+                </tr>
+              </thead>
+              <tbody id="endpoint-list"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+      <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    </div>
+  </body>
+</html>

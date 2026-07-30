@@ -312,6 +312,59 @@ test("fails closed when one OpenClaw session changes Telegram identity", () => {
   assert.equal(router.clientForSession(sessionKey), null);
 });
 
+test("keeps a one-use-bound workspace session pinned across web channel metadata", () => {
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const bindingKey = router.config.identityBindings[0].key;
+
+  assert.equal(
+    router.restoreSessionBinding({ sessionKey, bindingKey }),
+    true,
+  );
+  const identity = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "webchat",
+    agentAccountId: "workspace-account",
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.key, bindingKey);
+});
+
+test("workspace sessions expose only read-only AgentBridge tools", () => {
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const bindingKey = router.config.identityBindings[0].key;
+  assert.equal(
+    router.restoreSessionBinding({ sessionKey, bindingKey }),
+    true,
+  );
+
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      sessionKey,
+      messageChannel: "webchat",
+    },
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+
+  assert.equal(tools[0].name, "agentbridge_identity_status");
+  assert.equal(tools.length > 1, true);
+  assert.equal(
+    tools.slice(1).every((tool) => tool.annotations?.readOnlyHint === true),
+    true,
+  );
+});
+
 test("withholds OA tools from an unprovisioned Telegram user", async () => {
   const router = createRouter({
     requests: [],

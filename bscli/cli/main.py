@@ -44,6 +44,8 @@ from bscli.mcp.central import (
     serve_central_mcp,
     validate_central_mcp_server_config,
 )
+from bscli.workspace.gateway import OpenClawGatewayClient
+from bscli.workspace.server import validate_workspace_server_config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -239,6 +241,17 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_central_serve.add_argument("--admin-public-base-url")
     mcp_central_serve.add_argument("--admin-tls-cert")
     mcp_central_serve.add_argument("--admin-tls-key")
+    mcp_central_serve.add_argument("--workspace-host", default="127.0.0.1")
+    mcp_central_serve.add_argument("--workspace-port", type=int, default=0)
+    mcp_central_serve.add_argument("--workspace-public-base-url")
+    mcp_central_serve.add_argument("--workspace-tls-cert")
+    mcp_central_serve.add_argument("--workspace-tls-key")
+    mcp_central_serve.add_argument("--workspace-gateway-url")
+    mcp_central_serve.add_argument("--workspace-gateway-token-file")
+    mcp_central_serve.add_argument(
+        "--workspace-node-executable",
+        default="node",
+    )
     mcp_central_serve.add_argument(
         "--allow-insecure-private-http",
         action="store_true",
@@ -772,6 +785,7 @@ def handle_mcp(args: argparse.Namespace) -> int:
     if args.action != "central-serve":
         raise ValueError(f"unknown mcp action: {args.action}")
     admin_config = None
+    workspace_config = None
     try:
         if args.login_timeout < 1 or args.login_timeout > 300:
             raise ValueError("--login-timeout must be between 1 and 300 seconds")
@@ -822,6 +836,34 @@ def handle_mcp(args: argparse.Namespace) -> int:
             )
             if admin_config.port in {mcp_config.port, auth_config.port}:
                 raise ValueError("admin, MCP, and authentication services must use different ports")
+        gateway_configured = bool(args.workspace_gateway_url) or bool(
+            args.workspace_gateway_token_file
+        )
+        if bool(args.workspace_gateway_url) != bool(
+            args.workspace_gateway_token_file
+        ):
+            raise ValueError(
+                "workspace Gateway URL and token file must be configured together"
+            )
+        if gateway_configured and not args.workspace_port:
+            raise ValueError(
+                "workspace Gateway configuration requires --workspace-port"
+            )
+        if args.workspace_port:
+            workspace_config = validate_workspace_server_config(
+                host=args.workspace_host,
+                port=args.workspace_port,
+                public_base_url=args.workspace_public_base_url,
+                tls_cert=args.workspace_tls_cert,
+                tls_key=args.workspace_tls_key,
+            )
+            used_ports = {mcp_config.port, auth_config.port}
+            if admin_config is not None:
+                used_ports.add(admin_config.port)
+            if workspace_config.port in used_ports:
+                raise ValueError(
+                    "workspace, admin, MCP, and authentication services must use different ports"
+                )
     except ValueError as exc:
         print_json(_central_cli_error("CENTRAL_MCP_CONFIG_INVALID", str(exc)))
         return 2
@@ -837,6 +879,14 @@ def handle_mcp(args: argparse.Namespace) -> int:
         session_keepalive_lease_seconds=args.session_keepalive_lease,
     )
     identity_store = McpIdentityTokenStore(_central_db_path(home))
+    workspace_gateway = None
+    if args.workspace_gateway_url and args.workspace_gateway_token_file:
+        workspace_gateway = OpenClawGatewayClient(
+            url=args.workspace_gateway_url,
+            token_file=args.workspace_gateway_token_file,
+            state_dir=home / "workspace-gateway",
+            node_executable=args.workspace_node_executable,
+        )
     insecure_private_http = (
         mcp_config.insecure_private_http or auth_config.insecure_private_http
     )
@@ -847,6 +897,10 @@ def handle_mcp(args: argparse.Namespace) -> int:
         "mcpUrl": mcp_config.mcp_url,
         "authCardBaseUrl": auth_config.public_base_url,
         "adminBaseUrl": admin_config.public_base_url if admin_config else None,
+        "workspaceBaseUrl": (
+            workspace_config.public_base_url if workspace_config else None
+        ),
+        "workspaceGatewayConfigured": workspace_gateway is not None,
         "transport": "streamable_http",
         "stateless": True,
         "authentication": "bearer_identity_token",
@@ -869,6 +923,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
             mcp_config=mcp_config,
             auth_config=auth_config,
             admin_config=admin_config,
+            workspace_config=workspace_config,
+            workspace_gateway=workspace_gateway,
             login_timeout_seconds=args.login_timeout,
             keepalive_interval_seconds=args.session_keepalive_interval,
             keepalive_activity_lease_seconds=args.session_keepalive_lease,

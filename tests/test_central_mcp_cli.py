@@ -171,6 +171,81 @@ class CentralMcpCliTests(unittest.TestCase):
             604_800,
         )
 
+    def test_central_server_starts_workspace_with_gateway_bff(self):
+        with TemporaryDirectory() as tmp:
+            token_file = Path(tmp) / "gateway.token"
+            token_file.write_text("gateway-token-value", encoding="utf-8")
+            with (
+                patch("bscli.cli.main.serve_central_mcp") as serve,
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "mcp",
+                        "central-serve",
+                        "--workspace-host",
+                        "127.0.0.1",
+                        "--workspace-port",
+                        "8783",
+                        "--workspace-gateway-url",
+                        "ws://127.0.0.1:18789",
+                        "--workspace-gateway-token-file",
+                        str(token_file),
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            payload["workspaceBaseUrl"],
+            "http://127.0.0.1:8783",
+        )
+        self.assertTrue(payload["workspaceGatewayConfigured"])
+        self.assertIsNotNone(serve.call_args.kwargs["workspace_config"])
+        self.assertIsNotNone(serve.call_args.kwargs["workspace_gateway"])
+
+    def test_central_server_rejects_incomplete_or_orphaned_workspace_gateway(self):
+        cases = [
+            (
+                ["--workspace-gateway-url", "ws://127.0.0.1:18789"],
+                "configured together",
+            ),
+            (
+                [
+                    "--workspace-gateway-url",
+                    "ws://127.0.0.1:18789",
+                    "--workspace-gateway-token-file",
+                    "gateway.token",
+                ],
+                "requires --workspace-port",
+            ),
+            (
+                ["--workspace-port", "8790"],
+                "different ports",
+            ),
+        ]
+        for arguments, message in cases:
+            with self.subTest(arguments=arguments), TemporaryDirectory() as tmp:
+                with redirect_stdout(io.StringIO()) as stdout:
+                    exit_code = main(
+                        [
+                            "--home",
+                            tmp,
+                            "mcp",
+                            "central-serve",
+                            *arguments,
+                        ]
+                    )
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(
+                    payload["error"]["code"],
+                    "CENTRAL_MCP_CONFIG_INVALID",
+                )
+                self.assertIn(message, payload["error"]["message"])
+
     def test_central_server_enables_bounded_session_keepalive(self):
         with TemporaryDirectory() as tmp:
             with (

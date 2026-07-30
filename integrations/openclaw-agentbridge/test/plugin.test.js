@@ -13,6 +13,98 @@ import {
   toolResult,
 } from "./fixtures.js";
 
+test("registers and enforces the one-use workspace Gateway binding", async () => {
+  const attempts = [];
+  const restored = [];
+  const identityRouter = {
+    enabled: true,
+    configuredIdentities() {
+      return [
+        {
+          binding: { key: "telegram:*:user-a" },
+          client: {
+            async callTool(name, params, options) {
+              attempts.push({ binding: "user-a", name, params, options });
+              throw new Error("grant belongs to another identity");
+            },
+          },
+        },
+        {
+          binding: { key: "openclaw-weixin:*:user-b" },
+          client: {
+            async callTool(name, params, options) {
+              attempts.push({ binding: "user-b", name, params, options });
+              return { status: "succeeded" };
+            },
+          },
+        },
+      ];
+    },
+    restoreSessionBinding({ sessionKey, bindingKey }) {
+      restored.push({ sessionKey, bindingKey });
+      return bindingKey === "openclaw-weixin:*:user-b";
+    },
+    clientForSession() {
+      return null;
+    },
+    resolveToolContext() {
+      return { bound: false, reason: "not_bound" };
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+  const registered = harness.gatewayMethods.get(
+    "agentbridge.workspace.bind",
+  );
+  const responses = [];
+
+  await registered.handler({
+    params: {
+      sessionKey:
+        "agent:main:agentbridge-workspace:direct:account-123",
+      endpointKey: "workspace:account-123",
+      grant: "abwg_1234567890123456789012345678901234567890",
+    },
+    respond(ok, payload, error) {
+      responses.push({ ok, payload, error });
+    },
+  });
+
+  assert.deepEqual(registered.options, { scope: "operator.write" });
+  assert.equal(attempts.length, 2);
+  assert.equal(
+    attempts[1].name,
+    "agentbridge_host_workspace_session_bind",
+  );
+  assert.deepEqual(attempts[1].options, {
+    meta: {
+      "io.agentbridge/host": {
+        version: "1",
+        agentHost: "openclaw",
+      },
+    },
+  });
+  assert.deepEqual(restored, [
+    {
+      sessionKey:
+        "agent:main:agentbridge-workspace:direct:account-123",
+      bindingKey: "openclaw-weixin:*:user-b",
+    },
+  ]);
+  assert.deepEqual(responses, [
+    {
+      ok: true,
+      payload: {
+        status: "bound",
+        sessionKey:
+          "agent:main:agentbridge-workspace:direct:account-123",
+      },
+      error: undefined,
+    },
+  ]);
+});
+
 test("leaves an ordinary non-interaction tool result untouched", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
@@ -2499,6 +2591,7 @@ function fakeApi(pluginConfig) {
     middlewareOptions: null,
     command: null,
     toolFactory: null,
+    gatewayMethods: new Map(),
   };
   const api = {
     pluginConfig: {
@@ -2563,6 +2656,9 @@ function fakeApi(pluginConfig) {
     registerCommand(command) {
       state.command = command;
     },
+    registerGatewayMethod(name, handler, options) {
+      state.gatewayMethods.set(name, { handler, options });
+    },
   };
   return {
     api,
@@ -2583,6 +2679,9 @@ function fakeApi(pluginConfig) {
     },
     get toolFactory() {
       return state.toolFactory;
+    },
+    get gatewayMethods() {
+      return state.gatewayMethods;
     },
   };
 }

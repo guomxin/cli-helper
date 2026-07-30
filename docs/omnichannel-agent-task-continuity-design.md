@@ -1,14 +1,14 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.2，一期任务骨架已实现
+> 文档状态：Approved v0.3，二期只读 Agent Workspace 已实现
 >
 > 更新日期：2026-07-30
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.3.0、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.0、中心
 > AgentBridge MCP 与可信交互卡片
 >
-> 本文是分期实现依据。第 15.1 节的一期任务骨架已进入代码和部署验收阶段；
-> 用户网页端、跨端 Claim 与多端通知仍属于后续阶段。
+> 本文是分期实现依据。第 15.1 节任务骨架和第 15.2 节只读网页端已进入代码与
+> 部署验收阶段；跨端 Claim 与多端通知仍属于后续阶段。
 
 ## 0. 当前实施状态
 
@@ -26,12 +26,16 @@
   原私聊路由、轮询和卡片投递；
 - Task Hub 协调故障不覆盖已经成功返回的业务工具结果；
 - 双用户隔离、任务幂等、迁移建表和 Gateway 重启恢复已纳入自动化测试。
+- 独立 Agent Workspace 提供持久网页登录、只读智能体对话、任务时间线和端点查看；
+- 网页账号通过已可信 Telegram/微信的一次性配对码绑定到既有 `userSubject`；
+- BFF 使用 OpenClaw 正式 Gateway 协议，浏览器不持有 MCP 或 Gateway Token；
+- 网页 Session 通过 90 秒一次性凭证固定到正确 MCP 身份，并只暴露
+  `readOnlyHint=true` 的 AgentBridge 工具；
+- 桌面和移动端布局、双用户隔离、CSRF、凭证重放和错误身份兑换已纳入测试。
 
 尚未实现：
 
-- 普通用户 Agent Workspace 网页客户端；
 - 跨端 Interaction Claim、首选确认端和多端订阅投递；
-- 浏览器端短期会话、WebSocket/SSE 时间线；
 - 跨客户端继续任务和 OBO 执行委托。
 
 ## 1. 结论
@@ -784,11 +788,18 @@ eventId + endpointId + payloadType
 
 ### 15.2 二期：独立 Agent Workspace
 
+实施状态：代码已完成，正在执行内网发布验收。
+
 - 建设网页登录、聊天、任务列表和任务详情；
 - BFF 使用 OpenClaw Gateway 正式协议；
 - 网页端绑定到已有 `userSubject`；
 - 网页只使用独立凭据；
 - 支持网页发起只读任务及查看 AgentBridge 任务状态。
+
+当前实现采用本地网页账号加一次性可信聊天配对。网页 Session 为 30 天绝对期限、
+7 天空闲期限；普通退出只吊销浏览器会话，不删除与 `userSubject` 的永久关联。
+OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏览器不接触长期 Token。
+详细实现与运维基线见 [Agent Workspace 网页端](./agent-workspace.md)。
 
 验收：网页与 Telegram 使用同一用户的下游 Session，但凭据可分别撤销。
 
@@ -852,7 +863,7 @@ eventId + endpointId + payloadType
 
 以下问题在实施对应阶段前决定，不阻塞一期任务骨架：
 
-- Agent Workspace 初期使用本地账号还是直接接企业 OIDC；
+- 何时把已实现的本地网页账号升级为企业 OIDC；
 - 首选确认端由用户设置还是由能力风险策略指定；
 - 成功状态默认通知所有订阅端还是仅发起端和确认端；
 - Task Hub 首期与 AgentBridge 同进程部署还是独立服务；

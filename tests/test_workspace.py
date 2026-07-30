@@ -1,0 +1,643 @@
+from __future__ import annotations
+
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
+import http.client
+import json
+from pathlib import Path
+import socket
+import sqlite3
+import threading
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from bscli.core.central_service import CentralCapabilityService
+from bscli.core.tasks import TaskNotFound
+from bscli.workspace.application import WorkspaceApplication
+from bscli.workspace.gateway import (
+    GatewayRequestError,
+    OpenClawGatewayClient,
+)
+from bscli.workspace.server import (
+    create_workspace_http_server,
+    validate_workspace_server_config,
+)
+from bscli.workspace.stores import WorkspaceLinkError, WorkspaceStore
+
+
+PASSWORD = "AgentBridge!Workspace9"
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = datetime(2026, 7, 30, 1, 0, tzinfo=timezone.utc)
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+class FakeGateway:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def call(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        timeout_seconds: float = 30,
+    ) -> dict:
+        self.calls.append((method, params or {}))
+        if method == "system.info":
+            return {"version": "2026.7.1"}
+        if method == "chat.history":
+            return {
+                "sessionId": "session-web",
+                "messages": [
+                    {"role": "user", "content": "读取我的 OA 待办"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "当前有 3 条待办。"},
+                            {"type": "tool", "name": "hidden"},
+                        ],
+                    },
+                    {"role": "tool", "content": "not exposed"},
+                ],
+            }
+        if method == "agentbridge.workspace.bind":
+            return {"status": "bound"}
+        if method == "chat.send":
+            return {"status": "accepted", "runId": "run-web-1"}
+        raise AssertionError(f"unexpected Gateway method: {method}")
+
+
+class WorkspaceStoreTests(unittest.TestCase):
+    def test_identity_link_account_session_and_one_use_gateway_grant(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account_a = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            account_b = _create_account(
+                service,
+                user_subject="user-b",
+                username="bob",
+                endpoint_key="openclaw-weixin:*:bob",
+                client_type="openclaw-weixin",
+            )
+
+            self.assertNotEqual(
+                account_a["openclaw_session_key"],
+                account_b["openclaw_session_key"],
+            )
+            self.assertNotEqual(account_a["endpoint_id"], account_b["endpoint_id"])
+            authenticated = service.workspace.authenticate(
+                username="ALICE",
+                password=PASSWORD,
+            )
+            self.assertEqual(authenticated["user_subject"], "user-a")
+            self.assertIsNone(
+                service.workspace.authenticate(
+                    username="alice",
+                    password="not-the-password",
+                )
+            )
+
+            session = service.workspace.create_session(account_a["account_id"])
+            verified = service.workspace.verify_session(
+                session["session_token"],
+                csrf_token=session["csrf_token"],
+            )
+            self.assertEqual(verified["user_subject"], "user-a")
+            self.assertEqual(verified["created_at"], account_a["created_at"])
+            self.assertIsNone(
+                service.workspace.verify_session(
+                    session["session_token"],
+                    csrf_token="wrong",
+                )
+            )
+
+            grant = service.workspace.issue_gateway_grant(account_a["account_id"])
+            with self.assertRaises(PermissionError):
+                service.workspace.redeem_gateway_grant(
+                    grant=grant["grant"],
+                    user_subject="user-b",
+                    endpoint_key=grant["endpoint_key"],
+                    session_key=grant["session_key"],
+                )
+            redeemed = service.redeem_workspace_gateway_grant(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key=grant["endpoint_key"],
+                session_key=grant["session_key"],
+                grant=grant["grant"],
+            )
+            self.assertEqual(redeemed["status"], "succeeded")
+            with self.assertRaises(WorkspaceLinkError):
+                service.workspace.redeem_gateway_grant(
+                    grant=grant["grant"],
+                    user_subject="user-a",
+                    endpoint_key=grant["endpoint_key"],
+                    session_key=grant["session_key"],
+                )
+
+    def test_session_idle_timeout_and_logout_do_not_unlink_identity(self) -> None:
+        clock = MutableClock()
+        with TemporaryDirectory() as tmp:
+            store = WorkspaceStore(
+                Path(tmp) / "agentbridge.db",
+                clock=clock,
+                session_ttl_seconds=600,
+                session_idle_seconds=120,
+            )
+            link = store.start_link()
+            store.confirm_link(
+                link_code=link["link_code"],
+                user_subject="user-a",
+                approver_endpoint_id="endpoint-a",
+            )
+            account = store.create_account(
+                enrollment_token=link["enrollment_token"],
+                username="alice",
+                password=PASSWORD,
+            )
+            session = store.create_session(account["account_id"])
+
+            store.revoke_session(session["session_token"])
+            self.assertIsNone(store.verify_session(session["session_token"]))
+            self.assertEqual(
+                store.authenticate(username="alice", password=PASSWORD)[
+                    "user_subject"
+                ],
+                "user-a",
+            )
+
+            fresh = store.create_session(account["account_id"])
+            clock.value += timedelta(seconds=121)
+            self.assertIsNone(store.verify_session(fresh["session_token"]))
+
+    def test_account_completion_recovers_after_endpoint_registration_gap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            link = service.workspace.start_link()
+            service.workspace.confirm_link(
+                link_code=link["link_code"],
+                user_subject="user-a",
+                approver_endpoint_id="endpoint-a",
+            )
+            created = service.workspace.create_account(
+                enrollment_token=link["enrollment_token"],
+                username="alice",
+                password=PASSWORD,
+            )
+
+            completed = WorkspaceApplication(
+                service=service
+            ).complete_enrollment(
+                enrollment_token=link["enrollment_token"],
+                username="alice",
+                password=PASSWORD,
+            )
+
+            self.assertEqual(
+                completed["account"]["accountId"],
+                created["account_id"],
+            )
+            self.assertIsNotNone(
+                service.workspace.get_account(created["account_id"])[
+                    "endpoint_id"
+                ]
+            )
+
+    def test_workspace_tasks_events_and_endpoints_are_user_isolated(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account_a = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            account_b = _create_account(
+                service,
+                user_subject="user-b",
+                username="bob",
+                endpoint_key="telegram:*:bob",
+            )
+            app = WorkspaceApplication(service=service)
+            task_a = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="openclaw",
+                host_task_key="session-a|run-a",
+                endpoint_key="telegram:*:alice",
+                client_type="telegram",
+                external_subject="alice",
+                conversation_ref="agent:main:telegram:direct:alice",
+                title="Alice OA task",
+            )
+            service.ensure_host_task(
+                user_subject="user-b",
+                token_id="token-b",
+                agent_host="openclaw",
+                host_task_key="session-b|run-b",
+                endpoint_key="telegram:*:bob",
+                client_type="telegram",
+                external_subject="bob",
+                conversation_ref="agent:main:telegram:direct:bob",
+                title="Bob OA task",
+            )
+
+            self.assertEqual(
+                [item["title"] for item in app.list_tasks(account_a)],
+                ["Alice OA task"],
+            )
+            self.assertEqual(
+                [item["title"] for item in app.list_tasks(account_b)],
+                ["Bob OA task"],
+            )
+            self.assertTrue(
+                all(
+                    "user_subject" not in item
+                    for item in app.list_events(account_a)
+                )
+            )
+            self.assertTrue(
+                all(
+                    "user_subject" not in item
+                    and "token_id" not in item
+                    and "conversation_ref" not in item
+                    for item in app.list_endpoints(account_a)
+                )
+            )
+            with self.assertRaises(TaskNotFound):
+                app.task_detail(
+                    account_b,
+                    task_a["task"]["taskId"],
+                )
+
+    def test_password_hash_and_tokens_are_not_stored_in_plaintext(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            session = service.workspace.create_session(account["account_id"])
+            with closing(sqlite3.connect(service.db_path)) as connection:
+                password_hash = connection.execute(
+                    "SELECT password_hash FROM workspace_accounts"
+                ).fetchone()[0]
+                token_hash, csrf_hash = connection.execute(
+                    "SELECT token_hash, csrf_hash FROM workspace_sessions "
+                    "WHERE session_id = ?",
+                    (session["session_id"],),
+                ).fetchone()
+            self.assertNotIn(PASSWORD, password_hash)
+            self.assertNotEqual(token_hash, session["session_token"])
+            self.assertNotEqual(csrf_hash, session["csrf_token"])
+
+
+class WorkspaceApplicationTests(unittest.TestCase):
+    def test_chat_binds_identity_before_send_and_hides_tool_messages(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            gateway = FakeGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+
+            history = app.chat_history(account)
+            result = app.send_chat(
+                account,
+                message="读取我的 OA 待办",
+                idempotency_key="web-message-1",
+            )
+
+            self.assertEqual(
+                [item["role"] for item in history["messages"]],
+                ["user", "assistant"],
+            )
+            self.assertEqual(result.run_id, "run-web-1")
+            methods = [method for method, _params in gateway.calls]
+            self.assertEqual(
+                methods,
+                [
+                    "chat.history",
+                    "agentbridge.workspace.bind",
+                    "chat.send",
+                ],
+            )
+            bind = gateway.calls[1][1]
+            sent = gateway.calls[2][1]
+            self.assertEqual(bind["sessionKey"], account["openclaw_session_key"])
+            self.assertEqual(sent["sessionKey"], account["openclaw_session_key"])
+            self.assertFalse(sent["deliver"])
+
+
+class WorkspaceGatewayClientTests(unittest.TestCase):
+    def test_gateway_token_is_passed_only_through_the_child_environment(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                script_path=root / "gateway_client.mjs",
+            )
+            with patch(
+                "bscli.workspace.gateway.subprocess.run"
+            ) as run:
+                run.return_value.stdout = json.dumps(
+                    {"ok": True, "payload": {"version": "2026.7.1"}}
+                )
+                run.return_value.returncode = 0
+
+                result = client.call("system.info", {})
+
+            self.assertEqual(result["version"], "2026.7.1")
+            command = run.call_args.args[0]
+            self.assertNotIn("gateway-secret-token-value", command)
+            self.assertNotIn(
+                "gateway-secret-token-value",
+                run.call_args.kwargs["input"],
+            )
+            self.assertEqual(
+                run.call_args.kwargs["env"]["AB_GATEWAY_TOKEN"],
+                "gateway-secret-token-value",
+            )
+
+    def test_gateway_error_code_is_preserved_without_stderr_leakage(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+            )
+            with patch(
+                "bscli.workspace.gateway.subprocess.run"
+            ) as run:
+                run.return_value.stdout = json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "PAIRING_REQUIRED",
+                            "message": "Device approval is required.",
+                        },
+                    }
+                )
+                run.return_value.returncode = 0
+                with self.assertRaises(GatewayRequestError) as caught:
+                    client.call("system.info", {})
+
+            self.assertEqual(caught.exception.code, "PAIRING_REQUIRED")
+            self.assertNotIn(
+                "gateway-secret-token-value",
+                str(caught.exception),
+            )
+
+
+class WorkspaceHttpServerTests(unittest.TestCase):
+    def test_enrollment_login_csrf_and_read_only_workspace_routes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            gateway = FakeGateway()
+            application = WorkspaceApplication(service=service, gateway=gateway)
+            port = _free_port()
+            origin = f"http://127.0.0.1:{port}"
+            server = create_workspace_http_server(
+                config=validate_workspace_server_config(
+                    host="127.0.0.1",
+                    port=port,
+                    public_base_url=origin,
+                    tls_cert=None,
+                    tls_key=None,
+                ),
+                application=application,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, headers, link = _request(
+                    port,
+                    "POST",
+                    "/api/enrollment/start",
+                    body={},
+                    origin=origin,
+                )
+                self.assertEqual(status, 201)
+                cookies = _cookies(headers)
+                service.confirm_workspace_link(
+                    user_subject="user-a",
+                    token_id="token-a",
+                    agent_host="openclaw",
+                    endpoint_key="telegram:*:alice",
+                    client_type="telegram",
+                    external_subject="alice",
+                    conversation_ref="agent:main:telegram:direct:alice",
+                    link_code=link["linkCode"],
+                )
+                status, headers, completed = _request(
+                    port,
+                    "POST",
+                    "/api/enrollment/complete",
+                    body={"username": "alice", "password": PASSWORD},
+                    origin=origin,
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 201)
+                self.assertTrue(completed["authenticated"])
+                cookies.update(_cookies(headers))
+
+                status, response_headers, session = _request(
+                    port,
+                    "GET",
+                    "/api/session",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(session["authenticated"])
+                self.assertEqual(
+                    response_headers.get("X-Frame-Options"),
+                    "DENY",
+                )
+                self.assertNotIn(
+                    "userSubject",
+                    json.dumps(session, ensure_ascii=False),
+                )
+
+                status, _, error = _request(
+                    port,
+                    "POST",
+                    "/api/chat/send",
+                    body={"message": "读取待办"},
+                    origin=origin,
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 401)
+                self.assertEqual(
+                    error["error"]["code"],
+                    "AUTHENTICATION_REQUIRED",
+                )
+
+                status, _, accepted = _request(
+                    port,
+                    "POST",
+                    "/api/chat/send",
+                    body={"message": "读取待办"},
+                    origin=origin,
+                    cookies=cookies,
+                    csrf=cookies["agentbridge_workspace_csrf"],
+                )
+                self.assertEqual(status, 202)
+                self.assertEqual(accepted["runId"], "run-web-1")
+
+                status, _, endpoints = _request(
+                    port,
+                    "GET",
+                    "/api/endpoints",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(endpoints["items"])
+                self.assertTrue(
+                    all(
+                        "user_subject" not in item
+                        and "token_id" not in item
+                        and "route" not in item
+                        for item in endpoints["items"]
+                    )
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+
+class WorkspaceStaticAssetTests(unittest.TestCase):
+    def test_assets_are_csp_clean_and_mobile_detail_has_back_control(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "bscli" / "workspace" / "static"
+        page = (root / "index.html").read_text(encoding="utf-8")
+        script = (root / "workspace.js").read_text(encoding="utf-8")
+        stylesheet = (root / "workspace.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('style="', page)
+        self.assertNotIn("font-size: clamp(", stylesheet)
+        self.assertNotIn("linear-gradient(", stylesheet)
+        self.assertIn("mobile-detail-back", script)
+        self.assertIn("mobile-detail-back", stylesheet)
+        self.assertIn('class="task-detail mobile-empty"', page)
+        self.assertIn("const loginForm = event.currentTarget;", script)
+        self.assertIn("const enrollmentForm = event.currentTarget;", script)
+        self.assertIn("页面已刷新，请重新生成配对码。", script)
+        self.assertNotIn("setBusy(event.currentTarget", script)
+
+
+def _service(tmp: str) -> CentralCapabilityService:
+    return CentralCapabilityService(
+        home=tmp,
+        base_url="http://127.0.0.1:8000/seeyon",
+    )
+
+
+def _create_account(
+    service: CentralCapabilityService,
+    *,
+    user_subject: str,
+    username: str,
+    endpoint_key: str,
+    client_type: str = "telegram",
+) -> dict:
+    link = service.workspace.start_link()
+    service.confirm_workspace_link(
+        user_subject=user_subject,
+        token_id=f"token-{username}",
+        agent_host="openclaw",
+        endpoint_key=endpoint_key,
+        client_type=client_type,
+        external_subject=username,
+        conversation_ref=f"agent:main:{client_type}:direct:{username}",
+        link_code=link["link_code"],
+    )
+    account = service.workspace.create_account(
+        enrollment_token=link["enrollment_token"],
+        username=username,
+        password=PASSWORD,
+    )
+    return service.register_workspace_endpoint(
+        account_id=account["account_id"],
+    )["account"]
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _request(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    body: dict | None = None,
+    origin: str | None = None,
+    cookies: dict[str, str] | None = None,
+    csrf: str | None = None,
+) -> tuple[int, http.client.HTTPMessage, dict]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {"Host": f"127.0.0.1:{port}"}
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if origin:
+        headers["Origin"] = origin
+    if cookies:
+        headers["Cookie"] = "; ".join(
+            f"{name}={value}" for name, value in cookies.items()
+        )
+    if csrf:
+        headers["X-AgentBridge-CSRF"] = csrf
+    connection.request(method, path, body=payload, headers=headers)
+    response = connection.getresponse()
+    raw = response.read()
+    parsed = json.loads(raw.decode("utf-8")) if raw else {}
+    result = (response.status, response.headers, parsed)
+    connection.close()
+    return result
+
+
+def _cookies(headers: http.client.HTTPMessage) -> dict[str, str]:
+    result = {}
+    for value in headers.get_all("Set-Cookie") or []:
+        pair = value.split(";", 1)[0]
+        name, cookie_value = pair.split("=", 1)
+        result[name] = cookie_value
+    return result
+
+
+if __name__ == "__main__":
+    unittest.main()

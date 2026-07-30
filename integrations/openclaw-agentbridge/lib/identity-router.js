@@ -137,13 +137,15 @@ export class AgentBridgeIdentityRouter {
     if (!binding) {
       return null;
     }
+    const workspaceSession = isWorkspaceSessionKey(sessionKey);
     const normalizedChannel = identityPart(channel, true);
     const normalizedAccountId = identityPart(accountId, false);
     if (
-      (normalizedChannel && normalizedChannel !== binding.channel) ||
-      (normalizedAccountId &&
-        binding.accountId !== null &&
-        normalizedAccountId !== binding.accountId)
+      !workspaceSession &&
+      ((normalizedChannel && normalizedChannel !== binding.channel) ||
+        (normalizedAccountId &&
+          binding.accountId !== null &&
+          normalizedAccountId !== binding.accountId))
     ) {
       this.sessionBindings.set(sessionKey, "conflict");
       return unbound("session_identity_conflict");
@@ -221,6 +223,13 @@ export class AgentBridgeIdentityRouter {
     }
     return client;
   }
+}
+
+function isWorkspaceSessionKey(sessionKey) {
+  return (
+    typeof sessionKey === "string" &&
+    /^agent:[^:]+:agentbridge-workspace:direct:/i.test(sessionKey.trim())
+  );
 }
 
 function unbound(reason) {

@@ -1,0 +1,708 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import mimetypes
+from pathlib import Path
+import re
+import ssl
+import threading
+import time
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+from bscli.auth.server import validate_auth_server_config
+from bscli.core.tasks import TaskNotFound
+from bscli.workspace.application import WorkspaceApplication
+from bscli.workspace.gateway import GatewayRequestError
+from bscli.workspace.stores import (
+    WorkspaceConflictError,
+    WorkspaceLinkError,
+)
+
+
+MAX_BODY_BYTES = 128 * 1024
+SESSION_COOKIE = "agentbridge_workspace_session"
+CSRF_COOKIE = "agentbridge_workspace_csrf"
+ENROLLMENT_COOKIE = "agentbridge_workspace_enrollment"
+STATIC_ROOT = Path(__file__).with_name("static")
+
+
+@dataclass(frozen=True)
+class WorkspaceServerConfig:
+    host: str
+    port: int
+    public_base_url: str
+    tls_cert: Path | None
+    tls_key: Path | None
+
+    @property
+    def secure_cookie(self) -> bool:
+        return self.public_base_url.startswith("https://")
+
+
+class WorkspaceHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+class _RateLimiter:
+    def __init__(self, attempts: int = 8, window_seconds: int = 900) -> None:
+        self.attempts = attempts
+        self.window_seconds = window_seconds
+        self._values: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def allowed(self, key: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            values = [
+                item
+                for item in self._values.get(key, [])
+                if now - item < self.window_seconds
+            ]
+            self._values[key] = values
+            return len(values) < self.attempts
+
+    def fail(self, key: str) -> None:
+        with self._lock:
+            self._values.setdefault(key, []).append(time.monotonic())
+
+    def success(self, key: str) -> None:
+        with self._lock:
+            self._values.pop(key, None)
+
+
+def validate_workspace_server_config(
+    *,
+    host: str,
+    port: int,
+    public_base_url: str | None,
+    tls_cert: str | Path | None,
+    tls_key: str | Path | None,
+) -> WorkspaceServerConfig:
+    validated = validate_auth_server_config(
+        host=host,
+        port=port,
+        public_base_url=public_base_url,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        allow_insecure_private_http=False,
+    )
+    return WorkspaceServerConfig(
+        host=validated.host,
+        port=validated.port,
+        public_base_url=validated.public_base_url,
+        tls_cert=validated.tls_cert,
+        tls_key=validated.tls_key,
+    )
+
+
+def create_workspace_http_server(
+    *,
+    config: WorkspaceServerConfig,
+    application: WorkspaceApplication,
+) -> ThreadingHTTPServer:
+    expected = urlparse(config.public_base_url)
+    expected_origin = f"{expected.scheme.lower()}://{expected.netloc.lower()}"
+    allowed_host = (expected.hostname or "").lower()
+    limiter = _RateLimiter()
+
+    class WorkspaceRequestHandler(BaseHTTPRequestHandler):
+        server_version = "AgentBridgeWorkspace/0.1"
+        sys_version = ""
+
+        def log_message(self, _format: str, *_args) -> None:
+            return None
+
+        def do_GET(self) -> None:
+            route = urlparse(self.path)
+            if not self._host_allowed():
+                self._json(400, {"error": {"code": "INVALID_HOST"}})
+                return
+            if route.path == "/healthz":
+                self._json(
+                    200,
+                    {
+                        "status": "ok",
+                        "service": "agentbridge_workspace",
+                    },
+                )
+                return
+            if route.path in {"/", "/index.html"}:
+                self._static("index.html")
+                return
+            if route.path.startswith("/assets/"):
+                self._static(route.path.removeprefix("/assets/"))
+                return
+            if route.path == "/favicon.ico":
+                self.send_response(204)
+                self._security_headers()
+                self.end_headers()
+                return
+            if route.path == "/api/session":
+                account = self._session()
+                self._json(
+                    200,
+                    {
+                        "authenticated": account is not None,
+                        "account": application.public_account(account),
+                    },
+                )
+                return
+            if route.path == "/api/enrollment/status":
+                token = self._cookie(ENROLLMENT_COOKIE)
+                link = application.enrollment_status(token) if token else None
+                self._json(
+                    200,
+                    {
+                        "active": link is not None,
+                        "state": link["state"] if link else None,
+                        "expiresAt": link["expires_at"] if link else None,
+                    },
+                )
+                return
+            account = self._authenticate()
+            if account is None:
+                return
+            query = parse_qs(route.query)
+            try:
+                if route.path == "/api/tasks":
+                    self._json(
+                        200,
+                        {
+                            "items": application.list_tasks(
+                                account,
+                                active_only=_query_bool(
+                                    query,
+                                    "active_only",
+                                    False,
+                                ),
+                                limit=_query_int(query, "limit", 100),
+                            )
+                        },
+                    )
+                    return
+                task_match = re.fullmatch(
+                    r"/api/tasks/([0-9a-f-]{36})",
+                    route.path,
+                )
+                if task_match:
+                    self._json(
+                        200,
+                        application.task_detail(
+                            account,
+                            task_match.group(1),
+                        ),
+                    )
+                    return
+                if route.path == "/api/events":
+                    self._json(
+                        200,
+                        {
+                            "items": application.list_events(
+                                account,
+                                after_event_id=_query_value(
+                                    query,
+                                    "after",
+                                ),
+                                limit=_query_int(query, "limit", 100),
+                            )
+                        },
+                    )
+                    return
+                if route.path == "/api/events/stream":
+                    self._event_stream(
+                        account,
+                        after_event_id=(
+                            self.headers.get("Last-Event-ID")
+                            or _query_value(query, "after")
+                        ),
+                    )
+                    return
+                if route.path == "/api/endpoints":
+                    self._json(
+                        200,
+                        {"items": application.list_endpoints(account)},
+                    )
+                    return
+                if route.path == "/api/gateway":
+                    self._json(200, application.gateway_status())
+                    return
+                if route.path == "/api/chat/history":
+                    self._json(
+                        200,
+                        application.chat_history(
+                            account,
+                            limit=_query_int(query, "limit", 100),
+                        ),
+                    )
+                    return
+                self._json(404, {"error": {"code": "NOT_FOUND"}})
+            except Exception as exc:
+                self._handle_error(exc)
+
+        def do_POST(self) -> None:
+            route = urlparse(self.path)
+            if not self._host_allowed() or not self._origin_allowed(
+                expected_origin
+            ):
+                self._json(
+                    403,
+                    {"error": {"code": "INVALID_REQUEST_ORIGIN"}},
+                )
+                return
+            if route.path == "/api/enrollment/start":
+                link = application.start_enrollment()
+                self._json(
+                    201,
+                    {
+                        "linkCode": link["link_code"],
+                        "state": link["state"],
+                        "expiresAt": link["expires_at"],
+                    },
+                    enrollment_token=link["enrollment_token"],
+                )
+                return
+            if route.path == "/api/enrollment/complete":
+                self._complete_enrollment()
+                return
+            if route.path == "/api/login":
+                self._login(limiter)
+                return
+            account = self._authenticate(require_csrf=True)
+            if account is None:
+                return
+            try:
+                body = self._read_json()
+                if route.path == "/api/logout":
+                    application.logout(self._cookie(SESSION_COOKIE))
+                    self._json(200, {"status": "signed_out"}, clear=True)
+                    return
+                if route.path == "/api/chat/send":
+                    result = application.send_chat(
+                        account,
+                        message=_required_string(body, "message"),
+                        idempotency_key=_optional_string(
+                            body,
+                            "idempotencyKey",
+                        ),
+                    )
+                    self._json(
+                        202,
+                        {
+                            "status": result.status,
+                            "runId": result.run_id,
+                        },
+                    )
+                    return
+                self._json(404, {"error": {"code": "NOT_FOUND"}})
+            except Exception as exc:
+                self._handle_error(exc)
+
+        def _complete_enrollment(self) -> None:
+            enrollment = self._cookie(ENROLLMENT_COOKIE)
+            if not enrollment:
+                self._json(
+                    409,
+                    {"error": {"code": "ENROLLMENT_NOT_STARTED"}},
+                )
+                return
+            try:
+                body = self._read_json()
+                result = application.complete_enrollment(
+                    enrollment_token=enrollment,
+                    username=_required_string(body, "username"),
+                    password=_required_string(body, "password"),
+                )
+            except Exception as exc:
+                self._handle_error(exc)
+                return
+            self._json(
+                201,
+                {
+                    "authenticated": True,
+                    "account": result["account"],
+                },
+                session=result["session"],
+                clear_enrollment=True,
+            )
+
+        def _login(self, limiter: _RateLimiter) -> None:
+            key = self.client_address[0]
+            if not limiter.allowed(key):
+                self._json(
+                    429,
+                    {"error": {"code": "LOGIN_RATE_LIMITED"}},
+                )
+                return
+            try:
+                body = self._read_json()
+                result = application.login(
+                    username=_required_string(body, "username"),
+                    password=_required_string(body, "password"),
+                )
+            except Exception as exc:
+                limiter.fail(key)
+                self._handle_error(exc)
+                return
+            if result is None:
+                limiter.fail(key)
+                self._json(
+                    401,
+                    {"error": {"code": "LOGIN_FAILED"}},
+                )
+                return
+            limiter.success(key)
+            self._json(
+                200,
+                {
+                    "authenticated": True,
+                    "account": result["account"],
+                },
+                session=result["session"],
+            )
+
+        def _session(self, *, require_csrf: bool = False) -> dict | None:
+            csrf_token = (
+                self.headers.get("X-AgentBridge-CSRF")
+                if require_csrf
+                else None
+            )
+            if require_csrf and not csrf_token:
+                return None
+            return application.session(
+                self._cookie(SESSION_COOKIE),
+                csrf_token=csrf_token,
+            )
+
+        def _authenticate(self, *, require_csrf: bool = False) -> dict | None:
+            account = self._session(require_csrf=require_csrf)
+            if account is None:
+                self._json(
+                    401,
+                    {"error": {"code": "AUTHENTICATION_REQUIRED"}},
+                )
+            return account
+
+        def _event_stream(
+            self,
+            account: dict,
+            *,
+            after_event_id: str | None,
+        ) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self._security_headers()
+            self.end_headers()
+            cursor = after_event_id
+            deadline = time.monotonic() + 25
+            try:
+                while time.monotonic() < deadline:
+                    events = application.list_events(
+                        account,
+                        after_event_id=cursor,
+                        limit=100,
+                    )
+                    for event in events:
+                        cursor = event["event_id"]
+                        payload = json.dumps(
+                            event,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        self.wfile.write(
+                            (
+                                f"id: {cursor}\n"
+                                "event: task\n"
+                                f"data: {payload}\n\n"
+                            ).encode("utf-8")
+                        )
+                    if events:
+                        self.wfile.flush()
+                    time.sleep(1)
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _read_json(self) -> dict[str, Any]:
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+            except ValueError as exc:
+                raise ValueError("invalid request body length") from exc
+            if length <= 0 or length > MAX_BODY_BYTES:
+                raise ValueError("invalid request body length")
+            try:
+                value = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ValueError("request body must be valid JSON") from exc
+            if not isinstance(value, dict):
+                raise ValueError("request body must be a JSON object")
+            return value
+
+        def _cookie(self, name: str) -> str | None:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie") or "")
+            except Exception:
+                return None
+            morsel = cookie.get(name)
+            return morsel.value if morsel else None
+
+        def _host_allowed(self) -> bool:
+            host = (self.headers.get("Host") or "").split(":", 1)[0].lower()
+            return host == allowed_host
+
+        def _origin_allowed(self, expected_origin: str) -> bool:
+            return (self.headers.get("Origin") or "").lower() == expected_origin
+
+        def _static(self, relative: str) -> None:
+            if (
+                not relative
+                or ".." in relative
+                or relative.startswith(("/", "\\"))
+            ):
+                self._json(404, {"error": {"code": "NOT_FOUND"}})
+                return
+            path = (STATIC_ROOT / relative).resolve()
+            try:
+                path.relative_to(STATIC_ROOT.resolve())
+                body = path.read_bytes()
+            except (ValueError, OSError):
+                self._json(404, {"error": {"code": "NOT_FOUND"}})
+                return
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                mimetypes.guess_type(path.name)[0]
+                or "application/octet-stream",
+            )
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Cache-Control",
+                "no-store" if path.name == "index.html" else "public, max-age=300",
+            )
+            self._security_headers()
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(
+            self,
+            status: int,
+            payload: dict,
+            *,
+            session: dict | None = None,
+            enrollment_token: str | None = None,
+            clear: bool = False,
+            clear_enrollment: bool = False,
+        ) -> None:
+            body = json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            if session is not None:
+                self._set_cookie(
+                    SESSION_COOKIE,
+                    session["session_token"],
+                    http_only=True,
+                    max_age=30 * 24 * 3600,
+                )
+                self._set_cookie(
+                    CSRF_COOKIE,
+                    session["csrf_token"],
+                    http_only=False,
+                    max_age=30 * 24 * 3600,
+                )
+            if enrollment_token is not None:
+                self._set_cookie(
+                    ENROLLMENT_COOKIE,
+                    enrollment_token,
+                    http_only=True,
+                    max_age=15 * 60,
+                )
+            if clear:
+                self._set_cookie(SESSION_COOKIE, "", http_only=True, max_age=0)
+                self._set_cookie(CSRF_COOKIE, "", http_only=False, max_age=0)
+            if clear_enrollment:
+                self._set_cookie(
+                    ENROLLMENT_COOKIE,
+                    "",
+                    http_only=True,
+                    max_age=0,
+                )
+            self._security_headers()
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _set_cookie(
+            self,
+            name: str,
+            value: str,
+            *,
+            http_only: bool,
+            max_age: int,
+        ) -> None:
+            parts = [
+                f"{name}={value}",
+                "Path=/",
+                f"Max-Age={max_age}",
+                "SameSite=Strict",
+            ]
+            if config.secure_cookie:
+                parts.append("Secure")
+            if http_only:
+                parts.append("HttpOnly")
+            self.send_header("Set-Cookie", "; ".join(parts))
+
+        def _security_headers(self) -> None:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Permissions-Policy",
+                "camera=(), microphone=(), geolocation=()",
+            )
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+                "form-action 'self'; img-src 'self' data:; "
+                "style-src 'self'; script-src 'self'; connect-src 'self'",
+            )
+            if config.secure_cookie:
+                self.send_header(
+                    "Strict-Transport-Security",
+                    "max-age=31536000",
+                )
+
+        def _handle_error(self, exc: Exception) -> None:
+            if isinstance(exc, GatewayRequestError):
+                status = (
+                    503
+                    if exc.code.startswith(("GATEWAY_", "WEBSOCKET_"))
+                    else 502
+                )
+                self._json(
+                    status,
+                    {
+                        "error": {
+                            "code": exc.code,
+                            "message": str(exc),
+                        }
+                    },
+                )
+                return
+            if isinstance(exc, TaskNotFound):
+                self._json(404, {"error": {"code": "TASK_NOT_FOUND"}})
+                return
+            if isinstance(exc, WorkspaceConflictError):
+                self._json(
+                    409,
+                    {
+                        "error": {
+                            "code": "WORKSPACE_CONFLICT",
+                            "message": str(exc),
+                        }
+                    },
+                )
+                return
+            if isinstance(exc, WorkspaceLinkError):
+                self._json(
+                    409,
+                    {
+                        "error": {
+                            "code": "WORKSPACE_LINK_INVALID",
+                            "message": str(exc),
+                        }
+                    },
+                )
+                return
+            if isinstance(exc, (ValueError, PermissionError)):
+                self._json(
+                    400 if isinstance(exc, ValueError) else 403,
+                    {
+                        "error": {
+                            "code": (
+                                "INVALID_REQUEST"
+                                if isinstance(exc, ValueError)
+                                else "FORBIDDEN"
+                            ),
+                            "message": str(exc),
+                        }
+                    },
+                )
+                return
+            self._json(
+                500,
+                {"error": {"code": "WORKSPACE_INTERNAL_ERROR"}},
+            )
+
+    server = WorkspaceHTTPServer(
+        (config.host, config.port),
+        WorkspaceRequestHandler,
+    )
+    if config.tls_cert and config.tls_key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(config.tls_cert, config.tls_key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    return server
+
+
+def _required_string(body: dict, name: str) -> str:
+    value = body.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} is required")
+    return value.strip()
+
+
+def _optional_string(body: dict, name: str) -> str | None:
+    value = body.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value.strip() or None
+
+
+def _query_value(query: dict[str, list[str]], name: str) -> str | None:
+    values = query.get(name)
+    return values[0].strip() if values and values[0].strip() else None
+
+
+def _query_int(
+    query: dict[str, list[str]],
+    name: str,
+    default: int,
+) -> int:
+    value = _query_value(query, name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+
+
+def _query_bool(
+    query: dict[str, list[str]],
+    name: str,
+    default: bool,
+) -> bool:
+    value = _query_value(query, name)
+    if value is None:
+        return default
+    if value.lower() in {"1", "true", "yes"}:
+        return True
+    if value.lower() in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")

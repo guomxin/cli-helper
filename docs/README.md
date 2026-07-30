@@ -18,6 +18,8 @@
 - [受控写模型](./governed-write-model.md)：写操作的信任边界、状态机和验收要求。
 - [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)：独立用户网页端、
   Telegram、微信之间的任务延续、手机确认与状态通知目标设计。
+- [Agent Workspace 网页端](./agent-workspace.md)：二期网页客户端、一次性身份配对、
+  OpenClaw Gateway BFF、会话安全和部署验收。
 - [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)：聊天身份到
   AgentBridge Token 和用户会话的隔离。
 - [会话稳定性与多用户隔离验收](./session-stability-and-isolation-acceptance.md)：

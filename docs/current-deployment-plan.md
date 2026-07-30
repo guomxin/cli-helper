@@ -9,9 +9,9 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.3.0 为当前发布版本。
-> 中心端当前发布 59 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
-> 插件另提供 1 个身份状态工具；4 个任务治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.0 为当前代码版本。
+> 中心端当前定义 61 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
+> 插件另提供 1 个身份状态工具；6 个任务与 Workspace 治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
@@ -26,10 +26,11 @@
 - AgentBridge 通过中心 HTTP Session 和受控 Playwright Browser Worker 访问 OA；
 - 用户电脑不安装 Chrome 扩展、本地 Daemon 或 OA 连接器；
 - OpenClaw 通过 Streamable HTTPS MCP 调用 AgentBridge；
+- 普通用户可通过独立 Agent Workspace 网页端使用只读智能体对话和 Task Hub；
 - 登录、业务字段填写和写操作授权通过 AgentBridge 可信卡片完成；
 - Telegram 对三类 HTTPS 卡片使用原生 Web App 按钮，在应用内 WebView 中展示；
 - 当前 PoC 使用固定私网 IP、HTTPS 和专用内部 CA，不要求域名或公网证书；
-- 已部署服务不启用 `--allow-insecure-private-http`，8780/8782/8790 的明文 HTTP 均被拒绝。
+- 已部署服务不启用 `--allow-insecure-private-http`，8780/8782/8783/8790 的明文 HTTP 均被拒绝。
 
 当前目标服务器为 `10.10.50.213`：
 
@@ -38,6 +39,7 @@
 | AgentBridge MCP | `https://10.10.50.213:8790/mcp` | 用户电脑上的 OpenClaw |
 | 可信卡片服务 | `https://10.10.50.213:8780` | Telegram 应用内 WebView；普通浏览器仅作兼容入口 |
 | 管理控制台 | `https://10.10.50.213:8782` | 受信管理员与审计员浏览器 |
+| Agent Workspace | `https://10.10.50.213:8783` | 普通用户桌面或手机浏览器 |
 | OA | 由 `oa` 系统配置确定 | AgentBridge 中心 Worker |
 
 ## 2. 部署拓扑
@@ -52,6 +54,7 @@ flowchart LR
     subgraph S["公司内网 AgentBridge 服务器"]
         M["MCP 服务 :8790"]
         C["可信卡片服务 :8780"]
+        U["Agent Workspace :8783"]
         A["CentralCapabilityService"]
         R["Credential Broker"]
         W["每用户 HTTP Session / Browser Worker"]
@@ -63,7 +66,9 @@ flowchart LR
     O -->|"Streamable HTTPS + Bearer"| M
     O -.->|"原生 Web App 按钮"| B
     B -->|"认证 / 字段 / 授权卡片"| C
+    B -->|"普通用户智能体网页"| U
     M --> A
+    U --> A
     C --> R
     A --> W
     R --> W
@@ -1348,9 +1353,36 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   工具发布烟测和 OpenClaw Gateway 深度 RPC 检查通过；发布后辛国茂 OA 会话仍为 active；
 - 本轮没有执行 OA、泰华或语雀业务写入，也没有发起新的真实登录。
 
+## 15.33 2026-07-30 独立 Agent Workspace 二期
+
+- 新增独立普通用户网页端 `https://10.10.50.213:8783`，与 8782 管理控制台分离。
+  网页端提供本地账号登录、OpenClaw 只读对话、Task Hub 任务与时间线、关联端点和
+  待处理可信交互入口；
+- 首次注册通过 8 位一次性配对码完成。用户必须在已有可信 Telegram 或微信私聊发送
+  `/agentbridge link <code>`；AgentBridge 从该通道的 MCP Bearer 推导
+  `userSubject`，网页不能自行选择身份。普通退出只吊销浏览器 Session，不删除永久
+  账号关联；
+- 网页浏览器不持有 MCP Token 或 OpenClaw Gateway Token。BFF 在每次发送前签发
+  90 秒一次性凭证，通过插件私有 RPC `agentbridge.workspace.bind` 固定正确 MCP
+  身份，再调用正式 `chat.send`；
+- OpenClaw 插件升级为 `0.4.0`，新增网页配对命令和 Gateway 绑定方法。网页 Session
+  只注册 `readOnlyHint=true` 的 AgentBridge 工具；Telegram 和微信的既有受治理写
+  工具与卡片链路不变；
+- OpenClaw Gateway 使用 `gateway.bind=lan`，同时保留本机
+  `127.0.0.1:18789` 和内网 `10.90.20.210:18789`。AgentBridge Linux 服务器通过
+  Token 和持久设备身份连接，首次连接需要在 OpenClaw 工作站批准一次设备配对；
+- 自动化覆盖双用户任务/事件/端点隔离、错误身份兑换、一次性凭证重放、Session
+  超时、CSRF、密码与 Token 哈希、Gateway Token 不进入命令行、网页只读工具范围和
+  插件 Gateway Method；
+- Playwright 已完成桌面 `1440x900` 和移动端 `390x844` 的登录、对话、任务列表、
+  任务详情与返回路径验收，浏览器控制台 0 错误。内网正式部署和一次真实网页账号
+  绑定仍待本节发布收尾后补记；
+- 本轮实现与本地验收没有执行 OA、泰华或语雀业务写入。
+
 ## 16. 后续演进顺序
 
-1. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
-2. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
-3. 完成 24 小时双用户保活观察，并使用短期临时 Token 补做一次真实吊销隔离演练；
-4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。
+1. 完成 Agent Workspace 内网真实账号绑定和只读任务验收；
+2. 实现 Interaction Claim、首选确认端和“网页发起、手机确认”三期样板；
+3. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
+4. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
+5. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA 迁移到企业 PKI。

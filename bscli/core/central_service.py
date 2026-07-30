@@ -181,6 +181,7 @@ from bscli.core.write_authorizations import (
     WriteAuthorizationStateError,
     WriteAuthorizationStore,
 )
+from bscli.workspace.stores import WorkspaceStore
 
 
 WorkerFactory = Callable[[dict, object], object]
@@ -446,6 +447,7 @@ class CentralCapabilityService:
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
         self.tasks = TaskHubStore(self.db_path)
+        self.workspace = WorkspaceStore(self.db_path)
         self.governance_policies = GovernancePolicyStore(self.db_path)
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
@@ -1092,6 +1094,111 @@ class CentralCapabilityService:
             "count": len(tasks),
             "endpoint": endpoint_response(endpoint),
             "tasks": [task_response(task) for task in tasks],
+        }
+
+    def confirm_workspace_link(
+        self,
+        *,
+        user_subject: str,
+        token_id: str,
+        agent_host: str,
+        endpoint_key: str,
+        client_type: str,
+        external_subject: str,
+        conversation_ref: str,
+        link_code: str,
+        account_id: str | None = None,
+        label: str | None = None,
+        route: dict | None = None,
+    ) -> dict:
+        endpoint, _reused = self.tasks.ensure_endpoint(
+            user_subject=user_subject,
+            token_id=token_id,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            account_id=account_id,
+            conversation_ref=conversation_ref,
+            label=label,
+            route=route,
+            capabilities=["workspace.link.confirm"],
+        )
+        link = self.workspace.confirm_link(
+            link_code=link_code,
+            user_subject=user_subject,
+            approver_endpoint_id=endpoint["endpoint_id"],
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "link": {
+                "challengeId": link["challenge_id"],
+                "state": link["state"],
+                "expiresAt": link["expires_at"],
+            },
+        }
+
+    def register_workspace_endpoint(self, *, account_id: str) -> dict:
+        account = self.workspace.get_account(account_id)
+        endpoint, reused = self.tasks.ensure_endpoint(
+            user_subject=account["user_subject"],
+            token_id=f"workspace-account:{account_id}",
+            agent_host="openclaw",
+            endpoint_key=account["endpoint_key"],
+            client_type="web",
+            external_subject=account_id,
+            account_id=account_id,
+            conversation_ref=account["openclaw_session_key"],
+            label=f"Agent Workspace: {account['username']}",
+            route={},
+            capabilities=[
+                "workspace.chat",
+                "workspace.task.read",
+                "workspace.interaction.open",
+            ],
+        )
+        account = self.workspace.attach_endpoint(
+            account_id=account_id,
+            endpoint_id=endpoint["endpoint_id"],
+        )
+        return {
+            "account": account,
+            "endpoint": endpoint,
+            "reused": reused,
+        }
+
+    def redeem_workspace_gateway_grant(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        session_key: str,
+        grant: str,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        if endpoint["client_type"] != "web":
+            raise PermissionError(
+                "workspace gateway binding requires a web endpoint"
+            )
+        redeemed = self.workspace.redeem_gateway_grant(
+            grant=grant,
+            user_subject=user_subject,
+            endpoint_key=endpoint_key,
+            session_key=session_key,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "binding": {
+                "endpointKey": redeemed["endpoint_key"],
+                "sessionKey": redeemed["session_key"],
+            },
         }
 
     def interaction_required_scopes(

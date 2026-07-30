@@ -14,7 +14,7 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.3.0";
+const PLUGIN_VERSION = "0.4.0";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -223,6 +223,14 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
         };
       }
       const action = String(context.args || "status").trim().toLowerCase();
+      if (action.startsWith("link ")) {
+        return confirmWorkspaceLink({
+          identityRouter,
+          context,
+          sessionKey,
+          linkCode: action.slice(5),
+        });
+      }
       if (action === "pending") {
         const interactions = coordinator.pendingForSession(sessionKey);
         const presentation = presentationForRecords(
@@ -239,7 +247,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       }
       if (action !== "status") {
         return {
-          text: "用法：/agentbridge status 或 /agentbridge pending",
+          text: "用法：/agentbridge status、/agentbridge pending 或 /agentbridge link 配对码",
         };
       }
       const status = coordinator.statusForSession(sessionKey);
@@ -255,10 +263,138 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     },
   });
 
+  if (typeof api.registerGatewayMethod === "function") {
+    api.registerGatewayMethod(
+      "agentbridge.workspace.bind",
+      (options) =>
+        bindWorkspaceGatewaySession({
+          ...options,
+          identityRouter,
+          logger: api.logger,
+        }),
+      { scope: "operator.write" },
+    );
+  } else {
+    api.logger.warn(
+      "AgentBridge workspace binding is unavailable because this OpenClaw host does not expose registerGatewayMethod",
+    );
+  }
+
   api.logger.info(
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+async function confirmWorkspaceLink({
+  identityRouter,
+  context,
+  sessionKey,
+  linkCode,
+}) {
+  const code = String(linkCode || "")
+    .trim()
+    .toUpperCase()
+    .replaceAll("-", "");
+  if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) {
+    return { text: "配对码格式无效，请输入网页显示的 8 位配对码。" };
+  }
+  const resolved = identityRouter.resolvePinnedSession({
+    sessionKey,
+    channel: context.channelId || context.channel,
+    accountId: context.accountId,
+  });
+  if (!resolved?.bound) {
+    return {
+      text: "当前聊天身份尚未绑定 AgentBridge，不能确认网页端配对。",
+    };
+  }
+  const binding = resolved.binding;
+  try {
+    await resolved.client.callTool(
+      "agentbridge_host_workspace_link_confirm",
+      {
+        agent_host: "openclaw",
+        endpoint_key: binding.key,
+        client_type: binding.channel,
+        external_subject: binding.senderId,
+        account_id: binding.accountId,
+        conversation_ref: sessionKey,
+        label: binding.label,
+        route: {
+          channel: binding.channel,
+          to: binding.senderId,
+          accountId: binding.accountId,
+        },
+        link_code: code,
+      },
+      { meta: hostContextMeta() },
+    );
+  } catch (error) {
+    return {
+      text: `网页端配对未完成（${safeErrorCode(error)}）。请确认配对码仍在有效期内。`,
+    };
+  }
+  return {
+    text: "网页端身份配对已确认。请返回 Agent Workspace 设置登录账号和密码。",
+  };
+}
+
+async function bindWorkspaceGatewaySession({
+  params,
+  respond,
+  identityRouter,
+  logger,
+}) {
+  const sessionKey = safeText(params?.sessionKey, 1024);
+  const endpointKey = safeText(params?.endpointKey, 768);
+  const grant = safeText(params?.grant, 256);
+  if (
+    !sessionKey ||
+    !endpointKey ||
+    !grant ||
+    !isPrivateSessionKey(sessionKey)
+  ) {
+    respond(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "Invalid AgentBridge workspace binding request.",
+    });
+    return;
+  }
+  for (const { binding, client } of identityRouter.configuredIdentities()) {
+    try {
+      const result = await client.callTool(
+        "agentbridge_host_workspace_session_bind",
+        {
+          agent_host: "openclaw",
+          endpoint_key: endpointKey,
+          session_key: sessionKey,
+          grant,
+        },
+        { meta: hostContextMeta() },
+      );
+      if (
+        result?.status === "succeeded" &&
+        identityRouter.restoreSessionBinding({
+          sessionKey,
+          bindingKey: binding.key,
+        })
+      ) {
+        respond(true, {
+          status: "bound",
+          sessionKey,
+        });
+        return;
+      }
+    } catch {
+      // A one-use grant is intentionally valid for only one configured identity.
+    }
+  }
+  logger.warn("AgentBridge rejected a workspace gateway binding");
+  respond(false, undefined, {
+    code: "FORBIDDEN",
+    message: "AgentBridge workspace identity binding was rejected.",
+  });
 }
 
 async function recoverHostTasks({ coordinator, identityRouter, logger }) {

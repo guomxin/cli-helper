@@ -104,6 +104,12 @@ from bscli.mcp.presentation import (
     package_interaction_result,
     server_profile_json,
 )
+from bscli.workspace.application import WorkspaceApplication
+from bscli.workspace.gateway import OpenClawGatewayClient
+from bscli.workspace.server import (
+    WorkspaceServerConfig,
+    create_workspace_http_server,
+)
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
@@ -2112,6 +2118,83 @@ def create_central_mcp_server(
             limit=limit,
         )
 
+    @mcp.tool(
+        name="agentbridge_host_workspace_link_confirm",
+        title="Confirm Agent Workspace Identity Link",
+        description=(
+            "Host-private identity linking control. The authenticated MCP "
+            "identity, not model-supplied text, owns the resulting web account."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_workspace_link_confirm(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        client_type: Annotated[str, Field(min_length=1, max_length=80)],
+        external_subject: Annotated[str, Field(min_length=1, max_length=768)],
+        conversation_ref: Annotated[str, Field(min_length=1, max_length=1024)],
+        link_code: Annotated[str, Field(min_length=8, max_length=16)],
+        account_id: Annotated[str | None, Field(max_length=512)] = None,
+        label: Annotated[str | None, Field(max_length=120)] = None,
+        route: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.confirm_workspace_link,
+            user_subject=identity["user_subject"],
+            token_id=identity["token_id"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            account_id=account_id,
+            conversation_ref=conversation_ref,
+            link_code=link_code,
+            label=label,
+            route=route,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_workspace_session_bind",
+        title="Bind an Agent Workspace Gateway Session",
+        description=(
+            "Host-private one-use proof that binds a web chat session to the "
+            "authenticated AgentBridge identity."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_workspace_session_bind(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        session_key: Annotated[str, Field(min_length=16, max_length=1024)],
+        grant: Annotated[str, Field(min_length=32, max_length=256)],
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.redeem_workspace_gateway_grant,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            session_key=session_key,
+            grant=grant,
+        )
+
     return mcp
 
 
@@ -2122,6 +2205,8 @@ def serve_central_mcp(
     mcp_config: CentralMcpServerConfig,
     auth_config: AuthServerConfig,
     admin_config: AdminServerConfig | None = None,
+    workspace_config: WorkspaceServerConfig | None = None,
+    workspace_gateway: OpenClawGatewayClient | None = None,
     login_timeout_seconds: float = 45,
     keepalive_interval_seconds: float = 0,
     keepalive_activity_lease_seconds: float = 604_800,
@@ -2202,6 +2287,22 @@ def serve_central_mcp(
             name="agentbridge-admin",
             daemon=True,
         )
+    workspace_server = None
+    workspace_thread = None
+    if workspace_config is not None:
+        workspace_server = create_workspace_http_server(
+            config=workspace_config,
+            application=WorkspaceApplication(
+                service=service,
+                gateway=workspace_gateway,
+            ),
+        )
+        workspace_thread = threading.Thread(
+            target=workspace_server.serve_forever,
+            kwargs={"poll_interval": 0.25},
+            name="agentbridge-workspace",
+            daemon=True,
+        )
     auth_thread = threading.Thread(
         target=auth_server.serve_forever,
         kwargs={"poll_interval": 0.25},
@@ -2216,6 +2317,8 @@ def serve_central_mcp(
     auth_thread.start()
     if admin_thread is not None:
         admin_thread.start()
+    if workspace_thread is not None:
+        workspace_thread.start()
     keepalive.start()
     try:
         mcp = create_central_mcp_server(
@@ -2240,6 +2343,11 @@ def serve_central_mcp(
             admin_server.server_close()
         if admin_thread is not None:
             admin_thread.join(timeout=5)
+        if workspace_server is not None:
+            workspace_server.shutdown()
+            workspace_server.server_close()
+        if workspace_thread is not None:
+            workspace_thread.join(timeout=5)
         auth_server.shutdown()
         auth_server.server_close()
         auth_thread.join(timeout=5)

@@ -25,9 +25,14 @@ export function createAgentBridgeProxyTools({
   if (!identity.bound) {
     return [statusTool];
   }
+  const catalog = isWorkspaceSession(context.sessionKey)
+    ? AGENTBRIDGE_TOOL_CATALOG.filter(
+        (descriptor) => descriptor.annotations?.readOnlyHint === true,
+      )
+    : AGENTBRIDGE_TOOL_CATALOG;
   return [
     statusTool,
-    ...AGENTBRIDGE_TOOL_CATALOG.map((descriptor) =>
+    ...catalog.map((descriptor) =>
       createProxyTool({
         descriptor,
         identity,
@@ -39,6 +44,13 @@ export function createAgentBridgeProxyTools({
       }),
     ),
   ];
+}
+
+function isWorkspaceSession(sessionKey) {
+  return (
+    typeof sessionKey === "string" &&
+    /^agent:[^:]+:agentbridge-workspace:direct:/i.test(sessionKey.trim())
+  );
 }
 
 function createIdentityStatusTool(identity) {

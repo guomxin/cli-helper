@@ -641,6 +641,63 @@ class TaskHubStore:
             rows = connection.execute(query, parameters).fetchall()
         return [_task_from_row(row) for row in rows]
 
+    def list_endpoints(
+        self,
+        *,
+        user_subject: str,
+        active_only: bool = True,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        query = "SELECT * FROM client_endpoints WHERE user_subject = ?"
+        parameters: list[Any] = [user_subject]
+        if active_only:
+            query += " AND state = 'active'"
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [_endpoint_from_row(row) for row in rows]
+
+    def list_user_events(
+        self,
+        *,
+        user_subject: str,
+        after_event_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            parameters: list[Any] = [user_subject]
+            query = "SELECT * FROM task_events WHERE user_subject = ?"
+            if after_event_id:
+                cursor = connection.execute(
+                    """
+                    SELECT created_at, rowid FROM task_events
+                    WHERE event_id = ? AND user_subject = ?
+                    """,
+                    (after_event_id, user_subject),
+                ).fetchone()
+                if cursor is None:
+                    raise TaskNotFound(
+                        f"task event not found: {after_event_id}"
+                    )
+                query += (
+                    " AND (created_at > ? OR "
+                    "(created_at = ? AND rowid > ?))"
+                )
+                parameters.extend(
+                    [
+                        cursor["created_at"],
+                        cursor["created_at"],
+                        cursor["rowid"],
+                    ]
+                )
+            query += " ORDER BY created_at, rowid LIMIT ?"
+            parameters.append(limit)
+            rows = connection.execute(query, parameters).fetchall()
+        return [_event_from_row(row) for row in rows]
+
     def list_events(
         self,
         *,

@@ -22,6 +22,7 @@ include = ["bscli*"]
 [tool.setuptools.package-data]
 "bscli.mcp" = ["static/*.html"]
 "bscli.admin" = ["static/*.html", "static/*.css", "static/*.js"]
+"bscli.workspace" = ["static/*.html", "static/*.css", "static/*.js", "*.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

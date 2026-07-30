@@ -4,7 +4,8 @@ This native OpenClaw plugin recognizes `agentbridge.interaction.v1` envelopes
 returned by AgentBridge MCP tools and renders trusted card buttons in private
 conversations.
 
-Version 0.3 also supports multiple messaging identities in one OpenClaw Gateway. It
+Version 0.4 supports multiple messaging identities and the independent Agent
+Workspace in one OpenClaw Gateway. It
 registers the complete AgentBridge MCP catalog as native OpenClaw tools and
 selects an environment-backed Bearer token from trusted runtime sender context,
 never from model tool arguments. See
@@ -51,7 +52,7 @@ Security behavior is intentionally fail closed:
   private channel without involving the model; an opaque heartbeat is retained
   only as a delivery fallback.
 
-Version 0.3 adds the first persistent Task Hub adapter. The plugin lazily creates
+Version 0.3 added the first persistent Task Hub adapter. The plugin lazily creates
 one server-owned task when an AgentBridge business tool is first called, reuses
 the same task for tools in the same OpenClaw run, and attaches the opaque task
 reference through host-private MCP metadata rather than model arguments.
@@ -60,6 +61,15 @@ call. On `gateway_start`, each configured identity independently restores its
 own pending interactions, original private route, polling, and card delivery
 from AgentBridge. Task coordination failures are logged but do not replace a
 valid legacy-system tool result.
+
+Version 0.4 adds two host-only web integration controls. The
+`/agentbridge link <code>` command confirms a short-lived Agent Workspace
+enrollment through the already trusted Telegram or WeChat identity. The
+`agentbridge.workspace.bind` Gateway method redeems a one-use server grant and
+pins the synthetic web session to the only MCP identity that can redeem it.
+Agent Workspace sessions receive only catalog entries whose MCP annotations
+declare `readOnlyHint=true`; messaging sessions keep their existing governed
+write tools.
 
 ## Local installation
 
@@ -95,7 +105,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.3.0, ...)
+AgentBridge interaction plugin registered (version=0.4.0, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
