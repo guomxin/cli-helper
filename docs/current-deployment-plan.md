@@ -1400,6 +1400,10 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 回归门禁通过 Python `436 passed, 3 skipped, 194 subtests passed`、OpenClaw
   `83/83`、`compileall`、`pip check` 和 npm pack dry-run。本轮没有执行 OA、泰华
   或语雀业务写入。
+- 提交 `125f4f7` 已推送 GitHub，Linux Release `125f4f77bbcd` 已部署。OpenClaw
+  Gateway 完成单次重启后，插件 `0.4.2` 为 `loaded`，深度 RPC 和 61 个 MCP 工具
+  发布烟测通过。网页账号原有 5 条误标 `active` 的任务均已迁移为 `succeeded`，
+  且完成时间与对应成功 Operation 一致。
 
 ## 16. 后续演进顺序
 

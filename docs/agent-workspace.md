@@ -181,8 +181,10 @@ openclaw devices approve <requestId> --json
 4. OpenClaw 插件 `0.4.2` 和 `agentbridge.workspace.bind` 已加载；
 5. Telegram、微信通道在 Gateway 重启后均保持运行。
 
-仍需用户参与完成：
+真实用户验收已完成：
 
-1. 使用现有可信聊天身份完成一个网页账号绑定；
-2. 网页发起只读 OA 或泰华查询；
-3. 核对网页与原聊天端使用同一 `userSubject` 和下游 Session。
+1. 使用现有可信 Telegram 身份完成网页账号绑定；
+2. 网页成功发起只读 OA 与泰华查询；
+3. 网页任务、原聊天端和下游 Session 按同一 `userSubject` 关联；
+4. 插件 `0.4.2` 已验证 Gateway 身份绑定可被 Agent Runtime 复用；
+5. 成功结束的网页任务显示为“已完成”，不再滞留为“进行中”。
