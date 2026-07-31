@@ -1453,6 +1453,27 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `0.0.0.0:18789`；深度 RPC、配置审计和插件运行时检查通过，日志确认
   `agentbridge-interactions` `0.4.4`、Telegram 与微信提供器均已启动。
 
+## 15.37 2026-07-31 多端任务与字段卡同步一期
+
+- 修复 Workspace 会话错误复用 Telegram `endpoint_key` 的问题。MCP 身份绑定与客户端
+  端点绑定现在分别管理，网页任务使用自身 `workspace:*` 端点，且中央服务禁止任务
+  建立过程覆盖已注册的 Web 端点资料。
+- Task Hub 在任务建立时为同一 `userSubject` 的已绑定端登记关键事件订阅。任务建立、
+  执行中、等待用户、完成、失败、取消、过期和结果未知会同步到其他端；具备
+  `trusted_interaction` 能力的端收到可操作卡片，其他端只收到状态。
+- 业务字段卡与执行授权卡均按 Endpoint 创建独立 Presentation 和 Card Session。
+  多端同时打开不会互相覆盖 CSRF；任一端首先完成后，其他端只显示已处理状态，
+  原业务动作仍由原 OpenClaw 会话唯一续办。
+- 发布门禁通过 Python `458 passed, 3 skipped`、OpenClaw `87/87`、`compileall`、
+  `pip check`、npm pack dry-run 和 `git diff --check`。功能提交 `08b8ee1` 已推送，
+  Linux Release `08b8ee158bf0` 已部署，65 个 MCP 工具和 OA 会话复用冒烟正常。
+- 线上旧记录 `telegram:*:7052061588` 的 `conversation_ref` 已从 Workspace 会话
+  精确恢复为 `agent:main:telegram:direct:7052061588`。Gateway 只重启一次，深度
+  RPC 正常，PID `25504` 加载插件 `0.4.5`，Telegram 与微信提供器均完成启动。
+- 重启后的微信提供器日志仍出现访问微信上游 `getUpdates` 的网络超时；该问题属于
+  当前外网连通性，不是本次 Task Hub 或字段卡改动造成。此次未执行任何 OA、泰华
+  或语雀业务写入。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
