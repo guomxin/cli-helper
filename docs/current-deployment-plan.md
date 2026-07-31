@@ -1618,6 +1618,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   握手前重试、发送后不重试、单连接预清理和异常终止帧校验。完整门禁通过 Python
   `466 passed, 3 skipped, 194 subtests passed`、OpenClaw 插件 `92/92`、Node 语法和
   npm pack dry-run；未调用 OA、泰华或语雀业务写能力。
+- 提交 `d2c469a` 已推送，Linux Release `d2c469a83bd4` 已部署。systemd 重启、依赖
+  检查、Release 冒烟和辛国茂 OA 会话只读检查均通过，部署过程没有重启 OpenClaw。
+- 通过真实 Agent Workspace 连续发送“只回复 READY，不调用任何工具”和
+  “只回复 READY2，不调用任何工具”，两次均形成对应终态回复。第一轮日志确认
+  `agentbridge.workspace.bind` 与 `chat.send` 使用相同连接，分别耗时 433 ms 和
+  76 ms；两轮模型请求分别约 2.46 秒和 1.89 秒。AgentBridge 日志没有 Gateway
+  失败或自动重试，未生成业务应用卡，也未调用任何 AgentBridge/OA 工具；四条用户与
+  助手文本按序同步到 Telegram。
 
 ## 16. 后续演进顺序
 
