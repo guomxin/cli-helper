@@ -1146,6 +1146,8 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn('api("/api/timeline?limit=240")', script)
         self.assertIn("openTimelineStream", script)
         self.assertIn("renderChatTimeline", script)
+        self.assertEqual(script.count("dismissTerminalLiveMessages();"), 2)
+        self.assertIn('classList.contains("failed")', script)
         self.assertIn("parseTimestampMilliseconds", script)
         self.assertIn(r"/^\d{10,13}$/", script)
         self.assertIn("state.taskCards.get(task.task_id)", script)

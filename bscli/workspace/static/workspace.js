@@ -270,6 +270,7 @@ async function loadChat() {
       state.timelineCursor,
       Number(timeline.cursor) || 0,
     );
+    dismissTerminalLiveMessages();
     await hydrateTaskCards({ render: false });
     renderChatTimeline();
     container.scrollTop = container.scrollHeight;
@@ -416,6 +417,7 @@ async function sendChat(event) {
 }
 
 async function executeChatMessage(message, form = $("#chat-form")) {
+  dismissTerminalLiveMessages();
   const idempotencyKey = crypto.randomUUID();
   const local = messageElement({ role: "user", text: message });
   setTimelineNode(local, {
@@ -684,6 +686,14 @@ function renderRunFailure(runId, text, canRetry, requestMessage) {
     live.actions.append(retry);
   }
   scrollChat();
+}
+
+function dismissTerminalLiveMessages() {
+  state.liveMessages.forEach((live, runId) => {
+    if (!live?.item?.classList.contains("failed")) return;
+    live.item.remove();
+    state.liveMessages.delete(runId);
+  });
 }
 
 function agentFailureMessage(value, safeToRetry, state) {
