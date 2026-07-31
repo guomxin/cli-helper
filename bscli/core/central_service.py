@@ -997,6 +997,20 @@ class CentralCapabilityService:
         notifications = []
         for delivery in deliveries:
             event = delivery["payload"]
+            if delivery["payload_type"] == "timeline_message":
+                notifications.append(
+                    {
+                        "deliveryId": delivery["delivery_id"],
+                        "attemptCount": delivery["attempt_count"],
+                        "task": None,
+                        "event": None,
+                        "deliveryMode": "timeline_message",
+                        "interaction": None,
+                        "message": _timeline_notification_message(event),
+                        "timeline": event,
+                    }
+                )
+                continue
             task = self.tasks.get_task(
                 delivery["task_id"],
                 user_subject=user_subject,
@@ -1182,6 +1196,60 @@ class CentralCapabilityService:
             "endpoint": endpoint_response(endpoint),
             "reused": {
                 "task": task_reused,
+                "endpoint": endpoint_reused,
+            },
+        }
+
+    def append_host_timeline_message(
+        self,
+        *,
+        user_subject: str,
+        token_id: str,
+        agent_host: str,
+        endpoint_key: str,
+        client_type: str,
+        external_subject: str,
+        conversation_ref: str,
+        message_key: str,
+        role: str,
+        text: str,
+        account_id: str | None = None,
+        label: str | None = None,
+        route: dict | None = None,
+        task_id: str | None = None,
+    ) -> dict:
+        endpoint, endpoint_reused = self.tasks.ensure_endpoint(
+            user_subject=user_subject,
+            token_id=token_id,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            account_id=account_id,
+            conversation_ref=conversation_ref,
+            label=label,
+            route=route,
+            capabilities=(
+                ["workspace.timeline.read"]
+                if client_type in {"web", "webchat"}
+                else ["direct_status", "timeline_message"]
+            ),
+        )
+        entry, entry_reused = self.tasks.append_timeline_message(
+            user_subject=user_subject,
+            source_endpoint_id=endpoint["endpoint_id"],
+            message_key=message_key,
+            role=role,
+            text=text,
+            task_id=task_id,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "entry": timeline_entry_response(entry),
+            "endpoint": endpoint_response(endpoint),
+            "reused": {
+                "entry": entry_reused,
                 "endpoint": endpoint_reused,
             },
         }
@@ -2803,6 +2871,33 @@ def endpoint_response(endpoint: dict) -> dict:
         "updatedAt": endpoint["updated_at"],
         "lastSeenAt": endpoint["last_seen_at"],
     }
+
+
+def timeline_entry_response(entry: dict) -> dict:
+    return {
+        "entryId": entry["entry_id"],
+        "sequence": entry["sequence"],
+        "entryType": entry["entry_type"],
+        "taskId": entry.get("task_id"),
+        "role": entry.get("role"),
+        "text": entry.get("text"),
+        "payload": entry.get("payload") or {},
+        "createdAt": entry["created_at"],
+    }
+
+
+def _timeline_notification_message(entry: dict) -> str:
+    source = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+    client_type = str(source.get("clientType") or "unknown")
+    source_label = {
+        "web": "网页端",
+        "webchat": "网页端",
+        "telegram": "Telegram",
+        "openclaw-weixin": "微信",
+    }.get(client_type, str(source.get("label") or "其他端"))
+    actor = "你" if entry.get("role") == "user" else "智能体"
+    text = str(entry.get("text") or "").strip()
+    return f"【{source_label} · {actor}】\n{text}"
 
 
 def _task_notification_message(task: dict, event: dict) -> str:

@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.4，多端执行授权展示一期已实现
+> 文档状态：Approved v0.5，多端执行授权和有序文本同步一期已实现
 >
 > 更新日期：2026-07-31
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.4、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.8、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace 和执行授权多端展示已进入代码与
@@ -12,7 +12,7 @@
 
 ## 0. 当前实施状态
 
-截至 2026-07-30，已实现：
+截至 2026-07-31，已实现：
 
 - 中心端持久化 `ClientEndpoint`、`AgentTask`、`TaskEvent`、
   `TaskSubscription`、`NotificationOutbox`；
@@ -35,13 +35,17 @@
 - 同一执行授权可为 Workspace、Telegram 和微信生成端点专属展示入口；
 - 任一可信端都可确认或取消，中心数据库事务只接受第一个有效决定；
 - OpenClaw Outbox 通知泵按端点主动投递卡片和状态，失败最多重试 5 次；
-- 原任务宿主仍是唯一续办者，旁端确认不会获得原宿主的写权限或重复执行。
+- 原任务宿主仍是唯一续办者，旁端确认不会获得原宿主的写权限或重复执行；
+- 用户和助手的非敏感文本写入按 `userSubject` 隔离的追加式时间线，并按中心序号
+  同步到 Workspace、Telegram 和微信；
+- 消息幂等键、Interaction 状态语义去重和任务终态保护共同防止重复卡片、重复文本
+  以及成功任务被旧交互重新打开。
 
 尚未实现：
 
 - 登录卡和字段卡的多端共同编辑；
 - 首选确认端及用户自助通知偏好；
-- 跨客户端继续对话和 OBO 执行委托。
+- 跨客户端共享同一个模型运行上下文和 OBO 执行委托。
 
 ## 1. 结论
 
@@ -112,7 +116,9 @@ interaction
 - 保持 AgentBridge 对其他 MCP 宿主开放，不把业务内核绑定到 OpenClaw。
 
 一期 Task Hub 只跟踪已经进入 AgentBridge 能力调用的任务。普通闲聊、与遗留系统
-无关的问答和 OpenClaw 自身管理任务仍只保存在 OpenClaw，不为了“统一”而全部复制。
+无关的问答和 OpenClaw 自身管理任务不会创建 AgentTask。为保证已绑定客户端的体验
+连续性，Task Hub 可以保存用户和助手的非敏感文本展示副本，但不复制系统提示、工具
+内部消息、完整 Transcript 或模型推理上下文。
 
 ### 3.2 非目标
 
@@ -132,7 +138,7 @@ interaction
 | 状态域 | 权威组件 | 主键 | 保存内容 | 不保存 |
 | --- | --- | --- | --- | --- |
 | 模型对话 | OpenClaw | `sessionKey` / transcript reference | 用户消息、模型回复、工具调用上下文 | AgentBridge 凭据、Cookie、完整可信字段 |
-| 智能体任务 | Task Hub | `taskId` | 任务标题、阶段、当前操作/交互引用、订阅端、非敏感摘要 | 完整模型历史、密码、Cookie |
+| 智能体任务与展示时间线 | Task Hub | `taskId` / `sequence` | 任务标题、阶段、当前操作/交互引用、订阅端、非敏感摘要、用户/助手文本展示副本 | 系统提示、工具内部消息、完整模型历史、密码、Cookie |
 | 业务操作 | AgentBridge | `operationId` / `interactionId` | 能力调用、幂等、卡片状态、冻结计划、执行与回读 | 聊天渠道路由、完整聊天记录 |
 
 三者的关系是：
@@ -356,7 +362,9 @@ Token 还应记录 `clientId`、`clientType` 和 `audience`，便于审计和独
 | `version` | 乐观并发版本 |
 | `createdAt` / `updatedAt` / `finishedAt` | 生命周期时间 |
 
-Task Hub 不保存完整模型提示、业务字段卡提交值、冻结计划、Cookie 或密码。
+Task Hub 不保存完整模型提示、系统消息、工具参数/结果、业务字段卡提交值、冻结计划、
+Cookie 或密码。跨端文本时间线只允许 `user` 和 `assistant` 两种角色，并按
+`userSubject + dedupeKey` 幂等。
 
 ### 7.2 状态机
 
@@ -382,7 +390,9 @@ stateDiagram-v2
 
 任务状态是面向用户的聚合状态，不能覆盖 AgentBridge Operation 的权威状态。
 如果业务操作为 `outcome_unknown`，任务必须同步进入 `outcome_unknown`，不能因
-其他客户端重试而回到 `running`。
+其他客户端重试而回到 `running`。`succeeded`、`failed`、`outcome_unknown`、
+`canceled` 和 `expired` 均为不可被旧 Interaction 观测回退的终态；同一 Interaction
+从 `pending` 到 `processing` 仍属于一个“等待用户”语义事件，不重复投递卡片。
 
 ### 7.3 创建和关联规则
 
@@ -615,6 +625,10 @@ delivery -> endpoint-specific route
 跨端继续时，可以创建新的 OpenClaw Session，并注入经过裁剪的任务摘要。后续在
 OpenClaw 正式支持安全的跨端 Session/Thread 绑定时，再评估共享 Transcript。
 
+当前已实现的是展示层同步：不同 Session 产生的用户和助手非敏感文本进入同一中心
+时间线，其他端按序显示；这不等于合并 OpenClaw Transcript。任一端后续发起的新
+推理仍使用该端自己的 `sessionKey`，除非后续显式实现任务摘要注入或 OBO 切换。
+
 ### 10.4 兼容性
 
 插件继续作为独立 npm/本地链接包发布，声明支持的 OpenClaw 与 Plugin API 版本。
@@ -821,6 +835,7 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
 
 ### 15.4 四期：跨端继续对话
 
+- 已完成用户/助手非敏感文本的有序展示同步和来源端去重；
 - 支持任务选择、继续和非敏感摘要注入；
 - 支持一个任务关联多个 OpenClaw Session；
 - 处理多个并行任务的消歧；

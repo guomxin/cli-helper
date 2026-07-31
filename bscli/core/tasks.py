@@ -126,6 +126,8 @@ class TaskHubStore:
                     interaction_id TEXT NOT NULL UNIQUE,
                     user_subject TEXT NOT NULL,
                     linked_at TEXT NOT NULL,
+                    last_state TEXT,
+                    last_observed_at TEXT,
                     PRIMARY KEY (task_id, interaction_id)
                 );
 
@@ -160,9 +162,87 @@ class TaskHubStore:
 
                 CREATE INDEX IF NOT EXISTS notification_outbox_endpoint_state
                 ON notification_outbox (endpoint_id, state, next_attempt_at);
+
+                CREATE TABLE IF NOT EXISTS user_timeline (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id TEXT NOT NULL UNIQUE,
+                    user_subject TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    dedupe_key TEXT NOT NULL,
+                    source_endpoint_id TEXT,
+                    task_id TEXT,
+                    role TEXT,
+                    text TEXT,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (user_subject, dedupe_key)
+                );
+
+                CREATE INDEX IF NOT EXISTS user_timeline_subject_sequence
+                ON user_timeline (user_subject, sequence);
                 """
             )
+            self._migrate_task_interaction_observations(connection)
             self._repair_terminal_task_statuses(connection)
+
+    @staticmethod
+    def _migrate_task_interaction_observations(
+        connection: sqlite3.Connection,
+    ) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA table_info(task_interactions)"
+            ).fetchall()
+        }
+        if "last_state" not in columns:
+            connection.execute(
+                "ALTER TABLE task_interactions ADD COLUMN last_state TEXT"
+            )
+        if "last_observed_at" not in columns:
+            connection.execute(
+                "ALTER TABLE task_interactions ADD COLUMN last_observed_at TEXT"
+            )
+        event_states = {
+            "task.interaction.waiting": "pending",
+            "task.interaction.completed": "completed",
+            "task.canceled": "declined",
+            "task.interaction.expired": "expired",
+            "task.interaction.failed": "failed",
+            "task.interaction.superseded": "superseded",
+        }
+        rows = connection.execute(
+            """
+            SELECT interaction_id
+            FROM task_interactions
+            WHERE last_state IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            event = connection.execute(
+                """
+                SELECT event_type, created_at
+                FROM task_events
+                WHERE causation_ref = ?
+                  AND (
+                      event_type LIKE 'task.interaction.%'
+                      OR event_type = 'task.canceled'
+                  )
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (row["interaction_id"],),
+            ).fetchone()
+            state = event_states.get(str(event["event_type"])) if event else None
+            if state:
+                connection.execute(
+                    """
+                    UPDATE task_interactions
+                    SET last_state = ?, last_observed_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (state, event["created_at"], row["interaction_id"]),
+                )
 
     @staticmethod
     def _repair_terminal_task_statuses(
@@ -181,6 +261,23 @@ class TaskHubStore:
             UPDATE agent_tasks
             SET status = 'succeeded',
                 version = version + 1,
+                current_interaction_id = COALESCE(
+                    (
+                        SELECT task_interactions.interaction_id
+                        FROM task_interactions
+                        WHERE task_interactions.task_id =
+                            agent_tasks.task_id
+                          AND (
+                              task_interactions.last_state IS NULL
+                              OR task_interactions.last_state NOT IN (
+                                  'pending', 'processing'
+                              )
+                          )
+                        ORDER BY task_interactions.linked_at DESC
+                        LIMIT 1
+                    ),
+                    current_interaction_id
+                ),
                 finished_at = COALESCE(
                     (
                         SELECT operations.finished_at
@@ -190,7 +287,7 @@ class TaskHubStore:
                     ),
                     updated_at
                 )
-            WHERE status = 'active'
+            WHERE status IN ('active', 'waiting_user', 'running')
               AND current_operation_id IS NOT NULL
               AND EXISTS (
                   SELECT 1 FROM operations
@@ -567,7 +664,7 @@ class TaskHubStore:
             connection.execute("BEGIN IMMEDIATE")
             task = self._select_owned_task(connection, task_id, user_subject)
             linked = connection.execute(
-                "SELECT task_id FROM task_interactions WHERE interaction_id = ?",
+                "SELECT * FROM task_interactions WHERE interaction_id = ?",
                 (interaction_id,),
             ).fetchone()
             if linked is not None and linked["task_id"] != task_id:
@@ -576,12 +673,42 @@ class TaskHubStore:
                 connection.execute(
                     """
                     INSERT INTO task_interactions (
-                        task_id, interaction_id, user_subject, linked_at
-                    ) VALUES (?, ?, ?, ?)
+                        task_id, interaction_id, user_subject, linked_at,
+                        last_state, last_observed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (task_id, interaction_id, user_subject, now),
+                    (
+                        task_id,
+                        interaction_id,
+                        user_subject,
+                        now,
+                        state,
+                        now,
+                    ),
                 )
-            if task["status"] != "outcome_unknown":
+            elif linked["last_state"] != state:
+                connection.execute(
+                    """
+                    UPDATE task_interactions
+                    SET last_state = ?, last_observed_at = ?
+                    WHERE interaction_id = ?
+                    """,
+                    (state, now, interaction_id),
+                )
+            state_changed = linked is None or linked["last_state"] != state
+            event_changed = (
+                linked is None
+                or _event_type_for_interaction(
+                    str(linked["last_state"] or "")
+                )
+                != event_type
+            )
+            may_update_task = _interaction_may_update_task(
+                task=task,
+                interaction_id=interaction_id,
+                newly_linked=linked is None,
+            )
+            if may_update_task:
                 self._update_task_state(
                     connection,
                     task_id=task_id,
@@ -590,7 +717,7 @@ class TaskHubStore:
                     current_interaction_id=interaction_id,
                     now=now,
                 )
-            if linked is None or task["status"] != task_status:
+            if may_update_task and state_changed and event_changed:
                 if event_type == "task.interaction.waiting":
                     self._subscribe_companion_endpoints(
                         connection,
@@ -613,6 +740,127 @@ class TaskHubStore:
                 )
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
+
+    def append_timeline_message(
+        self,
+        *,
+        user_subject: str,
+        source_endpoint_id: str,
+        message_key: str,
+        role: str,
+        text: str,
+        task_id: str | None = None,
+    ) -> tuple[dict, bool]:
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        message_key = _required_text(message_key, "message_key", 768)
+        if role not in {"user", "assistant"}:
+            raise ValueError("timeline role is invalid")
+        normalized_text = _timeline_text(text)
+        normalized_task_id = (
+            _required_text(task_id, "task_id", 128) if task_id else None
+        )
+        now = _utc_now()
+        dedupe_key = f"message:{message_key}"
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, source_endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            if normalized_task_id:
+                self._select_owned_task(
+                    connection,
+                    normalized_task_id,
+                    user_subject,
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM user_timeline
+                WHERE user_subject = ? AND dedupe_key = ?
+                """,
+                (user_subject, dedupe_key),
+            ).fetchone()
+            if existing is not None:
+                return _timeline_from_row(existing), True
+
+            entry_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO user_timeline (
+                    entry_id, user_subject, entry_type, dedupe_key,
+                    source_endpoint_id, task_id, role, text,
+                    payload_json, created_at
+                ) VALUES (?, ?, 'chat_message', ?, ?, ?, ?, ?, '{}', ?)
+                """,
+                (
+                    entry_id,
+                    user_subject,
+                    dedupe_key,
+                    source_endpoint_id,
+                    normalized_task_id,
+                    role,
+                    normalized_text,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM user_timeline WHERE entry_id = ?",
+                (entry_id,),
+            ).fetchone()
+            self._enqueue_timeline_message(
+                connection,
+                entry=row,
+                source_endpoint_id=source_endpoint_id,
+            )
+        return _timeline_from_row(row), False
+
+    def list_timeline(
+        self,
+        *,
+        user_subject: str,
+        after_sequence: int | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            if after_sequence is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM user_timeline
+                    WHERE user_subject = ?
+                    ORDER BY sequence DESC
+                    LIMIT ?
+                    """,
+                    (user_subject, limit),
+                ).fetchall()
+                rows = list(reversed(rows))
+            else:
+                after_sequence = max(int(after_sequence), 0)
+                rows = connection.execute(
+                    """
+                    SELECT * FROM user_timeline
+                    WHERE user_subject = ? AND sequence > ?
+                    ORDER BY sequence
+                    LIMIT ?
+                    """,
+                    (user_subject, after_sequence, limit),
+                ).fetchall()
+        return [_timeline_from_row(row) for row in rows]
+
+    def latest_timeline_sequence(self, *, user_subject: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT MAX(sequence) AS sequence
+                FROM user_timeline
+                WHERE user_subject = ?
+                """,
+                (user_subject,),
+            ).fetchone()
+        return int(row["sequence"] or 0)
 
     def task_id_for_operation(
         self,
@@ -1056,6 +1304,29 @@ class TaskHubStore:
                 created_at,
             ),
         )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO user_timeline (
+                entry_id, user_subject, entry_type, dedupe_key,
+                source_endpoint_id, task_id, role, text,
+                payload_json, created_at
+            ) VALUES (?, ?, 'task_event', ?, NULL, ?, NULL, NULL, ?, ?)
+            """,
+            (
+                event_id,
+                user_subject,
+                f"task-event:{event_id}",
+                task_id,
+                _canonical_json(
+                    {
+                        "eventId": event_id,
+                        "eventType": event_type,
+                        "payload": payload,
+                    }
+                ),
+                created_at,
+            ),
+        )
         subscriptions = connection.execute(
             """
             SELECT * FROM task_subscriptions
@@ -1095,6 +1366,74 @@ class TaskHubStore:
                 ),
             )
         return event_id
+
+    @staticmethod
+    def _enqueue_timeline_message(
+        connection: sqlite3.Connection,
+        *,
+        entry: sqlite3.Row,
+        source_endpoint_id: str,
+    ) -> None:
+        source = connection.execute(
+            """
+            SELECT endpoint_id, client_type, label
+            FROM client_endpoints
+            WHERE endpoint_id = ?
+            """,
+            (source_endpoint_id,),
+        ).fetchone()
+        endpoints = connection.execute(
+            """
+            SELECT endpoint_id, client_type, capabilities_json
+            FROM client_endpoints
+            WHERE user_subject = ? AND state = 'active'
+              AND endpoint_id != ?
+            """,
+            (entry["user_subject"], source_endpoint_id),
+        ).fetchall()
+        payload = _canonical_json(
+            {
+                "entryId": entry["entry_id"],
+                "sequence": entry["sequence"],
+                "role": entry["role"],
+                "text": entry["text"],
+                "createdAt": entry["created_at"],
+                "source": {
+                    "endpointId": source_endpoint_id,
+                    "clientType": source["client_type"] if source else "unknown",
+                    "label": source["label"] if source else None,
+                },
+            }
+        )
+        for endpoint in endpoints:
+            capabilities = set(json.loads(endpoint["capabilities_json"]))
+            if endpoint["client_type"] in {"web", "webchat"}:
+                continue
+            if not capabilities.intersection(
+                {"direct_status", "timeline_message"}
+            ):
+                continue
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO notification_outbox (
+                    delivery_id, event_id, task_id, endpoint_id, user_subject,
+                    payload_type, payload_json, state, attempt_count,
+                    next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'timeline_message', ?,
+                          'pending', 0, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    entry["entry_id"],
+                    entry["task_id"] or "",
+                    endpoint["endpoint_id"],
+                    entry["user_subject"],
+                    payload,
+                    entry["created_at"],
+                    entry["created_at"],
+                    entry["created_at"],
+                ),
+            )
 
     @staticmethod
     def _update_task_state(
@@ -1217,6 +1556,26 @@ def _event_type_for_interaction(state: str) -> str:
     }.get(state, "task.interaction.updated")
 
 
+def _interaction_may_update_task(
+    *,
+    task: sqlite3.Row,
+    interaction_id: str,
+    newly_linked: bool,
+) -> bool:
+    terminal_statuses = {
+        "succeeded",
+        "failed",
+        "outcome_unknown",
+        "canceled",
+        "expired",
+    }
+    if task["status"] in terminal_statuses:
+        return False
+    if newly_linked:
+        return True
+    return task["current_interaction_id"] == interaction_id
+
+
 def _endpoint_from_row(row: sqlite3.Row) -> dict:
     value = dict(row)
     value["capabilities"] = json.loads(value.pop("capabilities_json"))
@@ -1237,6 +1596,12 @@ def _event_from_row(row: sqlite3.Row) -> dict:
 
 
 def _outbox_from_row(row: sqlite3.Row) -> dict:
+    value = dict(row)
+    value["payload"] = json.loads(value.pop("payload_json"))
+    return value
+
+
+def _timeline_from_row(row: sqlite3.Row) -> dict:
     value = dict(row)
     value["payload"] = json.loads(value.pop("payload_json"))
     return value
@@ -1268,6 +1633,13 @@ def _optional_text(value: Any, name: str, maximum: int) -> str | None:
     if not normalized:
         return None
     return _required_text(normalized, name, maximum)
+
+
+def _timeline_text(value: Any) -> str:
+    normalized = str(value or "").replace("\0", "").strip()
+    if not normalized or len(normalized) > 50_000:
+        raise ValueError("timeline text is invalid")
+    return normalized
 
 
 def _canonical_json(value: Any) -> str:

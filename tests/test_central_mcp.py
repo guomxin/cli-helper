@@ -172,6 +172,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_host_task_recovery_list", names)
         self.assertIn("agentbridge_host_task_list", names)
         self.assertIn("agentbridge_host_interaction_present", names)
+        self.assertIn("agentbridge_host_timeline_append", names)
         self.assertIn("agentbridge_host_notification_claim", names)
         self.assertIn("agentbridge_host_notification_ack", names)
         self.assertIn("agentbridge_host_workspace_link_confirm", names)

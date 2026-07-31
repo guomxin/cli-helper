@@ -845,6 +845,157 @@ test("suppresses routine companion status chatter but retains acknowledgement", 
   assert.equal(calls.at(-1).params.succeeded, true);
 });
 
+test("delivers an ordered timeline message once and acknowledges it", async () => {
+  const sessionKey = "agent:main:telegram:direct:1001";
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: sessionKey,
+            route: { channel: "telegram", to: "1001" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-timeline-1234567890",
+              deliveryMode: "timeline_message",
+              message: "[Web - You]\nSubmit a business trip request.",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:1001",
+      channel: "telegram",
+      senderId: "1001",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "[Web - You]\nSubmit a business trip request.",
+  );
+  const acknowledgements = calls.filter(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgements.length, 1);
+  assert.equal(acknowledgements[0].params.succeeded, true);
+});
+
+test("synchronizes user and assistant text once across duplicate WeChat hooks", async () => {
+  const requests = [];
+  const senderId = "wechat-user-a";
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-a";
+  const harness = fakeApi({
+    autoPoll: false,
+    syncTimeline: true,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+        label: "User A",
+      },
+    ],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            structuredContent: { status: "succeeded" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+  const context = {
+    channelId: "openclaw-weixin",
+    conversationId: senderId,
+    sessionKey,
+  };
+
+  await harness.hooks.message_received(
+    {
+      from: senderId,
+      senderId,
+      sessionKey,
+      content: "Submit a business trip request.",
+      messageId: "incoming-1",
+    },
+    context,
+  );
+  harness.hooks.message_sending(
+    {
+      to: senderId,
+      content: "Please confirm the trusted card.",
+      messageId: "outgoing-1",
+    },
+    context,
+  );
+  harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      channel: "openclaw-weixin",
+      sessionKey,
+      messageId: "outgoing-2",
+      payload: { text: "Please confirm the trusted card." },
+    },
+    context,
+  );
+  await coordinator.waitForIdle();
+
+  const timelineCalls = requests.filter(
+    (body) =>
+      body.params?.name === "agentbridge_host_timeline_append",
+  );
+  assert.equal(timelineCalls.length, 2);
+  assert.deepEqual(
+    timelineCalls.map((body) => body.params.arguments.role),
+    ["user", "assistant"],
+  );
+  assert.deepEqual(
+    timelineCalls.map((body) => body.params.arguments.text),
+    [
+      "Submit a business trip request.",
+      "Please confirm the trusted card.",
+    ],
+  );
+  assert.equal(
+    new Set(
+      timelineCalls.map(
+        (body) => body.params.arguments.endpoint_key,
+      ),
+    ).size,
+    1,
+  );
+});
+
 test("uses the bound WeChat route when the final reply omits channel metadata", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });
@@ -3087,6 +3238,7 @@ function fakeApi(pluginConfig) {
   const api = {
     pluginConfig: {
       allowedCardOrigins: [CARD_ORIGIN],
+      syncTimeline: false,
       ...pluginConfig,
     },
     config: {},

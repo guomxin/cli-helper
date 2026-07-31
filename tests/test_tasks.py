@@ -465,6 +465,234 @@ class TaskHubStoreTests(unittest.TestCase):
             [],
         )
 
+    def test_stale_interaction_observation_cannot_reopen_successful_task(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        task_id = task["task_id"]
+
+        for state in ("pending", "processing", "completed"):
+            self.store.link_interaction(
+                task_id=task_id,
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": "fields-a",
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": "fields-a",
+                    "type": "business_input",
+                    "state": state,
+                },
+            )
+        self.store.link_interaction(
+            task_id=task_id,
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "authorization-a",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "authorization-a",
+                "type": "execution_authorization",
+                "state": "pending",
+            },
+        )
+        self.store.link_interaction(
+            task_id=task_id,
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "authorization-a",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "authorization-a",
+                "type": "execution_authorization",
+                "state": "completed",
+            },
+        )
+        succeeded = self.store.link_operation(
+            task_id=task_id,
+            user_subject="user-a",
+            operation={
+                "operation_id": "submit-a",
+                "user_subject": "user-a",
+                "capability_name": "oa.business_trip.submit",
+                "status": "succeeded",
+                "error": None,
+            },
+        )
+
+        stale = self.store.link_interaction(
+            task_id=task_id,
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "fields-a",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "fields-a",
+                "type": "business_input",
+                "state": "completed",
+            },
+        )
+        duplicate_authorization = self.store.link_interaction(
+            task_id=task_id,
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "authorization-a",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "authorization-a",
+                "type": "execution_authorization",
+                "state": "completed",
+            },
+        )
+        late_pending = self.store.link_interaction(
+            task_id=task_id,
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "late-pending-a",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "late-pending-a",
+                "type": "execution_authorization",
+                "state": "pending",
+            },
+        )
+
+        self.assertEqual(succeeded["status"], "succeeded")
+        self.assertEqual(stale["status"], "succeeded")
+        self.assertEqual(duplicate_authorization["status"], "succeeded")
+        self.assertEqual(late_pending["status"], "succeeded")
+        self.assertEqual(
+            duplicate_authorization["current_interaction_id"],
+            "authorization-a",
+        )
+        events = self.store.list_events(
+            task_id=task_id,
+            user_subject="user-a",
+        )
+        waiting_by_interaction = [
+            event["payload"]["interactionId"]
+            for event in events
+            if event["event_type"] == "task.interaction.waiting"
+        ]
+        self.assertEqual(
+            waiting_by_interaction,
+            ["fields-a", "authorization-a"],
+        )
+        completed_by_interaction = [
+            event["payload"]["interactionId"]
+            for event in events
+            if event["event_type"] == "task.interaction.completed"
+        ]
+        self.assertEqual(
+            completed_by_interaction,
+            ["fields-a", "authorization-a"],
+        )
+
+    def test_timeline_orders_events_and_deduplicates_cross_endpoint_messages(self):
+        telegram, _ = self._endpoint()
+        workspace, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            capabilities=["workspace.timeline.read"],
+        )
+        task, _ = self._task(telegram["endpoint_id"])
+
+        user_entry, reused = self.store.append_timeline_message(
+            user_subject="user-a",
+            source_endpoint_id=workspace["endpoint_id"],
+            message_key="web-message-1:user",
+            role="user",
+            text="Submit a business trip request",
+            task_id=task["task_id"],
+        )
+        same_entry, reused_again = self.store.append_timeline_message(
+            user_subject="user-a",
+            source_endpoint_id=workspace["endpoint_id"],
+            message_key="web-message-1:user",
+            role="user",
+            text="Submit a business trip request",
+            task_id=task["task_id"],
+        )
+        self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "prepare-a",
+                "user_subject": "user-a",
+                "capability_name": "oa.business_trip.submit.prepare",
+                "status": "running",
+            },
+        )
+        assistant_entry, assistant_reused = (
+            self.store.append_timeline_message(
+                user_subject="user-a",
+                source_endpoint_id=workspace["endpoint_id"],
+                message_key="web-message-1:assistant",
+                role="assistant",
+                text="Please confirm the trusted card.",
+                task_id=task["task_id"],
+            )
+        )
+
+        timeline = self.store.list_timeline(user_subject="user-a")
+        sequences = [entry["sequence"] for entry in timeline]
+        self.assertEqual(sequences, sorted(sequences))
+        self.assertEqual(len(sequences), len(set(sequences)))
+        self.assertFalse(reused)
+        self.assertTrue(reused_again)
+        self.assertFalse(assistant_reused)
+        self.assertEqual(same_entry["entry_id"], user_entry["entry_id"])
+        self.assertGreater(
+            assistant_entry["sequence"],
+            user_entry["sequence"],
+        )
+        message_entries = [
+            entry
+            for entry in timeline
+            if entry["entry_type"] == "chat_message"
+        ]
+        self.assertEqual(
+            [entry["role"] for entry in message_entries],
+            ["user", "assistant"],
+        )
+
+        telegram_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=telegram["endpoint_id"],
+        )
+        timeline_deliveries = [
+            item
+            for item in telegram_outbox
+            if item["payload_type"] == "timeline_message"
+        ]
+        self.assertEqual(len(timeline_deliveries), 2)
+        self.assertEqual(
+            [item["payload"]["role"] for item in timeline_deliveries],
+            ["user", "assistant"],
+        )
+        workspace_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=workspace["endpoint_id"],
+        )
+        self.assertFalse(
+            any(
+                item["payload_type"] == "timeline_message"
+                for item in workspace_outbox
+            )
+        )
+
     def test_initialization_repairs_legacy_active_successful_tasks(self):
         db_path = Path(self.temp.name) / "repair-agentbridge.db"
         operations = OperationStore(db_path)
@@ -496,6 +724,33 @@ class TaskHubStoreTests(unittest.TestCase):
             active_conversation_ref="agent:main:workspace:account-a",
             title="List Pending OA Workflows",
         )
+        for interaction_id in ("fields-repair", "authorization-repair"):
+            task_store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": interaction_id,
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": interaction_id,
+                    "type": "execution_authorization",
+                    "state": "pending",
+                },
+            )
+            task_store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": interaction_id,
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": interaction_id,
+                    "type": "execution_authorization",
+                    "state": "completed",
+                },
+            )
         task_store.link_operation(
             task_id=task["task_id"],
             user_subject="user-a",
@@ -505,7 +760,8 @@ class TaskHubStoreTests(unittest.TestCase):
             connection.execute(
                 """
                 UPDATE agent_tasks
-                SET status = 'active', finished_at = NULL
+                SET status = 'waiting_user', finished_at = NULL,
+                    current_interaction_id = 'fields-repair'
                 WHERE task_id = ?
                 """,
                 (task["task_id"],),
@@ -518,6 +774,10 @@ class TaskHubStoreTests(unittest.TestCase):
         )
 
         self.assertEqual(repaired["status"], "succeeded")
+        self.assertEqual(
+            repaired["current_interaction_id"],
+            "authorization-repair",
+        )
         self.assertIsNotNone(repaired["finished_at"])
 
     def test_central_service_recovers_only_the_bound_users_pending_interaction(self):
@@ -777,6 +1037,57 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertNotEqual(
             workspace["interaction"]["presentation"]["url"],
             delivered["interaction"]["presentation"]["url"],
+        )
+
+    def test_central_service_claims_cross_endpoint_timeline_message(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            label="Telegram",
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=["direct_status", "timeline_message"],
+        )
+
+        appended = service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            message_key="workspace-message-1",
+            role="user",
+            text="Submit a business trip request",
+            label="Agent Workspace",
+        )
+        claimed = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+
+        self.assertFalse(appended["reused"]["entry"])
+        self.assertEqual(claimed["count"], 1)
+        notification = claimed["notifications"][0]
+        self.assertEqual(notification["deliveryMode"], "timeline_message")
+        self.assertIsNone(notification["task"])
+        self.assertIsNone(notification["event"])
+        self.assertIn("Submit a business trip request", notification["message"])
+        self.assertEqual(
+            notification["timeline"]["source"]["label"],
+            "Agent Workspace",
         )
 
     def test_workspace_task_does_not_overwrite_registered_endpoint(self):

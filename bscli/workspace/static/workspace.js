@@ -7,9 +7,13 @@ const state = {
   chatTimer: null,
   taskListTimer: null,
   eventSource: null,
-  lastEventId: null,
+  timelineCursor: 0,
   liveMessages: new Map(),
+  historyMessages: new Map(),
+  localMessages: new Map(),
+  syncedMessages: new Map(),
   taskCards: new Map(),
+  taskCardMeta: new Map(),
   taskSyncTimers: new Map(),
   toasts: new Map(),
 };
@@ -189,8 +193,7 @@ function enterWorkspace(account) {
   switchView("chat");
   loadGatewayStatus();
   loadTasks();
-  loadChat();
-  openEventStream();
+  loadChat().finally(openTimelineStream);
 }
 
 async function logout() {
@@ -202,6 +205,12 @@ async function logout() {
   clearTimeout(state.taskListTimer);
   state.taskSyncTimers.forEach((timer) => clearTimeout(timer));
   state.taskSyncTimers.clear();
+  state.historyMessages.clear();
+  state.localMessages.clear();
+  state.syncedMessages.clear();
+  state.taskCards.clear();
+  state.taskCardMeta.clear();
+  state.timelineCursor = 0;
   state.account = null;
   location.reload();
 }
@@ -238,29 +247,39 @@ async function loadGatewayStatus() {
 async function loadChat() {
   const container = $("#chat-messages");
   try {
-    const result = await api("/api/chat/history?limit=120");
-    state.liveMessages.clear();
-    state.taskCards.clear();
-    container.replaceChildren(
-      ...result.messages.map((message) => messageElement(message)),
+    const [history, timeline] = await Promise.all([
+      api("/api/chat/history?limit=120"),
+      api("/api/timeline?limit=240"),
+    ]);
+    state.historyMessages.clear();
+    history.messages.forEach((message, index) => {
+      const key = historyMessageKey(message, index);
+      const item = messageElement(message);
+      setTimelineNode(item, {
+        key,
+        createdAt: message.timestamp,
+        order: index,
+      });
+      state.historyMessages.set(key, item);
+    });
+    state.localMessages.clear();
+    timeline.items.forEach((entry) => ingestTimelineEntry(entry, false));
+    state.timelineCursor = Math.max(
+      state.timelineCursor,
+      Number(timeline.cursor) || 0,
     );
-    if (result.messages.length === 0) {
-      container.append(
+    await hydrateTaskCards({ render: false });
+    renderChatTimeline();
+    container.scrollTop = container.scrollHeight;
+  } catch (error) {
+    if (container.childElementCount === 0) {
+      container.replaceChildren(
         messageElement({
           role: "system",
-          text: "开始一个新的工作会话",
+          text: `智能体暂时不可用：${friendlyError(error)}`,
         }),
       );
     }
-    await hydrateTaskCards();
-    container.scrollTop = container.scrollHeight;
-  } catch (error) {
-    container.replaceChildren(
-      messageElement({
-        role: "system",
-        text: `智能体暂时不可用：${friendlyError(error)}`,
-      }),
-    );
   }
 }
 
@@ -270,13 +289,118 @@ function messageElement(message) {
   const text = document.createElement("div");
   text.textContent = message.text;
   item.append(text);
-  if (message.timestamp) {
+  if (message.timestamp || message.sourceLabel) {
     const time = document.createElement("time");
     time.className = "message-meta";
-    time.textContent = formatTime(message.timestamp);
+    time.textContent = [
+      message.sourceLabel,
+      message.timestamp ? formatTime(message.timestamp) : null,
+    ].filter(Boolean).join(" · ");
     item.append(time);
   }
   return item;
+}
+
+function historyMessageKey(message, index) {
+  if (message.id) return `history:${message.id}`;
+  return [
+    "history",
+    message.role,
+    message.timestamp || index,
+    textHash(message.text),
+  ].join(":");
+}
+
+function textHash(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function setTimelineNode(node, { key, createdAt, order = 0 }) {
+  const parsed = Date.parse(createdAt || "");
+  node.dataset.timelineKey = String(key);
+  node.dataset.timelineAt = String(
+    Number.isFinite(parsed) ? parsed : Number(order) || 0,
+  );
+  node.dataset.timelineOrder = String(Number(order) || 0);
+}
+
+function ingestTimelineEntry(entry, render = true) {
+  const sequence = Number(entry?.sequence) || 0;
+  state.timelineCursor = Math.max(state.timelineCursor, sequence);
+  if (entry?.entry_type === "chat_message") {
+    if (entry.source?.is_origin || !entry.entry_id || !entry.text) return;
+    let item = state.syncedMessages.get(entry.entry_id);
+    if (!item) {
+      item = messageElement({
+        role: entry.role === "user" ? "user" : "assistant",
+        text: entry.text,
+        timestamp: entry.created_at,
+        sourceLabel: entry.source?.display_label || "其他端",
+      });
+      state.syncedMessages.set(entry.entry_id, item);
+    }
+    setTimelineNode(item, {
+      key: `timeline:${entry.entry_id}`,
+      createdAt: entry.created_at,
+      order: sequence,
+    });
+    if (render) {
+      renderChatTimeline();
+      scrollChat();
+    }
+    return;
+  }
+  if (entry?.entry_type === "task_event") {
+    const taskId = entry.task_id || entry.payload?.taskId;
+    const eventType = entry.payload?.eventType;
+    if (taskId && !state.taskCardMeta.has(taskId)) {
+      state.taskCardMeta.set(taskId, {
+        createdAt: entry.created_at,
+        sequence,
+      });
+    }
+    if (render) scheduleTaskSync(taskId, eventType);
+  }
+}
+
+function renderChatTimeline() {
+  const container = $("#chat-messages");
+  const stable = [
+    ...state.historyMessages.values(),
+    ...state.localMessages.values(),
+    ...state.syncedMessages.values(),
+    ...state.taskCards.values(),
+  ].filter(Boolean);
+  stable.sort((left, right) => {
+    const time =
+      Number(left.dataset.timelineAt) - Number(right.dataset.timelineAt);
+    if (time !== 0) return time;
+    const order =
+      Number(left.dataset.timelineOrder) -
+      Number(right.dataset.timelineOrder);
+    if (order !== 0) return order;
+    return String(left.dataset.timelineKey).localeCompare(
+      String(right.dataset.timelineKey),
+    );
+  });
+  const live = [...state.liveMessages.values()]
+    .map((item) => item.item)
+    .filter((item) => item?.isConnected);
+  if (stable.length === 0 && live.length === 0) {
+    container.replaceChildren(
+      messageElement({
+        role: "system",
+        text: "开始一个新的工作会话",
+      }),
+    );
+    return;
+  }
+  container.replaceChildren(...stable, ...live);
 }
 
 async function sendChat(event) {
@@ -290,10 +414,17 @@ async function sendChat(event) {
 }
 
 async function executeChatMessage(message, form = $("#chat-form")) {
-  $("#chat-messages").append(messageElement({ role: "user", text: message }));
-  $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight;
-  setBusy(form, true);
   const idempotencyKey = crypto.randomUUID();
+  const local = messageElement({ role: "user", text: message });
+  setTimelineNode(local, {
+    key: `local:${idempotencyKey}`,
+    createdAt: new Date().toISOString(),
+    order: Number.MAX_SAFE_INTEGER - 1,
+  });
+  state.localMessages.set(idempotencyKey, local);
+  renderChatTimeline();
+  scrollChat();
+  setBusy(form, true);
   const live = ensureLiveMessage(idempotencyKey);
   live.requestMessage = message;
   addLiveProgress(idempotencyKey, "正在连接智能体", "active");
@@ -572,7 +703,7 @@ function scrollChat() {
   container.scrollTop = container.scrollHeight;
 }
 
-async function hydrateTaskCards() {
+async function hydrateTaskCards({ render = true } = {}) {
   try {
     const result = await api("/api/tasks?active_only=false&limit=30");
     const active = new Set(["active", "waiting_user", "running"]);
@@ -590,9 +721,20 @@ async function hydrateTaskCards() {
         api(`/api/tasks/${encodeURIComponent(task.task_id)}`),
       ),
     );
+    const candidateIds = new Set(candidates.map((task) => task.task_id));
     details.forEach((result) => {
-      if (result.status === "fulfilled") upsertTaskCard(result.value);
+      if (result.status === "fulfilled") {
+        upsertTaskCard(result.value, { render: false });
+      }
     });
+    state.taskCards.forEach((card, taskId) => {
+      if (!candidateIds.has(taskId)) {
+        card.remove();
+        state.taskCards.delete(taskId);
+        state.taskCardMeta.delete(taskId);
+      }
+    });
+    if (render) renderChatTimeline();
   } catch {}
 }
 
@@ -639,20 +781,29 @@ async function syncTaskCard(taskId) {
   }
 }
 
-function upsertTaskCard(result) {
+function upsertTaskCard(result, { render = true } = {}) {
   const task = result?.task;
   if (!task?.task_id) return;
   const container = $("#chat-messages");
   const nearBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight < 120;
   let card = state.taskCards.get(task.task_id);
-  if (!card?.isConnected) {
+  if (!card) {
     card = document.createElement("article");
     card.className = "message assistant application-card";
     card.dataset.taskId = task.task_id;
     state.taskCards.set(task.task_id, card);
-    container.append(card);
   }
+  const timelineMeta = state.taskCardMeta.get(task.task_id) || {
+    createdAt: task.created_at,
+    sequence: 0,
+  };
+  state.taskCardMeta.set(task.task_id, timelineMeta);
+  setTimelineNode(card, {
+    key: `task:${task.task_id}`,
+    createdAt: timelineMeta.createdAt || task.created_at,
+    order: timelineMeta.sequence || 0,
+  });
   card.className =
     `message assistant application-card ${escapeClass(task.status)}`;
   card.replaceChildren();
@@ -727,6 +878,7 @@ function upsertTaskCard(result) {
   });
   actions.append(progress);
   card.append(actions);
+  if (render) renderChatTimeline();
   if (nearBottom) scrollChat();
 }
 
@@ -940,28 +1092,34 @@ async function loadEndpoints() {
   }
 }
 
-function openEventStream() {
+function openTimelineStream() {
   state.eventSource?.close();
-  const query = state.lastEventId
-    ? `?after=${encodeURIComponent(state.lastEventId)}`
+  const query = state.timelineCursor
+    ? `?after=${encodeURIComponent(state.timelineCursor)}`
     : "";
-  const source = new EventSource(`/api/events/stream${query}`);
+  const source = new EventSource(`/api/timeline/stream${query}`);
   source.addEventListener("cursor", (event) => {
-    if (event.lastEventId) state.lastEventId = event.lastEventId;
+    state.timelineCursor = Math.max(
+      state.timelineCursor,
+      Number(event.lastEventId) || 0,
+    );
   });
-  source.addEventListener("task", (event) => {
+  source.addEventListener("timeline", (event) => {
     let payload = {};
     try {
       payload = JSON.parse(event.data || "{}");
     } catch {
       payload = {};
     }
-    if (event.lastEventId) state.lastEventId = event.lastEventId;
-    scheduleTaskSync(payload.task_id, payload.event_type);
+    state.timelineCursor = Math.max(
+      state.timelineCursor,
+      Number(event.lastEventId) || Number(payload.sequence) || 0,
+    );
+    ingestTimelineEntry(payload);
   });
   source.onerror = () => {
     source.close();
-    setTimeout(openEventStream, 5000);
+    setTimeout(openTimelineStream, 5000);
   };
   state.eventSource = source;
 }

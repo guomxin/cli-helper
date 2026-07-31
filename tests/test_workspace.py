@@ -449,6 +449,17 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 username="alice",
                 endpoint_key="telegram:*:alice",
             )
+            service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-alice",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:alice",
+                client_type="telegram",
+                external_subject="alice",
+                conversation_ref="agent:main:telegram:direct:alice",
+                capabilities=["direct_status", "timeline_message"],
+                route={"channel": "telegram", "to": "alice"},
+            )
             gateway = FakeGateway()
             app = WorkspaceApplication(service=service, gateway=gateway)
 
@@ -499,6 +510,78 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertEqual(bind["sessionKey"], account["openclaw_session_key"])
             self.assertEqual(sent["sessionKey"], account["openclaw_session_key"])
             self.assertFalse(sent["deliver"])
+            timeline = app.list_timeline(account)
+            messages = [
+                entry
+                for entry in timeline
+                if entry["entry_type"] == "chat_message"
+            ]
+            self.assertEqual(
+                [entry["role"] for entry in messages],
+                ["user", "assistant", "user"],
+            )
+            self.assertTrue(
+                all(entry["source"]["is_origin"] for entry in messages)
+            )
+            self.assertEqual(
+                [entry["sequence"] for entry in messages],
+                sorted(entry["sequence"] for entry in messages),
+            )
+            telegram_endpoint = service.tasks.endpoint_for_key(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:alice",
+            )
+            timeline_deliveries = [
+                delivery
+                for delivery in service.tasks.list_outbox(
+                    user_subject="user-a",
+                    endpoint_id=telegram_endpoint["endpoint_id"],
+                )
+                if delivery["payload_type"] == "timeline_message"
+            ]
+            self.assertEqual(len(timeline_deliveries), 3)
+
+    def test_timeline_is_isolated_by_workspace_identity(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account_a = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            account_b = _create_account(
+                service,
+                user_subject="user-b",
+                username="bob",
+                endpoint_key="wechat:direct:bob",
+                client_type="wechat",
+            )
+            service.tasks.append_timeline_message(
+                user_subject="user-a",
+                source_endpoint_id=account_a["endpoint_id"],
+                message_key="a-1",
+                role="user",
+                text="Message for Alice",
+            )
+            service.tasks.append_timeline_message(
+                user_subject="user-b",
+                source_endpoint_id=account_b["endpoint_id"],
+                message_key="b-1",
+                role="user",
+                text="Message for Bob",
+            )
+            app = WorkspaceApplication(service=service)
+
+            self.assertEqual(
+                [entry["text"] for entry in app.list_timeline(account_a)],
+                ["Message for Alice"],
+            )
+            self.assertEqual(
+                [entry["text"] for entry in app.list_timeline(account_b)],
+                ["Message for Bob"],
+            )
 
 
 class WorkspaceGatewayClientTests(unittest.TestCase):
@@ -761,6 +844,30 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertIn("event: chat", stream)
                 self.assertNotIn("user_subject", stream)
 
+                status, _, timeline = _request(
+                    port,
+                    "GET",
+                    "/api/timeline?limit=20",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [
+                        item["role"]
+                        for item in timeline["items"]
+                        if item["entry_type"] == "chat_message"
+                    ],
+                    ["user", "user", "assistant"],
+                )
+                self.assertEqual(
+                    timeline["cursor"],
+                    max(item["sequence"] for item in timeline["items"]),
+                )
+                self.assertNotIn(
+                    "user_subject",
+                    json.dumps(timeline, ensure_ascii=False),
+                )
+
                 status, _, endpoints = _request(
                     port,
                     "GET",
@@ -807,6 +914,10 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("handleChatDelta", script)
         self.assertIn("hydrateTaskCards", script)
         self.assertIn("upsertTaskCard", script)
+        self.assertIn('api("/api/timeline?limit=240")', script)
+        self.assertIn("openTimelineStream", script)
+        self.assertIn("renderChatTimeline", script)
+        self.assertIn("state.taskCards.get(task.task_id)", script)
         self.assertIn("displayTaskTitle", script)
         self.assertIn("OA 出差申请提交", script)
         self.assertIn('source.addEventListener("cursor"', script)

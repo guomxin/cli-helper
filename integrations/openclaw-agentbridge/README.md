@@ -80,6 +80,16 @@ first valid decision. Non-origin channels never resume the business task; the
 originating session remains the sole commit/verify coordinator. Failed channel
 deliveries are leased and retried at most five times.
 
+Version 0.4.8 adds an ordered, host-private display timeline for non-sensitive
+user and assistant text. Bound Telegram and WeChat sessions publish text with
+stable idempotency keys; duplicate OpenClaw outbound hooks share one publication.
+Agent Workspace appends its own messages through the BFF, reads remote messages
+through SSE, and reuses one stable DOM node for each task card. Credentials,
+trusted-card field values, tool arguments/results, system prompts, and complete
+OpenClaw transcripts are never copied into this timeline. Set
+`syncTimeline=false` only to disable messaging-endpoint publication during
+diagnosis; the default is `true`.
+
 Agent Workspace sessions receive read-only catalog entries plus the explicitly
 allowlisted `oa_business_trip_submit_prepare` and `oa_leave_submit_prepare`
 governed flows. Messaging sessions keep their existing governed write tools.
@@ -118,7 +128,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.4, ...)
+AgentBridge interaction plugin registered (version=0.4.8, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

@@ -213,6 +213,35 @@ def create_workspace_http_server(
                         },
                     )
                     return
+                if route.path == "/api/timeline":
+                    after_value = _query_value(query, "after")
+                    after_sequence = (
+                        int(after_value) if after_value is not None else None
+                    )
+                    self._json(
+                        200,
+                        {
+                            "items": application.list_timeline(
+                                account,
+                                after_sequence=after_sequence,
+                                limit=_query_int(query, "limit", 200),
+                            ),
+                            "cursor": application.timeline_cursor(account),
+                        },
+                    )
+                    return
+                if route.path == "/api/timeline/stream":
+                    cursor_value = (
+                        self.headers.get("Last-Event-ID")
+                        or _query_value(query, "after")
+                    )
+                    self._timeline_stream(
+                        account,
+                        after_sequence=(
+                            int(cursor_value) if cursor_value else None
+                        ),
+                    )
+                    return
                 if route.path == "/api/events/stream":
                     self._event_stream(
                         account,
@@ -436,6 +465,63 @@ def create_workspace_http_server(
                             ).encode("utf-8")
                         )
                     if events:
+                        self.wfile.flush()
+                    time.sleep(1)
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _timeline_stream(
+            self,
+            account: dict,
+            *,
+            after_sequence: int | None,
+        ) -> None:
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self._security_headers()
+            self.end_headers()
+            cursor = (
+                max(int(after_sequence), 0)
+                if after_sequence is not None
+                else application.timeline_cursor(account)
+            )
+            deadline = time.monotonic() + 25
+            try:
+                if after_sequence is None:
+                    self.wfile.write(
+                        (
+                            f"id: {cursor}\n"
+                            "event: cursor\n"
+                            'data: {"ready":true}\n\n'
+                        ).encode("utf-8")
+                    )
+                    self.wfile.flush()
+                while time.monotonic() < deadline:
+                    entries = application.list_timeline(
+                        account,
+                        after_sequence=cursor,
+                        limit=100,
+                    )
+                    for entry in entries:
+                        cursor = int(entry["sequence"])
+                        payload = json.dumps(
+                            entry,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        self.wfile.write(
+                            (
+                                f"id: {cursor}\n"
+                                "event: timeline\n"
+                                f"data: {payload}\n\n"
+                            ).encode("utf-8")
+                        )
+                    if entries:
                         self.wfile.flush()
                     time.sleep(1)
                 self.wfile.write(b": keepalive\n\n")

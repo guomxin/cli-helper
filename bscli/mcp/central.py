@@ -2036,6 +2036,57 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_timeline_append",
+        title="Append Host-Owned Cross-Endpoint Message",
+        description=(
+            "Host-private append-only message timeline control. It synchronizes "
+            "non-sensitive user and assistant text across endpoints and is not a "
+            "model business capability."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_timeline_append(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        client_type: Annotated[str, Field(min_length=1, max_length=80)],
+        external_subject: Annotated[str, Field(min_length=1, max_length=768)],
+        conversation_ref: Annotated[str, Field(min_length=1, max_length=1024)],
+        message_key: Annotated[str, Field(min_length=1, max_length=768)],
+        role: Annotated[str, Field(pattern="^(user|assistant)$")],
+        text: Annotated[str, Field(min_length=1, max_length=50_000)],
+        account_id: Annotated[str | None, Field(max_length=512)] = None,
+        label: Annotated[str | None, Field(max_length=120)] = None,
+        route: dict[str, Any] | None = None,
+        task_id: Annotated[str | None, Field(max_length=128)] = None,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.append_host_timeline_message,
+            user_subject=identity["user_subject"],
+            token_id=identity["token_id"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            client_type=client_type,
+            external_subject=external_subject,
+            conversation_ref=conversation_ref,
+            message_key=message_key,
+            role=role,
+            text=text,
+            account_id=account_id,
+            label=label,
+            route=route,
+            task_id=task_id,
+        )
+
+    @mcp.tool(
         name="agentbridge_host_task_observe",
         title="Observe Host-Owned AgentBridge Task",
         description=(

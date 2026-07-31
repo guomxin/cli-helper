@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sqlite3
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -156,6 +157,41 @@ class WorkspaceApplication:
             user_subject=account["user_subject"],
         )
 
+    def list_timeline(
+        self,
+        account: dict,
+        *,
+        after_sequence: int | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        endpoints = {
+            endpoint["endpoint_id"]: endpoint
+            for endpoint in self.service.tasks.list_endpoints(
+                user_subject=account["user_subject"],
+                active_only=False,
+                limit=100,
+            )
+        }
+        return [
+            _public_timeline_entry(
+                entry,
+                source=endpoints.get(entry.get("source_endpoint_id")),
+                is_origin=(
+                    entry.get("source_endpoint_id") == account.get("endpoint_id")
+                ),
+            )
+            for entry in self.service.tasks.list_timeline(
+                user_subject=account["user_subject"],
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        ]
+
+    def timeline_cursor(self, account: dict) -> int:
+        return self.service.tasks.latest_timeline_sequence(
+            user_subject=account["user_subject"],
+        )
+
     def list_endpoints(self, account: dict) -> list[dict]:
         return [
             _public_endpoint(endpoint)
@@ -232,17 +268,43 @@ class WorkspaceApplication:
         message = str(message or "").strip()
         if not message or len(message) > 20_000:
             raise ValueError("chat message is empty or too long")
+        effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
+        self._append_workspace_message(
+            account,
+            role="user",
+            text=message,
+            message_key=f"workspace:user:{effective_key}",
+        )
         grant = self.store.issue_gateway_grant(account["account_id"])
-        return self._gateway().send_stream(
+        source = self._gateway().send_stream(
             session_key=grant["session_key"],
             endpoint_key=grant["endpoint_key"],
             grant=grant["grant"],
             message=message,
-            idempotency_key=(
-                _safe_text(idempotency_key, 128) or str(uuid4())
-            ),
+            idempotency_key=effective_key,
             timeout_seconds=150,
         )
+
+        def synchronized_stream() -> Iterator[dict[str, Any]]:
+            for item in source:
+                if (
+                    item.get("type") == "chat"
+                    and item.get("state") == "final"
+                    and isinstance(item.get("text"), str)
+                    and item["text"].strip()
+                ):
+                    self._append_workspace_message(
+                        account,
+                        role="assistant",
+                        text=item["text"],
+                        message_key=(
+                            "workspace:assistant:"
+                            f"{_safe_text(item.get('runId'), 256) or effective_key}"
+                        ),
+                    )
+                yield item
+
+        return synchronized_stream()
 
     def send_chat(
         self,
@@ -255,6 +317,13 @@ class WorkspaceApplication:
         if not message or len(message) > 20_000:
             raise ValueError("chat message is empty or too long")
         gateway = self._gateway()
+        effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
+        self._append_workspace_message(
+            account,
+            role="user",
+            text=message,
+            message_key=f"workspace:user:{effective_key}",
+        )
         grant = self.store.issue_gateway_grant(account["account_id"])
         gateway.call(
             "agentbridge.workspace.bind",
@@ -271,9 +340,7 @@ class WorkspaceApplication:
                 "sessionKey": grant["session_key"],
                 "message": message,
                 "deliver": False,
-                "idempotencyKey": (
-                    _safe_text(idempotency_key, 128) or str(uuid4())
-                ),
+                "idempotencyKey": effective_key,
                 "timeoutMs": 120_000,
             },
             timeout_seconds=30,
@@ -286,6 +353,29 @@ class WorkspaceApplication:
             ),
             status=_safe_text(result.get("status"), 80) or "accepted",
         )
+
+    def _append_workspace_message(
+        self,
+        account: dict,
+        *,
+        role: str,
+        text: str,
+        message_key: str,
+    ) -> None:
+        endpoint_id = _safe_text(account.get("endpoint_id"), 128)
+        if not endpoint_id:
+            return
+        try:
+            self.service.tasks.append_timeline_message(
+                user_subject=account["user_subject"],
+                source_endpoint_id=endpoint_id,
+                message_key=message_key,
+                role=role,
+                text=text,
+            )
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error):
+            # Chat remains available if the optional cross-end projection fails.
+            return
 
     def _gateway(self) -> OpenClawGatewayClient:
         if self.gateway is None:
@@ -330,6 +420,37 @@ def _public_event(event: dict) -> dict:
         "created_at",
     )
     return {name: event.get(name) for name in names}
+
+
+def _public_timeline_entry(
+    entry: dict,
+    *,
+    source: dict | None,
+    is_origin: bool,
+) -> dict:
+    client_type = str((source or {}).get("client_type") or "system")
+    display_label = (source or {}).get("label") or {
+        "web": "Agent Workspace",
+        "webchat": "Agent Workspace",
+        "telegram": "Telegram",
+        "openclaw-weixin": "微信",
+        "system": "AgentBridge",
+    }.get(client_type, "已关联客户端")
+    return {
+        "entry_id": entry["entry_id"],
+        "sequence": entry["sequence"],
+        "entry_type": entry["entry_type"],
+        "task_id": entry.get("task_id"),
+        "role": entry.get("role"),
+        "text": entry.get("text"),
+        "payload": entry.get("payload") or {},
+        "created_at": entry["created_at"],
+        "source": {
+            "client_type": client_type,
+            "display_label": display_label,
+            "is_origin": bool(is_origin),
+        },
+    }
 
 
 def _public_endpoint(endpoint: dict) -> dict:

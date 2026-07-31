@@ -33,6 +33,7 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.created",
   "task.operation.linked",
   "task.operation.running",
+  "task.interaction.waiting",
   "task.interaction.completed",
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
@@ -691,7 +692,9 @@ export class InteractionCoordinator {
             [notification.interaction],
           );
         } else if (
-          notification.deliveryMode === "status" &&
+          ["status", "timeline_message"].includes(
+            notification.deliveryMode,
+          ) &&
           typeof notification.message === "string"
         ) {
           delivered = await this.deliverTextDirect(
@@ -723,7 +726,12 @@ export class InteractionCoordinator {
   }
 
   async waitForIdle() {
-    await Promise.allSettled([...this.polls.values()]);
+    await Promise.allSettled([
+      ...this.polls.values(),
+      ...(this.timelinePublisher
+        ? [this.timelinePublisher.waitForIdle()]
+        : []),
+    ]);
   }
 
   upsert({

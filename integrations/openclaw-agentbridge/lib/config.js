@@ -6,6 +6,7 @@ const DEFAULTS = Object.freeze({
   pollIntervalSeconds: 2,
   maxPollSeconds: 1800,
   wakeAgentOnComplete: true,
+  syncTimeline: true,
 });
 
 export function resolvePluginConfig(raw) {
@@ -52,6 +53,10 @@ export function resolvePluginConfig(raw) {
     wakeAgentOnComplete: booleanValue(
       source.wakeAgentOnComplete,
       DEFAULTS.wakeAgentOnComplete,
+    ),
+    syncTimeline: booleanValue(
+      source.syncTimeline,
+      DEFAULTS.syncTimeline,
     ),
   });
 }

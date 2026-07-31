@@ -1,5 +1,9 @@
 import { resolvePluginConfig } from "./config.js";
-import { InteractionCoordinator, presentationForRecords } from "./coordinator.js";
+import {
+  createInteractionSharedState,
+  InteractionCoordinator,
+  presentationForRecords,
+} from "./coordinator.js";
 import { AgentBridgeIdentityRouter } from "./identity-router.js";
 import {
   appendPresentationLinks,
@@ -14,19 +18,20 @@ import {
   createAgentBridgeProxyTools,
   hostContextMeta,
 } from "./proxy-tools.js";
+import { TimelinePublisher } from "./timeline.js";
 
-const PLUGIN_VERSION = "0.4.7";
+const PLUGIN_VERSION = "0.4.8";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
-  const identitySessionBindings = dependencies.sharedState
-    ? dependencies.sharedState.identitySessionBindings ||
-      (dependencies.sharedState.identitySessionBindings = new Map())
-    : undefined;
-  const identitySessionEndpoints = dependencies.sharedState
-    ? dependencies.sharedState.identitySessionEndpoints ||
-      (dependencies.sharedState.identitySessionEndpoints = new Map())
-    : undefined;
+  const sharedState =
+    dependencies.sharedState || createInteractionSharedState();
+  const identitySessionBindings =
+    sharedState.identitySessionBindings ||
+    (sharedState.identitySessionBindings = new Map());
+  const identitySessionEndpoints =
+    sharedState.identitySessionEndpoints ||
+    (sharedState.identitySessionEndpoints = new Map());
   const identityRouter =
     dependencies.identityRouter ||
     new AgentBridgeIdentityRouter({
@@ -52,7 +57,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     mcpClientResolver: identityRouter.enabled
       ? (sessionKey) => identityRouter.clientForSession(sessionKey)
       : null,
-    sharedState: dependencies.sharedState,
+    sharedState,
     sleep: dependencies.sleep,
     now: dependencies.now,
     fetchImpl: dependencies.documentFetchImpl || globalThis.fetch,
@@ -67,6 +72,16 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           })
       : null,
   });
+  const timelinePublisher =
+    config.syncTimeline && identityRouter.enabled
+      ? new TimelinePublisher({
+          identityRouter,
+          logger: api.logger,
+          sharedState,
+          now: dependencies.now,
+        })
+      : null;
+  coordinator.timelinePublisher = timelinePublisher;
 
   if (identityRouter.enabled) {
     api.registerTool(
@@ -124,9 +139,19 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     }
   });
 
-  api.on("message_received", (event, context) => {
+  api.on("message_received", async (event, context) => {
     coordinator.recordUserMessage(event, context);
     bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
+    await timelinePublisher?.capture({
+      sessionKey: event.sessionKey || context.sessionKey,
+      role: "user",
+      text: event.content ?? event.text,
+      event,
+      context,
+      taskId: coordinator.activeTaskForSession(
+        event.sessionKey || context.sessionKey,
+      ),
+    });
   });
 
   api.on("message_sending", (event, context) => {
@@ -148,6 +173,14 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     ) {
       return undefined;
     }
+    void timelinePublisher?.capture({
+      sessionKey,
+      role: "assistant",
+      text: event.content,
+      event,
+      context,
+      taskId: coordinator.activeTaskForSession(sessionKey),
+    });
     const pending = coordinator.pendingForSession(sessionKey);
     api.logger.info(
       `AgentBridge WeChat message delivery check (private=${isPrivateSessionKey(sessionKey)}, pending=${pending.length})`,
@@ -181,6 +214,14 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     if (coordinator.isDirectDeliveryActive(sessionKey)) {
       return undefined;
     }
+    void timelinePublisher?.capture({
+      sessionKey,
+      role: "assistant",
+      text: event.payload?.text,
+      event,
+      context,
+      taskId: coordinator.activeTaskForSession(sessionKey),
+    });
     const channel =
       coordinator.deliveryChannelForSession(sessionKey) ||
       routeChannel ||

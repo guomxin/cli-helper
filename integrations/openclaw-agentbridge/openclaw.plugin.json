@@ -161,6 +161,11 @@
         "type": "boolean",
         "description": "Allow non-sensitive background model wake-ups, including one original-request retry after a successful credential login.",
         "default": true
+      },
+      "syncTimeline": {
+        "type": "boolean",
+        "description": "Synchronize non-sensitive user and assistant text across endpoints through the AgentBridge ordered timeline.",
+        "default": true
       }
     }
   }

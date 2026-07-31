@@ -9,9 +9,9 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.5 为当前代码版本。
-> 中心端当前定义 65 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
-> 插件另提供 1 个身份状态工具；9 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.8 为当前代码版本。
+> 中心端当前定义 66 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
+> 插件另提供 1 个身份状态工具；10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
@@ -1502,6 +1502,35 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `390x844` 移动宽度；三张历史应用卡正确重建，跨过一次 SSE 重连周期后提示仍为
   0，浏览器控制台无错误或警告。部署后 AgentBridge warning 日志为空。
 - 本轮只读取已有任务和日志，没有发起、提交、审批、撤销任何 OA、泰华或语雀业务。
+
+## 15.39 2026-07-31 有序跨端时间线与任务终态修复
+
+- 用户真实撤销、重新提交出差申请后发现四个关联问题：Workspace 新卡出现时历史卡
+  似乎重新追加或换位；Telegram 偶发重复授权卡；已核对并实际提交成功的任务仍显示
+  “进行中”；普通文本没有像应用卡一样跨端同步和排序。
+- 生产账本确认最新出差任务的 `oa.business_trip.submit` Operation 已在
+  `2026-07-31 08:43:39Z` 成功，但六秒后旧业务字段 Interaction 再次以
+  `completed` 被观测。旧 Task Hub 把任何 `completed` 映射为 `active`，因此覆盖
+  已成功终态；同一授权 Interaction 的重复等待事件也进入 Telegram Outbox。
+- Task Hub 为 Interaction 关联增加最后观测状态，只在语义事件变化时追加事件。
+  `pending -> processing` 仍是同一个等待事件；已成功、失败、结果未知、取消或过期
+  的任务不会被旧 Interaction 回退。启动迁移会修复“当前 Operation 已成功、任务
+  却仍为 active/waiting/running”的既有记录。
+- 新增按 `userSubject` 隔离的 `user_timeline` 追加式时间线。TaskEvent、网页文本和
+  消息端用户/助手文本共享数据库递增序号；消息按稳定幂等键入账，Outbox 按顺序投递
+  到其他消息端，来源端不接收自己的镜像。
+- OpenClaw 插件升级为 `0.4.8`，通过宿主私有
+  `agentbridge_host_timeline_append` 发布非敏感文本。微信两个出站 Hook 对同一回复
+  共用一个发布 Promise，中心端再以唯一键二次防重。凭据、Cookie、业务字段值、
+  授权决定、系统提示和工具内部消息均不进入跨端时间线。
+- Workspace 改为读取 `/api/timeline` 并通过带数字游标的 SSE 增量更新。聊天历史、
+  其他端文本和任务卡使用稳定键排序；同一 `taskId` 复用原 DOM 节点及首次位置，
+  刷新或状态变化不再删除后追加历史卡片。
+- 针对生产时序新增终态不回退、等待事件去重、消息幂等、双用户隔离、HTTP 时间线、
+  微信双 Hook 去重和 Timeline Outbox 投递测试。实现阶段门禁为 Python 相关测试
+  `61/61`；完整门禁为 Python `463 passed, 3 skipped`、OpenClaw 插件 `92/92`、
+  npm pack dry-run 和 `git diff --check` 全部通过。正式部署记录在发布后补充。
+- 本次实现和自动化没有调用 OA、泰华或语雀业务写能力。
 
 ## 16. 后续演进顺序
 
