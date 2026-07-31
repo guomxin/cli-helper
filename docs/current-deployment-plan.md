@@ -1574,6 +1574,27 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 针对性测试 `28/28` 通过；完整发布门禁为 Python
   `464 passed, 3 skipped, 194 subtests passed`、OpenClaw 插件 `92/92`、依赖检查和
   npm pack dry-run 全部通过。本轮自动化没有调用 OA、泰华或语雀业务写能力。
+- 发布脚本的第一轮正式执行暴露了 Windows PowerShell 对 `--batch-json` 嵌套引号的
+  剥离问题。流程在 OpenClaw 重启前主动失败；随后改用无 BOM 临时文件和
+  `--batch-file`，OpenClaw 自身 dry-run 与部署资产测试 `11/11` 通过。修复提交
+  `90de652` 已推送。
+- 最终 Linux Release `19dd3ffd8203` 已部署，OpenClaw 2026.7.1 的 CLI/Gateway 版本
+  一致、插件无漂移、深度 RPC 与冷热预热均通过；Gateway PID 为 `13512`，30 秒告警
+  和 120 秒中止阈值已从实际配置回读确认。
+- 真实 Agent Workspace 先后执行“查看前 5 条 OA 已发”和“查看前 3 条 OA 已发”。
+  两次均返回业务结果，任务数最终为 0；Operation 账本分别只有一条
+  `oa.workflow.sent.list`，Operation ID 为 `eb89339d-d5a4-4f9c-824a-466eb2baa002` 和
+  `ad955a39-658c-48a5-b9d3-9109689f2381`，均为 `succeeded`，执行时间约 2.25 秒，
+  没有重复 OA 调用。
+- 真实验收同时发现旧失败 Run 的临时状态块会永久排在最新消息底部。提交 `19dd3ff`
+  增加终止状态清理；重新部署并刷新后，历史消息、查询结果和应用卡顺序保留，旧
+  `GATEWAY_TIMEOUT` 消失。第二次查询完成后页面没有超时或“处理未完成”，输入框恢复
+  可用。23:42 的微信 `getUpdates ETIMEDOUT` 是独立通道网络噪声，与两次 Workspace
+  查询和 OA 调用无关。
+- 当前方案已经消除 AgentBridge 的残留排队放大器，并用发布预热覆盖受控 Gateway
+  重启。OpenClaw 意外重启后仍可能重新触发其进程内缓存冷载入；彻底消除该上游问题
+  需要 OpenClaw 提供持久工具缓存或非阻塞插件发现。本项目不维护 OpenClaw 私有源码
+  分支，现阶段用预热门禁、单 Run 隔离、主动中止和稳定失败反馈控制风险。
 
 ## 16. 后续演进顺序
 
