@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import sqlite3
 from typing import Any, Iterator
 from uuid import uuid4
@@ -497,14 +498,38 @@ def _visible_messages(result: Any) -> list[dict]:
                 "role": role,
                 "text": text,
                 "timestamp": _safe_text(
-                    value.get("timestamp")
-                    or value.get("createdAt")
-                    or value.get("created_at"),
+                    _visible_timestamp(
+                        value.get("timestamp")
+                        or value.get("createdAt")
+                        or value.get("created_at")
+                    ),
                     80,
                 ),
             }
         )
     return messages
+
+
+def _visible_timestamp(value: Any) -> str | None:
+    text = _safe_text(value, 80)
+    if not text:
+        return None
+    if text.isdigit():
+        numeric = int(text)
+        if 1_000_000_000 <= numeric < 10_000_000_000:
+            seconds = float(numeric)
+        elif 1_000_000_000_000 <= numeric < 10_000_000_000_000:
+            seconds = numeric / 1_000
+        else:
+            return text
+        try:
+            return datetime.fromtimestamp(
+                seconds,
+                tz=timezone.utc,
+            ).isoformat(timespec="milliseconds")
+        except (OverflowError, OSError, ValueError):
+            return text
+    return text
 
 
 def _message_text(content: Any) -> str:

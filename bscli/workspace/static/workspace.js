@@ -191,9 +191,11 @@ function enterWorkspace(account) {
   $("#app-view").hidden = false;
   $("#account-name").textContent = account.username;
   switchView("chat");
-  loadGatewayStatus();
   loadTasks();
-  loadChat().finally(openTimelineStream);
+  loadChat().finally(() => {
+    openTimelineStream();
+    loadGatewayStatus();
+  });
 }
 
 async function logout() {
@@ -321,7 +323,7 @@ function textHash(value) {
 }
 
 function setTimelineNode(node, { key, createdAt, order = 0 }) {
-  const parsed = Date.parse(createdAt || "");
+  const parsed = parseTimestampMilliseconds(createdAt);
   node.dataset.timelineKey = String(key);
   node.dataset.timelineAt = String(
     Number.isFinite(parsed) ? parsed : Number(order) || 0,
@@ -1219,14 +1221,25 @@ function emptyState(text) {
 
 function formatTime(value) {
   if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return String(value);
+  const parsed = parseTimestampMilliseconds(value);
+  if (!Number.isFinite(parsed)) return String(value);
+  const date = new Date(parsed);
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function parseTimestampMilliseconds(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return Number.NaN;
+  if (/^\d{10,13}$/.test(text)) {
+    const numeric = Number(text);
+    return numeric < 100_000_000_000 ? numeric * 1_000 : numeric;
+  }
+  return Date.parse(text);
 }
 
 function statusLabel(status) {

@@ -70,13 +70,18 @@ class FakeGateway:
             return {
                 "sessionId": "session-web",
                 "messages": [
-                    {"role": "user", "content": "读取我的 OA 待办"},
+                    {
+                        "role": "user",
+                        "content": "读取我的 OA 待办",
+                        "timestamp": 1_785_459_303_372,
+                    },
                     {
                         "role": "assistant",
                         "content": [
                             {"type": "text", "text": "当前有 3 条待办。"},
                             {"type": "tool", "name": "hidden"},
                         ],
+                        "timestamp": "1785459333802",
                     },
                     {"role": "tool", "content": "not exposed"},
                 ],
@@ -481,6 +486,20 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertEqual(
                 [item["role"] for item in history["messages"]],
                 ["user", "assistant"],
+            )
+            self.assertEqual(
+                history["messages"][0]["timestamp"],
+                datetime.fromtimestamp(
+                    1_785_459_303.372,
+                    timezone.utc,
+                ).isoformat(timespec="milliseconds"),
+            )
+            self.assertEqual(
+                history["messages"][1]["timestamp"],
+                datetime.fromtimestamp(
+                    1_785_459_333.802,
+                    timezone.utc,
+                ).isoformat(timespec="milliseconds"),
             )
             self.assertEqual(result.run_id, "run-web-1")
             self.assertEqual(streamed[-1]["state"], "final")
@@ -917,6 +936,8 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn('api("/api/timeline?limit=240")', script)
         self.assertIn("openTimelineStream", script)
         self.assertIn("renderChatTimeline", script)
+        self.assertIn("parseTimestampMilliseconds", script)
+        self.assertIn(r"/^\d{10,13}$/", script)
         self.assertIn("state.taskCards.get(task.task_id)", script)
         self.assertIn("displayTaskTitle", script)
         self.assertIn("OA 出差申请提交", script)
