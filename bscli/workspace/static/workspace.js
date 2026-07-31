@@ -5,8 +5,13 @@ const state = {
   selectedTaskId: null,
   enrollmentTimer: null,
   chatTimer: null,
+  taskListTimer: null,
   eventSource: null,
+  lastEventId: null,
   liveMessages: new Map(),
+  taskCards: new Map(),
+  taskSyncTimers: new Map(),
+  toasts: new Map(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -194,6 +199,9 @@ async function logout() {
   } catch {}
   state.eventSource?.close();
   clearTimeout(state.chatTimer);
+  clearTimeout(state.taskListTimer);
+  state.taskSyncTimers.forEach((timer) => clearTimeout(timer));
+  state.taskSyncTimers.clear();
   state.account = null;
   location.reload();
 }
@@ -232,6 +240,7 @@ async function loadChat() {
   try {
     const result = await api("/api/chat/history?limit=120");
     state.liveMessages.clear();
+    state.taskCards.clear();
     container.replaceChildren(
       ...result.messages.map((message) => messageElement(message)),
     );
@@ -243,6 +252,7 @@ async function loadChat() {
         }),
       );
     }
+    await hydrateTaskCards();
     container.scrollTop = container.scrollHeight;
   } catch (error) {
     container.replaceChildren(
@@ -276,20 +286,33 @@ async function sendChat(event) {
   const message = textarea.value.trim();
   if (!message) return;
   textarea.value = "";
+  await executeChatMessage(message, form);
+}
+
+async function executeChatMessage(message, form = $("#chat-form")) {
   $("#chat-messages").append(messageElement({ role: "user", text: message }));
   $("#chat-messages").scrollTop = $("#chat-messages").scrollHeight;
   setBusy(form, true);
   const idempotencyKey = crypto.randomUUID();
+  const live = ensureLiveMessage(idempotencyKey);
+  live.requestMessage = message;
   addLiveProgress(idempotencyKey, "正在连接智能体", "active");
   try {
     await consumeChatStream({ message, idempotencyKey });
     scheduleChatRefresh(500, 1);
   } catch (error) {
-    addLiveProgress(idempotencyKey, "处理失败", "failed");
-    toast(friendlyError(error), true);
+    if (!error.rendered) {
+      renderRunFailure(
+        error.runId || idempotencyKey,
+        friendlyError(error),
+        false,
+        message,
+      );
+      toast(friendlyError(error), true, error.code || "chat-failed");
+    }
   } finally {
     setBusy(form, false);
-    textarea.focus();
+    form.elements.message?.focus();
   }
 }
 
@@ -331,6 +354,9 @@ async function consumeChatStream({ message, idempotencyKey }) {
   const decoder = new TextDecoder();
   let buffer = "";
   let streamError = null;
+  let runId = idempotencyKey;
+  let hadToolActivity = false;
+  let terminalFailure = null;
   for (;;) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -340,11 +366,18 @@ async function consumeChatStream({ message, idempotencyKey }) {
       const event = parseSseBlock(block);
       if (!event) continue;
       if (event.name === "accepted" && event.data.runId) {
-        addLiveProgress(event.data.runId, "请求已交给智能体", "active");
+        runId = event.data.runId;
+        adoptLiveMessage(idempotencyKey, runId, message);
+        addLiveProgress(runId, "请求已交给智能体", "active");
       } else if (event.name === "progress") {
+        if (event.data.kind === "tool") hadToolActivity = true;
         handleChatProgress(event.data);
       } else if (event.name === "chat") {
-        handleChatDelta(event.data);
+        if (["error", "aborted"].includes(event.data.state)) {
+          terminalFailure = event.data;
+        } else {
+          handleChatDelta(event.data);
+        }
       } else if (event.name === "stream-error") {
         streamError = event.data.code || "GATEWAY_STREAM_FAILED";
       }
@@ -354,6 +387,25 @@ async function consumeChatStream({ message, idempotencyKey }) {
   if (streamError) {
     const error = new Error(streamError);
     error.code = streamError;
+    error.runId = runId;
+    throw error;
+  }
+  if (terminalFailure) {
+    const safeToRetry =
+      terminalFailure.state === "error" && !hadToolActivity;
+    const text = agentFailureMessage(
+      terminalFailure.text,
+      safeToRetry,
+      terminalFailure.state,
+    );
+    renderRunFailure(runId, text, safeToRetry, message);
+    const error = new Error(text);
+    error.code =
+      terminalFailure.state === "aborted"
+        ? "AGENT_RUN_ABORTED"
+        : "AGENT_RUN_FAILED";
+    error.runId = runId;
+    error.rendered = true;
     throw error;
   }
 }
@@ -388,12 +440,33 @@ function ensureLiveMessage(runId) {
   progress.className = "live-progress";
   const text = document.createElement("div");
   text.className = "live-text";
-  item.append(progress, text);
+  const actions = document.createElement("div");
+  actions.className = "live-actions";
+  item.append(progress, text, actions);
   $("#chat-messages").append(item);
-  live = { item, progress, text, rows: new Map() };
+  live = {
+    item,
+    progress,
+    text,
+    actions,
+    rows: new Map(),
+    requestMessage: null,
+  };
   state.liveMessages.set(runId, live);
   scrollChat();
   return live;
+}
+
+function adoptLiveMessage(previousRunId, runId, requestMessage) {
+  if (previousRunId === runId) return ensureLiveMessage(runId);
+  const previous = state.liveMessages.get(previousRunId);
+  const existing = state.liveMessages.get(runId);
+  if (existing?.item?.isConnected) return existing;
+  if (!previous?.item?.isConnected) return ensureLiveMessage(runId);
+  state.liveMessages.delete(previousRunId);
+  previous.requestMessage = requestMessage;
+  state.liveMessages.set(runId, previous);
+  return previous;
 }
 
 function handleChatProgress(payload) {
@@ -452,24 +525,221 @@ function handleChatDelta(payload) {
   }
   if (payload.state === "final") {
     live.progress.replaceChildren();
+    live.actions.replaceChildren();
     live.item.classList.remove("live-message");
     state.liveMessages.delete(payload.runId);
     scheduleChatRefresh(500, 1);
-  } else if (["error", "aborted"].includes(payload.state)) {
-    live.item.classList.add("failed");
-    addLiveProgress(
-      payload.runId,
-      payload.state === "aborted" ? "处理已停止" : "处理失败",
-      "failed",
-    );
-    scheduleChatRefresh(1000, 1);
   }
   scrollChat();
+}
+
+function renderRunFailure(runId, text, canRetry, requestMessage) {
+  const live = ensureLiveMessage(runId);
+  live.item.classList.add("failed");
+  live.text.textContent = text;
+  live.actions.replaceChildren();
+  addLiveProgress(runId, "处理未完成", "failed");
+  if (canRetry && requestMessage) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "secondary retry-command";
+    retry.textContent = "重新发送";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      await executeChatMessage(requestMessage);
+    });
+    live.actions.append(retry);
+  }
+  scrollChat();
+}
+
+function agentFailureMessage(value, safeToRetry, state) {
+  if (state === "aborted") return "智能体处理已停止。";
+  const text = String(value || "").trim();
+  const networkFailure =
+    /network|connection|econnreset|before producing a reply/i.test(text);
+  if (networkFailure && safeToRetry) {
+    return "智能体网络连接中断，尚未调用业务工具。可安全地重新发送这条指令。";
+  }
+  if (networkFailure) {
+    return "智能体网络连接中断。由于任务已经开始调用业务工具，请先查看任务状态再决定是否重试。";
+  }
+  return text || "智能体未能完成本次处理。";
 }
 
 function scrollChat() {
   const container = $("#chat-messages");
   container.scrollTop = container.scrollHeight;
+}
+
+async function hydrateTaskCards() {
+  try {
+    const result = await api("/api/tasks?active_only=false&limit=30");
+    const active = new Set(["active", "waiting_user", "running"]);
+    const recentCutoff = Date.now() - 6 * 60 * 60 * 1000;
+    const candidates = result.items
+      .filter((task) => {
+        const updatedAt = Date.parse(task.updated_at || "");
+        return active.has(task.status) ||
+          (Number.isFinite(updatedAt) && updatedAt >= recentCutoff);
+      })
+      .slice(0, 8)
+      .reverse();
+    const details = await Promise.allSettled(
+      candidates.map((task) =>
+        api(`/api/tasks/${encodeURIComponent(task.task_id)}`),
+      ),
+    );
+    details.forEach((result) => {
+      if (result.status === "fulfilled") upsertTaskCard(result.value);
+    });
+  } catch {}
+}
+
+function scheduleTaskSync(taskId, eventType) {
+  if (!taskId) return;
+  clearTimeout(state.taskSyncTimers.get(taskId));
+  state.taskSyncTimers.set(
+    taskId,
+    setTimeout(async () => {
+      state.taskSyncTimers.delete(taskId);
+      await syncTaskCard(taskId);
+    }, 220),
+  );
+  clearTimeout(state.taskListTimer);
+  state.taskListTimer = setTimeout(loadTasks, 260);
+  if (
+    ["task.operation.failed", "task.operation.outcome_unknown"].includes(
+      eventType,
+    )
+  ) {
+    toast(
+      eventType === "task.operation.outcome_unknown"
+        ? "一项业务操作的最终结果需要核对。"
+        : "一项业务操作执行失败。",
+      true,
+      `task:${taskId}:failure`,
+    );
+  }
+}
+
+async function syncTaskCard(taskId) {
+  try {
+    const result = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+    upsertTaskCard(result);
+    if (state.selectedTaskId === taskId) renderTaskDetail(result);
+  } catch (error) {
+    if (error.code !== "TASK_NOT_FOUND") {
+      toast(
+        friendlyError(error),
+        true,
+        `task:${taskId}:${error.code || "sync"}`,
+      );
+    }
+  }
+}
+
+function upsertTaskCard(result) {
+  const task = result?.task;
+  if (!task?.task_id) return;
+  const container = $("#chat-messages");
+  const nearBottom =
+    container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  let card = state.taskCards.get(task.task_id);
+  if (!card?.isConnected) {
+    card = document.createElement("article");
+    card.className = "message assistant application-card";
+    card.dataset.taskId = task.task_id;
+    state.taskCards.set(task.task_id, card);
+    container.append(card);
+  }
+  card.className =
+    `message assistant application-card ${escapeClass(task.status)}`;
+  card.replaceChildren();
+
+  const header = document.createElement("div");
+  header.className = "application-card-header";
+  const heading = document.createElement("div");
+  const eyebrow = document.createElement("span");
+  eyebrow.className = "application-card-eyebrow";
+  eyebrow.textContent = "AGENTBRIDGE 应用卡";
+  const title = document.createElement("strong");
+  title.className = "application-card-title";
+  title.textContent = task.title || "AgentBridge 任务";
+  heading.append(eyebrow, title);
+  const status = document.createElement("span");
+  status.className =
+    `application-card-status ${escapeClass(task.status)}`;
+  status.textContent = statusLabel(task.status);
+  header.append(heading, status);
+  card.append(header);
+
+  const interaction = result.interaction;
+  const description = document.createElement("p");
+  description.className = "application-card-copy";
+  description.textContent =
+    interaction?.message || taskCardStatusMessage(task.status);
+  card.append(description);
+
+  const facts = document.createElement("dl");
+  facts.className = "application-card-facts";
+  const systemName = interaction?.display?.systemName;
+  const effect = interaction?.display?.effect;
+  if (systemName) addDetail(facts, "系统", systemName);
+  if (effect) addDetail(facts, "影响", effect);
+  const latestEvent = result.events?.at(-1);
+  if (latestEvent) {
+    addDetail(
+      facts,
+      "最新进展",
+      `${eventLabel(latestEvent.event_type)} · ${formatTime(latestEvent.created_at)}`,
+    );
+  }
+  if (facts.childElementCount) card.append(facts);
+
+  const actions = document.createElement("div");
+  actions.className = "application-card-actions";
+  const url = interaction?.presentation?.url;
+  if (
+    interaction &&
+    ["pending", "processing"].includes(interaction.state) &&
+    typeof url === "string" &&
+    /^https:\/\//.test(url)
+  ) {
+    const action = document.createElement("a");
+    action.className = "primary";
+    action.href = url;
+    action.target = "_blank";
+    action.rel = "noopener";
+    action.textContent = interactionActionLabel(interaction.type);
+    actions.append(action);
+  }
+  const progress = document.createElement("button");
+  progress.type = "button";
+  progress.className = "secondary";
+  progress.textContent = "查看进度";
+  progress.addEventListener("click", () => {
+    switchView("tasks");
+    loadTaskDetail(task.task_id);
+  });
+  actions.append(progress);
+  card.append(actions);
+  if (nearBottom) scrollChat();
+}
+
+function taskCardStatusMessage(status) {
+  return (
+    {
+      active: "任务已创建，等待智能体继续处理。",
+      waiting_user: "任务正在等待你的填写或确认。",
+      running: "智能体正在执行已确认的操作。",
+      succeeded: "任务已经完成。",
+      failed: "任务未能完成，请查看进度了解原因。",
+      outcome_unknown: "最终结果未能确认，请先到业务系统核对。",
+      canceled: "任务已取消。",
+      expired: "任务交互已过期，请重新发起。",
+    }[status] || "任务状态已更新。"
+  );
 }
 
 async function loadTasks() {
@@ -644,7 +914,13 @@ async function loadEndpoints() {
 
 function openEventStream() {
   state.eventSource?.close();
-  const source = new EventSource("/api/events/stream");
+  const query = state.lastEventId
+    ? `?after=${encodeURIComponent(state.lastEventId)}`
+    : "";
+  const source = new EventSource(`/api/events/stream${query}`);
+  source.addEventListener("cursor", (event) => {
+    if (event.lastEventId) state.lastEventId = event.lastEventId;
+  });
   source.addEventListener("task", (event) => {
     let payload = {};
     try {
@@ -652,15 +928,8 @@ function openEventStream() {
     } catch {
       payload = {};
     }
-    loadTasks();
-    if (state.selectedTaskId === payload.task_id) {
-      loadTaskDetail(state.selectedTaskId);
-    }
-    toast(
-      payload.event_type === "task.interaction.waiting"
-        ? "新的可信确认已可在网页端处理"
-        : "任务状态已更新",
-    );
+    if (event.lastEventId) state.lastEventId = event.lastEventId;
+    scheduleTaskSync(payload.task_id, payload.event_type);
   });
   source.onerror = () => {
     source.close();
@@ -731,12 +1000,28 @@ function friendlyError(error) {
   return labels[error.code] || error.message || "操作没有完成。";
 }
 
-function toast(message, isError = false) {
-  const item = document.createElement("div");
+function toast(message, isError = false, key = message) {
+  const normalizedKey = String(key || message);
+  let item = state.toasts.get(normalizedKey);
+  if (!item?.isConnected) {
+    item = document.createElement("div");
+    state.toasts.set(normalizedKey, item);
+    $("#toast-region").append(item);
+  }
   item.className = `toast${isError ? " error" : ""}`;
   item.textContent = message;
-  $("#toast-region").append(item);
-  setTimeout(() => item.remove(), 4200);
+  clearTimeout(item.dismissTimer);
+  while ($("#toast-region").childElementCount > 2) {
+    const oldest = $("#toast-region").firstElementChild;
+    state.toasts.forEach((value, toastKey) => {
+      if (value === oldest) state.toasts.delete(toastKey);
+    });
+    oldest?.remove();
+  }
+  item.dismissTimer = setTimeout(() => {
+    item.remove();
+    state.toasts.delete(normalizedKey);
+  }, 5200);
 }
 
 function emptyState(text) {
@@ -794,6 +1079,16 @@ function interactionLabel(type) {
       business_input: "需要补充业务信息",
       execution_authorization: "需要核对并确认",
     }[type] || "需要用户处理"
+  );
+}
+
+function interactionActionLabel(type) {
+  return (
+    {
+      credential: "安全登录",
+      business_input: "填写信息",
+      execution_authorization: "核对并确认",
+    }[type] || "继续处理"
   );
 }
 

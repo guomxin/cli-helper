@@ -29,6 +29,13 @@ const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const LOGIN_CONTINUATION_TTL_MS = 5 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
+const QUIET_COMPANION_TASK_EVENTS = new Set([
+  "task.created",
+  "task.operation.linked",
+  "task.operation.running",
+  "task.interaction.completed",
+]);
+const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
 const LOGIN_READ_TOOLS = new Map([
   [
     "oa_workflow_pending_list",
@@ -649,6 +656,15 @@ export class InteractionCoordinator {
         notification?.deliveryMode === "no_op"
       ) {
         delivered = true;
+      } else if (isPullBasedEndpoint(endpoint, route, binding)) {
+        // Agent Workspace reads the same Task Hub event stream directly.
+        delivered = true;
+      } else if (
+        notification?.deliveryMode === "status" &&
+        QUIET_COMPANION_TASK_EVENTS.has(notification?.event?.eventType)
+      ) {
+        // Keep companion chats focused on actionable cards and terminal results.
+        delivered = true;
       } else if (
         isPrivateSessionKey(sessionKey) &&
         route &&
@@ -1211,7 +1227,7 @@ export class InteractionCoordinator {
       if (!presentation) {
         return false;
       }
-      const text = "AgentBridge 已收到你提交的信息，请继续完成下面的安全操作。";
+      const text = "请处理下面的 AgentBridge 安全卡片。";
       const initialPayload = { text, presentation };
       if (
         !(await this.sendRoutePayload(
@@ -1995,6 +2011,14 @@ function safeStatusMessage(status, errorCode, response = null) {
     default:
       return `AgentBridge 安全交互状态已更新：${safeCode(status)}${code}。`;
   }
+}
+
+function isPullBasedEndpoint(endpoint, route, binding) {
+  const clientType = String(endpoint?.clientType || "").trim().toLowerCase();
+  const channel = String(
+    route?.channel || binding?.channel || "",
+  ).trim().toLowerCase();
+  return clientType === "web" || PULL_BASED_CHANNELS.has(channel);
 }
 
 function normalizeToolCallId(value) {

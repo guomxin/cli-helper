@@ -403,9 +403,18 @@ def create_workspace_http_server(
             self.send_header("Connection", "close")
             self._security_headers()
             self.end_headers()
-            cursor = after_event_id
+            cursor = after_event_id or application.event_cursor(account)
             deadline = time.monotonic() + 25
             try:
+                if not after_event_id:
+                    self.wfile.write(
+                        (
+                            f"id: {cursor}\n"
+                            "event: cursor\n"
+                            'data: {"ready":true}\n\n'
+                        ).encode("utf-8")
+                    )
+                    self.wfile.flush()
                 while time.monotonic() < deadline:
                     events = application.list_events(
                         account,

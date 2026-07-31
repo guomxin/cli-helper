@@ -146,6 +146,16 @@ class WorkspaceApplication:
             )
         ]
 
+    def latest_event_id(self, account: dict) -> str | None:
+        return self.service.tasks.latest_user_event_id(
+            user_subject=account["user_subject"],
+        )
+
+    def event_cursor(self, account: dict) -> str:
+        return self.service.tasks.current_user_event_cursor(
+            user_subject=account["user_subject"],
+        )
+
     def list_endpoints(self, account: dict) -> list[dict]:
         return [
             _public_endpoint(endpoint)

@@ -2817,11 +2817,10 @@ def _task_notification_message(task: dict, event: dict) -> str:
         return f"{title}：任务正在执行。"
     if event_type == "task.interaction.waiting":
         return f"{title}：任务正在等待用户填写或确认。"
-    if event_type in {
-        "task.interaction.completed",
-        "task.operation.succeeded",
-    }:
-        return f"{title}：可信确认已完成，任务状态为 {task['status']}。"
+    if event_type == "task.interaction.completed":
+        return f"{title}：可信确认已完成。"
+    if event_type == "task.operation.succeeded":
+        return f"{title}：已完成。"
     if event_type == "task.canceled":
         return f"{title}：用户已取消本次操作。"
     if event_type == "task.interaction.expired":
@@ -2832,7 +2831,7 @@ def _task_notification_message(task: dict, event: dict) -> str:
         "task.interaction.failed",
         "task.operation.failed",
     }:
-        return f"{title}：执行失败，请返回发起端查看具体原因。"
+        return f"{title}：执行失败，请查看任务详情。"
     if event_type == "task.operation.outcome_unknown":
         return f"{title}：最终结果未能确认，请先在目标系统核对。"
     return f"{title}：任务状态已更新为 {task['status']}。"

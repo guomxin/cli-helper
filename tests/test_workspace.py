@@ -349,6 +349,10 @@ class WorkspaceStoreTests(unittest.TestCase):
                     for item in app.list_events(account_a)
                 )
             )
+            self.assertEqual(
+                app.latest_event_id(account_a),
+                app.list_events(account_a)[-1]["event_id"],
+            )
             self.assertTrue(
                 all(
                     "user_subject" not in item
@@ -801,6 +805,12 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("parseSseBlock", script)
         self.assertIn("handleChatProgress", script)
         self.assertIn("handleChatDelta", script)
+        self.assertIn("hydrateTaskCards", script)
+        self.assertIn("upsertTaskCard", script)
+        self.assertIn('source.addEventListener("cursor"', script)
+        self.assertNotIn('"任务状态已更新",', script)
+        self.assertIn("childElementCount > 2", script)
+        self.assertIn("application-card", stylesheet)
 
 
 def _service(tmp: str) -> CentralCapabilityService:

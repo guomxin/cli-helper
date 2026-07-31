@@ -99,6 +99,47 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
+    def test_latest_user_event_id_tracks_only_the_owned_event_stream(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        created_event = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )[-1]
+
+        self.assertEqual(
+            self.store.latest_user_event_id(user_subject="user-a"),
+            created_event["event_id"],
+        )
+        self.assertIsNone(
+            self.store.latest_user_event_id(user_subject="user-b"),
+        )
+        self.assertTrue(
+            self.store.current_user_event_cursor(
+                user_subject="user-b",
+            ).startswith("time:"),
+        )
+
+        self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-latest",
+                "user_subject": "user-a",
+                "capability_name": "oa.leave.prepare",
+                "status": "running",
+            },
+        )
+        latest_event = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )[-1]
+        self.assertNotEqual(latest_event["event_id"], created_event["event_id"])
+        self.assertEqual(
+            self.store.latest_user_event_id(user_subject="user-a"),
+            latest_event["event_id"],
+        )
+
     def test_waiting_interaction_is_broadcast_to_all_trusted_user_endpoints(self):
         origin, _ = self._endpoint()
         secondary, _ = self.store.ensure_endpoint(

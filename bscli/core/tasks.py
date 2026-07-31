@@ -731,32 +731,66 @@ class TaskHubStore:
             parameters: list[Any] = [user_subject]
             query = "SELECT * FROM task_events WHERE user_subject = ?"
             if after_event_id:
-                cursor = connection.execute(
-                    """
-                    SELECT created_at, rowid FROM task_events
-                    WHERE event_id = ? AND user_subject = ?
-                    """,
-                    (after_event_id, user_subject),
-                ).fetchone()
-                if cursor is None:
-                    raise TaskNotFound(
-                        f"task event not found: {after_event_id}"
+                if after_event_id.startswith("time:"):
+                    cursor_time = after_event_id.removeprefix("time:")
+                    try:
+                        parsed = datetime.fromisoformat(cursor_time)
+                    except ValueError as exc:
+                        raise TaskNotFound(
+                            f"task event cursor is invalid: {after_event_id}"
+                        ) from exc
+                    if parsed.tzinfo is None:
+                        raise TaskNotFound(
+                            f"task event cursor is invalid: {after_event_id}"
+                        )
+                    query += " AND created_at > ?"
+                    parameters.append(parsed.isoformat())
+                else:
+                    cursor = connection.execute(
+                        """
+                        SELECT created_at, rowid FROM task_events
+                        WHERE event_id = ? AND user_subject = ?
+                        """,
+                        (after_event_id, user_subject),
+                    ).fetchone()
+                    if cursor is None:
+                        raise TaskNotFound(
+                            f"task event not found: {after_event_id}"
+                        )
+                    query += (
+                        " AND (created_at > ? OR "
+                        "(created_at = ? AND rowid > ?))"
                     )
-                query += (
-                    " AND (created_at > ? OR "
-                    "(created_at = ? AND rowid > ?))"
-                )
-                parameters.extend(
-                    [
-                        cursor["created_at"],
-                        cursor["created_at"],
-                        cursor["rowid"],
-                    ]
-                )
+                    parameters.extend(
+                        [
+                            cursor["created_at"],
+                            cursor["created_at"],
+                            cursor["rowid"],
+                        ]
+                    )
             query += " ORDER BY created_at, rowid LIMIT ?"
             parameters.append(limit)
             rows = connection.execute(query, parameters).fetchall()
         return [_event_from_row(row) for row in rows]
+
+    def latest_user_event_id(self, *, user_subject: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT event_id FROM task_events
+                WHERE user_subject = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (user_subject,),
+            ).fetchone()
+        return str(row["event_id"]) if row is not None else None
+
+    def current_user_event_cursor(self, *, user_subject: str) -> str:
+        return (
+            self.latest_user_event_id(user_subject=user_subject)
+            or f"time:{_utc_now()}"
+        )
 
     def list_events(
         self,

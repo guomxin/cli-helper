@@ -737,6 +737,114 @@ test("delivers a non-origin authorization and acknowledges its outbox item", asy
   assert.equal(calls.at(-1).params.succeeded, true);
 });
 
+test("acknowledges pull-based workspace notifications without direct webchat delivery", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "web",
+            conversationRef:
+              "agent:main:agentbridge-workspace:direct:account-123",
+            route: { channel: "webchat", to: "account-123" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-workspace-card-1234567890",
+              deliveryMode: "trusted_interaction",
+              interaction: interaction({
+                interactionId: "interaction-workspace-card-1234567890",
+              }),
+            },
+            {
+              deliveryId: "delivery-workspace-status-1234567890",
+              deliveryMode: "status",
+              event: { eventType: "task.operation.succeeded" },
+              message: "Task completed.",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "workspace:account-123",
+      channel: "webchat",
+      senderId: "account-123",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 0);
+  const acknowledgements = calls.filter(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgements.length, 2);
+  assert.equal(
+    acknowledgements.every((item) => item.params.succeeded === true),
+    true,
+  );
+});
+
+test("suppresses routine companion status chatter but retains acknowledgement", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: "agent:main:telegram:direct:1001",
+            route: { channel: "telegram", to: "1001" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-routine-status-1234567890",
+              deliveryMode: "status",
+              event: { eventType: "task.operation.running" },
+              message: "Task is running.",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:1001",
+      channel: "telegram",
+      senderId: "1001",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(calls.at(-1).name, "agentbridge_host_notification_ack");
+  assert.equal(calls.at(-1).params.succeeded, true);
+});
+
 test("uses the bound WeChat route when the final reply omits channel metadata", () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, { mcpClient: null });

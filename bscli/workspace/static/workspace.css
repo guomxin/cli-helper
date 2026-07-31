@@ -512,6 +512,141 @@ code {
   margin-top: 10px;
 }
 
+.live-actions {
+  display: flex;
+  margin-top: 10px;
+}
+
+.live-actions:empty {
+  display: none;
+}
+
+.retry-command {
+  min-height: 34px;
+}
+
+.application-card {
+  width: min(720px, 94%);
+  padding: 0;
+  overflow: hidden;
+  white-space: normal;
+}
+
+.application-card.waiting_user {
+  border-color: #d8bd83;
+}
+
+.application-card.failed,
+.application-card.outcome_unknown {
+  border-color: #d4a19e;
+}
+
+.application-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f4f7f5;
+}
+
+.application-card-header > div {
+  min-width: 0;
+}
+
+.application-card-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--teal);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.application-card-title {
+  display: block;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.application-card-status {
+  flex: 0 0 auto;
+  min-width: 58px;
+  padding: 4px 7px;
+  border: 1px solid #b7c4bf;
+  border-radius: 5px;
+  color: #40524d;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.application-card-status.waiting_user {
+  border-color: #d1b26f;
+  color: #765718;
+  background: #fff8e9;
+}
+
+.application-card-status.running,
+.application-card-status.active {
+  border-color: #8fbdb3;
+  color: #0b6255;
+  background: #e7f3ef;
+}
+
+.application-card-status.succeeded {
+  border-color: #99b89a;
+  color: #38633b;
+  background: #edf5ed;
+}
+
+.application-card-status.failed,
+.application-card-status.outcome_unknown {
+  border-color: #ce9d99;
+  color: #873d3a;
+  background: #fbefee;
+}
+
+.application-card-copy {
+  margin: 0;
+  padding: 13px 16px 0;
+  color: #34443f;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.application-card-facts {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 7px 10px;
+  margin: 12px 16px 0;
+  font-size: 12px;
+}
+
+.application-card-facts dt {
+  color: var(--muted);
+}
+
+.application-card-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.application-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 16px 16px;
+}
+
+.application-card-actions .primary,
+.application-card-actions .secondary {
+  min-height: 36px;
+}
+
 @keyframes live-pulse {
   50% {
     opacity: 0.35;
@@ -753,6 +888,7 @@ td {
   z-index: 10;
   display: grid;
   gap: 8px;
+  pointer-events: none;
 }
 
 .toast {
