@@ -807,6 +807,8 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("handleChatDelta", script)
         self.assertIn("hydrateTaskCards", script)
         self.assertIn("upsertTaskCard", script)
+        self.assertIn("displayTaskTitle", script)
+        self.assertIn("OA 出差申请提交", script)
         self.assertIn('source.addEventListener("cursor"', script)
         self.assertNotIn('"任务状态已更新",', script)
         self.assertIn("childElementCount > 2", script)

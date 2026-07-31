@@ -665,7 +665,7 @@ function upsertTaskCard(result) {
   eyebrow.textContent = "AGENTBRIDGE 应用卡";
   const title = document.createElement("strong");
   title.className = "application-card-title";
-  title.textContent = task.title || "AgentBridge 任务";
+  title.textContent = displayTaskTitle(task.title);
   heading.append(eyebrow, title);
   const status = document.createElement("span");
   status.className =
@@ -677,8 +677,12 @@ function upsertTaskCard(result) {
   const interaction = result.interaction;
   const description = document.createElement("p");
   description.className = "application-card-copy";
-  description.textContent =
-    interaction?.message || taskCardStatusMessage(task.status);
+  const interactionActive =
+    interaction &&
+    ["pending", "processing"].includes(interaction.state);
+  description.textContent = interactionActive
+    ? interaction.message || taskCardStatusMessage(task.status)
+    : taskCardStatusMessage(task.status);
   card.append(description);
 
   const facts = document.createElement("dl");
@@ -701,8 +705,7 @@ function upsertTaskCard(result) {
   actions.className = "application-card-actions";
   const url = interaction?.presentation?.url;
   if (
-    interaction &&
-    ["pending", "processing"].includes(interaction.state) &&
+    interactionActive &&
     typeof url === "string" &&
     /^https:\/\//.test(url)
   ) {
@@ -739,6 +742,30 @@ function taskCardStatusMessage(status) {
       canceled: "任务已取消。",
       expired: "任务交互已过期，请重新发起。",
     }[status] || "任务状态已更新。"
+  );
+}
+
+function displayTaskTitle(value) {
+  const title = String(value || "").trim();
+  return (
+    {
+      "Prepare OA Efficiency-Data Approval": "OA 效能数据审批",
+      "Prepare OA Travel-Expense Approval": "OA 差旅费审批",
+      "Prepare OA Labor-Contract Renewal Approval": "OA 劳动合同续签审批",
+      "Prepare OA Weekly-Report Acknowledgement": "OA 周报阅办",
+      "Prepare OA Standard-Collaboration Approval": "OA 普通事项审批",
+      "Prepare OA Workflow Revoke": "OA 流程撤销",
+      "Prepare OA Business Trip Draft": "OA 出差申请草稿",
+      "Prepare OA Business Trip Submission": "OA 出差申请提交",
+      "Prepare OA Leave Draft": "OA 请假申请草稿",
+      "Prepare OA Leave Submission": "OA 请假申请提交",
+      "Prepare OA Missed-Punch Draft": "OA 补签申请草稿",
+      "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
+      "Prepare OA Meeting Creation": "OA 会议创建",
+      "Prepare Taihua Work Log": "泰华工作日志提交",
+    }[title] ||
+    title ||
+    "AgentBridge 任务"
   );
 }
 
@@ -779,7 +806,8 @@ function renderTasks() {
           <span>${formatTime(task.updated_at)}</span>
         </span>
       </span>`;
-    button.querySelector(".task-title").textContent = task.title;
+    button.querySelector(".task-title").textContent =
+      displayTaskTitle(task.title);
     button.addEventListener("click", () => loadTaskDetail(task.task_id));
     list.append(button);
   });
@@ -820,7 +848,7 @@ function renderTaskDetail(result) {
   eyebrow.className = "eyebrow";
   eyebrow.textContent = statusLabel(task.status);
   const title = document.createElement("h2");
-  title.textContent = task.title;
+  title.textContent = displayTaskTitle(task.title);
   headingCopy.append(eyebrow, title);
   heading.append(back, headingCopy);
   detail.append(heading);
@@ -1065,9 +1093,14 @@ function eventLabel(type) {
       "task.operation.linked": "操作已关联",
       "task.interaction.pending": "等待用户处理",
       "task.interaction.completed": "可信交互已完成",
+      "task.interaction.expired": "可信交互已过期",
+      "task.interaction.failed": "可信交互失败",
+      "task.interaction.superseded": "可信交互已更新",
+      "task.operation.running": "操作执行中",
       "task.operation.succeeded": "操作成功",
       "task.operation.failed": "操作失败",
       "task.operation.outcome_unknown": "操作结果待核对",
+      "task.canceled": "任务已取消",
     }[type] || type.replaceAll(".", " / ")
   );
 }
