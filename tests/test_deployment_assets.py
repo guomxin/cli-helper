@@ -59,6 +59,7 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             "diagnostics.stuckSessionWarnMs",
             "diagnostics.stuckSessionAbortMs",
+            "--batch-file",
             "gateway status --deep --require-rpc --json",
             "OpenClaw CLI and Gateway versions do not match",
             "OpenClaw Gateway reports plugin version drift",

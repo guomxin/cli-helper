@@ -224,8 +224,23 @@ if ($RestartOpenClaw) {
             value = 120000
         }
     ) | ConvertTo-Json -Compress
-    & openclaw config set --batch-json $diagnosticsBatch
-    if ($LASTEXITCODE -ne 0) {
+    $diagnosticsBatchFile = Join-Path ([IO.Path]::GetTempPath()) (
+        "agentbridge-openclaw-diagnostics-{0}.json" -f [guid]::NewGuid().ToString("N")
+    )
+    $configExitCode = 1
+    try {
+        [IO.File]::WriteAllText(
+            $diagnosticsBatchFile,
+            $diagnosticsBatch,
+            [Text.UTF8Encoding]::new($false)
+        )
+        & openclaw config set --batch-file $diagnosticsBatchFile
+        $configExitCode = $LASTEXITCODE
+    }
+    finally {
+        Remove-Item -LiteralPath $diagnosticsBatchFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($configExitCode -ne 0) {
         throw "Configuring OpenClaw stuck-session recovery failed"
     }
     & openclaw gateway restart
