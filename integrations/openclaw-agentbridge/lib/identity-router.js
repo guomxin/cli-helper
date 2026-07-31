@@ -84,8 +84,11 @@ export class AgentBridgeIdentityRouter {
 
   async resolveWorkspaceSession(sessionKey, { signal } = {}) {
     const pinned = this.resolvePinnedSession({ sessionKey });
-    if (pinned?.bound || !isWorkspaceSessionKey(sessionKey)) {
+    if (!isWorkspaceSessionKey(sessionKey)) {
       return pinned || unbound("identity_not_provisioned");
+    }
+    if (pinned?.bound && this.endpointKeyForSession(sessionKey)) {
+      return pinned;
     }
     for (const { binding, client } of this.configuredIdentities()) {
       try {

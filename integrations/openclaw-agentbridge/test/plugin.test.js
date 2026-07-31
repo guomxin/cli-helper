@@ -209,7 +209,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
   ]);
 });
 
-test("shares a workspace identity binding with the agent runtime instance", async () => {
+test("shares workspace identity and endpoint bindings with the agent runtime instance", async () => {
   const sharedState = createInteractionSharedState();
   const requests = [];
   const pluginConfig = {
@@ -226,16 +226,26 @@ test("shares a workspace identity binding with the agent runtime instance", asyn
   };
   const fetchImpl = async (_url, options) => {
     const body = JSON.parse(options.body);
+    const toolName = body.params?.name;
     requests.push({
       authorization: options.headers.Authorization,
       body,
     });
+    const structuredContent =
+      toolName === "agentbridge_host_task_ensure"
+        ? {
+            status: "succeeded",
+            task: { taskId: "task-workspace-shared-1234567890" },
+          }
+        : toolName === "oa_workflow_pending_list"
+          ? { status: "succeeded", result: { count: 0, items: [] } }
+          : { status: "succeeded" };
     return new Response(
       JSON.stringify({
         jsonrpc: "2.0",
         id: body.id,
         result: {
-          structuredContent: { status: "succeeded" },
+          structuredContent,
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -270,20 +280,33 @@ test("shares a workspace identity binding with the agent runtime instance", asyn
   const tools = runtime.toolFactory({
     sessionKey,
     messageChannel: "webchat",
+    runId: "workspace-shared-run",
   });
-  const statusTool = tools.find((tool) => tool.name === "oa_session_status");
-  const result = await statusTool.execute("workspace-status", {});
+  const pendingTool = tools.find(
+    (tool) => tool.name === "oa_workflow_pending_list",
+  );
+  const result = await pendingTool.execute("workspace-pending", { limit: 5 });
 
   assert.equal(responses[0].ok, true);
   assert.equal(result.details.structuredContent.status, "succeeded");
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.deepEqual(
     requests.map((request) => request.body.params.name),
     [
       "agentbridge_host_workspace_session_bind",
-      "oa_session_status",
+      "agentbridge_host_task_ensure",
+      "oa_workflow_pending_list",
     ],
   );
+  const taskEnsure = requests.find(
+    (request) =>
+      request.body.params.name === "agentbridge_host_task_ensure",
+  );
+  assert.equal(
+    taskEnsure.body.params.arguments.endpoint_key,
+    "workspace:account-123",
+  );
+  assert.equal(taskEnsure.body.params.arguments.client_type, "web");
   assert.equal(
     requests.every(
       (request) => request.authorization === "Bearer token-a",

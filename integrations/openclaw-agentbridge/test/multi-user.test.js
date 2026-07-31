@@ -428,6 +428,53 @@ test("workspace sessions recover a missing in-memory identity binding", async ()
   );
 });
 
+test("workspace sessions recover a missing endpoint for a pinned identity", async () => {
+  const requests = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_workspace_session_resolve") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            binding: {
+              endpointKey: "workspace:account-123",
+              sessionKey:
+                "agent:main:agentbridge-workspace:direct:account-123",
+            },
+          },
+        };
+      }
+      return {
+        structuredContent: {
+          status: "succeeded",
+        },
+      };
+    },
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const bindingKey = router.config.identityBindings[0].key;
+  assert.equal(
+    router.restoreSessionBinding({ sessionKey, bindingKey }),
+    true,
+  );
+  assert.equal(router.endpointKeyForSession(sessionKey), null);
+
+  const resolved = await router.resolveWorkspaceSession(sessionKey);
+
+  assert.equal(resolved.bound, true);
+  assert.equal(
+    router.endpointKeyForSession(sessionKey),
+    "workspace:account-123",
+  );
+  assert.deepEqual(
+    requests.map((request) => request.body.params.name),
+    ["agentbridge_host_workspace_session_resolve"],
+  );
+});
+
 test("workspace tasks keep the web endpoint distinct from the bearer binding", async () => {
   const requests = [];
   const router = createRouter({

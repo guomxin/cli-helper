@@ -15,13 +15,17 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.4.5";
+const PLUGIN_VERSION = "0.4.6";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
   const identitySessionBindings = dependencies.sharedState
     ? dependencies.sharedState.identitySessionBindings ||
       (dependencies.sharedState.identitySessionBindings = new Map())
+    : undefined;
+  const identitySessionEndpoints = dependencies.sharedState
+    ? dependencies.sharedState.identitySessionEndpoints ||
+      (dependencies.sharedState.identitySessionEndpoints = new Map())
     : undefined;
   const identityRouter =
     dependencies.identityRouter ||
@@ -31,6 +35,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       env: dependencies.env,
       fetchImpl: dependencies.fetchImpl,
       sessionBindings: identitySessionBindings,
+      sessionEndpoints: identitySessionEndpoints,
     });
   const mcpClient = identityRouter.enabled
     ? null

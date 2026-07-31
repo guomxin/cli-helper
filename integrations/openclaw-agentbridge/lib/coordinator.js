@@ -88,6 +88,7 @@ export function createInteractionSharedState() {
     recentUserMessages: new Map(),
     documentDeliveries: new Map(),
     identitySessionBindings: new Map(),
+    identitySessionEndpoints: new Map(),
   };
 }
 
