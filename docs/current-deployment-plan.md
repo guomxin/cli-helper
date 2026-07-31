@@ -1529,7 +1529,20 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 针对生产时序新增终态不回退、等待事件去重、消息幂等、双用户隔离、HTTP 时间线、
   微信双 Hook 去重和 Timeline Outbox 投递测试。实现阶段门禁为 Python 相关测试
   `61/61`；完整门禁为 Python `463 passed, 3 skipped`、OpenClaw 插件 `92/92`、
-  npm pack dry-run 和 `git diff --check` 全部通过。正式部署记录在发布后补充。
+  npm pack dry-run 和 `git diff --check` 全部通过。功能提交 `0dd6150` 已推送，
+  Linux Release `0dd6150255b1` 已部署；发布冒烟确认 66 个 MCP 工具完整、辛国茂
+  OA 会话 active。OpenClaw 只重启一次，新 PID `14848` 监听
+  `0.0.0.0:18789`，深度 RPC、配置审计通过，插件 `0.4.8` 为 `loaded`。
+- 生产任务 `8348fae3-3be4-4049-bae8-3568c48482bb` 经启动修复后为
+  `succeeded`；当前 Operation 仍是实际成功的
+  `a1ab02ba-2f1b-4160-beb3-97de8e93ea14`，完成时间保持
+  `2026-07-31 08:43:39Z`，较早 Interaction 的延迟完成没有再次覆盖终态。
+- 发布后 Chrome 真实刷新进一步发现 OpenClaw 历史消息使用 13 位毫秒时间戳。补充
+  后端 ISO 归一和前端数字时间兼容，并把 Gateway 状态探测移到聊天历史加载之后，
+  避免并发 RPC 造成偶发假离线。提交 `e56dc3f` 已推送，Linux Release
+  `e56dc3fec851` 已部署；再次通过 Python `463 passed, 3 skipped` 和前端语法检查。
+  真实页面中旧消息已显示正常日期，历史应用卡按首次任务时间穿插归位，最后一张
+  出差申请卡为“已完成”、活动任务数为 0，Gateway 为“已连接”，控制台无错误或警告。
 - 本次实现和自动化没有调用 OA、泰华或语雀业务写能力。
 
 ## 16. 后续演进顺序
