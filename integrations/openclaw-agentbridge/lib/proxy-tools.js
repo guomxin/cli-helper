@@ -11,6 +11,10 @@ export const AGENTBRIDGE_PROXY_TOOL_NAMES = Object.freeze([
   IDENTITY_STATUS_TOOL_NAME,
   ...AGENTBRIDGE_TOOL_NAMES,
 ]);
+const WORKSPACE_GOVERNED_WRITE_TOOLS = new Set([
+  "oa_business_trip_submit_prepare",
+  "oa_leave_submit_prepare",
+]);
 
 export function createAgentBridgeProxyTools({
   context,
@@ -40,7 +44,9 @@ export function createAgentBridgeProxyTools({
   }
   const catalog = workspaceSession
     ? AGENTBRIDGE_TOOL_CATALOG.filter(
-        (descriptor) => descriptor.annotations?.readOnlyHint === true,
+        (descriptor) =>
+          descriptor.annotations?.readOnlyHint === true ||
+          WORKSPACE_GOVERNED_WRITE_TOOLS.has(descriptor.name),
       )
     : AGENTBRIDGE_TOOL_CATALOG;
   return [

@@ -431,6 +431,105 @@ test("remembers the host task attached to a pending trusted interaction", () => 
   );
 });
 
+test("replaces a final authorization with its endpoint-specific URL", async () => {
+  const requests = [];
+  const senderId = "7052061588";
+  const sessionKey = `agent:main:telegram:direct:${senderId}`;
+  const endpointUrl =
+    `${CARD_ORIGIN}/authorize/auth-1234567890-abcdef/` +
+    "present/presentation-1234567890-abcdef";
+  const authorization = interaction({
+    interactionId: "interaction-authorization-1234567890",
+    type: "execution_authorization",
+    title: "确认提交请假申请",
+    presentation: { url: `${CARD_ORIGIN}/authorize/auth-1234567890-abcdef` },
+  });
+  const harness = fakeApi({
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+      },
+    ],
+  });
+  registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            structuredContent: {
+              status: "succeeded",
+              interaction: {
+                ...authorization,
+                presentation: {
+                  ...authorization.presentation,
+                  url: endpointUrl,
+                  individualized: true,
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+  harness.hooks.message_received(
+    {
+      content: "提交请假申请",
+      senderId,
+      channel: "telegram",
+      sessionKey,
+    },
+    {
+      channelId: "telegram",
+      senderId,
+      sessionKey,
+      conversationId: senderId,
+    },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-endpoint-presentation",
+    runId: "run-endpoint-presentation",
+    sessionKey,
+  });
+
+  await harness.middleware(
+    {
+      toolCallId: "tool-endpoint-presentation",
+      toolName: "oa_leave_submit_prepare",
+      result: toolResult(authorization),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+  const reply = harness.hooks.reply_payload_sending(
+    {
+      kind: "final",
+      sessionKey,
+      channel: "telegram",
+      payload: { text: "请确认。" },
+    },
+    { sessionKey, channelId: "telegram" },
+  );
+
+  assert.equal(
+    requests[0].params.name,
+    "agentbridge_host_interaction_present",
+  );
+  assert.equal(
+    reply.payload.presentation.blocks.at(-1).buttons[0].url,
+    endpointUrl,
+  );
+});
+
 test("uses one host task run reference for multiple tools in the same agent run", () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
@@ -518,10 +617,14 @@ test("restores a pending interaction and its original route on gateway start", a
 
   await harness.hooks.gateway_start();
 
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
   assert.equal(
     requests[0].params.name,
     "agentbridge_host_task_recovery_list",
+  );
+  assert.equal(
+    requests[1].params.name,
+    "agentbridge_host_notification_claim",
   );
   assert.deepEqual(requests[0].params._meta, {
     "io.agentbridge/host": {
@@ -539,6 +642,76 @@ test("restores a pending interaction and its original route on gateway start", a
     harness.sentPayloads[0].payload.presentation.blocks.at(-1).buttons[0].url,
     CARD_URL,
   );
+  coordinator.stopAll();
+});
+
+test("delivers a non-origin authorization and acknowledges its outbox item", async () => {
+  const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user-a";
+  const authorizationUrl =
+    `${CARD_ORIGIN}/authorize/auth-1234567890-abcdef/` +
+    "present/wechat-presentation-1234567890";
+  const authorization = interaction({
+    interactionId: "interaction-notification-1234567890",
+    type: "execution_authorization",
+    presentation: { url: authorizationUrl },
+  });
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            conversationRef: sessionKey,
+            route: {
+              channel: "openclaw-weixin",
+              to: "wechat-user-a",
+            },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-1234567890-abcdef",
+              deliveryMode: "trusted_interaction",
+              interaction: authorization,
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+  const identityRouter = {
+    restoreSessionBinding() {
+      return true;
+    },
+  };
+  const binding = {
+    key: "openclaw-weixin:*:wechat-user-a",
+    channel: "openclaw-weixin",
+    senderId: "wechat-user-a",
+    accountId: null,
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    identityRouter,
+    binding,
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    JSON.stringify(harness.sentPayloads[0].payload).includes(
+      authorizationUrl,
+    ),
+    true,
+  );
+  assert.equal(calls.at(-1).name, "agentbridge_host_notification_ack");
+  assert.equal(calls.at(-1).params.succeeded, true);
 });
 
 test("uses the bound WeChat route when the final reply omits channel metadata", () => {

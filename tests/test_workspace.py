@@ -388,6 +388,54 @@ class WorkspaceStoreTests(unittest.TestCase):
 
 
 class WorkspaceApplicationTests(unittest.TestCase):
+    def test_task_detail_uses_the_workspace_endpoint_authorization_url(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            task = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="workspace-token",
+                agent_host="openclaw",
+                host_task_key="workspace-task|run-1",
+                endpoint_key=account["endpoint_key"],
+                client_type="web",
+                external_subject=account["account_id"],
+                conversation_ref=account["openclaw_session_key"],
+                title="Submit leave request",
+            )
+            authorization = service.write_authorizations.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.leave.submit",
+                capability_version="1",
+                prepare_operation_id="prepare-a",
+                plan={"reason": "Test"},
+                summary={"title": "Submit leave request", "fields": []},
+                card_base_url="https://cards.example.test",
+            )
+            interaction = service._execution_authorization_interaction(
+                authorization
+            )
+            service.observe_host_task(
+                user_subject="user-a",
+                task_id=task["task"]["taskId"],
+                interaction_ids=[interaction["interactionId"]],
+            )
+            app = WorkspaceApplication(service=service)
+
+            detail = app.task_detail(account, task["task"]["taskId"])
+
+            presentation = detail["interaction"]["presentation"]
+            self.assertTrue(presentation["individualized"])
+            self.assertEqual(presentation["endpointId"], account["endpoint_id"])
+            self.assertIn("/present/", presentation["url"])
+
     def test_chat_binds_identity_before_send_and_hides_tool_messages(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)

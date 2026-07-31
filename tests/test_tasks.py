@@ -99,6 +99,203 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
+    def test_waiting_interaction_is_broadcast_to_all_trusted_user_endpoints(self):
+        origin, _ = self._endpoint()
+        secondary, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="wechat:direct:user-a",
+            client_type="wechat",
+            external_subject="wechat-user-a",
+            conversation_ref="agent:main:wechat:direct:user-a",
+            capabilities=["trusted_interaction", "direct_status"],
+            route={"channel": "wechat", "to": "wechat-user-a"},
+        )
+        task, _ = self._task(origin["endpoint_id"])
+
+        self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "interaction-broadcast",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "interaction-broadcast",
+                "type": "execution_authorization",
+                "state": "pending",
+            },
+        )
+
+        secondary_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=secondary["endpoint_id"],
+        )
+        self.assertEqual(len(secondary_outbox), 1)
+        self.assertEqual(
+            secondary_outbox[0]["payload"]["eventType"],
+            "task.interaction.waiting",
+        )
+        self.assertEqual(
+            secondary_outbox[0]["payload"]["payload"]["interactionId"],
+            "interaction-broadcast",
+        )
+
+    def test_endpoint_capabilities_are_merged_when_route_is_reobserved(self):
+        endpoint, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            capabilities=["direct_status"],
+        )
+        updated, reused = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            capabilities=["trusted_interaction"],
+        )
+
+        self.assertTrue(reused)
+        self.assertEqual(updated["endpoint_id"], endpoint["endpoint_id"])
+        self.assertEqual(
+            set(updated["capabilities"]),
+            {"direct_status", "trusted_interaction"},
+        )
+
+    def test_outbox_claim_and_ack_are_endpoint_and_user_bound(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+
+        claimed = self.store.claim_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            limit=1,
+        )
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["state"], "delivering")
+        self.assertEqual(claimed[0]["attempt_count"], 1)
+        self.assertEqual(
+            self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                limit=1,
+            ),
+            [],
+        )
+        acknowledged = self.store.acknowledge_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            delivery_id=claimed[0]["delivery_id"],
+            succeeded=True,
+        )
+        self.assertEqual(acknowledged["state"], "acknowledged")
+        with self.assertRaises(TaskNotFound):
+            self.store.acknowledge_outbox(
+                user_subject="user-b",
+                endpoint_id=endpoint["endpoint_id"],
+                delivery_id=claimed[0]["delivery_id"],
+                succeeded=True,
+            )
+        self.assertEqual(task["status"], "active")
+
+    def test_outbox_delivery_stops_after_five_failed_attempts(self):
+        endpoint, _ = self._endpoint()
+        self._task(endpoint["endpoint_id"])
+        delivery = None
+
+        for _attempt in range(5):
+            with self.store._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET next_attempt_at = '2000-01-01T00:00:00+00:00'
+                    WHERE endpoint_id = ? AND state IN ('pending', 'delivering')
+                    """,
+                    (endpoint["endpoint_id"],),
+                )
+            claimed = self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                limit=1,
+            )
+            self.assertEqual(len(claimed), 1)
+            delivery = self.store.acknowledge_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                delivery_id=claimed[0]["delivery_id"],
+                succeeded=False,
+                retry_after_seconds=1,
+            )
+
+        self.assertEqual(delivery["state"], "failed")
+        self.assertEqual(
+            self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+            ),
+            [],
+        )
+
+    def test_outbox_delivery_stops_after_five_expired_leases(self):
+        endpoint, _ = self._endpoint()
+        self._task(endpoint["endpoint_id"])
+        delivery_id = None
+
+        for attempt in range(5):
+            with self.store._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET next_attempt_at = '2000-01-01T00:00:00+00:00'
+                    WHERE endpoint_id = ? AND state IN ('pending', 'delivering')
+                    """,
+                    (endpoint["endpoint_id"],),
+                )
+            claimed = self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                limit=1,
+            )
+            self.assertEqual(len(claimed), 1)
+            self.assertEqual(claimed[0]["attempt_count"], attempt + 1)
+            delivery_id = claimed[0]["delivery_id"]
+
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE notification_outbox
+                SET next_attempt_at = '2000-01-01T00:00:00+00:00'
+                WHERE delivery_id = ?
+                """,
+                (delivery_id,),
+            )
+        self.assertEqual(
+            self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+            ),
+            [],
+        )
+        with self.store._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT state, attempt_count FROM notification_outbox
+                WHERE delivery_id = ?
+                """,
+                (delivery_id,),
+            ).fetchone()
+        self.assertEqual(row["state"], "failed")
+        self.assertEqual(row["attempt_count"], 5)
+
     def test_rejects_cross_user_endpoint_task_and_artifact_access(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])
@@ -298,6 +495,122 @@ class TaskHubStoreTests(unittest.TestCase):
                 agent_host="openclaw",
                 endpoint_key="telegram:*:1001",
             )
+
+    def test_central_service_presents_one_authorization_on_multiple_endpoints(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        origin = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="telegram-task",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="Submit leave request",
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=["trusted_interaction", "direct_status"],
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="wechat:direct:user-a",
+            client_type="wechat",
+            external_subject="wechat-user-a",
+            conversation_ref="agent:main:wechat:direct:user-a",
+            route={"channel": "wechat", "to": "wechat-user-a"},
+            capabilities=["trusted_interaction", "direct_status"],
+        )
+        authorization = service.write_authorizations.create(
+            user_subject="user-a",
+            system_id="oa",
+            session_id="session-a",
+            capability_name="oa.leave.submit",
+            capability_version="1",
+            prepare_operation_id="prepare-a",
+            plan={"reason": "Test"},
+            summary={"title": "Submit leave request", "fields": []},
+            card_base_url="https://cards.example.test",
+        )
+        interaction = service._execution_authorization_interaction(authorization)
+        service.observe_host_task(
+            user_subject="user-a",
+            task_id=origin["task"]["taskId"],
+            interaction_ids=[interaction["interactionId"]],
+        )
+
+        telegram = service.present_interaction(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            interaction_id=interaction["interactionId"],
+        )
+        wechat = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="wechat:direct:user-a",
+        )
+
+        self.assertEqual(wechat["count"], 1)
+        notification = wechat["notifications"][0]
+        self.assertEqual(
+            notification["deliveryMode"],
+            "trusted_interaction",
+        )
+        self.assertNotEqual(
+            telegram["interaction"]["presentation"]["url"],
+            notification["interaction"]["presentation"]["url"],
+        )
+        self.assertTrue(
+            telegram["interaction"]["presentation"]["individualized"]
+        )
+        acknowledged = service.acknowledge_host_notification(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="wechat:direct:user-a",
+            delivery_id=notification["deliveryId"],
+            succeeded=True,
+        )
+        self.assertEqual(
+            acknowledged["delivery"]["state"],
+            "acknowledged",
+        )
+        presentation_id = telegram["interaction"]["presentation"][
+            "presentationId"
+        ]
+        csrf = service.write_authorizations.issue_csrf(
+            authorization["authorization_id"],
+            presentation_id=presentation_id,
+        )
+        service.write_authorizations.decide(
+            authorization["authorization_id"],
+            decision="approve",
+            csrf_token=csrf,
+            csrf_cookie=csrf,
+            presentation_id=presentation_id,
+        )
+        service.get_interaction(
+            user_subject="user-a",
+            interaction_id=interaction["interactionId"],
+        )
+        terminal = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="wechat:direct:user-a",
+        )
+        self.assertEqual(terminal["count"], 1)
+        self.assertEqual(
+            terminal["notifications"][0]["deliveryMode"],
+            "status",
+        )
+        self.assertIn(
+            "可信确认已完成",
+            terminal["notifications"][0]["message"],
+        )
 
     def test_task_schema_migrates_alongside_existing_ledgers(self):
         db_path = Path(self.temp.name) / "legacy-agentbridge.db"

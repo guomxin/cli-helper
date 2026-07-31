@@ -646,8 +646,21 @@ function openEventStream() {
   state.eventSource?.close();
   const source = new EventSource("/api/events/stream");
   source.addEventListener("task", (event) => {
-    if (state.activeView === "tasks") loadTasks();
-    toast("任务状态已更新");
+    let payload = {};
+    try {
+      payload = JSON.parse(event.data || "{}");
+    } catch {
+      payload = {};
+    }
+    loadTasks();
+    if (state.selectedTaskId === payload.task_id) {
+      loadTaskDetail(state.selectedTaskId);
+    }
+    toast(
+      payload.event_type === "task.interaction.waiting"
+        ? "新的可信确认已可在网页端处理"
+        : "任务状态已更新",
+    );
   });
   source.onerror = () => {
     source.close();

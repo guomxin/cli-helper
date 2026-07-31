@@ -309,6 +309,11 @@ class AuthServerConfigTests(unittest.TestCase):
             thread.start()
             port = server.server_address[1]
             try:
+                presentation = authorization_store.create_presentation(
+                    authorization["authorization_id"],
+                    user_subject="user-a",
+                    endpoint_id="telegram-1",
+                )
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
                 connection.request(
                     "GET",
@@ -318,6 +323,19 @@ class AuthServerConfigTests(unittest.TestCase):
                 html = response.read().decode("utf-8")
                 self.assertEqual(response.status, 200)
                 self.assertIn("保存出差申请草稿", html)
+                connection.close()
+
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                presentation_path = (
+                    f"/authorize/{authorization['authorization_id']}/present/"
+                    f"{presentation['presentation_id']}"
+                )
+                connection.request("GET", presentation_path)
+                response = connection.getresponse()
+                html = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn(f'action="{presentation_path}"', html)
+                self.assertIn(f"Path={presentation_path}", response.getheader("Set-Cookie"))
                 connection.close()
 
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

@@ -55,7 +55,7 @@ class WriteAuthorizationStore:
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(
+            connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS write_authorizations (
                     authorization_id TEXT PRIMARY KEY,
@@ -76,18 +76,13 @@ class WriteAuthorizationStore:
                     updated_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     decided_at TEXT,
-                    consumed_at TEXT
-                )
-                """
-            )
-            connection.execute(
-                """
+                    consumed_at TEXT,
+                    decided_endpoint_id TEXT
+                );
+
                 CREATE INDEX IF NOT EXISTS write_authorizations_subject_state
-                ON write_authorizations (user_subject, state, created_at)
-                """
-            )
-            connection.execute(
-                """
+                ON write_authorizations (user_subject, state, created_at);
+
                 CREATE TRIGGER IF NOT EXISTS immutable_write_authorization_plan
                 BEFORE UPDATE OF user_subject, system_id, session_id,
                     capability_name, capability_version, prepare_operation_id,
@@ -96,8 +91,51 @@ class WriteAuthorizationStore:
                 ON write_authorizations
                 BEGIN
                     SELECT RAISE(ABORT, 'write authorization plan is immutable');
-                END
+                END;
+
+                CREATE TABLE IF NOT EXISTS write_authorization_presentations (
+                    presentation_id TEXT PRIMARY KEY,
+                    authorization_id TEXT NOT NULL,
+                    user_subject TEXT NOT NULL,
+                    endpoint_id TEXT NOT NULL,
+                    card_url TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    opened_at TEXT,
+                    decided_at TEXT,
+                    UNIQUE (authorization_id, endpoint_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS write_authorization_presentations_auth
+                ON write_authorization_presentations (
+                    authorization_id, state, created_at
+                );
+
+                CREATE TABLE IF NOT EXISTS write_authorization_card_sessions (
+                    card_session_id TEXT PRIMARY KEY,
+                    authorization_id TEXT NOT NULL,
+                    presentation_id TEXT,
+                    endpoint_id TEXT,
+                    csrf_hash TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS write_authorization_card_sessions_auth
+                ON write_authorization_card_sessions (
+                    authorization_id, state, created_at
+                );
                 """
+            )
+            _ensure_column(
+                connection,
+                "write_authorizations",
+                "decided_endpoint_id",
+                "TEXT",
             )
 
     def create(
@@ -152,6 +190,32 @@ class WriteAuthorizationStore:
             )
             connection.execute(
                 """
+                UPDATE write_authorization_presentations
+                SET state = 'expired', updated_at = ?
+                WHERE state = 'active'
+                  AND authorization_id IN (
+                    SELECT authorization_id FROM write_authorizations
+                    WHERE user_subject = ? AND capability_name = ?
+                      AND state = 'superseded'
+                  )
+                """,
+                (_format_time(now), user_subject, capability_name),
+            )
+            connection.execute(
+                """
+                UPDATE write_authorization_card_sessions
+                SET state = 'expired'
+                WHERE state = 'pending'
+                  AND authorization_id IN (
+                    SELECT authorization_id FROM write_authorizations
+                    WHERE user_subject = ? AND capability_name = ?
+                      AND state = 'superseded'
+                  )
+                """,
+                (user_subject, capability_name),
+            )
+            connection.execute(
+                """
                 INSERT INTO write_authorizations (
                     authorization_id, user_subject, system_id, session_id,
                     capability_name, capability_version, prepare_operation_id,
@@ -185,7 +249,97 @@ class WriteAuthorizationStore:
             row = self._expire_if_needed(connection, self._select(connection, authorization_id))
         return _authorization_from_row(row, include_plan=include_plan)
 
-    def issue_csrf(self, authorization_id: str) -> str:
+    def create_presentation(
+        self,
+        authorization_id: str,
+        *,
+        user_subject: str,
+        endpoint_id: str,
+    ) -> dict:
+        user_subject = str(user_subject or "").strip()
+        endpoint_id = str(endpoint_id or "").strip()
+        if not user_subject or not endpoint_id:
+            raise ValueError(
+                "write authorization presentation identity is required"
+            )
+        now = _as_utc(self.clock())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            authorization = self._expire_if_needed(
+                connection,
+                self._select(connection, authorization_id),
+            )
+            if authorization["user_subject"] != user_subject:
+                raise WriteAuthorizationNotFound(
+                    f"write authorization not found: {authorization_id}"
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM write_authorization_presentations
+                WHERE authorization_id = ? AND endpoint_id = ?
+                """,
+                (authorization_id, endpoint_id),
+            ).fetchone()
+            if existing is not None:
+                return _presentation_from_row(existing)
+            presentation_id = secrets.token_urlsafe(32)
+            card_url = (
+                f"{_card_base_url(authorization['card_url'])}"
+                f"/authorize/{authorization_id}/present/{presentation_id}"
+            )
+            presentation_state = (
+                "active"
+                if authorization["state"] == "pending"
+                else "expired"
+                if authorization["state"] in {"expired", "superseded"}
+                else "decided"
+            )
+            connection.execute(
+                """
+                INSERT INTO write_authorization_presentations (
+                    presentation_id, authorization_id, user_subject,
+                    endpoint_id, card_url, state, created_at, updated_at,
+                    expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    presentation_id,
+                    authorization_id,
+                    user_subject,
+                    endpoint_id,
+                    card_url,
+                    presentation_state,
+                    _format_time(now),
+                    _format_time(now),
+                    authorization["expires_at"],
+                ),
+            )
+            row = self._select_presentation(
+                connection,
+                authorization_id,
+                presentation_id,
+            )
+        return _presentation_from_row(row)
+
+    def get_presentation(
+        self,
+        authorization_id: str,
+        presentation_id: str,
+    ) -> dict:
+        with self._connect() as connection:
+            row = self._select_presentation(
+                connection,
+                authorization_id,
+                presentation_id,
+            )
+        return _presentation_from_row(row)
+
+    def issue_csrf(
+        self,
+        authorization_id: str,
+        *,
+        presentation_id: str | None = None,
+    ) -> str:
         token = secrets.token_urlsafe(32)
         now = _as_utc(self.clock())
         with self._connect() as connection:
@@ -195,13 +349,42 @@ class WriteAuthorizationStore:
                 raise WriteAuthorizationStateError(
                     f"write authorization is not pending: {row['state']}"
                 )
+            endpoint_id = None
+            if presentation_id is not None:
+                presentation = self._select_presentation(
+                    connection,
+                    authorization_id,
+                    presentation_id,
+                )
+                endpoint_id = presentation["endpoint_id"]
+                connection.execute(
+                    """
+                    UPDATE write_authorization_presentations
+                    SET opened_at = COALESCE(opened_at, ?), updated_at = ?
+                    WHERE presentation_id = ?
+                    """,
+                    (
+                        _format_time(now),
+                        _format_time(now),
+                        presentation_id,
+                    ),
+                )
             connection.execute(
                 """
-                UPDATE write_authorizations
-                SET csrf_hash = ?, updated_at = ?
-                WHERE authorization_id = ?
+                INSERT INTO write_authorization_card_sessions (
+                    card_session_id, authorization_id, presentation_id,
+                    endpoint_id, csrf_hash, state, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
-                (_token_hash(token), _format_time(now), authorization_id),
+                (
+                    secrets.token_urlsafe(24),
+                    authorization_id,
+                    presentation_id,
+                    endpoint_id,
+                    _token_hash(token),
+                    _format_time(now),
+                    row["expires_at"],
+                ),
             )
         return token
 
@@ -212,6 +395,7 @@ class WriteAuthorizationStore:
         decision: str,
         csrf_token: str,
         csrf_cookie: str,
+        presentation_id: str | None = None,
     ) -> dict:
         if decision not in {"approve", "reject"}:
             raise ValueError("write authorization decision must be approve or reject")
@@ -223,13 +407,42 @@ class WriteAuthorizationStore:
                 raise WriteAuthorizationStateError(
                     f"write authorization is not pending: {row['state']}"
                 )
-            expected_hash = str(row["csrf_hash"] or "")
             supplied_hash = _token_hash(csrf_token) if csrf_token else ""
+            if presentation_id is None:
+                session = connection.execute(
+                    """
+                    SELECT * FROM write_authorization_card_sessions
+                    WHERE authorization_id = ? AND presentation_id IS NULL
+                      AND csrf_hash = ? AND state = 'pending'
+                    """,
+                    (authorization_id, supplied_hash),
+                ).fetchone()
+            else:
+                self._select_presentation(
+                    connection,
+                    authorization_id,
+                    presentation_id,
+                )
+                session = connection.execute(
+                    """
+                    SELECT * FROM write_authorization_card_sessions
+                    WHERE authorization_id = ? AND presentation_id = ?
+                      AND csrf_hash = ? AND state = 'pending'
+                    """,
+                    (
+                        authorization_id,
+                        presentation_id,
+                        supplied_hash,
+                    ),
+                ).fetchone()
             if (
-                not expected_hash
+                session is None
                 or not csrf_cookie
                 or not hmac.compare_digest(csrf_token, csrf_cookie)
-                or not hmac.compare_digest(expected_hash, supplied_hash)
+                or not hmac.compare_digest(
+                    str(session["csrf_hash"]),
+                    supplied_hash,
+                )
             ):
                 raise WriteAuthorizationAccessDenied(
                     "write authorization card CSRF validation failed"
@@ -238,15 +451,42 @@ class WriteAuthorizationStore:
             cursor = connection.execute(
                 """
                 UPDATE write_authorizations
-                SET state = ?, csrf_hash = NULL, decided_at = ?, updated_at = ?
+                SET state = ?, csrf_hash = NULL, decided_at = ?, updated_at = ?,
+                    decided_endpoint_id = ?
                 WHERE authorization_id = ? AND state = 'pending'
                 """,
-                (state, _format_time(now), _format_time(now), authorization_id),
+                (
+                    state,
+                    _format_time(now),
+                    _format_time(now),
+                    session["endpoint_id"],
+                    authorization_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise WriteAuthorizationStateError(
                     "write authorization could not be decided"
                 )
+            connection.execute(
+                """
+                UPDATE write_authorization_card_sessions
+                SET state = 'consumed', consumed_at = ?
+                WHERE authorization_id = ? AND state = 'pending'
+                """,
+                (_format_time(now), authorization_id),
+            )
+            connection.execute(
+                """
+                UPDATE write_authorization_presentations
+                SET state = 'decided', decided_at = ?, updated_at = ?
+                WHERE authorization_id = ?
+                """,
+                (
+                    _format_time(now),
+                    _format_time(now),
+                    authorization_id,
+                ),
+            )
             row = self._select(connection, authorization_id)
         return _authorization_from_row(row, include_plan=False)
 
@@ -319,6 +559,25 @@ class WriteAuthorizationStore:
             )
         return row
 
+    @staticmethod
+    def _select_presentation(
+        connection: sqlite3.Connection,
+        authorization_id: str,
+        presentation_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM write_authorization_presentations
+            WHERE authorization_id = ? AND presentation_id = ?
+            """,
+            (authorization_id, presentation_id),
+        ).fetchone()
+        if row is None:
+            raise WriteAuthorizationNotFound(
+                "write authorization presentation not found"
+            )
+        return row
+
     def _expire_if_needed(
         self,
         connection: sqlite3.Connection,
@@ -335,6 +594,22 @@ class WriteAuthorizationStore:
                 """,
                 (_format_time(now), _format_time(now), row["authorization_id"]),
             )
+            connection.execute(
+                """
+                UPDATE write_authorization_presentations
+                SET state = 'expired', updated_at = ?
+                WHERE authorization_id = ? AND state = 'active'
+                """,
+                (_format_time(now), row["authorization_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE write_authorization_card_sessions
+                SET state = 'expired'
+                WHERE authorization_id = ? AND state = 'pending'
+                """,
+                (row["authorization_id"],),
+            )
             return self._select(connection, row["authorization_id"])
         return row
 
@@ -347,6 +622,19 @@ def _authorization_from_row(row: sqlite3.Row, *, include_plan: bool) -> dict:
     if include_plan:
         value["plan"] = plan
     return value
+
+
+def _presentation_from_row(row: sqlite3.Row) -> dict:
+    return dict(row)
+
+
+def _card_base_url(card_url: str) -> str:
+    marker = "/authorize/"
+    if marker not in card_url:
+        raise WriteAuthorizationIntegrityError(
+            "write authorization card URL is invalid"
+        )
+    return card_url.rsplit(marker, 1)[0]
 
 
 def _validate_card_base_url(value: str) -> str:
@@ -385,3 +673,19 @@ def _format_time(value: datetime) -> str:
 
 def _parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(timezone.utc)
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table: str,
+    column: str,
+    declaration: str,
+) -> None:
+    columns = {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+    if column not in columns:
+        connection.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+        )

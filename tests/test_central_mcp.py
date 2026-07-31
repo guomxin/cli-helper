@@ -171,6 +171,9 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_host_task_observe", names)
         self.assertIn("agentbridge_host_task_recovery_list", names)
         self.assertIn("agentbridge_host_task_list", names)
+        self.assertIn("agentbridge_host_interaction_present", names)
+        self.assertIn("agentbridge_host_notification_claim", names)
+        self.assertIn("agentbridge_host_notification_ack", names)
         self.assertIn("agentbridge_host_workspace_link_confirm", names)
         self.assertIn("agentbridge_host_workspace_session_bind", names)
         self.assertIn("agentbridge_host_workspace_session_resolve", names)
@@ -1006,6 +1009,47 @@ class CentralMcpTests(unittest.TestCase):
             label=None,
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
+        )
+
+    def test_host_interaction_presentation_uses_endpoint_identity(self):
+        with self._server() as (service, _store, token, client):
+            service.present_interaction.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "interaction": {
+                    "interactionId": "interaction-1234567890",
+                    "presentation": {
+                        "url": "https://cards.example.test/endpoint-card"
+                    },
+                },
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=63,
+                token=token,
+                params={
+                    "name": "agentbridge_host_interaction_present",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "endpoint_key": "telegram:*:1001",
+                        "interaction_id": "interaction-1234567890",
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.present_interaction.assert_called_once_with(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            interaction_id="interaction-1234567890",
         )
 
     def test_mcp_and_direct_service_share_idempotent_operation(self):

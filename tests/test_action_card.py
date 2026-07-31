@@ -111,7 +111,74 @@ class TrustedActionCardTests(unittest.TestCase):
                 approved.body.decode("utf-8"),
             )
             self.assertEqual(store.get(authorization["authorization_id"])["state"], "approved")
-            self.assertEqual(replay.status, 409)
+            self.assertEqual(replay.status, 200)
+            self.assertIn("已在其他可信端确认", replay.body.decode("utf-8"))
+
+    def test_each_endpoint_gets_an_independent_card_session(self):
+        with TemporaryDirectory() as tmp:
+            store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
+            authorization = _authorization(store)
+            app = TrustedActionApplication(authorization_store=store)
+            endpoint_a = store.create_presentation(
+                authorization["authorization_id"],
+                user_subject="user-a",
+                endpoint_id="telegram-1",
+            )
+            endpoint_b = store.create_presentation(
+                authorization["authorization_id"],
+                user_subject="user-a",
+                endpoint_id="workspace-1",
+            )
+            page_a = app.get_card(
+                authorization["authorization_id"],
+                presentation_id=endpoint_a["presentation_id"],
+                secure_cookie=False,
+            )
+            page_b = app.get_card(
+                authorization["authorization_id"],
+                presentation_id=endpoint_b["presentation_id"],
+                secure_cookie=False,
+            )
+            csrf_a = re.search(
+                r'name="csrf_token" value="([^"]+)"',
+                page_a.body.decode("utf-8"),
+            ).group(1)
+            csrf_b = re.search(
+                r'name="csrf_token" value="([^"]+)"',
+                page_b.body.decode("utf-8"),
+            ).group(1)
+            cookie_a = page_a.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+            cookie_b = page_b.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+
+            approved = app.submit_card(
+                authorization["authorization_id"],
+                presentation_id=endpoint_b["presentation_id"],
+                body=urlencode(
+                    {"csrf_token": csrf_b, "decision": "approve"}
+                ).encode(),
+                content_type="application/x-www-form-urlencoded",
+                csrf_cookie=cookie_b,
+            )
+            already_done = app.submit_card(
+                authorization["authorization_id"],
+                presentation_id=endpoint_a["presentation_id"],
+                body=urlencode(
+                    {"csrf_token": csrf_a, "decision": "approve"}
+                ).encode(),
+                content_type="application/x-www-form-urlencoded",
+                csrf_cookie=cookie_a,
+            )
+
+            self.assertEqual(approved.status, 200)
+            self.assertEqual(already_done.status, 200)
+            self.assertIn(
+                "已在其他可信端确认",
+                already_done.body.decode("utf-8"),
+            )
+            self.assertIn(
+                f"Path=/authorize/{authorization['authorization_id']}/present/",
+                page_a.headers["Set-Cookie"],
+            )
 
     def test_rejection_never_creates_an_executable_authorization(self):
         with TemporaryDirectory() as tmp:

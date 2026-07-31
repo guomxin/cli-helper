@@ -6,6 +6,7 @@ import {
   channelFromPrivateSessionKey,
   isPrivateSessionKey,
   mergePresentations,
+  processToolResult,
 } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 import {
@@ -14,7 +15,7 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.4.3";
+const PLUGIN_VERSION = "0.4.4";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -51,6 +52,15 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     now: dependencies.now,
     fetchImpl: dependencies.documentFetchImpl || globalThis.fetch,
     saveMediaBufferImpl: dependencies.saveMediaBufferImpl,
+    interactionPresenter: identityRouter.enabled
+      ? (interaction, sessionKey) =>
+          presentInteractionForSession({
+            identityRouter,
+            interaction,
+            sessionKey,
+            allowedCardOrigins: config.allowedCardOrigins,
+          })
+      : null,
   });
 
   if (identityRouter.enabled) {
@@ -209,6 +219,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       identityRouter,
       logger: api.logger,
     });
+    coordinator.startNotificationPump(identityRouter);
   });
 
   api.on("gateway_stop", () => {
@@ -289,6 +300,37 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+async function presentInteractionForSession({
+  identityRouter,
+  interaction,
+  sessionKey,
+  allowedCardOrigins,
+}) {
+  let resolved = identityRouter.resolvePinnedSession({ sessionKey });
+  if (!resolved?.bound) {
+    resolved = await identityRouter.resolveWorkspaceSession(sessionKey);
+  }
+  if (!resolved?.bound) {
+    throw new Error("AgentBridge endpoint identity is not bound");
+  }
+  const response = await resolved.client.callTool(
+    "agentbridge_host_interaction_present",
+    {
+      agent_host: "openclaw",
+      endpoint_key: resolved.binding.key,
+      interaction_id: interaction.interactionId,
+    },
+    { meta: hostContextMeta() },
+  );
+  const processed = processToolResult(response, allowedCardOrigins);
+  return (
+    processed.interactions.find(
+      (candidate) =>
+        candidate.interactionId === interaction.interactionId,
+    ) || null
+  );
 }
 
 async function confirmWorkspaceLink({

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -261,6 +261,15 @@ class TaskHubStore:
                         "client endpoint is already bound to another user"
                     )
                 endpoint_id = existing["endpoint_id"]
+                existing_capabilities = set(
+                    json.loads(existing["capabilities_json"])
+                )
+                merged_capabilities_json = _canonical_json(
+                    sorted(
+                        existing_capabilities
+                        | set(json.loads(capabilities_json))
+                    )
+                )
                 connection.execute(
                     """
                     UPDATE client_endpoints
@@ -277,7 +286,7 @@ class TaskHubStore:
                         normalized_account,
                         values["conversation_ref"],
                         normalized_label,
-                        capabilities_json,
+                        merged_capabilities_json,
                         route_json,
                         now,
                         now,
@@ -576,6 +585,16 @@ class TaskHubStore:
                     now=now,
                 )
             if linked is None or task["status"] != task_status:
+                if (
+                    event_type == "task.interaction.waiting"
+                    and interaction.get("type") == "execution_authorization"
+                ):
+                    self._subscribe_trusted_endpoints(
+                        connection,
+                        task_id=task_id,
+                        user_subject=user_subject,
+                        created_at=now,
+                    )
                 self._append_event(
                     connection,
                     task_id=task_id,
@@ -775,6 +794,194 @@ class TaskHubStore:
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [_outbox_from_row(row) for row in rows]
+
+    def claim_outbox(
+        self,
+        *,
+        user_subject: str,
+        endpoint_id: str,
+        limit: int = 10,
+        lease_seconds: int = 30,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 100)
+        lease_seconds = min(max(int(lease_seconds), 5), 300)
+        now = _utc_now()
+        lease_until = _utc_after(lease_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            connection.execute(
+                """
+                UPDATE notification_outbox
+                SET state = 'failed', updated_at = ?
+                WHERE user_subject = ? AND endpoint_id = ?
+                  AND state = 'delivering'
+                  AND attempt_count >= 5
+                  AND next_attempt_at <= ?
+                """,
+                (now, user_subject, endpoint_id, now),
+            )
+            rows = connection.execute(
+                """
+                SELECT * FROM notification_outbox
+                WHERE user_subject = ? AND endpoint_id = ?
+                  AND attempt_count < 5
+                  AND (
+                    state = 'pending'
+                    OR (state = 'delivering' AND next_attempt_at <= ?)
+                  )
+                ORDER BY created_at, rowid
+                LIMIT ?
+                """,
+                (user_subject, endpoint_id, now, limit),
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                cursor = connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET state = 'delivering',
+                        attempt_count = attempt_count + 1,
+                        next_attempt_at = ?, updated_at = ?
+                    WHERE delivery_id = ?
+                      AND attempt_count < 5
+                      AND (
+                        state = 'pending'
+                        OR (state = 'delivering' AND next_attempt_at <= ?)
+                      )
+                    """,
+                    (lease_until, now, row["delivery_id"], now),
+                )
+                if cursor.rowcount == 1:
+                    claimed.append(
+                        connection.execute(
+                            """
+                            SELECT * FROM notification_outbox
+                            WHERE delivery_id = ?
+                            """,
+                            (row["delivery_id"],),
+                        ).fetchone()
+                    )
+        return [_outbox_from_row(row) for row in claimed]
+
+    def acknowledge_outbox(
+        self,
+        *,
+        user_subject: str,
+        endpoint_id: str,
+        delivery_id: str,
+        succeeded: bool,
+        retry_after_seconds: int = 5,
+    ) -> dict:
+        retry_after_seconds = min(max(int(retry_after_seconds), 1), 300)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM notification_outbox
+                WHERE delivery_id = ? AND user_subject = ? AND endpoint_id = ?
+                """,
+                (delivery_id, user_subject, endpoint_id),
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound("notification delivery not found")
+            if succeeded:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET state = 'acknowledged', updated_at = ?,
+                        acknowledged_at = ?
+                    WHERE delivery_id = ?
+                    """,
+                    (now, now, delivery_id),
+                )
+            elif int(row["attempt_count"]) >= 5:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET state = 'failed', updated_at = ?,
+                        acknowledged_at = NULL
+                    WHERE delivery_id = ?
+                    """,
+                    (now, delivery_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET state = 'pending', next_attempt_at = ?, updated_at = ?,
+                        acknowledged_at = NULL
+                    WHERE delivery_id = ?
+                    """,
+                    (_utc_after(retry_after_seconds), now, delivery_id),
+                )
+            updated = connection.execute(
+                """
+                SELECT * FROM notification_outbox WHERE delivery_id = ?
+                """,
+                (delivery_id,),
+            ).fetchone()
+        return _outbox_from_row(updated)
+
+    @staticmethod
+    def _subscribe_trusted_endpoints(
+        connection: sqlite3.Connection,
+        *,
+        task_id: str,
+        user_subject: str,
+        created_at: str,
+    ) -> None:
+        endpoints = connection.execute(
+            """
+            SELECT endpoint_id, capabilities_json
+            FROM client_endpoints
+            WHERE user_subject = ? AND state = 'active'
+            """,
+            (user_subject,),
+        ).fetchall()
+        for endpoint in endpoints:
+            capabilities = set(json.loads(endpoint["capabilities_json"]))
+            if "trusted_interaction" not in capabilities:
+                continue
+            connection.execute(
+                """
+                INSERT INTO task_subscriptions (
+                    subscription_id, task_id, endpoint_id, user_subject,
+                    event_filters_json, state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+                ON CONFLICT(task_id, endpoint_id) DO UPDATE SET
+                    event_filters_json = excluded.event_filters_json,
+                    state = 'active',
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(uuid4()),
+                    task_id,
+                    endpoint["endpoint_id"],
+                    user_subject,
+                    _canonical_json(
+                        [
+                            "task.interaction.waiting",
+                            "task.interaction.completed",
+                            "task.interaction.expired",
+                            "task.interaction.failed",
+                            "task.interaction.superseded",
+                            "task.canceled",
+                            "task.operation.succeeded",
+                            "task.operation.failed",
+                            "task.operation.outcome_unknown",
+                        ]
+                    ),
+                    created_at,
+                    created_at,
+                ),
+            )
 
     def _append_event(
         self,
@@ -1026,3 +1233,9 @@ def _canonical_json(value: Any) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _utc_after(seconds: int) -> str:
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    ).isoformat()

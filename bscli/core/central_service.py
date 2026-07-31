@@ -915,7 +915,43 @@ class CentralCapabilityService:
         }
 
     def get_interaction(self, *, user_subject: str, interaction_id: str) -> dict:
-        _record, _resource, interaction = self._load_interaction(
+        record, _resource, interaction = self._load_interaction(
+            user_subject=user_subject,
+            interaction_id=interaction_id,
+        )
+        task_id = self.tasks.task_id_for_interaction(
+            interaction_id,
+            user_subject=user_subject,
+        )
+        if task_id:
+            self.tasks.link_interaction(
+                task_id=task_id,
+                user_subject=user_subject,
+                interaction_record=record,
+                interaction=interaction,
+            )
+        return {
+            "protocolVersion": "0.1",
+            "interaction": {
+                **interaction,
+                "taskId": task_id,
+            },
+        }
+
+    def present_interaction(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        interaction_id: str,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        record, resource, interaction = self._load_interaction(
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
@@ -925,9 +961,139 @@ class CentralCapabilityService:
         )
         return {
             "protocolVersion": "0.1",
+            "status": "succeeded",
             "interaction": {
-                **interaction,
+                **self._present_interaction_for_endpoint(
+                    record=record,
+                    resource=resource,
+                    interaction=interaction,
+                    endpoint=endpoint,
+                ),
                 "taskId": task_id,
+            },
+            "endpoint": endpoint_response(endpoint),
+        }
+
+    def claim_host_notifications(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        limit: int = 10,
+        lease_seconds: int = 30,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        deliveries = self.tasks.claim_outbox(
+            user_subject=user_subject,
+            endpoint_id=endpoint["endpoint_id"],
+            limit=limit,
+            lease_seconds=lease_seconds,
+        )
+        notifications = []
+        for delivery in deliveries:
+            event = delivery["payload"]
+            task = self.tasks.get_task(
+                delivery["task_id"],
+                user_subject=user_subject,
+            )
+            item = {
+                "deliveryId": delivery["delivery_id"],
+                "attemptCount": delivery["attempt_count"],
+                "task": task_response(task),
+                "event": event,
+                "deliveryMode": "no_op",
+                "interaction": None,
+                "message": None,
+            }
+            if task["origin_endpoint_id"] == endpoint["endpoint_id"]:
+                item["deliveryMode"] = "origin_handled"
+            elif event.get("eventType") == "task.interaction.waiting":
+                interaction_id = (event.get("payload") or {}).get(
+                    "interactionId"
+                )
+                if interaction_id:
+                    try:
+                        record, resource, interaction = self._load_interaction(
+                            user_subject=user_subject,
+                            interaction_id=interaction_id,
+                        )
+                    except (KeyError, InteractionIntegrityError):
+                        interaction = None
+                    if interaction is not None and interaction["state"] in {
+                        "pending",
+                        "processing",
+                    }:
+                        item["deliveryMode"] = "trusted_interaction"
+                        item["interaction"] = (
+                            self._present_interaction_for_endpoint(
+                                record=record,
+                                resource=resource,
+                                interaction=interaction,
+                                endpoint=endpoint,
+                            )
+                        )
+                    else:
+                        item["deliveryMode"] = "status"
+                        item["message"] = _task_notification_message(
+                            task,
+                            event,
+                        )
+            elif event.get("eventType") in {
+                "task.interaction.completed",
+                "task.interaction.expired",
+                "task.interaction.failed",
+                "task.canceled",
+                "task.operation.succeeded",
+                "task.operation.failed",
+                "task.operation.outcome_unknown",
+            }:
+                item["deliveryMode"] = "status"
+                item["message"] = _task_notification_message(task, event)
+            notifications.append(item)
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "count": len(notifications),
+            "endpoint": endpoint_response(endpoint),
+            "notifications": notifications,
+        }
+
+    def acknowledge_host_notification(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        delivery_id: str,
+        succeeded: bool,
+        retry_after_seconds: int = 5,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        delivery = self.tasks.acknowledge_outbox(
+            user_subject=user_subject,
+            endpoint_id=endpoint["endpoint_id"],
+            delivery_id=delivery_id,
+            succeeded=succeeded,
+            retry_after_seconds=retry_after_seconds,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "delivery": {
+                "deliveryId": delivery["delivery_id"],
+                "state": delivery["state"],
+                "attemptCount": delivery["attempt_count"],
+                "nextAttemptAt": delivery["next_attempt_at"],
+                "acknowledgedAt": delivery.get("acknowledged_at"),
             },
         }
 
@@ -1375,6 +1541,39 @@ class CentralCapabilityService:
                 "interaction binding does not match its trusted resource"
             )
         return record, resource, build_interaction_envelope(record, resource)
+
+    def _present_interaction_for_endpoint(
+        self,
+        *,
+        record: dict,
+        resource: dict,
+        interaction: dict,
+        endpoint: dict,
+    ) -> dict:
+        if record["interaction_type"] != "execution_authorization":
+            return {
+                **interaction,
+                "presentation": {
+                    **interaction["presentation"],
+                    "endpointId": endpoint["endpoint_id"],
+                    "individualized": False,
+                },
+            }
+        presentation = self.write_authorizations.create_presentation(
+            resource["authorization_id"],
+            user_subject=record["user_subject"],
+            endpoint_id=endpoint["endpoint_id"],
+        )
+        return {
+            **interaction,
+            "presentation": {
+                **interaction["presentation"],
+                "url": presentation["card_url"],
+                "endpointId": endpoint["endpoint_id"],
+                "presentationId": presentation["presentation_id"],
+                "individualized": True,
+            },
+        }
 
     def _credential_interaction(self, challenge: dict) -> dict:
         record = self.interactions.register(
@@ -2548,6 +2747,28 @@ def endpoint_response(endpoint: dict) -> dict:
         "updatedAt": endpoint["updated_at"],
         "lastSeenAt": endpoint["last_seen_at"],
     }
+
+
+def _task_notification_message(task: dict, event: dict) -> str:
+    event_type = str(event.get("eventType") or "")
+    title = str(task.get("title") or "AgentBridge 任务")
+    if event_type in {
+        "task.interaction.completed",
+        "task.operation.succeeded",
+    }:
+        return f"{title}：可信确认已完成，任务状态为 {task['status']}。"
+    if event_type == "task.canceled":
+        return f"{title}：用户已取消本次操作。"
+    if event_type == "task.interaction.expired":
+        return f"{title}：可信确认已过期，请从智能体重新发起。"
+    if event_type in {
+        "task.interaction.failed",
+        "task.operation.failed",
+    }:
+        return f"{title}：执行失败，请返回发起端查看具体原因。"
+    if event_type == "task.operation.outcome_unknown":
+        return f"{title}：最终结果未能确认，请先在目标系统核对。"
+    return f"{title}：任务状态已更新为 {task['status']}。"
 
 
 def challenge_response(challenge: dict) -> dict:

@@ -102,6 +102,7 @@ export class InteractionCoordinator {
     now = Date.now,
     fetchImpl = globalThis.fetch,
     saveMediaBufferImpl = saveOpenClawMediaBuffer,
+    interactionPresenter = null,
   }) {
     this.api = api;
     this.config = config;
@@ -111,10 +112,13 @@ export class InteractionCoordinator {
     this.now = now;
     this.fetchImpl = fetchImpl;
     this.saveMediaBufferImpl = saveMediaBufferImpl;
+    this.interactionPresenter = interactionPresenter;
     this.sharedStateId = sharedState.id || "isolated";
     this.records = sharedState.records;
     this.polls = new Map();
     this.abortControllers = new Map();
+    this.notificationController = null;
+    this.notificationPump = null;
     this.toolBindings = new Map();
     this.sessionRoutes = sharedState.sessionRoutes;
     this.directDeliveries = sharedState.directDeliveries;
@@ -247,6 +251,17 @@ export class InteractionCoordinator {
       this.config.allowedCardOrigins,
     );
     if (processed.sanitized) {
+      const sessionKey = binding?.sessionKey || context.sessionKey;
+      const presented = this.presentInteractions(
+        processed.interactions,
+        sessionKey,
+      );
+      if (presented) {
+        return presented.then((interactions) => {
+          this.captureInteractions(interactions, binding, context, taskId);
+          return { result: processed.result };
+        });
+      }
       this.captureInteractions(processed.interactions, binding, context, taskId);
       return { result: processed.result };
     }
@@ -388,8 +403,40 @@ export class InteractionCoordinator {
       );
       return undefined;
     }
-    this.captureInteractions(interactions, binding, context, taskId);
+    const presented =
+      (await this.presentInteractions(interactions, sessionKey)) || interactions;
+    this.captureInteractions(presented, binding, context, taskId);
     return undefined;
+  }
+
+  presentInteractions(interactions, sessionKey) {
+    if (
+      typeof this.interactionPresenter !== "function" ||
+      !isPrivateSessionKey(sessionKey) ||
+      !interactions.some(
+        (interaction) => interaction.type === "execution_authorization",
+      )
+    ) {
+      return null;
+    }
+    return Promise.all(
+      interactions.map(async (interaction) => {
+        if (interaction.type !== "execution_authorization") {
+          return interaction;
+        }
+        try {
+          return (
+            (await this.interactionPresenter(interaction, sessionKey)) ||
+            interaction
+          );
+        } catch (error) {
+          this.api.logger.warn(
+            `AgentBridge endpoint presentation failed; original card retained (${safeErrorCode(error)})`,
+          );
+          return interaction;
+        }
+      }),
+    );
   }
 
   activeTaskForSession(sessionKey) {
@@ -417,14 +464,18 @@ export class InteractionCoordinator {
     if (!isPrivateSessionKey(sessionKey) || !taskId || !interaction) {
       return false;
     }
+    const presented =
+      (await this.presentInteractions([interaction], sessionKey)) || [
+        interaction,
+      ];
     const record = this.upsert({
-      interaction,
+      interaction: presented[0],
       sessionKey,
       runId,
       taskId,
     });
     this.startPolling(record);
-    await this.deliverInteractionsDirect(sessionKey, [interaction]);
+    await this.deliverInteractionsDirect(sessionKey, presented);
     return true;
   }
   takeForDelivery({ sessionKey }) {
@@ -504,6 +555,9 @@ export class InteractionCoordinator {
   }
 
   stopAll() {
+    this.notificationController?.abort();
+    this.notificationController = null;
+    this.notificationPump = null;
     for (const controller of this.abortControllers.values()) {
       controller.abort();
     }
@@ -514,6 +568,141 @@ export class InteractionCoordinator {
     this.recentUserMessages.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
+  }
+
+  startNotificationPump(identityRouter, { intervalMs = 2000 } = {}) {
+    if (
+      this.notificationController ||
+      !identityRouter?.enabled
+    ) {
+      return false;
+    }
+    const controller = new AbortController();
+    this.notificationController = controller;
+    this.notificationPump = this.runNotificationPump(
+      identityRouter,
+      controller.signal,
+      intervalMs,
+    ).catch((error) => {
+      if (!controller.signal.aborted) {
+        this.api.logger.warn(
+          `AgentBridge notification pump stopped: ${safeErrorCode(error)}`,
+        );
+      }
+    });
+    return true;
+  }
+
+  async runNotificationPump(identityRouter, signal, intervalMs) {
+    while (!signal.aborted) {
+      for (const { binding, client } of identityRouter.configuredIdentities()) {
+        if (signal.aborted) {
+          return;
+        }
+        await this.deliverEndpointNotifications(
+          identityRouter,
+          binding,
+          client,
+          signal,
+        );
+      }
+      await backgroundSleep(intervalMs, signal);
+    }
+  }
+
+  async deliverEndpointNotifications(
+    identityRouter,
+    binding,
+    client,
+    signal,
+  ) {
+    let response;
+    try {
+      response = await client.callTool(
+        "agentbridge_host_notification_claim",
+        {
+          agent_host: "openclaw",
+          endpoint_key: binding.key,
+          limit: 10,
+          lease_seconds: 30,
+        },
+        { signal, meta: hostContextMeta() },
+      );
+    } catch (error) {
+      if (!signal.aborted) {
+        this.api.logger.debug?.(
+          `AgentBridge endpoint notification claim unavailable (${safeErrorCode(error)})`,
+        );
+      }
+      return;
+    }
+    const endpoint = response?.endpoint;
+    for (const notification of Array.isArray(response?.notifications)
+      ? response.notifications
+      : []) {
+      let delivered = false;
+      const sessionKey = endpoint?.conversationRef;
+      const route = endpoint?.route;
+      if (
+        notification?.deliveryMode === "origin_handled" ||
+        notification?.deliveryMode === "no_op"
+      ) {
+        delivered = true;
+      } else if (
+        isPrivateSessionKey(sessionKey) &&
+        route &&
+        typeof route === "object" &&
+        !Array.isArray(route) &&
+        identityRouter.restoreSessionBinding({
+          sessionKey,
+          bindingKey: binding.key,
+        })
+      ) {
+        this.bindDeliveryRoute({
+          sessionKey,
+          channel: route.channel || binding.channel,
+          to: route.to || binding.senderId,
+          accountId: route.accountId || binding.accountId,
+          threadId: route.threadId,
+        });
+        if (
+          notification.deliveryMode === "trusted_interaction" &&
+          notification.interaction
+        ) {
+          delivered = await this.deliverInteractionsDirect(
+            sessionKey,
+            [notification.interaction],
+          );
+        } else if (
+          notification.deliveryMode === "status" &&
+          typeof notification.message === "string"
+        ) {
+          delivered = await this.deliverTextDirect(
+            sessionKey,
+            notification.message,
+          );
+        }
+      }
+      try {
+        await client.callTool(
+          "agentbridge_host_notification_ack",
+          {
+            agent_host: "openclaw",
+            endpoint_key: binding.key,
+            delivery_id: notification.deliveryId,
+            succeeded: delivered,
+            retry_after_seconds: 5,
+          },
+          { signal, meta: hostContextMeta() },
+        );
+      } catch (error) {
+        if (!signal.aborted) {
+          this.api.logger.warn(
+            `AgentBridge endpoint notification acknowledgement failed (${safeErrorCode(error)})`,
+          );
+        }
+      }
+    }
   }
 
   async waitForIdle() {
@@ -667,9 +856,14 @@ export class InteractionCoordinator {
       response,
       this.config.allowedCardOrigins,
     );
-    const nextInteractions = processed.interactions.filter(
+    let nextInteractions = processed.interactions.filter(
       (item) => item.interactionId !== record.interaction.interactionId,
     );
+    nextInteractions =
+      (await this.presentInteractions(
+        nextInteractions,
+        record.sessionKey,
+      )) || nextInteractions;
     for (const interaction of nextInteractions) {
       const next = this.upsert({
         interaction,
@@ -1832,6 +2026,25 @@ function defaultSleep(milliseconds, signal) {
       return;
     }
     const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+function backgroundSleep(milliseconds, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, milliseconds);
+    timer.unref?.();
     signal?.addEventListener(
       "abort",
       () => {

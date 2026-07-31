@@ -335,7 +335,7 @@ test("keeps a one-use-bound workspace session pinned across web channel metadata
   assert.equal(identity.binding.key, bindingKey);
 });
 
-test("workspace sessions expose only read-only AgentBridge tools", () => {
+test("workspace sessions expose reads plus two governed submit preparations", () => {
   const router = createRouter({
     requests: [],
     env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
@@ -359,10 +359,15 @@ test("workspace sessions expose only read-only AgentBridge tools", () => {
 
   assert.equal(tools[0].name, "agentbridge_identity_status");
   assert.equal(tools.length > 1, true);
-  assert.equal(
-    tools.slice(1).every((tool) => tool.annotations?.readOnlyHint === true),
-    true,
-  );
+  const governedWrites = tools
+    .slice(1)
+    .filter((tool) => tool.annotations?.readOnlyHint !== true)
+    .map((tool) => tool.name)
+    .sort();
+  assert.deepEqual(governedWrites, [
+    "oa_business_trip_submit_prepare",
+    "oa_leave_submit_prepare",
+  ]);
 });
 
 test("workspace sessions recover a missing in-memory identity binding", async () => {

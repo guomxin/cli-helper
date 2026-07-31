@@ -115,8 +115,10 @@ class WorkspaceApplication:
         interaction = None
         if task.get("current_interaction_id"):
             try:
-                response = self.service.get_interaction(
+                response = self.service.present_interaction(
                     user_subject=account["user_subject"],
+                    agent_host="openclaw",
+                    endpoint_key=account["endpoint_key"],
                     interaction_id=task["current_interaction_id"],
                 )
                 interaction = response["interaction"]

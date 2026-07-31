@@ -2119,6 +2119,104 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_interaction_present",
+        title="Present Trusted Interaction for One Endpoint",
+        description=(
+            "Host-private trusted-interaction presentation. Execution "
+            "authorizations receive an endpoint-specific one-use URL."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_interaction_present(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.present_interaction,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            interaction_id=interaction_id,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_notification_claim",
+        title="Claim Endpoint Notifications",
+        description=(
+            "Host-private lease for pending endpoint deliveries. It does not "
+            "execute or resume business operations."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_notification_claim(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        limit: Annotated[int, Field(ge=1, le=100)] = 10,
+        lease_seconds: Annotated[int, Field(ge=5, le=300)] = 30,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.claim_host_notifications,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            limit=limit,
+            lease_seconds=lease_seconds,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_notification_ack",
+        title="Acknowledge Endpoint Notification",
+        description=(
+            "Host-private delivery acknowledgement or bounded retry request."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_notification_ack(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        delivery_id: Annotated[str, Field(min_length=16, max_length=128)],
+        succeeded: bool,
+        retry_after_seconds: Annotated[int, Field(ge=1, le=300)] = 5,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.acknowledge_host_notification,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            delivery_id=delivery_id,
+            succeeded=succeeded,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+    @mcp.tool(
         name="agentbridge_host_workspace_link_confirm",
         title="Confirm Agent Workspace Identity Link",
         description=(

@@ -1,14 +1,14 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.3，二期只读 Agent Workspace 已实现
+> 文档状态：Approved v0.4，多端执行授权展示一期已实现
 >
-> 更新日期：2026-07-30
+> 更新日期：2026-07-31
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.3、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.4、中心
 > AgentBridge MCP 与可信交互卡片
 >
-> 本文是分期实现依据。第 15.1 节任务骨架和第 15.2 节只读网页端已进入代码与
-> 部署验收阶段；跨端 Claim 与多端通知仍属于后续阶段。
+> 本文是分期实现依据。任务骨架、Agent Workspace 和执行授权多端展示已进入代码与
+> 部署验收阶段；跨客户端对话接续和 OBO 执行委托仍属于后续阶段。
 
 ## 0. 当前实施状态
 
@@ -30,13 +30,18 @@
 - 网页账号通过已可信 Telegram/微信的一次性配对码绑定到既有 `userSubject`；
 - BFF 使用 OpenClaw 正式 Gateway 协议，浏览器不持有 MCP 或 Gateway Token；
 - 网页 Session 通过 90 秒一次性凭证固定到正确 MCP 身份，并只暴露
-  `readOnlyHint=true` 的 AgentBridge 工具；
+-  `readOnlyHint=true` 的能力及请假、出差两个受治理正式提交准备入口；
 - 桌面和移动端布局、双用户隔离、CSRF、凭证重放和错误身份兑换已纳入测试。
+- 同一执行授权可为 Workspace、Telegram 和微信生成端点专属展示入口；
+- 任一可信端都可确认或取消，中心数据库事务只接受第一个有效决定；
+- OpenClaw Outbox 通知泵按端点主动投递卡片和状态，失败最多重试 5 次；
+- 原任务宿主仍是唯一续办者，旁端确认不会获得原宿主的写权限或重复执行。
 
 尚未实现：
 
-- 跨端 Interaction Claim、首选确认端和多端订阅投递；
-- 跨客户端继续任务和 OBO 执行委托。
+- 登录卡和字段卡的多端共同编辑；
+- 首选确认端及用户自助通知偏好；
+- 跨客户端继续对话和 OBO 执行委托。
 
 ## 1. 结论
 
@@ -55,7 +60,7 @@
    OpenClaw `sessionKey` 存活。
 7. 状态通知可以投递到多个客户端，但字段提交、执行授权和业务提交只能消费一次。
 8. AgentBridge 继续掌管业务能力、可信交互、操作幂等与结果核验；Task Hub 掌管
-   客户端绑定、任务索引、订阅、领取和通知；OpenClaw 掌管模型对话与推理。
+   客户端绑定、任务索引、订阅、多端展示和通知；OpenClaw 掌管模型对话与推理。
 
 ## 2. 问题与当前差距
 
@@ -233,7 +238,7 @@ Task Hub 是渠道无关的任务与投递协调器，不是新的智能体，�
 - 任务创建、状态机和版本控制；
 - OpenClaw Session、AgentBridge Operation 与 Interaction 的关联；
 - 同一用户多个 Client Endpoint 的注册和订阅；
-- 待处理交互的跨端领取；
+- 待处理执行授权的端点专属展示；
 - 通知 Outbox、投递去重、重试和回执；
 - Gateway 重启后的任务与路由恢复；
 - 为目标客户端提供最小、非敏感的任务恢复摘要。
@@ -402,7 +407,7 @@ task.created
 task.message.accepted
 task.operation.linked
 task.interaction.waiting
-task.interaction.claimed
+task.interaction.presented
 task.interaction.completed
 task.operation.succeeded
 task.operation.failed
@@ -414,7 +419,7 @@ task.canceled
 每个事件包含 `eventId`、`taskId`、`userSubject`、事件类型、非敏感 payload、
 发生时间和因果引用。客户端按 `eventId` 去重。
 
-## 8. 可信交互的跨端领取
+## 8. 执行授权的多端展示与单次决定
 
 ### 8.1 绑定原则
 
@@ -430,33 +435,29 @@ task.canceled
 
 不能仅凭短期 URL、`taskId`、`interactionId` 或网页参数认领交互。
 
-Task Hub 和普通通知只保存 `interactionId` 及展示摘要，不持久化可信卡片 URL。
-客户端先以自身已认证 Endpoint 调用 Claim；Claim 成功后，再由 AgentBridge 为该
-Endpoint 生成或兑换短期、一次性的可信页面入口。当前直接把宿主私有 URL发回原
-私聊的 v1 路径只作为迁移兼容，不能直接扩展为“把同一个 URL 广播到所有端”。
+Task Hub 和普通通知只保存 `interactionId` 及展示摘要。每个已认证 Endpoint 在展示
+执行授权时，由 AgentBridge 生成独立 `presentationId` 和短期 URL。不同端不能复制
+彼此的 URL，URL 也不进入模型上下文。
 
-### 8.2 Claim 状态
+### 8.2 Presentation 与 Card Session
 
-为避免网页和手机同时操作，增加短期 Claim：
+同一授权允许存在多个端点展示：
 
-| 字段 | 含义 |
+| 对象 | 作用 |
 | --- | --- |
-| `claimId` | 不透明一次性 ID |
-| `interactionId` | 被领取的交互 |
-| `taskId` | 所属任务 |
-| `userSubject` | 所属用户 |
-| `endpointId` | 领取客户端 |
-| `state` | `claimed`、`completed`、`released`、`expired` |
-| `expiresAt` | 短租约到期时间 |
+| `Authorization` | 冻结业务计划和最终决定，所有端共享 |
+| `Presentation` | 绑定一个 `authorizationId + endpointId` 的展示入口 |
+| `CardSession` | 每次打开页面生成的独立 CSRF 会话 |
 
-领取规则：
+规则：
 
-1. 同一交互同时最多一个活动 Claim；
-2. 已完成或已消费的交互不能重新领取；
-3. Claim 超时可以由同一用户其他 Endpoint 重新领取；
-4. 页面提交时再次校验 Endpoint、Claim、Interaction、用户和资源状态；
-5. 执行授权的最终消费仍由 AgentBridge 的一次性授权和幂等账本保证；
-6. 一个客户端完成后，其他客户端立即收到“已在另一客户端处理”的状态。
+1. 同一 Endpoint 对同一授权复用一个 Presentation，不同 Endpoint 的 URL 必须不同；
+2. 同一 Presentation 被重复打开时，各页面使用独立 Card Session，互不覆盖 Cookie；
+3. 网页、Telegram 和微信可以同时显示并操作同一授权；
+4. `UPDATE ... WHERE state='pending'` 在事务内原子接受第一个有效决定；
+5. 首次决定后立即消费全部 Card Session，并把全部 Presentation 标为已决定；
+6. 其他端随后提交时返回“已在其他可信端确认/取消”，不再报未知冲突；
+7. 最终业务消费仍经过一次性授权、Operation 幂等和权威回读。
 
 ### 8.3 手机确认策略
 
@@ -468,11 +469,11 @@ preferredConfirmationEndpoint = telegram-mobile
 
 默认策略：
 
-- 网页发起且存在首选手机端：网页显示等待状态，手机端主动收到卡片；
-- 首选端离线或投递失败：网页仍可领取，不自动降低授权要求；
-- Telegram 和微信同时订阅：两端都可收到提示，但只有首先成功 Claim 的端可操作；
+- 网页发起后，网页保留确认入口，已绑定的 Telegram 和微信主动收到各自入口；
+- 某端离线或投递失败不影响其他端确认，也不自动降低授权要求；
+- Telegram 和微信同时订阅时，两端都可操作，但只有第一个有效决定生效；
 - 高风险能力可要求指定 Endpoint 或更高 `trustLevel`；
-- 群聊、公开频道和无法稳定识别用户的 Endpoint 不允许 Claim。
+- 群聊、公开频道和无法稳定识别用户的 Endpoint 不允许展示写授权。
 
 ### 8.4 确认权与执行权
 
@@ -492,11 +493,11 @@ preferredConfirmationEndpoint = telegram-mobile
 
 ### 9.1 订阅模型
 
-任务默认订阅：
+任务进入执行授权等待态后默认订阅：
 
 - 发起 Endpoint；
-- 用户配置的首选确认 Endpoint；
-- 用户配置的状态通知 Endpoint。
+- 同一 `userSubject` 下具备 `trusted_interaction` 能力的活动消息端点；
+- Workspace 通过用户级 SSE 直接观察 TaskEvent，不依赖消息 Outbox。
 
 每个订阅可选择：
 
@@ -521,7 +522,7 @@ file_ready
 | `eventId` | 来源任务事件 |
 | `endpointId` | 目标客户端 |
 | `payloadType` | 文本、可信卡、文件、状态 |
-| `state` | `pending`、`sent`、`acknowledged`、`failed`、`expired` |
+| `state` | `pending`、`delivering`、`acknowledged`、`failed` |
 | `attemptCount` | 尝试次数 |
 | `nextAttemptAt` | 下次投递时间 |
 
@@ -531,9 +532,9 @@ file_ready
 eventId + endpointId + payloadType
 ```
 
-Outbox 重试只重复通知，不重复 AgentBridge 业务操作。
-可信卡投递记录保存 Interaction 引用和展示意图，不保存可直接使用的可信 URL；
-实际入口在目标 Endpoint 成功 Claim 后生成。
+Outbox 重试只重复通知，不重复 AgentBridge 业务操作。投递使用 30 秒 Lease，失败
+5 次后转为 `failed`。可信卡投递记录保存 Interaction 引用和展示意图；端点专属
+Presentation 在领取投递项时生成，URL 只进入宿主私有响应。
 
 ### 9.3 在另一客户端继续
 
@@ -639,7 +640,7 @@ OpenClaw 核心。
 - `/chat`：智能体对话和当前任务侧栏；
 - `/tasks`：进行中、等待处理和最近完成；
 - `/tasks/{taskId}`：任务时间线、当前状态、继续操作；
-- `/interactions/{interactionId}`：领取并打开可信卡；
+- `/interactions/{interactionId}`：为当前网页 Endpoint 打开专属可信卡；
 - `/files/{grantId}`：短期文件领取；
 - `/settings/endpoints`：已绑定客户端和通知偏好。
 
@@ -691,12 +692,12 @@ POST /agent/endpoints/{endpointId}/revoke
 PUT  /agent/endpoints/{endpointId}/preferences
 ```
 
-### 12.3 Interaction 接口
+### 12.3 宿主私有 Interaction 与通知接口
 
 ```text
-POST /agent/interactions/{interactionId}/claim
-POST /agent/interactions/{interactionId}/release
-GET  /agent/interactions/{interactionId}
+agentbridge_host_interaction_present
+agentbridge_host_notification_claim
+agentbridge_host_notification_ack
 ```
 
 真正的字段提交、登录和授权仍进入现有 AgentBridge 可信页面及账本，不由 Task Hub
@@ -734,7 +735,7 @@ eventId + endpointId + payloadType
 ### 13.2 单写者
 
 - 同一任务使用乐观版本或短期执行 Lease，防止两个 OpenClaw Session 同时推进；
-- 同一 Interaction 同时只有一个 Claim；
+- 同一执行授权允许多端展示，但中心只接受一个最终决定；
 - 同一用户同一系统仍使用现有 Session 锁；
 - AgentBridge Operation 的幂等和提交边界不因 Task Hub 引入而放宽。
 
@@ -742,29 +743,29 @@ eventId + endpointId + payloadType
 
 | 故障 | 行为 |
 | --- | --- |
-| 手机离线 | 网页继续显示可领取；Outbox 有界重试 |
+| 手机离线 | 网页仍可确认；Outbox 最多重试 5 次 |
 | Telegram 成功、微信失败 | 记录每端投递结果，不重复业务操作 |
 | Gateway 重启 | 从 Task Hub 恢复任务、交互和待投递事件 |
 | 网页刷新 | 通过任务列表和事件游标恢复 |
-| 两端同时点授权 | 一个 Claim 成功，另一个显示已被领取 |
-| Claim 后客户端掉线 | 租约超时后允许同用户重新领取 |
+| 两端同时点授权 | 一个原子决定成功，另一个显示已在其他可信端处理 |
+| 打开卡片后客户端掉线 | 其他端仍可直接确认，无需等待领取租约 |
 | 模型 Session 被清空 | 新 Session 使用任务摘要继续 |
 | AgentBridge 返回 `outcome_unknown` | 所有端显示需核对，禁止自动重试 |
 | Token 被撤销 | 只影响对应客户端凭据，不删除任务和下游 Session |
 | 原执行宿主离线 | 保留任务和已完成确认，等待原身份绑定执行上下文恢复，不换 Token 执行 |
-| Endpoint 解绑 | 停止新通知并撤销该端未完成 Claim |
+| Endpoint 解绑 | 停止新通知，不影响其他端已生成的短期入口 |
 
 ## 14. 安全与隐私
 
 - Client Endpoint 必须来自宿主可信身份，不使用昵称、聊天文本或模型参数；
-- Task、Operation、Interaction、Claim 和 Delivery 全部绑定同一 `userSubject`；
+- Task、Operation、Interaction、Presentation 和 Delivery 全部绑定同一 `userSubject`；
 - 所有用户接口按对象所有权过滤，跨用户查询统一返回不可发现；
 - 可信 URL 仅进入宿主私有展示元数据，不进入模型、普通聊天历史或通知日志；
 - 网页使用独立 CSP、CSRF、Origin、Host、Cookie 和点击劫持防护；
 - 敏感卡片页面与 Agent Workspace 普通页面使用清晰、不同的安全边界；
 - 多端通知默认只给最小摘要，高敏内容需要用户进入可信页面查看；
 - 管理员可以撤销 Endpoint 和 Token，但不能替用户完成业务授权；
-- Endpoint 绑定、领取、释放、完成、撤销和投递结果进入追加式审计；
+- Endpoint 绑定、展示、决定、完成、撤销和投递结果进入追加式审计；
 - 群聊、共享 Web Session 和无法确定发送者的渠道不允许写操作；
 - 任何身份冲突、主体不匹配或重复绑定都 fail closed。
 
@@ -803,14 +804,17 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
 
 验收：网页与 Telegram 使用同一用户的下游 Session，但凭据可分别撤销。
 
-### 15.3 三期：网页发起、手机确认
+### 15.3 三期：网页发起、多端确认
 
-- 配置首选确认 Endpoint；
-- 增加 Interaction Claim；
-- 网页发起一个受控写任务；
-- 字段卡可在网页完成，执行授权卡主动推送到手机；
-- 手机确认后自动续办；
-- 网页、Telegram、微信同步收到确定终态。
+实施状态：一期代码已完成，等待部署与真实无副作用验收。
+
+- Workspace 开放请假、出差两个正式提交的受治理 prepare 工具；
+- 字段卡仍由发起端填写；
+- 最终执行授权在网页、Telegram、微信生成独立 Presentation；
+- 任一可信端可确认或取消，中心只接受首次有效决定；
+- 原发起 OpenClaw 会话自动续办，旁端不接管执行；
+- 网页通过 SSE、消息端通过 Outbox 同步收到状态；
+- 首选确认 Endpoint 和更多流程入口后续按验收结果扩展。
 
 首个真实样板建议使用已稳定、可回读且可撤销的 OA 请假或出差申请。真实提交和
 撤销仍需针对该测试事项明确授权。
@@ -837,8 +841,8 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
 
 1. 网页发起 OA 读取，Telegram 收到完成提醒，三端结果属于同一 `userSubject`；
 2. 网页发起写任务，手机完成执行授权，网页自动显示最终核验结果；
-3. Telegram 与微信同时打开同一授权，只有一端能够成功 Claim；
-4. 手机 Claim 后断网，超时后网页可以重新领取；
+3. Telegram 与微信同时打开各自授权入口，只有一个最终决定能够生效；
+4. 手机打开后断网，网页无需等待即可完成同一授权；
 5. Gateway 在字段卡等待期间重启，任务和卡片仍可恢复；
 6. 网页 Token 撤销后 Telegram 仍可使用，网页不能继续调用；
 7. 两个真实用户同时操作，不互见任务、卡片、文件或通知；
@@ -850,7 +854,7 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
 
 - 活动任务数及各状态停留时间；
 - `waiting_user` 超时数量；
-- Interaction Claim 冲突、过期和跨端完成率；
+- Presentation 生成、首次决定竞争、过期和跨端完成率；
 - 每渠道通知成功率、延迟和重试次数；
 - Gateway 重启后的恢复任务数；
 - 同一任务关联的 Operation 数；

@@ -4,9 +4,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier, Thread
 
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
+    WriteAuthorizationNotFound,
     WriteAuthorizationStateError,
     WriteAuthorizationStore,
 )
@@ -122,6 +124,81 @@ class WriteAuthorizationStoreTests(unittest.TestCase):
                 created["card_url"].startswith("http://127.0.0.1:8780/authorize/")
             )
             self.assertIsNone(re.search(r"user-a|session-a", created["card_url"]))
+
+    def test_endpoint_presentations_are_distinct_and_first_decision_wins(self):
+        with TemporaryDirectory() as tmp:
+            store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
+            created = _authorization(store)
+            telegram = store.create_presentation(
+                created["authorization_id"],
+                user_subject="user-a",
+                endpoint_id="telegram-1",
+            )
+            workspace = store.create_presentation(
+                created["authorization_id"],
+                user_subject="user-a",
+                endpoint_id="workspace-1",
+            )
+            telegram_csrf = store.issue_csrf(
+                created["authorization_id"],
+                presentation_id=telegram["presentation_id"],
+            )
+            workspace_csrf = store.issue_csrf(
+                created["authorization_id"],
+                presentation_id=workspace["presentation_id"],
+            )
+
+            self.assertNotEqual(telegram["presentation_id"], workspace["presentation_id"])
+            self.assertNotEqual(telegram["card_url"], workspace["card_url"])
+
+            barrier = Barrier(2)
+            outcomes = []
+
+            def decide(presentation, csrf):
+                barrier.wait()
+                try:
+                    result = store.decide(
+                        created["authorization_id"],
+                        decision="approve",
+                        csrf_token=csrf,
+                        csrf_cookie=csrf,
+                        presentation_id=presentation["presentation_id"],
+                    )
+                    outcomes.append(("approved", result["decided_endpoint_id"]))
+                except WriteAuthorizationStateError:
+                    outcomes.append(("already_decided", None))
+
+            threads = [
+                Thread(target=decide, args=(telegram, telegram_csrf)),
+                Thread(target=decide, args=(workspace, workspace_csrf)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+            self.assertCountEqual(
+                [outcome[0] for outcome in outcomes],
+                ["approved", "already_decided"],
+            )
+            final = store.get(created["authorization_id"])
+            self.assertEqual(final["state"], "approved")
+            self.assertIn(
+                final["decided_endpoint_id"],
+                {"telegram-1", "workspace-1"},
+            )
+
+    def test_presentation_cannot_cross_user_boundary(self):
+        with TemporaryDirectory() as tmp:
+            store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
+            created = _authorization(store)
+
+            with self.assertRaises(WriteAuthorizationNotFound):
+                store.create_presentation(
+                    created["authorization_id"],
+                    user_subject="user-b",
+                    endpoint_id="workspace-b",
+                )
 
 
 def _authorization(

@@ -1,11 +1,11 @@
 # Agent Workspace 网页端
 
-> 状态：二期只读版本已实现
+> 状态：二期网页端及多端执行授权一期已实现
 >
 > 更新日期：2026-07-31
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.3
+> `agentbridge-interactions` 0.4.4
 
 ## 1. 定位
 
@@ -19,13 +19,15 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 - 通过 OpenClaw Gateway 使用智能体对话；
 - 查看当前用户的 AgentBridge 任务、事件时间线和关联端点；
 - 打开当前任务的可信登录、字段或授权页面；
-- 网页发起只读 AgentBridge 能力。
+- 网页发起只读 AgentBridge 能力；
+- 网页发起 OA 请假、出差两个正式提交的受治理填单流程；
+- 最终执行授权同时显示在网页并主动投递到已绑定 Telegram、微信。
 
 当前二期不提供：
 
-- 网页端业务写工具；
-- 网页发起后自动把授权推送到手机；
-- 多端 Interaction Claim 和跨端继续对话；
+- 除请假、出差正式提交准备之外的网页端业务写工具；
+- 登录卡、字段卡的多端共同填写；
+- 跨端继续对话和 OBO 执行宿主切换；
 - 企业 OIDC、找回密码和自助解绑。
 
 ## 2. 身份绑定
@@ -79,9 +81,11 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 agent:main:agentbridge-workspace:direct:<workspace-account-id>
 ```
 
-网页会话只注册 MCP 目录中 `readOnlyHint=true` 的 AgentBridge 工具。即使模型尝试
-选择写工具，网页 OpenClaw Session 也看不到这些工具。Telegram 和微信的既有权限
-与行为不受此限制。
+网页会话注册 MCP 目录中 `readOnlyHint=true` 的 AgentBridge 工具，并额外允许
+`oa_business_trip_submit_prepare`、`oa_leave_submit_prepare` 两个受治理入口。
+这两个入口先产生字段卡和冻结计划，最终提交仍必须经过执行授权卡；网页模型看不到
+对应 commit 工具，确认后的 commit/verify 由原任务协调器续办。Telegram 和微信的
+既有权限与行为不受此限制。
 
 OpenClaw 核心源码没有修改。接入只使用正式插件 API、Gateway WebSocket 协议和
 自定义 Gateway Method，因此 OpenClaw 升级后只需执行插件兼容测试。
@@ -165,7 +169,7 @@ openclaw devices approve <requestId> --json
 日常使用：
 
 1. 使用网页用户名和密码登录；
-2. 在“对话”中发起只读任务；
+2. 在“对话”中发起读取任务，或请假、出差正式提交任务；
 3. 在“任务”中查看 Task Hub 状态、时间线和待处理可信交互；
 4. 在“端点”中核对网页、Telegram、微信端点；
 5. 退出只影响当前网页会话。
@@ -178,6 +182,9 @@ openclaw devices approve <requestId> --json
 - Gateway 绑定凭证只能由对应身份兑换一次，错误身份和重放均失败；
 - 网页聊天历史只返回用户和助手文本，不返回系统提示或工具内部消息；
 - 可信卡片继续使用独立 HTTPS 页面，敏感字段不进入聊天；
+- 同一执行授权为每个 Endpoint 生成独立 URL 和页面会话；
+- 任一可信端可确认，但中心事务只接受第一个有效决定并只执行一次；
+- 旁端只有确认权，不继承原 OpenClaw 会话的写 scope 或执行上下文；
 - CSP 禁止第三方脚本、跨源连接和 iframe 嵌入；
 - 登录失败按来源地址限流，密码使用 scrypt 哈希存储。
 
@@ -189,7 +196,7 @@ openclaw devices approve <requestId> --json
 - 双用户任务、事件和端点隔离；
 - 错误身份兑换、一次性凭证重放和 CSRF 拒绝；
 - Gateway Token 不进入子进程命令行或请求 JSON；
-- 网页会话只暴露只读 AgentBridge 工具；
+- 网页会话只暴露读取工具及两个明确允许的受治理提交准备工具；
 - 插件 Gateway Method 使用 `operator.write` 并固定正确身份；
 - 桌面 `1440x900` 与移动端 `390x844` 的登录、对话、任务列表、详情和返回；
 - 浏览器控制台 0 错误。
@@ -219,3 +226,12 @@ openclaw devices approve <requestId> --json
    “正在检查 OA 登录状态”、工具结果、回答增量、智能体结束和最终回答；
 4. 事件清洗层未向浏览器输出工具参数、工具结果、Token、`userSubject` 或其他会话；
 5. Linux Release `c3c675e6e4f0` 已部署，62 个 MCP 工具完整，OA 会话保持 active。
+
+2026-07-31 多端执行授权一期代码验收：
+
+1. Workspace、Telegram、微信分别获得绑定自身 Endpoint 的授权 URL；
+2. 多页面使用独立 CSRF Card Session，不再因后打开页面覆盖先打开页面；
+3. 并发确认只有一个原子决定成功，其他端显示已在另一可信端处理；
+4. Outbox 主动投递执行授权和终态，30 秒 Lease、最多 5 次失败重试；
+5. Workspace SSE 在等待确认时刷新任务详情并提示可在网页处理；
+6. 原任务会话继续执行 commit/verify，旁端仅展示和确认。

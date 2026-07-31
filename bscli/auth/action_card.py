@@ -20,9 +20,20 @@ class TrustedActionApplication:
     def __init__(self, *, authorization_store: WriteAuthorizationStore) -> None:
         self.authorization_store = authorization_store
 
-    def get_card(self, authorization_id: str, *, secure_cookie: bool) -> AuthCardResponse:
+    def get_card(
+        self,
+        authorization_id: str,
+        *,
+        secure_cookie: bool,
+        presentation_id: str | None = None,
+    ) -> AuthCardResponse:
         try:
             authorization = self.authorization_store.get(authorization_id)
+            if presentation_id is not None:
+                self.authorization_store.get_presentation(
+                    authorization_id,
+                    presentation_id,
+                )
         except WriteAuthorizationNotFound:
             return self._message_response(
                 status=404,
@@ -32,15 +43,20 @@ class TrustedActionApplication:
             )
         state = authorization["state"]
         if state == "pending":
-            csrf_token = self.authorization_store.issue_csrf(authorization_id)
+            csrf_token = self.authorization_store.issue_csrf(
+                authorization_id,
+                presentation_id=presentation_id,
+            )
             nonce = secrets.token_urlsafe(18)
             body = _render_confirmation(
                 authorization,
                 csrf_token=csrf_token,
                 nonce=nonce,
+                presentation_id=presentation_id,
             )
+            card_path = _card_path(authorization_id, presentation_id)
             cookie = (
-                f"agentbridge_csrf={csrf_token}; Path=/authorize/{authorization_id}; "
+                f"agentbridge_csrf={csrf_token}; Path={card_path}; "
                 f"HttpOnly; SameSite=Strict; Max-Age={_ttl_seconds(authorization)}"
             )
             if secure_cookie:
@@ -83,6 +99,7 @@ class TrustedActionApplication:
         body: bytes,
         content_type: str,
         csrf_cookie: str,
+        presentation_id: str | None = None,
     ) -> AuthCardResponse:
         if len(body) > MAX_AUTH_BODY_BYTES:
             return self._message_response(
@@ -134,11 +151,17 @@ class TrustedActionApplication:
                     tone="error",
                 )
             try:
+                if presentation_id is not None:
+                    self.authorization_store.get_presentation(
+                        authorization_id,
+                        presentation_id,
+                    )
                 authorization = self.authorization_store.decide(
                     authorization_id,
                     decision=decision,
                     csrf_token=fields["csrf_token"][0],
                     csrf_cookie=csrf_cookie,
+                    presentation_id=presentation_id,
                 )
             except WriteAuthorizationNotFound:
                 return self._message_response(
@@ -155,10 +178,31 @@ class TrustedActionApplication:
                     tone="error",
                 )
             except WriteAuthorizationStateError:
+                try:
+                    current = self.authorization_store.get(authorization_id)
+                except WriteAuthorizationNotFound:
+                    current = None
+                if current is not None and current["state"] in {
+                    "approved",
+                    "consumed",
+                }:
+                    return self._message_response(
+                        status=200,
+                        title="操作已在其他可信端确认",
+                        message="中心服务已经接受首次有效确认，业务操作只会执行一次。",
+                        tone="success",
+                    )
+                if current is not None and current["state"] == "rejected":
+                    return self._message_response(
+                        status=200,
+                        title="操作已在其他可信端取消",
+                        message="中心服务不会执行这份操作计划。",
+                        tone="neutral",
+                    )
                 return self._message_response(
-                    status=409,
-                    title="操作确认已被使用",
-                    message="请检查操作状态或重新生成计划。",
+                    status=410,
+                    title="操作确认已失效",
+                    message="请返回智能体重新生成操作计划。",
                     tone="error",
                 )
             if authorization["state"] == "approved":
@@ -206,7 +250,13 @@ class TrustedActionApplication:
         return AuthCardResponse(status, _security_headers(nonce), body.encode("utf-8"))
 
 
-def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) -> str:
+def _render_confirmation(
+    authorization: dict,
+    *,
+    csrf_token: str,
+    nonce: str,
+    presentation_id: str | None,
+) -> str:
     summary = authorization.get("summary") if isinstance(authorization.get("summary"), dict) else {}
     fields = summary.get("fields") if isinstance(summary.get("fields"), list) else []
     title = str(summary.get("title") or "确认执行计划")
@@ -244,18 +294,28 @@ def _render_confirmation(authorization: dict, *, csrf_token: str, nonce: str) ->
               <div><dt>计划指纹</dt><dd class="hash">{escape(str(authorization.get('plan_hash') or ''))}</dd></div>
             </dl>
             <p class="notice">{escape(notice)}</p>
-            <form method="post" action="/authorize/{escape(authorization['authorization_id'])}" id="action-form">
+            <form method="post" action="{escape(_card_path(authorization['authorization_id'], presentation_id))}" id="action-form">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
               <div class="actions">
                 <button type="submit" name="decision" value="reject" class="secondary">取消操作</button>
                 <button type="submit" name="decision" value="approve" class="primary">{escape(authorize_label)}</button>
               </div>
             </form>
-            <footer>授权将在 {_format_expiry(authorization['expires_at'])} 失效，且只能使用一次</footer>
+            <footer>可在任一可信端确认；中心服务只接受一次决定并只执行一次</footer>
           </section>
         </main>
         """,
     )
+
+
+def _card_path(
+    authorization_id: str,
+    presentation_id: str | None,
+) -> str:
+    base = f"/authorize/{authorization_id}"
+    if presentation_id is None:
+        return base
+    return f"{base}/present/{presentation_id}"
 
 
 def _document(

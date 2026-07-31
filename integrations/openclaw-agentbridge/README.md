@@ -72,9 +72,17 @@ starts after the pin has disappeared, the plugin calls the host-private,
 read-only `agentbridge_host_workspace_session_resolve` tool with each
 configured Bearer identity and restores only the identity that centrally owns
 the exact web session. Browser or model input cannot select the identity.
-Agent Workspace sessions receive only catalog entries whose MCP annotations
-declare `readOnlyHint=true`; messaging sessions keep their existing governed
-write tools.
+Version 0.4.4 adds endpoint-specific execution-authorization presentations and
+an acknowledged notification outbox pump. A final authorization can be visible
+in Agent Workspace, Telegram, and WeChat at the same time. Every endpoint gets
+its own URL and card session, while AgentBridge atomically accepts only the
+first valid decision. Non-origin channels never resume the business task; the
+originating session remains the sole commit/verify coordinator. Failed channel
+deliveries are leased and retried at most five times.
+
+Agent Workspace sessions receive read-only catalog entries plus the explicitly
+allowlisted `oa_business_trip_submit_prepare` and `oa_leave_submit_prepare`
+governed flows. Messaging sessions keep their existing governed write tools.
 
 ## Local installation
 
@@ -110,7 +118,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.3, ...)
+AgentBridge interaction plugin registered (version=0.4.4, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

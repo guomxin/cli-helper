@@ -138,7 +138,7 @@ def create_auth_http_server(
             if document_file_id is not None and download_application is not None:
                 self._send(download_application.get_file(document_file_id))
                 return
-            card_application, card_id = self._card_target()
+            card_application, card_id, presentation_id = self._card_target()
             if card_application is None or card_id is None:
                 self._send(application._message_response(
                     status=404,
@@ -147,12 +147,10 @@ def create_auth_http_server(
                     tone="error",
                 ))
                 return
-            self._send(
-                card_application.get_card(
-                    card_id,
-                    secure_cookie=config.secure_cookie,
-                )
-            )
+            card_arguments = {"secure_cookie": config.secure_cookie}
+            if card_application is action_application:
+                card_arguments["presentation_id"] = presentation_id
+            self._send(card_application.get_card(card_id, **card_arguments))
 
         def do_POST(self) -> None:
             if not self._host_allowed() or not self._origin_allowed():
@@ -200,7 +198,7 @@ def create_auth_http_server(
                     body = b""
                 self._send(response)
                 return
-            card_application, card_id = self._card_target()
+            card_application, card_id, presentation_id = self._card_target()
             if card_application is None or card_id is None:
                 self._send(application._message_response(
                     status=404,
@@ -210,11 +208,16 @@ def create_auth_http_server(
                 ))
                 return
             try:
+                card_arguments = {
+                    "body": body,
+                    "content_type": self.headers.get("Content-Type") or "",
+                    "csrf_cookie": csrf_cookie,
+                }
+                if card_application is action_application:
+                    card_arguments["presentation_id"] = presentation_id
                 response = card_application.submit_card(
                     card_id,
-                    body=body,
-                    content_type=self.headers.get("Content-Type") or "",
-                    csrf_cookie=csrf_cookie,
+                    **card_arguments,
                 )
             finally:
                 body = b""
@@ -256,18 +259,19 @@ def create_auth_http_server(
                         and challenge.get("challenge_type")
                         == "interactive_browser_login"
                     ):
-                        return interactive_application, challenge_id
-                return application, challenge_id
-            authorization_id = _authorization_id_from_path(self.path)
-            if authorization_id is not None and action_application is not None:
-                return action_application, authorization_id
+                        return interactive_application, challenge_id, None
+                return application, challenge_id, None
+            authorization_target = _authorization_target_from_path(self.path)
+            if authorization_target is not None and action_application is not None:
+                authorization_id, presentation_id = authorization_target
+                return action_application, authorization_id, presentation_id
             submission_id = _field_submission_id_from_path(self.path)
             if submission_id is not None and field_application is not None:
-                return field_application, submission_id
+                return field_application, submission_id, None
             download_id = _document_download_id_from_path(self.path)
             if download_id is not None and download_application is not None:
-                return download_application, download_id
-            return None, None
+                return download_application, download_id, None
+            return None, None, None
 
         def _send(self, response: AuthCardResponse) -> None:
             self.send_response(response.status)
@@ -324,9 +328,29 @@ def _challenge_id_from_path(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _authorization_target_from_path(
+    path: str,
+) -> tuple[str, str | None] | None:
+    normalized = path.split("?", 1)[0]
+    presentation = re.fullmatch(
+        r"/authorize/([A-Za-z0-9_-]{32,128})/present/"
+        r"([A-Za-z0-9_-]{32,128})",
+        normalized,
+    )
+    if presentation:
+        return presentation.group(1), presentation.group(2)
+    legacy = re.fullmatch(
+        r"/authorize/([A-Za-z0-9_-]{32,128})",
+        normalized,
+    )
+    if legacy:
+        return legacy.group(1), None
+    return None
+
+
 def _authorization_id_from_path(path: str) -> str | None:
-    match = re.fullmatch(r"/authorize/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
-    return match.group(1) if match else None
+    target = _authorization_target_from_path(path)
+    return target[0] if target is not None else None
 
 
 def _field_submission_id_from_path(path: str) -> str | None:
