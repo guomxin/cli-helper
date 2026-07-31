@@ -428,6 +428,72 @@ test("workspace sessions recover a missing in-memory identity binding", async ()
   );
 });
 
+test("workspace tasks keep the web endpoint distinct from the bearer binding", async () => {
+  const requests = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_workspace_session_resolve") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            binding: {
+              endpointKey: "workspace:account-123",
+              sessionKey:
+                "agent:main:agentbridge-workspace:direct:account-123",
+            },
+          },
+        };
+      }
+      if (name === "agentbridge_host_task_ensure") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            task: { taskId: "task-workspace-1234567890" },
+          },
+        };
+      }
+      return {
+        structuredContent: {
+          status: "succeeded",
+          result: { count: 0, items: [] },
+        },
+      };
+    },
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      sessionKey,
+      messageChannel: "webchat",
+      runId: "workspace-run",
+    },
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+
+  const tool = tools.find((item) => item.name === "oa_workflow_pending_list");
+  await tool.execute("workspace-call", { limit: 5 });
+
+  const ensure = requests.find(
+    (request) =>
+      request.body.params.name === "agentbridge_host_task_ensure",
+  );
+  assert.equal(
+    ensure.body.params.arguments.endpoint_key,
+    "workspace:account-123",
+  );
+  assert.equal(ensure.body.params.arguments.client_type, "web");
+  assert.equal(ensure.body.params.arguments.external_subject, "account-123");
+  assert.deepEqual(ensure.body.params.arguments.route, {});
+  assert.equal(
+    router.endpointKeyForSession(sessionKey),
+    "workspace:account-123",
+  );
+});
+
 test("withholds OA tools from an unprovisioned Telegram user", async () => {
   const router = createRouter({
     requests: [],

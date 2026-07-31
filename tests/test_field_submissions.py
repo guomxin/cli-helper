@@ -120,6 +120,66 @@ class FieldSubmissionStoreTests(unittest.TestCase):
             self.assertTrue(created["card_url"].startswith("http://127.0.0.1:8780/input/"))
             self.assertIsNone(re.search(r"user-a|session-a", created["card_url"]))
 
+    def test_endpoint_presentations_have_independent_sessions_and_one_winner(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            created = _submission(store)
+            telegram = store.create_presentation(
+                created["submission_id"],
+                user_subject="user-a",
+                endpoint_id="endpoint-telegram",
+            )
+            workspace = store.create_presentation(
+                created["submission_id"],
+                user_subject="user-a",
+                endpoint_id="endpoint-workspace",
+            )
+            telegram_csrf = store.issue_csrf(
+                created["submission_id"],
+                presentation_id=telegram["presentation_id"],
+            )
+            workspace_csrf = store.issue_csrf(
+                created["submission_id"],
+                presentation_id=workspace["presentation_id"],
+            )
+
+            self.assertNotEqual(telegram["card_url"], workspace["card_url"])
+            self.assertNotEqual(telegram_csrf, workspace_csrf)
+            submitted = store.submit(
+                created["submission_id"],
+                csrf_token=telegram_csrf,
+                csrf_cookie=telegram_csrf,
+                values={"reason": "Test"},
+                presentation_id=telegram["presentation_id"],
+            )
+            self.assertEqual(submitted["state"], "submitted")
+            with self.assertRaises(FieldSubmissionStateError):
+                store.submit(
+                    created["submission_id"],
+                    csrf_token=workspace_csrf,
+                    csrf_cookie=workspace_csrf,
+                    values={"reason": "Duplicate"},
+                    presentation_id=workspace["presentation_id"],
+                )
+            self.assertEqual(
+                store.get_presentation(
+                    created["submission_id"],
+                    workspace["presentation_id"],
+                )["state"],
+                "submitted",
+            )
+
+    def test_presentation_is_bound_to_the_same_user(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            created = _submission(store)
+            with self.assertRaises(KeyError):
+                store.create_presentation(
+                    created["submission_id"],
+                    user_subject="user-b",
+                    endpoint_id="endpoint-other",
+                )
+
 
 def _submission(store, *, operation_id="prepare-1", ttl_seconds=900):
     return store.create(

@@ -15,7 +15,7 @@ import {
   hostContextMeta,
 } from "./proxy-tools.js";
 
-const PLUGIN_VERSION = "0.4.4";
+const PLUGIN_VERSION = "0.4.5";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -319,7 +319,9 @@ async function presentInteractionForSession({
     "agentbridge_host_interaction_present",
     {
       agent_host: "openclaw",
-      endpoint_key: resolved.binding.key,
+      endpoint_key:
+        identityRouter.endpointKeyForSession(sessionKey) ||
+        resolved.binding.key,
       interaction_id: interaction.interactionId,
     },
     { meta: hostContextMeta() },
@@ -426,6 +428,7 @@ async function bindWorkspaceGatewaySession({
         identityRouter.restoreSessionBinding({
           sessionKey,
           bindingKey: binding.key,
+          endpointKey,
         })
       ) {
         respond(true, {

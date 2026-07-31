@@ -148,7 +148,7 @@ def create_auth_http_server(
                 ))
                 return
             card_arguments = {"secure_cookie": config.secure_cookie}
-            if card_application is action_application:
+            if card_application in {action_application, field_application}:
                 card_arguments["presentation_id"] = presentation_id
             self._send(card_application.get_card(card_id, **card_arguments))
 
@@ -213,7 +213,7 @@ def create_auth_http_server(
                     "content_type": self.headers.get("Content-Type") or "",
                     "csrf_cookie": csrf_cookie,
                 }
-                if card_application is action_application:
+                if card_application in {action_application, field_application}:
                     card_arguments["presentation_id"] = presentation_id
                 response = card_application.submit_card(
                     card_id,
@@ -265,9 +265,10 @@ def create_auth_http_server(
             if authorization_target is not None and action_application is not None:
                 authorization_id, presentation_id = authorization_target
                 return action_application, authorization_id, presentation_id
-            submission_id = _field_submission_id_from_path(self.path)
-            if submission_id is not None and field_application is not None:
-                return field_application, submission_id, None
+            submission_target = _field_submission_target_from_path(self.path)
+            if submission_target is not None and field_application is not None:
+                submission_id, presentation_id = submission_target
+                return field_application, submission_id, presentation_id
             download_id = _document_download_id_from_path(self.path)
             if download_id is not None and download_application is not None:
                 return download_application, download_id, None
@@ -353,9 +354,29 @@ def _authorization_id_from_path(path: str) -> str | None:
     return target[0] if target is not None else None
 
 
+def _field_submission_target_from_path(
+    path: str,
+) -> tuple[str, str | None] | None:
+    normalized = path.split("?", 1)[0]
+    presentation = re.fullmatch(
+        r"/input/([A-Za-z0-9_-]{32,128})/present/"
+        r"([A-Za-z0-9_-]{32,128})",
+        normalized,
+    )
+    if presentation:
+        return presentation.group(1), presentation.group(2)
+    legacy = re.fullmatch(
+        r"/input/([A-Za-z0-9_-]{32,128})",
+        normalized,
+    )
+    if legacy:
+        return legacy.group(1), None
+    return None
+
+
 def _field_submission_id_from_path(path: str) -> str | None:
-    match = re.fullmatch(r"/input/([A-Za-z0-9_-]{32,128})", path.split("?", 1)[0])
-    return match.group(1) if match else None
+    target = _field_submission_target_from_path(path)
+    return target[0] if target is not None else None
 
 
 def _document_download_id_from_path(path: str) -> str | None:

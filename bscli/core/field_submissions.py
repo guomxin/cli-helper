@@ -117,6 +117,46 @@ class FieldSubmissionStore:
                 END
                 """
             )
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS field_submission_presentations (
+                    presentation_id TEXT PRIMARY KEY,
+                    submission_id TEXT NOT NULL,
+                    user_subject TEXT NOT NULL,
+                    endpoint_id TEXT NOT NULL,
+                    card_url TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    opened_at TEXT,
+                    submitted_at TEXT,
+                    UNIQUE (submission_id, endpoint_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS field_submission_presentations_input
+                ON field_submission_presentations (
+                    submission_id, state, created_at
+                );
+
+                CREATE TABLE IF NOT EXISTS field_submission_card_sessions (
+                    card_session_id TEXT PRIMARY KEY,
+                    submission_id TEXT NOT NULL,
+                    presentation_id TEXT,
+                    endpoint_id TEXT,
+                    csrf_hash TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS field_submission_card_sessions_input
+                ON field_submission_card_sessions (
+                    submission_id, state, created_at
+                );
+                """
+            )
 
     def create(
         self,
@@ -170,6 +210,32 @@ class FieldSubmissionStore:
             )
             connection.execute(
                 """
+                UPDATE field_submission_presentations
+                SET state = 'expired', updated_at = ?
+                WHERE state = 'active'
+                  AND submission_id IN (
+                    SELECT submission_id FROM field_submissions
+                    WHERE user_subject = ? AND capability_name = ?
+                      AND state = 'superseded'
+                  )
+                """,
+                (_format_time(now), user_subject, capability_name),
+            )
+            connection.execute(
+                """
+                UPDATE field_submission_card_sessions
+                SET state = 'expired'
+                WHERE state = 'pending'
+                  AND submission_id IN (
+                    SELECT submission_id FROM field_submissions
+                    WHERE user_subject = ? AND capability_name = ?
+                      AND state = 'superseded'
+                  )
+                """,
+                (user_subject, capability_name),
+            )
+            connection.execute(
+                """
                 INSERT INTO field_submissions (
                     submission_id, user_subject, system_id, session_id,
                     capability_name, capability_version, create_operation_id,
@@ -203,7 +269,95 @@ class FieldSubmissionStore:
             self._verify_integrity(row, include_values=include_values)
         return _submission_from_row(row, include_values=include_values)
 
-    def issue_csrf(self, submission_id: str) -> str:
+    def create_presentation(
+        self,
+        submission_id: str,
+        *,
+        user_subject: str,
+        endpoint_id: str,
+    ) -> dict:
+        user_subject = str(user_subject or "").strip()
+        endpoint_id = str(endpoint_id or "").strip()
+        if not user_subject or not endpoint_id:
+            raise ValueError("field submission presentation identity is required")
+        now = _as_utc(self.clock())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            submission = self._expire_if_needed(
+                connection,
+                self._select(connection, submission_id),
+            )
+            if submission["user_subject"] != user_subject:
+                raise FieldSubmissionNotFound(
+                    f"field submission not found: {submission_id}"
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM field_submission_presentations
+                WHERE submission_id = ? AND endpoint_id = ?
+                """,
+                (submission_id, endpoint_id),
+            ).fetchone()
+            if existing is not None:
+                return _presentation_from_row(existing)
+            presentation_id = secrets.token_urlsafe(32)
+            card_url = (
+                f"{_card_base_url(submission['card_url'])}"
+                f"/input/{submission_id}/present/{presentation_id}"
+            )
+            presentation_state = (
+                "active"
+                if submission["state"] == "pending"
+                else "expired"
+                if submission["state"] in {"expired", "superseded"}
+                else "submitted"
+            )
+            connection.execute(
+                """
+                INSERT INTO field_submission_presentations (
+                    presentation_id, submission_id, user_subject,
+                    endpoint_id, card_url, state, created_at, updated_at,
+                    expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    presentation_id,
+                    submission_id,
+                    user_subject,
+                    endpoint_id,
+                    card_url,
+                    presentation_state,
+                    _format_time(now),
+                    _format_time(now),
+                    submission["expires_at"],
+                ),
+            )
+            row = self._select_presentation(
+                connection,
+                submission_id,
+                presentation_id,
+            )
+        return _presentation_from_row(row)
+
+    def get_presentation(
+        self,
+        submission_id: str,
+        presentation_id: str,
+    ) -> dict:
+        with self._connect() as connection:
+            row = self._select_presentation(
+                connection,
+                submission_id,
+                presentation_id,
+            )
+        return _presentation_from_row(row)
+
+    def issue_csrf(
+        self,
+        submission_id: str,
+        *,
+        presentation_id: str | None = None,
+    ) -> str:
         token = secrets.token_urlsafe(32)
         now = _as_utc(self.clock())
         with self._connect() as connection:
@@ -214,13 +368,42 @@ class FieldSubmissionStore:
                 raise FieldSubmissionStateError(
                     f"field submission is not pending: {row['state']}"
                 )
+            endpoint_id = None
+            if presentation_id is not None:
+                presentation = self._select_presentation(
+                    connection,
+                    submission_id,
+                    presentation_id,
+                )
+                endpoint_id = presentation["endpoint_id"]
+                connection.execute(
+                    """
+                    UPDATE field_submission_presentations
+                    SET opened_at = COALESCE(opened_at, ?), updated_at = ?
+                    WHERE presentation_id = ?
+                    """,
+                    (
+                        _format_time(now),
+                        _format_time(now),
+                        presentation_id,
+                    ),
+                )
             connection.execute(
                 """
-                UPDATE field_submissions
-                SET csrf_hash = ?, updated_at = ?
-                WHERE submission_id = ?
+                INSERT INTO field_submission_card_sessions (
+                    card_session_id, submission_id, presentation_id,
+                    endpoint_id, csrf_hash, state, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
-                (_token_hash(token), _format_time(now), submission_id),
+                (
+                    secrets.token_urlsafe(24),
+                    submission_id,
+                    presentation_id,
+                    endpoint_id,
+                    _token_hash(token),
+                    _format_time(now),
+                    row["expires_at"],
+                ),
             )
         return token
 
@@ -231,6 +414,7 @@ class FieldSubmissionStore:
         csrf_token: str,
         csrf_cookie: str,
         values: dict[str, Any],
+        presentation_id: str | None = None,
     ) -> dict:
         if not isinstance(values, dict):
             raise TypeError("submitted field values must be an object")
@@ -245,13 +429,38 @@ class FieldSubmissionStore:
                 raise FieldSubmissionStateError(
                     f"field submission is not pending: {row['state']}"
                 )
-            expected_hash = str(row["csrf_hash"] or "")
             supplied_hash = _token_hash(csrf_token) if csrf_token else ""
+            if presentation_id is None:
+                session = connection.execute(
+                    """
+                    SELECT * FROM field_submission_card_sessions
+                    WHERE submission_id = ? AND presentation_id IS NULL
+                      AND csrf_hash = ? AND state = 'pending'
+                    """,
+                    (submission_id, supplied_hash),
+                ).fetchone()
+            else:
+                self._select_presentation(
+                    connection,
+                    submission_id,
+                    presentation_id,
+                )
+                session = connection.execute(
+                    """
+                    SELECT * FROM field_submission_card_sessions
+                    WHERE submission_id = ? AND presentation_id = ?
+                      AND csrf_hash = ? AND state = 'pending'
+                    """,
+                    (submission_id, presentation_id, supplied_hash),
+                ).fetchone()
             if (
-                not expected_hash
+                session is None
                 or not csrf_cookie
                 or not hmac.compare_digest(csrf_token, csrf_cookie)
-                or not hmac.compare_digest(expected_hash, supplied_hash)
+                or not hmac.compare_digest(
+                    str(session["csrf_hash"]),
+                    supplied_hash,
+                )
             ):
                 raise FieldSubmissionAccessDenied(
                     "field submission card CSRF validation failed"
@@ -273,6 +482,26 @@ class FieldSubmissionStore:
             )
             if cursor.rowcount != 1:
                 raise FieldSubmissionStateError("field submission could not be submitted")
+            connection.execute(
+                """
+                UPDATE field_submission_card_sessions
+                SET state = 'consumed', consumed_at = ?
+                WHERE submission_id = ? AND state = 'pending'
+                """,
+                (_format_time(now), submission_id),
+            )
+            connection.execute(
+                """
+                UPDATE field_submission_presentations
+                SET state = 'submitted', submitted_at = ?, updated_at = ?
+                WHERE submission_id = ?
+                """,
+                (
+                    _format_time(now),
+                    _format_time(now),
+                    submission_id,
+                ),
+            )
             row = self._select(connection, submission_id)
             self._verify_integrity(row, include_values=True)
         return _submission_from_row(row, include_values=False)
@@ -338,6 +567,25 @@ class FieldSubmissionStore:
             raise FieldSubmissionNotFound(f"field submission not found: {submission_id}")
         return row
 
+    @staticmethod
+    def _select_presentation(
+        connection: sqlite3.Connection,
+        submission_id: str,
+        presentation_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM field_submission_presentations
+            WHERE submission_id = ? AND presentation_id = ?
+            """,
+            (submission_id, presentation_id),
+        ).fetchone()
+        if row is None:
+            raise FieldSubmissionNotFound(
+                "field submission presentation not found"
+            )
+        return row
+
     def _expire_if_needed(
         self,
         connection: sqlite3.Connection,
@@ -352,6 +600,22 @@ class FieldSubmissionStore:
                 WHERE submission_id = ?
                 """,
                 (_format_time(now), row["submission_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE field_submission_presentations
+                SET state = 'expired', updated_at = ?
+                WHERE submission_id = ? AND state = 'active'
+                """,
+                (_format_time(now), row["submission_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE field_submission_card_sessions
+                SET state = 'expired'
+                WHERE submission_id = ? AND state = 'pending'
+                """,
+                (row["submission_id"],),
             )
             return self._select(connection, row["submission_id"])
         return row
@@ -377,6 +641,14 @@ def _submission_from_row(row: sqlite3.Row, *, include_values: bool) -> dict:
         value["values"] = json.loads(values_json)
     value.pop("values_hash", None)
     return value
+
+
+def _presentation_from_row(row: sqlite3.Row) -> dict:
+    return dict(row)
+
+
+def _card_base_url(card_url: str) -> str:
+    return card_url.split("/input/", 1)[0].rstrip("/")
 
 
 def _validate_card_base_url(value: str) -> str:

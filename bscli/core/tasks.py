@@ -423,6 +423,12 @@ class TaskHubStore:
                     now,
                 ),
             )
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
             self._append_event(
                 connection,
                 task_id=task_id,
@@ -585,11 +591,8 @@ class TaskHubStore:
                     now=now,
                 )
             if linked is None or task["status"] != task_status:
-                if (
-                    event_type == "task.interaction.waiting"
-                    and interaction.get("type") == "execution_authorization"
-                ):
-                    self._subscribe_trusted_endpoints(
+                if event_type == "task.interaction.waiting":
+                    self._subscribe_companion_endpoints(
                         connection,
                         task_id=task_id,
                         user_subject=user_subject,
@@ -930,7 +933,7 @@ class TaskHubStore:
         return _outbox_from_row(updated)
 
     @staticmethod
-    def _subscribe_trusted_endpoints(
+    def _subscribe_companion_endpoints(
         connection: sqlite3.Connection,
         *,
         task_id: str,
@@ -947,7 +950,13 @@ class TaskHubStore:
         ).fetchall()
         for endpoint in endpoints:
             capabilities = set(json.loads(endpoint["capabilities_json"]))
-            if "trusted_interaction" not in capabilities:
+            if not capabilities.intersection(
+                {
+                    "direct_status",
+                    "trusted_interaction",
+                    "workspace.task.read",
+                }
+            ):
                 continue
             connection.execute(
                 """
@@ -955,10 +964,7 @@ class TaskHubStore:
                     subscription_id, task_id, endpoint_id, user_subject,
                     event_filters_json, state, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-                ON CONFLICT(task_id, endpoint_id) DO UPDATE SET
-                    event_filters_json = excluded.event_filters_json,
-                    state = 'active',
-                    updated_at = excluded.updated_at
+                ON CONFLICT(task_id, endpoint_id) DO NOTHING
                 """,
                 (
                     str(uuid4()),
@@ -967,6 +973,9 @@ class TaskHubStore:
                     user_subject,
                     _canonical_json(
                         [
+                            "task.created",
+                            "task.operation.linked",
+                            "task.operation.running",
                             "task.interaction.waiting",
                             "task.interaction.completed",
                             "task.interaction.expired",

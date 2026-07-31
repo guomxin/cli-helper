@@ -250,7 +250,11 @@ class AuthServerConfigTests(unittest.TestCase):
                 self.assertEqual(response.getheader("Cache-Control"), "no-store")
                 connection.close()
 
-                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1",
+                    port,
+                    timeout=5,
+                )
                 connection.request(
                     "POST",
                     f"/auth/{challenge['challenge_id']}",
@@ -416,7 +420,37 @@ class AuthServerConfigTests(unittest.TestCase):
                 self.assertIn("填写出差申请", html)
                 connection.close()
 
-                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                presentation = submission_store.create_presentation(
+                    submission["submission_id"],
+                    user_subject="user-a",
+                    endpoint_id="endpoint-telegram",
+                )
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1",
+                    port,
+                    timeout=5,
+                )
+                connection.request(
+                    "GET",
+                    (
+                        f"/input/{submission['submission_id']}/present/"
+                        f"{presentation['presentation_id']}"
+                    ),
+                )
+                response = connection.getresponse()
+                html = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn(
+                    f"/present/{presentation['presentation_id']}",
+                    html,
+                )
+                connection.close()
+
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1",
+                    port,
+                    timeout=5,
+                )
                 connection.request(
                     "POST",
                     f"/input/{submission['submission_id']}",

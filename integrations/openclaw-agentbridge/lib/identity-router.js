@@ -9,6 +9,7 @@ export class AgentBridgeIdentityRouter {
     env = process.env,
     fetchImpl = globalThis.fetch,
     sessionBindings = new Map(),
+    sessionEndpoints = new Map(),
   }) {
     this.config = config;
     this.endpoint = resolveMcpEndpoint(config, hostConfig);
@@ -19,6 +20,7 @@ export class AgentBridgeIdentityRouter {
     );
     this.clients = new Map();
     this.sessionBindings = sessionBindings;
+    this.sessionEndpoints = sessionEndpoints;
   }
 
   get enabled() {
@@ -109,6 +111,7 @@ export class AgentBridgeIdentityRouter {
           this.restoreSessionBinding({
             sessionKey,
             bindingKey: binding.key,
+            endpointKey: result.binding.endpointKey,
           })
         ) {
           return this.resolvePinnedSession({ sessionKey });
@@ -129,7 +132,7 @@ export class AgentBridgeIdentityRouter {
       .filter((item) => item.client);
   }
 
-  restoreSessionBinding({ sessionKey, bindingKey }) {
+  restoreSessionBinding({ sessionKey, bindingKey, endpointKey = null }) {
     if (!isPrivateSessionKey(sessionKey)) {
       return false;
     }
@@ -143,7 +146,24 @@ export class AgentBridgeIdentityRouter {
       return false;
     }
     this.sessionBindings.set(sessionKey, bindingKey);
+    if (isWorkspaceSessionKey(sessionKey)) {
+      const normalizedEndpointKey = identityPart(endpointKey, false);
+      if (
+        normalizedEndpointKey &&
+        normalizedEndpointKey.startsWith("workspace:")
+      ) {
+        this.sessionEndpoints.set(sessionKey, normalizedEndpointKey);
+      }
+    }
     return true;
+  }
+
+  endpointKeyForSession(sessionKey) {
+    if (isWorkspaceSessionKey(sessionKey)) {
+      return this.sessionEndpoints.get(sessionKey) || null;
+    }
+    const bindingKey = this.sessionBindings.get(sessionKey);
+    return bindingKey && bindingKey !== "conflict" ? bindingKey : null;
   }
 
   statusForSession(sessionKey) {
@@ -164,6 +184,7 @@ export class AgentBridgeIdentityRouter {
 
   removeSession(sessionKey) {
     this.sessionBindings.delete(sessionKey);
+    this.sessionEndpoints.delete(sessionKey);
   }
 
   resolvePinnedSession({ sessionKey, channel, accountId }) {

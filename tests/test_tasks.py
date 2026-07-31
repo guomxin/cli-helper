@@ -132,14 +132,59 @@ class TaskHubStoreTests(unittest.TestCase):
             user_subject="user-a",
             endpoint_id=secondary["endpoint_id"],
         )
-        self.assertEqual(len(secondary_outbox), 1)
+        self.assertEqual(len(secondary_outbox), 2)
         self.assertEqual(
             secondary_outbox[0]["payload"]["eventType"],
+            "task.created",
+        )
+        self.assertEqual(
+            secondary_outbox[1]["payload"]["eventType"],
             "task.interaction.waiting",
         )
         self.assertEqual(
-            secondary_outbox[0]["payload"]["payload"]["interactionId"],
+            secondary_outbox[1]["payload"]["payload"]["interactionId"],
             "interaction-broadcast",
+        )
+
+    def test_business_input_is_broadcast_to_all_trusted_user_endpoints(self):
+        origin, _ = self._endpoint()
+        secondary, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:2002",
+            client_type="telegram",
+            external_subject="2002",
+            conversation_ref="agent:main:telegram:direct:2002",
+            capabilities=["trusted_interaction", "direct_status"],
+            route={"channel": "telegram", "to": "2002"},
+        )
+        task, _ = self._task(origin["endpoint_id"])
+
+        self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "input-broadcast",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "input-broadcast",
+                "type": "business_input",
+                "state": "pending",
+            },
+        )
+
+        events = [
+            item["payload"]["eventType"]
+            for item in self.store.list_outbox(
+                user_subject="user-a",
+                endpoint_id=secondary["endpoint_id"],
+            )
+        ]
+        self.assertEqual(
+            events,
+            ["task.created", "task.interaction.waiting"],
         )
 
     def test_endpoint_capabilities_are_merged_when_route_is_reobserved(self):
@@ -611,6 +656,136 @@ class TaskHubStoreTests(unittest.TestCase):
             "可信确认已完成",
             terminal["notifications"][0]["message"],
         )
+
+    def test_central_service_presents_business_input_on_multiple_endpoints(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        origin = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            host_task_key="workspace-task",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="Submit business trip",
+            capabilities=["workspace.task.read"],
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=["trusted_interaction", "direct_status"],
+        )
+        submission = service.field_submissions.create(
+            user_subject="user-a",
+            system_id="oa",
+            session_id="session-a",
+            capability_name="oa.business_trip.submit.prepare",
+            capability_version="1",
+            create_operation_id="prepare-input",
+            form_schema={
+                "title": "Business trip",
+                "fields": [
+                    {
+                        "name": "reason",
+                        "label": "Reason",
+                        "control": "text",
+                        "required": True,
+                    }
+                ],
+            },
+            card_base_url="https://cards.example.test",
+        )
+        interaction = service._business_input_interaction(submission)
+        service.observe_host_task(
+            user_subject="user-a",
+            task_id=origin["task"]["taskId"],
+            interaction_ids=[interaction["interactionId"]],
+        )
+
+        workspace = service.present_interaction(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            interaction_id=interaction["interactionId"],
+        )
+        telegram = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+
+        self.assertEqual(telegram["count"], 1)
+        delivered = telegram["notifications"][0]
+        self.assertEqual(delivered["deliveryMode"], "trusted_interaction")
+        self.assertTrue(
+            delivered["interaction"]["presentation"]["individualized"]
+        )
+        self.assertNotEqual(
+            workspace["interaction"]["presentation"]["url"],
+            delivered["interaction"]["presentation"]["url"],
+        )
+
+    def test_workspace_task_does_not_overwrite_registered_endpoint(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        endpoint, _ = service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="workspace-account:account-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            label="Agent Workspace: alice",
+            capabilities=["workspace.task.read"],
+        )
+
+        service.ensure_host_task(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            host_task_key="workspace-session|run-1",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="Read pending items",
+            capabilities=["workspace.task.read"],
+        )
+        preserved = service.tasks.endpoint_for_key(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+        )
+
+        self.assertEqual(preserved["endpoint_id"], endpoint["endpoint_id"])
+        self.assertEqual(
+            preserved["token_id"],
+            "workspace-account:account-a",
+        )
+        self.assertEqual(preserved["client_type"], "web")
+        self.assertEqual(preserved["label"], "Agent Workspace: alice")
 
     def test_task_schema_migrates_alongside_existing_ledgers(self):
         db_path = Path(self.temp.name) / "legacy-agentbridge.db"

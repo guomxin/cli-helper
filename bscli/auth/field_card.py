@@ -24,9 +24,20 @@ class TrustedFieldApplication:
     def __init__(self, *, submission_store: FieldSubmissionStore) -> None:
         self.submission_store = submission_store
 
-    def get_card(self, submission_id: str, *, secure_cookie: bool) -> AuthCardResponse:
+    def get_card(
+        self,
+        submission_id: str,
+        *,
+        secure_cookie: bool,
+        presentation_id: str | None = None,
+    ) -> AuthCardResponse:
         try:
             submission = self.submission_store.get(submission_id)
+            if presentation_id is not None:
+                self.submission_store.get_presentation(
+                    submission_id,
+                    presentation_id,
+                )
         except FieldSubmissionNotFound:
             return self._message_response(
                 status=404,
@@ -43,7 +54,10 @@ class TrustedFieldApplication:
             )
         state = submission["state"]
         if state == "pending":
-            csrf_token = self.submission_store.issue_csrf(submission_id)
+            csrf_token = self.submission_store.issue_csrf(
+                submission_id,
+                presentation_id=presentation_id,
+            )
             nonce = secrets.token_urlsafe(18)
             body = _render_form(
                 submission,
@@ -51,9 +65,15 @@ class TrustedFieldApplication:
                 nonce=nonce,
                 values={},
                 error=None,
+                presentation_id=presentation_id,
+            )
+            cookie_path = (
+                f"/input/{submission_id}/present/{presentation_id}"
+                if presentation_id is not None
+                else f"/input/{submission_id}"
             )
             cookie = (
-                f"agentbridge_csrf={csrf_token}; Path=/input/{submission_id}; "
+                f"agentbridge_csrf={csrf_token}; Path={cookie_path}; "
                 f"HttpOnly; SameSite=Strict; Max-Age={_ttl_seconds(submission)}"
             )
             if secure_cookie:
@@ -89,6 +109,7 @@ class TrustedFieldApplication:
         body: bytes,
         content_type: str,
         csrf_cookie: str,
+        presentation_id: str | None = None,
     ) -> AuthCardResponse:
         if len(body) > MAX_AUTH_BODY_BYTES:
             return self._message_response(
@@ -177,6 +198,7 @@ class TrustedFieldApplication:
                     nonce=nonce,
                     values=raw_values,
                     error=str(exc),
+                    presentation_id=presentation_id,
                 )
                 return AuthCardResponse(400, _security_headers(nonce), page.encode("utf-8"))
             try:
@@ -185,6 +207,7 @@ class TrustedFieldApplication:
                     csrf_token=csrf_token,
                     csrf_cookie=csrf_cookie,
                     values=normalized,
+                    presentation_id=presentation_id,
                 )
             except FieldSubmissionAccessDenied:
                 return self._message_response(
@@ -389,6 +412,7 @@ def _render_form(
     nonce: str,
     values: dict[str, str],
     error: str | None,
+    presentation_id: str | None,
 ) -> str:
     schema = submission["form_schema"]
     controls = "".join(
@@ -413,7 +437,7 @@ def _render_form(
               </div>
             </header>
             {error_html}
-            <form method="post" action="/input/{escape(submission['submission_id'])}">
+            <form method="post" action="{_form_action(submission['submission_id'], presentation_id)}">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
               <div class="form-grid">{controls}</div>
               <p class="notice">{escape(str(schema.get('notice') or '字段提交后仍需单独确认操作计划。'))}</p>
@@ -424,6 +448,13 @@ def _render_form(
         </main>
         """,
     )
+
+
+def _form_action(submission_id: str, presentation_id: str | None) -> str:
+    base = f"/input/{escape(submission_id)}"
+    if presentation_id is None:
+        return base
+    return f"{base}/present/{escape(presentation_id)}"
 
 
 def _render_value(item: dict[str, Any], values: dict[str, str]) -> str:

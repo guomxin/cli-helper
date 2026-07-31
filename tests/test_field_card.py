@@ -166,6 +166,55 @@ class TrustedFieldCardTests(unittest.TestCase):
             self.assertEqual(store.get(submission["submission_id"])["state"], "pending")
 
 
+    def test_endpoint_cards_do_not_invalidate_each_other(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            submission = _submission(store)
+            telegram = store.create_presentation(
+                submission["submission_id"],
+                user_subject="user-a",
+                endpoint_id="endpoint-telegram",
+            )
+            workspace = store.create_presentation(
+                submission["submission_id"],
+                user_subject="user-a",
+                endpoint_id="endpoint-workspace",
+            )
+            app = TrustedFieldApplication(submission_store=store)
+            telegram_csrf, telegram_cookie = _csrf(
+                app,
+                submission["submission_id"],
+                telegram["presentation_id"],
+            )
+            workspace_csrf, workspace_cookie = _csrf(
+                app,
+                submission["submission_id"],
+                workspace["presentation_id"],
+            )
+            body = urlencode(
+                {"csrf_token": telegram_csrf, **_valid_values()}
+            ).encode()
+
+            accepted = app.submit_card(
+                submission["submission_id"],
+                body=body,
+                content_type="application/x-www-form-urlencoded",
+                csrf_cookie=telegram_cookie,
+                presentation_id=telegram["presentation_id"],
+            )
+            other_end = app.get_card(
+                submission["submission_id"],
+                secure_cookie=False,
+                presentation_id=workspace["presentation_id"],
+            )
+
+            self.assertEqual(accepted.status, 200)
+            self.assertEqual(other_end.status, 200)
+            self.assertNotIn("<form", other_end.body.decode("utf-8"))
+            self.assertNotEqual(telegram_csrf, workspace_csrf)
+            self.assertTrue(workspace_cookie)
+
+
 def _submission(store):
     return store.create(
         user_subject="user-a",
@@ -179,8 +228,12 @@ def _submission(store):
     )
 
 
-def _csrf(app, submission_id):
-    page = app.get_card(submission_id, secure_cookie=False)
+def _csrf(app, submission_id, presentation_id=None):
+    page = app.get_card(
+        submission_id,
+        secure_cookie=False,
+        presentation_id=presentation_id,
+    )
     html = page.body.decode("utf-8")
     csrf = re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
     cookie = page.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]

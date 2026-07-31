@@ -174,7 +174,7 @@ from bscli.core.session_secrets import (
     SessionStateStore,
 )
 from bscli.core.sessions import SessionRegistry
-from bscli.core.tasks import TaskHubStore
+from bscli.core.tasks import TaskHubStore, TaskIntegrityError, TaskNotFound
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
     WriteAuthorizationNotFound,
@@ -1024,10 +1024,15 @@ class CentralCapabilityService:
                         )
                     except (KeyError, InteractionIntegrityError):
                         interaction = None
-                    if interaction is not None and interaction["state"] in {
-                        "pending",
-                        "processing",
-                    }:
+                    can_open_interaction = (
+                        "trusted_interaction"
+                        in set(endpoint.get("capabilities") or [])
+                    )
+                    if (
+                        can_open_interaction
+                        and interaction is not None
+                        and interaction["state"] in {"pending", "processing"}
+                    ):
                         item["deliveryMode"] = "trusted_interaction"
                         item["interaction"] = (
                             self._present_interaction_for_endpoint(
@@ -1044,9 +1049,13 @@ class CentralCapabilityService:
                             event,
                         )
             elif event.get("eventType") in {
+                "task.created",
+                "task.operation.linked",
+                "task.operation.running",
                 "task.interaction.completed",
                 "task.interaction.expired",
                 "task.interaction.failed",
+                "task.interaction.superseded",
                 "task.canceled",
                 "task.operation.succeeded",
                 "task.operation.failed",
@@ -1114,19 +1123,50 @@ class CentralCapabilityService:
         route: dict | None = None,
         capabilities: list[str] | None = None,
     ) -> dict:
-        endpoint, endpoint_reused = self.tasks.ensure_endpoint(
-            user_subject=user_subject,
-            token_id=token_id,
-            agent_host=agent_host,
-            endpoint_key=endpoint_key,
-            client_type=client_type,
-            external_subject=external_subject,
-            account_id=account_id,
-            conversation_ref=conversation_ref,
-            label=label,
-            route=route,
-            capabilities=capabilities,
-        )
+        try:
+            endpoint = self.tasks.endpoint_for_key(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                endpoint_key=endpoint_key,
+            )
+        except TaskNotFound:
+            endpoint, endpoint_reused = self.tasks.ensure_endpoint(
+                user_subject=user_subject,
+                token_id=token_id,
+                agent_host=agent_host,
+                endpoint_key=endpoint_key,
+                client_type=client_type,
+                external_subject=external_subject,
+                account_id=account_id,
+                conversation_ref=conversation_ref,
+                label=label,
+                route=route,
+                capabilities=capabilities,
+            )
+        else:
+            endpoint_reused = True
+            if endpoint["client_type"] == "web":
+                if (
+                    client_type != "web"
+                    or endpoint["conversation_ref"] != conversation_ref
+                ):
+                    raise TaskIntegrityError(
+                        "workspace task context does not match its registered endpoint"
+                    )
+            else:
+                endpoint, endpoint_reused = self.tasks.ensure_endpoint(
+                    user_subject=user_subject,
+                    token_id=token_id,
+                    agent_host=agent_host,
+                    endpoint_key=endpoint_key,
+                    client_type=client_type,
+                    external_subject=external_subject,
+                    account_id=account_id,
+                    conversation_ref=conversation_ref,
+                    label=label,
+                    route=route,
+                    capabilities=capabilities,
+                )
         task, task_reused = self.tasks.ensure_task(
             user_subject=user_subject,
             agent_host=agent_host,
@@ -1550,6 +1590,22 @@ class CentralCapabilityService:
         interaction: dict,
         endpoint: dict,
     ) -> dict:
+        if record["interaction_type"] == "business_input":
+            presentation = self.field_submissions.create_presentation(
+                resource["submission_id"],
+                user_subject=record["user_subject"],
+                endpoint_id=endpoint["endpoint_id"],
+            )
+            return {
+                **interaction,
+                "presentation": {
+                    **interaction["presentation"],
+                    "url": presentation["card_url"],
+                    "endpointId": endpoint["endpoint_id"],
+                    "presentationId": presentation["presentation_id"],
+                    "individualized": True,
+                },
+            }
         if record["interaction_type"] != "execution_authorization":
             return {
                 **interaction,
@@ -2752,6 +2808,15 @@ def endpoint_response(endpoint: dict) -> dict:
 def _task_notification_message(task: dict, event: dict) -> str:
     event_type = str(event.get("eventType") or "")
     title = str(task.get("title") or "AgentBridge 任务")
+    if event_type == "task.created":
+        return f"{title}：任务已在另一端发起。"
+    if event_type in {
+        "task.operation.linked",
+        "task.operation.running",
+    }:
+        return f"{title}：任务正在执行。"
+    if event_type == "task.interaction.waiting":
+        return f"{title}：任务正在等待用户填写或确认。"
     if event_type in {
         "task.interaction.completed",
         "task.operation.succeeded",
@@ -2761,6 +2826,8 @@ def _task_notification_message(task: dict, event: dict) -> str:
         return f"{title}：用户已取消本次操作。"
     if event_type == "task.interaction.expired":
         return f"{title}：可信确认已过期，请从智能体重新发起。"
+    if event_type == "task.interaction.superseded":
+        return f"{title}：当前交互已被更新，请使用最新卡片继续。"
     if event_type in {
         "task.interaction.failed",
         "task.operation.failed",

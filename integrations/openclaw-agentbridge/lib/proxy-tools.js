@@ -55,6 +55,7 @@ export function createAgentBridgeProxyTools({
       createProxyTool({
         descriptor,
         resolveIdentity,
+        identityRouter,
         context,
         serverName,
         taskIdResolver,
@@ -101,6 +102,7 @@ function createIdentityStatusTool(resolveIdentity) {
 function createProxyTool({
   descriptor,
   resolveIdentity,
+  identityRouter,
   context,
   serverName,
   taskIdResolver,
@@ -129,6 +131,7 @@ function createProxyTool({
       const taskId = await resolveTaskId({
         descriptor,
         identity,
+        identityRouter,
         context,
         toolCallId,
         taskIdResolver,
@@ -174,6 +177,7 @@ function createProxyTool({
 async function resolveTaskId({
   descriptor,
   identity,
+  identityRouter,
   context,
   toolCallId,
   taskIdResolver,
@@ -199,6 +203,14 @@ async function resolveTaskId({
     return null;
   }
   const binding = identity.binding;
+  const workspaceSession = isWorkspaceSession(sessionKey);
+  const endpointKey = identityRouter.endpointKeyForSession(sessionKey);
+  if (!endpointKey) {
+    logger?.warn?.(
+      "AgentBridge task creation skipped because the session endpoint is not bound",
+    );
+    return null;
+  }
   const delivery =
     context.deliveryContext &&
     typeof context.deliveryContext === "object" &&
@@ -211,21 +223,33 @@ async function resolveTaskId({
       {
         agent_host: "openclaw",
         host_task_key: boundedText(`${sessionKey}|${runRef}`, 1024),
-        endpoint_key: binding.key,
-        client_type: binding.channel,
-        external_subject: binding.senderId,
+        endpoint_key: endpointKey,
+        client_type: workspaceSession ? "web" : binding.channel,
+        external_subject: workspaceSession
+          ? workspaceSubject(endpointKey)
+          : binding.senderId,
         conversation_ref: sessionKey,
         title: boundedText(descriptor.title || descriptor.name, 240),
-        account_id: binding.accountId,
-        label: binding.label,
-        route: {
-          channel: binding.channel,
-          to: boundedText(delivery.to, 768) || binding.senderId,
-          accountId:
-            boundedText(delivery.accountId, 512) || binding.accountId,
-          threadId: boundedText(delivery.threadId, 512),
-        },
-        capabilities: ["direct_status", "trusted_interaction"],
+        account_id: workspaceSession
+          ? workspaceSubject(endpointKey)
+          : binding.accountId,
+        label: workspaceSession ? "Agent Workspace" : binding.label,
+        route: workspaceSession
+          ? {}
+          : {
+              channel: binding.channel,
+              to: boundedText(delivery.to, 768) || binding.senderId,
+              accountId:
+                boundedText(delivery.accountId, 512) || binding.accountId,
+              threadId: boundedText(delivery.threadId, 512),
+            },
+        capabilities: workspaceSession
+          ? [
+              "workspace.chat",
+              "workspace.task.read",
+              "workspace.interaction.open",
+            ]
+          : ["direct_status", "trusted_interaction"],
       },
       { meta: hostContextMeta() },
     );
@@ -242,6 +266,10 @@ async function resolveTaskId({
     );
     return null;
   }
+}
+
+function workspaceSubject(endpointKey) {
+  return boundedText(String(endpointKey).slice("workspace:".length), 768);
 }
 
 async function observeTaskResult({ client, taskId, result, logger, signal }) {

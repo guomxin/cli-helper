@@ -5,7 +5,7 @@
 > 更新日期：2026-07-31
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.4
+> `agentbridge-interactions` 0.4.5
 
 ## 1. 定位
 
@@ -236,4 +236,17 @@ openclaw devices approve <requestId> --json
 5. Workspace SSE 在等待确认时刷新任务详情并提示可在网页处理；
 6. 原任务会话继续执行 commit/verify，旁端仅展示和确认。
 7. 提交 `420d890` 已推送，Linux Release `420d8902f534` 已部署；65 个 MCP 工具
-   发布冒烟、OpenClaw Gateway 深度 RPC 和插件 `0.4.4` 运行时检查均通过。
+   发布冒烟、OpenClaw Gateway 深度 RPC 和插件 `0.4.5` 运行时检查均通过。
+
+## 多端任务同步一期
+
+自 `agentbridge-interactions` 0.4.5 起，Workspace、Telegram 和微信不再共享
+同一个客户端端点记录。MCP Token 只决定用户身份和调用权限，客户端端点决定任务
+来源、会话地址和通知路由。网页发起任务不会再覆盖 Telegram 或微信的会话资料。
+
+任务建立后，已绑定端会订阅同一任务的关键事件，包括任务建立、执行中、等待用户、
+完成、失败、取消和结果未知。具备 `trusted_interaction` 能力的端收到可操作卡片；
+只具备状态能力的端只收到状态消息。普通聊天和敏感字段值不做跨端复制。
+
+业务字段填写卡和最终执行授权卡都按端点生成独立展示链接及 CSRF 会话。任意一端
+先完成后，其他端再次打开会看到已处理状态，底层业务动作仍只会提交一次。
