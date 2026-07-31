@@ -48,6 +48,12 @@ const idempotencyKey =
   mode === "send-stream"
     ? requiredText(input.idempotencyKey, "idempotencyKey", 128)
     : null;
+const preflightAbort =
+  mode === "send-stream" && input.preflightAbort !== false;
+const acceptTimeoutMs =
+  mode === "send-stream"
+    ? clampInteger(input.acceptTimeoutMs, 5_000, 60_000, 20_000)
+    : timeoutMs;
 const identity = loadOrCreateIdentity(identityPath);
 const scopes = ["operator.read", "operator.write"];
 
@@ -64,14 +70,19 @@ let streamAccepted = false;
 let streamHadToolActivity = false;
 let abortSent = false;
 let abortTimer = null;
+let requestStage = "connect";
+let preflightFallbackSent = false;
 const connectId = `connect-${randomUUID()}`;
+const preflightAbortRequestId = `preflight-abort-${randomUUID()}`;
+const preflightAbortFallbackRequestId =
+  `preflight-abort-fallback-${randomUUID()}`;
 const bindRequestId = `bind-${randomUUID()}`;
 const requestId = `rpc-${randomUUID()}`;
 const abortRequestId = `abort-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
-const timer = setTimeout(
+let timer = setTimeout(
   () => handleRequestTimeout(),
-  timeoutMs,
+  acceptTimeoutMs,
 );
 
 socket.addEventListener("message", (event) => {
@@ -134,18 +145,11 @@ socket.addEventListener("message", (event) => {
     if (mode === "stream") {
       process.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
     } else if (mode === "send-stream") {
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id: bindRequestId,
-          method: "agentbridge.workspace.bind",
-          params: {
-            sessionKey: streamSessionKey,
-            endpointKey,
-            grant,
-          },
-        }),
-      );
+      if (preflightAbort) {
+        requestPreflightAbort(true);
+      } else {
+        requestWorkspaceBind();
+      }
     } else if (!methodSent) {
       methodSent = true;
       socket.send(
@@ -159,15 +163,48 @@ socket.addEventListener("message", (event) => {
     }
     return;
   }
+  if (
+    mode === "send-stream" &&
+    [preflightAbortRequestId, preflightAbortFallbackRequestId].includes(
+      frame.id,
+    )
+  ) {
+    if (!frame.ok) {
+      const code = safeCode(
+        frame?.error?.details?.code || frame?.error?.code,
+      );
+      if (
+        frame.id === preflightAbortRequestId &&
+        code === "INVALID_REQUEST" &&
+        !preflightFallbackSent
+      ) {
+        preflightFallbackSent = true;
+        requestPreflightAbort(false);
+        return;
+      }
+      finishError(
+        code,
+        safeMessage(frame?.error?.message),
+        stageDetails(),
+      );
+      return;
+    }
+    requestWorkspaceBind();
+    return;
+  }
   if (frame.id === bindRequestId && mode === "send-stream") {
     if (!frame.ok) {
       finishError(
         safeCode(frame?.error?.details?.code || frame?.error?.code),
         safeMessage(frame?.error?.message),
-        frame?.error?.details,
+        {
+          ...(isRecord(frame?.error?.details) ? frame.error.details : {}),
+          ...stageDetails(),
+        },
       );
       return;
     }
+    requestStage = "send_accept";
     socket.send(
       JSON.stringify({
         type: "req",
@@ -232,6 +269,9 @@ socket.addEventListener("message", (event) => {
         256,
       );
     streamAccepted = true;
+    requestStage = "run";
+    clearTimeout(timer);
+    timer = setTimeout(() => handleRequestTimeout(), timeoutMs);
     process.stdout.write(
       `${JSON.stringify({
         type: "accepted",
@@ -259,6 +299,40 @@ function handleRequestTimeout() {
   finishError(
     "GATEWAY_TIMEOUT",
     "OpenClaw Gateway request timed out.",
+    stageDetails(),
+  );
+}
+
+function requestPreflightAbort(preserveSideRuns) {
+  requestStage = "preflight_abort";
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: preserveSideRuns
+        ? preflightAbortRequestId
+        : preflightAbortFallbackRequestId,
+      method: "chat.abort",
+      params: {
+        sessionKey: streamSessionKey,
+        ...(preserveSideRuns ? { preserveSideRuns: true } : {}),
+      },
+    }),
+  );
+}
+
+function requestWorkspaceBind() {
+  requestStage = "bind";
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: bindRequestId,
+      method: "agentbridge.workspace.bind",
+      params: {
+        sessionKey: streamSessionKey,
+        endpointKey,
+        grant,
+      },
+    }),
   );
 }
 
@@ -305,10 +379,19 @@ function timeoutDetails(aborted) {
   };
 }
 
+function stageDetails() {
+  return {
+    stage: requestStage,
+    accepted: streamAccepted,
+    hadToolActivity: streamHadToolActivity,
+  };
+}
+
 socket.addEventListener("error", () => {
   finishError(
     "GATEWAY_CONNECTION_FAILED",
     "Could not connect to the OpenClaw Gateway.",
+    stageDetails(),
   );
 });
 
@@ -317,6 +400,7 @@ socket.addEventListener("close", (event) => {
     finishError(
       "GATEWAY_CONNECTION_CLOSED",
       safeMessage(event.reason || "OpenClaw Gateway closed the connection."),
+      stageDetails(),
     );
   }
 });

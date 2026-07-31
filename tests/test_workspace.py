@@ -536,14 +536,12 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 [
                     "chat.history",
                     "stream",
-                    "chat.abort",
                     "send_stream",
-                    "chat.abort",
                     "send_stream",
                 ],
             )
-            streamed_send = gateway.calls[3][1]
-            compatibility_send = gateway.calls[5][1]
+            streamed_send = gateway.calls[2][1]
+            compatibility_send = gateway.calls[3][1]
             self.assertEqual(
                 streamed_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -772,6 +770,8 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
 
         self.assertIn('caps: ["tool-events"]', source)
         self.assertIn('method: "chat.abort"', source)
+        self.assertIn("preflightAbortRequestId", source)
+        self.assertIn("requestWorkspaceBind", source)
         self.assertIn("GATEWAY_RUN_TIMEOUT_ABORTED", source)
 
     def test_gateway_token_is_passed_only_through_the_child_environment(self) -> None:
@@ -898,6 +898,8 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
             request = json.loads(input_pipe.value)
             self.assertEqual(request["mode"], "send-stream")
             self.assertEqual(request["idempotencyKey"], "run-1")
+            self.assertTrue(request["preflightAbort"])
+            self.assertEqual(request["acceptTimeoutMs"], 20_000)
             self.assertNotIn("gateway-secret-token-value", input_pipe.value)
             command = popen.call_args.args[0]
             self.assertNotIn("gateway-secret-token-value", command)
@@ -955,6 +957,128 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 timeout_seconds=5,
                 raise_on_error=False,
             )
+
+    def test_gateway_send_stream_retries_one_pre_accept_handshake_failure(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+            )
+            payloads = []
+
+            def stream_payload(payload):
+                payloads.append(payload)
+                if len(payloads) == 1:
+                    def failed_stream():
+                        raise GatewayRequestError(
+                            "GATEWAY_CONNECTION_CLOSED",
+                            "connection closed",
+                            {"stage": "connect", "accepted": False},
+                        )
+                        yield  # pragma: no cover
+
+                    return failed_stream()
+                return iter(
+                    [
+                        {
+                            "type": "accepted",
+                            "runId": "run-retry-1",
+                            "status": "started",
+                        },
+                        {
+                            "type": "chat",
+                            "runId": "run-retry-1",
+                            "state": "final",
+                            "text": "done",
+                        },
+                    ]
+                )
+
+            with patch.object(
+                client,
+                "_stream_payload",
+                side_effect=stream_payload,
+            ):
+                events = list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="List five sent workflows",
+                        idempotency_key="run-retry-1",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(len(payloads), 2)
+            self.assertEqual(
+                [event["type"] for event in events],
+                ["progress", "accepted", "chat"],
+            )
+            self.assertEqual(events[0]["phase"], "retry")
+
+    def test_gateway_send_stream_does_not_retry_after_send_started(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+            )
+            calls = 0
+
+            def stream_payload(_payload):
+                nonlocal calls
+                calls += 1
+
+                def failed_stream():
+                    raise GatewayRequestError(
+                        "GATEWAY_CONNECTION_CLOSED",
+                        "connection closed",
+                        {"stage": "send_accept", "accepted": False},
+                    )
+                    yield  # pragma: no cover
+
+                return failed_stream()
+
+            with (
+                patch.object(
+                    client,
+                    "_stream_payload",
+                    side_effect=stream_payload,
+                ),
+                self.assertRaises(GatewayRequestError),
+            ):
+                list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="List five sent workflows",
+                        idempotency_key="run-no-retry-1",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(calls, 1)
 
 
 class WorkspaceHttpServerTests(unittest.TestCase):

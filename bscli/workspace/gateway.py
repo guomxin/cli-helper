@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
 from typing import Any, Iterator
+
+
+_LOG = logging.getLogger(__name__)
+
+_PRE_ACCEPT_RETRY_CODES = {
+    "GATEWAY_CONNECTION_CLOSED",
+    "GATEWAY_CONNECTION_FAILED",
+    "GATEWAY_PROCESS_FAILED",
+    "GATEWAY_RESPONSE_INVALID",
+    "GATEWAY_TIMEOUT",
+}
+_PRE_ACCEPT_RETRY_STAGES = {"connect", "preflight_abort", "bind"}
 
 
 class GatewayRequestError(RuntimeError):
@@ -128,30 +141,67 @@ class OpenClawGatewayClient:
             if len(text) < minimum or len(text) > maximum:
                 raise ValueError(f"OpenClaw {name} is invalid")
             normalized[name] = text
-        source = self._stream_payload(
-            {
-                "mode": "send-stream",
-                **normalized,
-                "timeoutMs": min(
-                    max(int(timeout_seconds * 1000), 1_000),
-                    180_000,
-                ),
-            }
-        )
+        payload = {
+            "mode": "send-stream",
+            **normalized,
+            "preflightAbort": True,
+            "acceptTimeoutMs": 20_000,
+            "timeoutMs": min(
+                max(int(timeout_seconds * 1000), 1_000),
+                180_000,
+            ),
+        }
 
         def guarded_stream() -> Iterator[dict[str, Any]]:
             run_id: str | None = None
             terminal = False
+            source = None
             try:
-                for item in source:
-                    if item.get("type") == "accepted":
-                        run_id = str(item.get("runId") or "").strip() or None
-                    if (
-                        item.get("type") == "chat"
-                        and item.get("state") in {"final", "error", "aborted"}
-                    ):
-                        terminal = True
-                    yield item
+                for attempt in range(2):
+                    accepted = False
+                    source = self._stream_payload(payload)
+                    try:
+                        for item in source:
+                            if item.get("type") == "accepted":
+                                accepted = True
+                                run_id = (
+                                    str(item.get("runId") or "").strip()
+                                    or None
+                                )
+                            if (
+                                item.get("type") == "chat"
+                                and item.get("state")
+                                in {"final", "error", "aborted"}
+                            ):
+                                terminal = True
+                            yield item
+                        return
+                    except GatewayRequestError as exc:
+                        if not _should_retry_before_accept(
+                            exc,
+                            accepted=accepted,
+                            attempt=attempt,
+                        ):
+                            raise
+                        _LOG.warning(
+                            "Retrying OpenClaw Gateway before run acceptance "
+                            "code=%s stage=%s attempt=%s",
+                            exc.code,
+                            str(exc.details.get("stage") or "unknown"),
+                            attempt + 1,
+                        )
+                        yield {
+                            "type": "progress",
+                            "runId": normalized["idempotencyKey"],
+                            "kind": "system",
+                            "phase": "retry",
+                            "label": "OpenClaw connection is recovering",
+                        }
+                    finally:
+                        close = getattr(source, "close", None)
+                        if callable(close):
+                            close()
+                        source = None
             finally:
                 close = getattr(source, "close", None)
                 if callable(close):
@@ -245,6 +295,7 @@ class OpenClawGatewayClient:
                 )
             process.stdin.write(json.dumps(payload, ensure_ascii=False))
             process.stdin.close()
+            saw_eof = False
             for raw_line in process.stdout:
                 try:
                     item = json.loads(raw_line)
@@ -252,7 +303,10 @@ class OpenClawGatewayClient:
                     continue
                 if not isinstance(item, dict):
                     continue
-                if item.get("type") in {"ready", "eof"}:
+                if item.get("type") == "eof":
+                    saw_eof = True
+                    break
+                if item.get("type") == "ready":
                     continue
                 if item.get("type") == "error":
                     error = (
@@ -272,6 +326,11 @@ class OpenClawGatewayClient:
                     )
                 if item.get("type") in {"accepted", "progress", "chat"}:
                     yield item
+            if not saw_eof:
+                raise GatewayRequestError(
+                    "GATEWAY_RESPONSE_INVALID",
+                    "OpenClaw Gateway stream ended without a terminal frame.",
+                )
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -310,3 +369,17 @@ class OpenClawGatewayClient:
                 "OpenClaw Gateway credentials are invalid.",
             )
         return token
+
+
+def _should_retry_before_accept(
+    error: GatewayRequestError,
+    *,
+    accepted: bool,
+    attempt: int,
+) -> bool:
+    if accepted or attempt >= 1 or error.code not in _PRE_ACCEPT_RETRY_CODES:
+        return False
+    stage = str(error.details.get("stage") or "").strip()
+    if stage:
+        return stage in _PRE_ACCEPT_RETRY_STAGES
+    return error.code in {"GATEWAY_PROCESS_FAILED", "GATEWAY_RESPONSE_INVALID"}

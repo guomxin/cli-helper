@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 import sqlite3
 import threading
 from typing import Any, Iterator
@@ -9,6 +10,9 @@ from uuid import uuid4
 
 from bscli.core.central_service import CentralCapabilityService
 from bscli.workspace.gateway import GatewayRequestError, OpenClawGatewayClient
+
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -288,10 +292,6 @@ class WorkspaceApplication:
                 self._claim_chat_account(account)
                 claimed = True
                 gateway = self._gateway()
-                gateway.abort_chat(
-                    session_key=account["openclaw_session_key"],
-                    timeout_seconds=8,
-                )
                 grant = self.store.issue_gateway_grant(account["account_id"])
                 source = gateway.send_stream(
                     session_key=grant["session_key"],
@@ -328,6 +328,12 @@ class WorkspaceApplication:
                             assistant_recorded = True
                     yield item
             except GatewayRequestError as exc:
+                _LOG.warning(
+                    "Workspace chat Gateway failure account_id=%s code=%s stage=%s",
+                    _safe_text(account.get("account_id"), 128),
+                    exc.code,
+                    _safe_text(exc.details.get("stage"), 80),
+                )
                 if not assistant_recorded:
                     self._append_workspace_failure(
                         account,

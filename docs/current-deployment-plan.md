@@ -1596,6 +1596,29 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   需要 OpenClaw 提供持久工具缓存或非阻塞插件发现。本项目不维护 OpenClaw 私有源码
   分支，现阶段用预热门禁、单 Run 隔离、主动中止和稳定失败反馈控制风险。
 
+## 15.41 2026-08-01 Workspace 连续请求握手收敛
+
+- 用户手工完成 OA 已发查询、流程撤销、待办查询、两条补签详情读取和第一条补签审批。
+  中心 Operation 账本显示相关读操作、撤销和第一条补签审批均为 `succeeded`；第一条
+  补签于 00:17:15 完成，第二条在 00:18:27 和 00:19:33 发起的两次请求均未创建
+  AgentBridge Task 或 Operation，证明没有进入 OA，更不存在重复审批或未知写结果。
+- OpenClaw 日志显示第一条结束后的 `chat.abort` 独立连接在 428 ms 内成功；随后新的
+  Workspace 连接发生握手抖动。第二次重试的连接已到 `auth_validated`，但 9.949 秒
+  仍未完成 `connect`，最终由调用方关闭。同期诊断曾记录 3.0 至 12.6 秒事件循环延迟。
+  问题属于 OpenClaw Gateway 短时阻塞，不是第二条补签字段或 OA API 故障。
+- 原 Workspace 发送链路每条消息先启动一个 Node 子进程和 WebSocket 执行
+  `chat.abort`，再启动第二套进程和连接执行身份绑定及 `chat.send`。这会把一次业务
+  请求暴露给两次握手，并使第一条连接成功、第二条连接抖动时直接失败。
+- 新实现把残留 Run 清理、`agentbridge.workspace.bind` 和 `chat.send` 合并到同一条
+  WebSocket。连接、预清理或绑定阶段发生瞬时故障时，使用相同幂等键自动重试一次；
+  到达 `send_accept` 或 Run 阶段后绝不自动重试，继续维持业务写动作的保守边界。
+  首次受理采用独立 20 秒门限，受理成功后才开始计算 120 秒 Run 门限。
+- Gateway 错误现在记录脱敏的 `code` 和 `stage`；子进程无终止帧也会明确返回
+  `GATEWAY_RESPONSE_INVALID`，以后不再只留下泛化的“暂时无响应”。新增测试覆盖
+  握手前重试、发送后不重试、单连接预清理和异常终止帧校验。完整门禁通过 Python
+  `466 passed, 3 skipped, 194 subtests passed`、OpenClaw 插件 `92/92`、Node 语法和
+  npm pack dry-run；未调用 OA、泰华或语雀业务写能力。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
