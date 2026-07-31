@@ -227,7 +227,7 @@ openclaw devices approve <requestId> --json
 4. 事件清洗层未向浏览器输出工具参数、工具结果、Token、`userSubject` 或其他会话；
 5. Linux Release `c3c675e6e4f0` 已部署，62 个 MCP 工具完整，OA 会话保持 active。
 
-2026-07-31 多端执行授权一期代码验收：
+2026-07-31 多端执行授权一期部署验收：
 
 1. Workspace、Telegram、微信分别获得绑定自身 Endpoint 的授权 URL；
 2. 多页面使用独立 CSRF Card Session，不再因后打开页面覆盖先打开页面；
@@ -235,3 +235,5 @@ openclaw devices approve <requestId> --json
 4. Outbox 主动投递执行授权和终态，30 秒 Lease、最多 5 次失败重试；
 5. Workspace SSE 在等待确认时刷新任务详情并提示可在网页处理；
 6. 原任务会话继续执行 commit/verify，旁端仅展示和确认。
+7. 提交 `420d890` 已推送，Linux Release `420d8902f534` 已部署；65 个 MCP 工具
+   发布冒烟、OpenClaw Gateway 深度 RPC 和插件 `0.4.4` 运行时检查均通过。

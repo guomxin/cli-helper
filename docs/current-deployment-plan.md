@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-30
+> 文档日期：2026-07-31
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
 >
@@ -9,9 +9,9 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.3 为当前代码版本。
-> 中心端当前定义 61 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
-> 插件另提供 1 个身份状态工具；6 个任务与 Workspace 治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.4 为当前代码版本。
+> 中心端当前定义 65 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
+> 插件另提供 1 个身份状态工具；9 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
@@ -1425,9 +1425,38 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `accepted`、生命周期开始、`正在检查 OA 登录状态` 工具开始与结果、多个回答增量、
   生命周期结束和最终回答“当前 OA 已登录，账号为辛国茂。”。
 
+## 15.36 2026-07-31 多端执行授权与单次提交
+
+- 执行授权不再由单个终端独占。中央服务为 Workspace、Telegram 和微信的每个可信
+  Endpoint 分别签发 Presentation URL 与独立 Card Session；任一端均可确认或取消，
+  但授权状态通过数据库原子更新只接受第一个有效决定。其他端随后显示“已在其他可信端
+  处理”，不会重复决定。
+- Task Hub 在执行授权进入等待状态时，自动订阅同一 `userSubject` 下具备
+  `trusted_interaction` 能力的活动端点。OpenClaw 插件使用宿主私有 Outbox 工具领取并
+  回执通知；30 秒租约、最多 5 次投递，包含“领取后未回执”的崩溃场景。通知严格绑定
+  用户和 Endpoint，跨用户领取、展示和回执均被拒绝。
+- 多端只竞争“确认权”，不竞争“执行权”。原始 OpenClaw 会话仍是唯一
+  `commit/verify` 协调者；旁端只展示、确认和接收终态，不会恢复模型运行或调用下游
+  写接口。Workspace 当前仅额外开放出差和请假的受控 `prepare` 入口，最终提交工具仍
+  不向网页模型直接暴露。
+- OpenClaw 插件升级为 `0.4.4`，在 Gateway 启动后按两个已配置身份运行通知泵，并为
+  原端卡片改写 Endpoint 专属 URL。实现没有修改 OpenClaw 核心源码。
+- 发布门禁通过 Python `452 passed, 3 skipped`、OpenClaw 插件 `86/86`、Workspace
+  Gateway 事件 `4/4`、`compileall`、`pip check`、npm pack dry-run 和
+  `git diff --check`。并发决定、独立 CSRF、跨用户隔离、租约重试、非原端投递和
+  原会话唯一续办均有回归覆盖。
+- 提交 `420d890` 已推送 GitHub，Linux Release `420d8902f534` 已部署。正式 HTTPS
+  MCP Release 冒烟确认 65 个工具完整、辛国茂 OA 会话 active；未调用待办列表或任何
+  业务写工具。
+- Windows 的单次 `openclaw gateway restart` 因托管任务交接延迟超过外层 15 分钟
+  执行时限，但没有重复重启。原启动最终完成，唯一 PID `24936` 监听
+  `0.0.0.0:18789`；深度 RPC、配置审计和插件运行时检查通过，日志确认
+  `agentbridge-interactions` `0.4.4`、Telegram 与微信提供器均已启动。
+
 ## 16. 后续演进顺序
 
-1. 实现 Interaction Claim、首选确认端和“网页发起、手机确认”三期样板；
+1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
+   真实跨端验收；
 2. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
 3. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
 4. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA
