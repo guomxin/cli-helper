@@ -60,18 +60,17 @@ let connectSent = false;
 let methodSent = false;
 let connected = false;
 let streamRunId = mode === "send-stream" ? idempotencyKey : null;
+let streamAccepted = false;
+let streamHadToolActivity = false;
+let abortSent = false;
+let abortTimer = null;
 const connectId = `connect-${randomUUID()}`;
 const bindRequestId = `bind-${randomUUID()}`;
 const requestId = `rpc-${randomUUID()}`;
+const abortRequestId = `abort-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
 const timer = setTimeout(
-  () =>
-    mode === "stream" && connected
-      ? finish()
-      : finishError(
-          "GATEWAY_TIMEOUT",
-          "OpenClaw Gateway request timed out.",
-        ),
+  () => handleRequestTimeout(),
   timeoutMs,
 );
 
@@ -106,6 +105,9 @@ socket.addEventListener("message", (event) => {
       streamRunId,
     );
     if (normalized) {
+      if (normalized.type === "progress" && normalized.kind === "tool") {
+        streamHadToolActivity = true;
+      }
       process.stdout.write(`${JSON.stringify(normalized)}\n`);
       if (
         normalized.type === "chat" &&
@@ -182,6 +184,34 @@ socket.addEventListener("message", (event) => {
     );
     return;
   }
+  if (frame.id === abortRequestId && mode === "send-stream") {
+    if (abortTimer) {
+      clearTimeout(abortTimer);
+      abortTimer = null;
+    }
+    if (!frame.ok) {
+      finishError(
+        "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
+        "The timed-out OpenClaw run could not be confirmed as stopped.",
+        timeoutDetails(false),
+      );
+      return;
+    }
+    const payload = isRecord(frame.payload) ? frame.payload : {};
+    const abortConfirmed =
+      payload.aborted === true &&
+      (!Array.isArray(payload.runIds) || payload.runIds.includes(streamRunId));
+    finishError(
+      abortConfirmed
+        ? "GATEWAY_RUN_TIMEOUT_ABORTED"
+        : "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
+      abortConfirmed
+        ? "The timed-out OpenClaw run was stopped."
+        : "The timed-out OpenClaw run was no longer abortable.",
+      timeoutDetails(abortConfirmed),
+    );
+    return;
+  }
   if (frame.id !== requestId) {
     return;
   }
@@ -201,6 +231,7 @@ socket.addEventListener("message", (event) => {
         "runId",
         256,
       );
+    streamAccepted = true;
     process.stdout.write(
       `${JSON.stringify({
         type: "accepted",
@@ -215,6 +246,64 @@ socket.addEventListener("message", (event) => {
   }
   finish({ ok: true, payload: frame.payload ?? null });
 });
+
+function handleRequestTimeout() {
+  if (mode === "stream" && connected) {
+    finish();
+    return;
+  }
+  if (mode === "send-stream" && connected && streamAccepted) {
+    requestStreamAbort();
+    return;
+  }
+  finishError(
+    "GATEWAY_TIMEOUT",
+    "OpenClaw Gateway request timed out.",
+  );
+}
+
+function requestStreamAbort() {
+  if (settled || abortSent) return;
+  abortSent = true;
+  try {
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: abortRequestId,
+        method: "chat.abort",
+        params: {
+          sessionKey: streamSessionKey,
+          runId: streamRunId,
+        },
+      }),
+    );
+  } catch {
+    finishError(
+      "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
+      "The timed-out OpenClaw run could not be stopped.",
+      timeoutDetails(false),
+    );
+    return;
+  }
+  abortTimer = setTimeout(
+    () =>
+      finishError(
+        "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
+        "OpenClaw did not confirm that the timed-out run stopped.",
+        timeoutDetails(false),
+      ),
+    10_000,
+  );
+}
+
+function timeoutDetails(aborted) {
+  return {
+    runId: streamRunId,
+    abortRequested: abortSent,
+    aborted,
+    hadToolActivity: streamHadToolActivity,
+  };
+}
 
 socket.addEventListener("error", () => {
   finishError(
@@ -318,6 +407,10 @@ function finish(payload) {
   if (settled) return;
   settled = true;
   clearTimeout(timer);
+  if (abortTimer) {
+    clearTimeout(abortTimer);
+    abortTimer = null;
+  }
   if (streamingMode) {
     process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
   } else {

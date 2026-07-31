@@ -48,6 +48,34 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, script)
 
+    def test_openclaw_restart_has_recovery_guardrails_and_warmup_gate(self) -> None:
+        deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+        warmup = (
+            ROOT / "scripts/Test-OpenClawGatewayWarmup.ps1"
+        ).read_text(encoding="utf-8")
+
+        for marker in (
+            "diagnostics.stuckSessionWarnMs",
+            "diagnostics.stuckSessionAbortMs",
+            "gateway status --deep --require-rpc --json",
+            "OpenClaw CLI and Gateway versions do not match",
+            "OpenClaw Gateway reports plugin version drift",
+            "$gatewayWarmupScript",
+            'if ($warmup.status -ne "succeeded")',
+        ):
+            self.assertIn(marker, deploy)
+        for marker in (
+            'sessionKey = "agent:${AgentId}:agentbridge-release-warmup"',
+            '--message $message',
+            '--thinking off',
+            '$status -ne "ok"',
+            '$reply -ne "READY"',
+            "HotPathMaximumSeconds",
+        ):
+            self.assertIn(marker, warmup)
+
     def test_deployment_cleans_stale_build_tree_before_wheel(self) -> None:
         script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"

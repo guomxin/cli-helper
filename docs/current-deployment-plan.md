@@ -1545,6 +1545,36 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   出差申请卡为“已完成”、活动任务数为 0，Gateway 为“已连接”，控制台无错误或警告。
 - 本次实现和自动化没有调用 OA、泰华或语雀业务写能力。
 
+## 15.40 2026-07-31 Workspace 堵塞根因与发布预热门禁
+
+- 用户连续两次从 Workspace 查询 OA 已发事项均失败。中心 Operation 账本为 0，
+  OpenClaw Transcript 也没有形成完整助手回复，证明失败发生在 OA 工具调用之前。
+- OpenClaw 生产日志确认，`chat.send` 接受 Run 后长时间停在
+  `embedded_run:started`。事件循环最大延迟达到约 194.6 秒，而 CPU 单核占比仅约
+  0.034；后续工具阶段统计显示 `openclaw-tools:plugin-tools` 同步耗时 155,973 ms，
+  其中插件工厂本身合计仅约 5.5 秒。主要堵塞来自 Gateway 重启后插件注册表和模块的
+  冷载入，不是 OA、模型响应或 AgentBridge MCP 执行。
+- OpenClaw 当前插件工具描述缓存仅在进程内存中。Gateway 重启会丢失缓存，首个真实
+  用户可能被迫承担冷启动；同步冷载入还会同时拖住 Gateway RPC、Telegram 和微信
+  轮询。现阶段不修改 OpenClaw 源码，改为在每次显式 Gateway 重启后由发布流程承担
+  冷启动，并以第二轮热路径作为正式就绪门禁。
+- `scripts/Test-OpenClawGatewayWarmup.ps1` 使用专用无业务 Session 连续执行冷、热两轮
+  `READY` 探针，不携带 `--local`，也不投递到消息通道。真实试运行冷轮 19.326 秒、
+  热轮 18.543 秒；热路径超过 60 秒即失败。
+- `scripts/Deploy-AgentBridge.ps1 -RestartOpenClaw` 现统一配置 30 秒卡滞告警、120 秒
+  卡死中止，等待深度 RPC，核对 CLI/Gateway 版本和插件漂移，再执行冷/热预热。端口
+  监听但预热未通过时不再报告发布成功。
+- Workspace BFF 改为每账号单 Run：第二条请求不排队；发送前以 `chat.abort` 清理
+  残留 Run；流式超时、浏览器断连或生成器提前关闭后，按已接受 Run ID 主动中止。
+  原实现只结束 HTTP/SSE 等待而不终止 OpenClaw Run，是一次卡顿继续污染后续请求的
+  主要放大器。
+- 超时中止结果携带是否已出现工具活动。未调用工具且确认中止时给出安全失败；已调用
+  工具或无法确认中止时要求先核对业务系统，不自动重试。失败结论同时写入中心跨端
+  时间线，避免网页报错而 Telegram/微信仍停在旧状态。
+- 针对性测试 `28/28` 通过；完整发布门禁为 Python
+  `464 passed, 3 skipped, 194 subtests passed`、OpenClaw 插件 `92/92`、依赖检查和
+  npm pack dry-run 全部通过。本轮自动化没有调用 OA、泰华或语雀业务写能力。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的

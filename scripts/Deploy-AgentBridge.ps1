@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $validationScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeValidation.ps1"
 $smokeScript = Join-Path $PSScriptRoot "Test-AgentBridgeMcp.ps1"
+$gatewayWarmupScript = Join-Path $PSScriptRoot "Test-OpenClawGatewayWarmup.ps1"
 
 if ($HostName -notmatch '^[A-Za-z0-9.-]+$') {
     throw "HostName contains unsupported characters"
@@ -78,6 +79,8 @@ $plan = [ordered]@{
     smoke = -not $SkipSmoke
     loginReuseSmoke = [bool]$IncludeLoginReuseSmoke
     restartOpenClaw = [bool]$RestartOpenClaw
+    openClawGuardrails = [bool]$RestartOpenClaw
+    openClawWarmup = [bool]$RestartOpenClaw
     installSystemDependencies = [bool]$InstallSystemDependencies
     systemdUnit = $systemdUnit
 }
@@ -211,12 +214,55 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($RestartOpenClaw) {
+    $diagnosticsBatch = @(
+        @{
+            path = "diagnostics.stuckSessionWarnMs"
+            value = 30000
+        },
+        @{
+            path = "diagnostics.stuckSessionAbortMs"
+            value = 120000
+        }
+    ) | ConvertTo-Json -Compress
+    & openclaw config set --batch-json $diagnosticsBatch
+    if ($LASTEXITCODE -ne 0) {
+        throw "Configuring OpenClaw stuck-session recovery failed"
+    }
     & openclaw gateway restart
     if ($LASTEXITCODE -ne 0) { throw "OpenClaw Gateway restart failed" }
-    $gatewayStatus = (& openclaw gateway status --deep --require-rpc --json) | Out-String | ConvertFrom-Json
-    if (-not $gatewayStatus.rpc.ok) { throw "OpenClaw Gateway deep RPC check failed" }
+
+    $gatewayReady = $false
+    for ($attempt = 1; $attempt -le 24; $attempt++) {
+        try {
+            $gatewayStatus = (
+                & openclaw gateway status --deep --require-rpc --json
+            ) | Out-String | ConvertFrom-Json
+            if ($gatewayStatus.rpc.ok) {
+                $gatewayReady = $true
+                break
+            }
+        } catch {
+            if ($attempt -eq 24) {
+                throw
+            }
+        }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $gatewayReady) {
+        throw "OpenClaw Gateway deep RPC check failed"
+    }
+    if ($gatewayStatus.cli.version -ne $gatewayStatus.gateway.version) {
+        throw "OpenClaw CLI and Gateway versions do not match"
+    }
+    if (@($gatewayStatus.pluginVersionDrift.drifts).Count -gt 0) {
+        throw "OpenClaw Gateway reports plugin version drift"
+    }
     $plugin = (& openclaw plugins inspect agentbridge-interactions --runtime --json) | Out-String | ConvertFrom-Json
     if ($plugin.plugin.status -ne "loaded") { throw "AgentBridge OpenClaw plugin is not loaded" }
+    $warmup = (& $gatewayWarmupScript) | Out-String | ConvertFrom-Json
+    if ($warmup.status -ne "succeeded") {
+        throw "OpenClaw Gateway cold/hot warm-up failed"
+    }
 }
 
 if (-not $SkipSmoke) {

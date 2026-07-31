@@ -139,9 +139,35 @@ class FakeGateway:
                     "runId": idempotency_key,
                     "status": "started",
                 },
-                *self.stream_events,
+                *[
+                    {**event, "runId": idempotency_key}
+                    for event in self.stream_events
+                ],
             ]
         )
+
+    def abort_chat(
+        self,
+        *,
+        session_key: str,
+        run_id: str | None = None,
+        preserve_side_runs: bool = True,
+        timeout_seconds: float = 8,
+        raise_on_error: bool = True,
+    ) -> dict:
+        self.calls.append(
+            (
+                "chat.abort",
+                {
+                    "sessionKey": session_key,
+                    "runId": run_id,
+                    "preserveSideRuns": preserve_side_runs,
+                    "timeoutSeconds": timeout_seconds,
+                    "raiseOnError": raise_on_error,
+                },
+            )
+        )
+        return {"aborted": False}
 
 
 class WorkspaceStoreTests(unittest.TestCase):
@@ -501,7 +527,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
                     timezone.utc,
                 ).isoformat(timespec="milliseconds"),
             )
-            self.assertEqual(result.run_id, "run-web-1")
+            self.assertEqual(result.run_id, "web-message-1")
             self.assertEqual(streamed[-1]["state"], "final")
             self.assertEqual(send_streamed[0]["type"], "accepted")
             methods = [method for method, _params in gateway.calls]
@@ -510,14 +536,14 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 [
                     "chat.history",
                     "stream",
+                    "chat.abort",
                     "send_stream",
-                    "agentbridge.workspace.bind",
-                    "chat.send",
+                    "chat.abort",
+                    "send_stream",
                 ],
             )
-            streamed_send = gateway.calls[2][1]
-            bind = gateway.calls[3][1]
-            sent = gateway.calls[4][1]
+            streamed_send = gateway.calls[3][1]
+            compatibility_send = gateway.calls[5][1]
             self.assertEqual(
                 streamed_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -526,9 +552,14 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 streamed_send["idempotencyKey"],
                 "web-message-stream-1",
             )
-            self.assertEqual(bind["sessionKey"], account["openclaw_session_key"])
-            self.assertEqual(sent["sessionKey"], account["openclaw_session_key"])
-            self.assertFalse(sent["deliver"])
+            self.assertEqual(
+                compatibility_send["sessionKey"],
+                account["openclaw_session_key"],
+            )
+            self.assertEqual(
+                compatibility_send["idempotencyKey"],
+                "web-message-1",
+            )
             timeline = app.list_timeline(account)
             messages = [
                 entry
@@ -537,7 +568,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             ]
             self.assertEqual(
                 [entry["role"] for entry in messages],
-                ["user", "assistant", "user"],
+                ["user", "assistant", "user", "assistant"],
             )
             self.assertTrue(
                 all(entry["source"]["is_origin"] for entry in messages)
@@ -559,7 +590,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 )
                 if delivery["payload_type"] == "timeline_message"
             ]
-            self.assertEqual(len(timeline_deliveries), 3)
+            self.assertEqual(len(timeline_deliveries), 4)
 
     def test_timeline_is_isolated_by_workspace_identity(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -602,6 +633,133 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 ["Message for Bob"],
             )
 
+    def test_gateway_failure_is_projected_to_the_cross_end_timeline(self) -> None:
+        class FailingGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                super().send_stream(**kwargs)
+                raise GatewayRequestError(
+                    "GATEWAY_RUN_TIMEOUT_ABORTED",
+                    "run stopped",
+                    {"hadToolActivity": False},
+                )
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            app = WorkspaceApplication(
+                service=service,
+                gateway=FailingGateway(),
+            )
+
+            with self.assertRaises(GatewayRequestError) as caught:
+                list(
+                    app.send_chat_stream(
+                        account,
+                        message="List five sent workflows",
+                        idempotency_key="failed-run-1",
+                    )
+                )
+
+            self.assertEqual(
+                caught.exception.code,
+                "GATEWAY_RUN_TIMEOUT_ABORTED",
+            )
+            timeline = app.list_timeline(account)
+            self.assertEqual(
+                [entry["role"] for entry in timeline],
+                ["user", "assistant"],
+            )
+            self.assertIn("\u5b89\u5168\u4e2d\u6b62", timeline[-1]["text"])
+
+    def test_second_workspace_run_is_rejected_instead_of_queued(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                self.calls.append(("send_stream", kwargs))
+
+                def events():
+                    yield {
+                        "type": "accepted",
+                        "runId": kwargs["idempotency_key"],
+                        "status": "started",
+                    }
+                    entered.set()
+                    release.wait(timeout=5)
+                    yield {
+                        "type": "chat",
+                        "runId": kwargs["idempotency_key"],
+                        "state": "final",
+                        "text": "done",
+                    }
+
+                return events()
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            gateway = BlockingGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+            first_errors: list[Exception] = []
+
+            def consume_first() -> None:
+                try:
+                    list(
+                        app.send_chat_stream(
+                            account,
+                            message="first",
+                            idempotency_key="concurrent-run-1",
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover - assertion aid
+                    first_errors.append(exc)
+
+            thread = threading.Thread(target=consume_first)
+            thread.start()
+            self.assertTrue(entered.wait(timeout=3))
+            try:
+                with self.assertRaises(GatewayRequestError) as caught:
+                    list(
+                        app.send_chat_stream(
+                            account,
+                            message="second",
+                            idempotency_key="concurrent-run-2",
+                        )
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "WORKSPACE_RUN_IN_PROGRESS",
+                )
+            finally:
+                release.set()
+                thread.join(timeout=5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(first_errors, [])
+            self.assertEqual(
+                sum(method == "send_stream" for method, _ in gateway.calls),
+                1,
+            )
+            timeline = app.list_timeline(account)
+            self.assertTrue(
+                any(
+                    entry["role"] == "assistant"
+                    and "\u6ca1\u6709\u6392\u961f" in entry["text"]
+                    for entry in timeline
+                )
+            )
+
 
 class WorkspaceGatewayClientTests(unittest.TestCase):
     def test_gateway_client_advertises_tool_event_streaming(self) -> None:
@@ -613,6 +771,8 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn('caps: ["tool-events"]', source)
+        self.assertIn('method: "chat.abort"', source)
+        self.assertIn("GATEWAY_RUN_TIMEOUT_ABORTED", source)
 
     def test_gateway_token_is_passed_only_through_the_child_environment(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -746,6 +906,56 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 "gateway-secret-token-value",
             )
 
+    def test_closing_an_accepted_stream_aborts_the_openclaw_run(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+            )
+            input_pipe = _CaptureInput()
+            with (
+                patch("bscli.workspace.gateway.subprocess.Popen") as popen,
+                patch.object(client, "abort_chat") as abort_chat,
+            ):
+                process = popen.return_value
+                process.stdin = input_pipe
+                process.stdout = iter(
+                    [
+                        '{"type":"accepted","runId":"run-close-1",'
+                        '"status":"started"}\n',
+                    ]
+                )
+                process.poll.return_value = 0
+                stream = client.send_stream(
+                    session_key=(
+                        "agent:main:agentbridge-workspace:direct:account-a"
+                    ),
+                    endpoint_key="workspace:account-a",
+                    grant="g" * 48,
+                    message="List five sent workflows",
+                    idempotency_key="run-close-1",
+                    timeout_seconds=120,
+                )
+
+                self.assertEqual(next(stream)["type"], "accepted")
+                stream.close()
+
+            abort_chat.assert_called_once_with(
+                session_key=(
+                    "agent:main:agentbridge-workspace:direct:account-a"
+                ),
+                run_id="run-close-1",
+                timeout_seconds=5,
+                raise_on_error=False,
+            )
+
 
 class WorkspaceHttpServerTests(unittest.TestCase):
     def test_enrollment_login_csrf_and_read_only_workspace_routes(self) -> None:
@@ -840,7 +1050,7 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                     csrf=cookies["agentbridge_workspace_csrf"],
                 )
                 self.assertEqual(status, 202)
-                self.assertEqual(accepted["runId"], "run-web-1")
+                self.assertTrue(accepted["runId"])
 
                 status, response_headers, stream = _raw_request(
                     port,
@@ -876,7 +1086,7 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                         for item in timeline["items"]
                         if item["entry_type"] == "chat_message"
                     ],
-                    ["user", "user", "assistant"],
+                    ["user", "assistant", "user", "assistant"],
                 )
                 self.assertEqual(
                     timeline["cursor"],

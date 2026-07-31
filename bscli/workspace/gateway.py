@@ -128,7 +128,7 @@ class OpenClawGatewayClient:
             if len(text) < minimum or len(text) > maximum:
                 raise ValueError(f"OpenClaw {name} is invalid")
             normalized[name] = text
-        return self._stream_payload(
+        source = self._stream_payload(
             {
                 "mode": "send-stream",
                 **normalized,
@@ -138,6 +138,80 @@ class OpenClawGatewayClient:
                 ),
             }
         )
+
+        def guarded_stream() -> Iterator[dict[str, Any]]:
+            run_id: str | None = None
+            terminal = False
+            try:
+                for item in source:
+                    if item.get("type") == "accepted":
+                        run_id = str(item.get("runId") or "").strip() or None
+                    if (
+                        item.get("type") == "chat"
+                        and item.get("state") in {"final", "error", "aborted"}
+                    ):
+                        terminal = True
+                    yield item
+            finally:
+                close = getattr(source, "close", None)
+                if callable(close):
+                    close()
+                if run_id and not terminal:
+                    self.abort_chat(
+                        session_key=normalized["sessionKey"],
+                        run_id=run_id,
+                        timeout_seconds=5,
+                        raise_on_error=False,
+                    )
+
+        return guarded_stream()
+
+    def abort_chat(
+        self,
+        *,
+        session_key: str,
+        run_id: str | None = None,
+        preserve_side_runs: bool = True,
+        timeout_seconds: float = 8,
+        raise_on_error: bool = True,
+    ) -> dict[str, Any] | None:
+        params: dict[str, Any] = {
+            "sessionKey": str(session_key or "").strip(),
+        }
+        if not params["sessionKey"]:
+            raise ValueError("OpenClaw session key is invalid")
+        if run_id:
+            params["runId"] = str(run_id).strip()
+        elif preserve_side_runs:
+            params["preserveSideRuns"] = True
+        try:
+            result = self.call(
+                "chat.abort",
+                params,
+                timeout_seconds=timeout_seconds,
+            )
+        except GatewayRequestError as exc:
+            if (
+                not run_id
+                and preserve_side_runs
+                and exc.code == "INVALID_REQUEST"
+            ):
+                params.pop("preserveSideRuns", None)
+                try:
+                    result = self.call(
+                        "chat.abort",
+                        params,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except GatewayRequestError:
+                    if raise_on_error:
+                        raise
+                    return None
+                return result if isinstance(result, dict) else {}
+            if raise_on_error:
+                raise
+            return None
+        return result if isinstance(result, dict) else {}
 
     def _stream_payload(
         self,
@@ -192,6 +266,9 @@ class OpenClawGatewayClient:
                             error.get("message")
                             or "OpenClaw Gateway stream failed."
                         ),
+                        error.get("details") if isinstance(
+                            error.get("details"), dict
+                        ) else None,
                     )
                 if item.get("type") in {"accepted", "progress", "chat"}:
                     yield item

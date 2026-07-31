@@ -1182,6 +1182,14 @@ function friendlyError(error) {
     WORKSPACE_LINK_INVALID: "配对尚未完成或已经失效。",
     WORKSPACE_CONFLICT: "该身份或用户名已经绑定网页账号。",
     GATEWAY_NOT_CONFIGURED: "智能体连接尚未配置。",
+    WORKSPACE_RUN_IN_PROGRESS:
+      "\u4e0a\u4e00\u6761\u7f51\u9875\u4efb\u52a1\u4ecd\u5728\u5904\u7406\uff0c\u672c\u6b21\u8bf7\u6c42\u6ca1\u6709\u6392\u961f\u3002",
+    GATEWAY_RUN_TIMEOUT_ABORTED:
+      "\u667a\u80fd\u4f53\u8fd0\u884c\u8d85\u65f6\uff0c\u5df2\u505c\u6b62\u540e\u7eed\u5904\u7406\u3002",
+    GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED:
+      "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u5df2\u505c\u6b62\u7ee7\u7eed\u6392\u961f\u3002",
+    GATEWAY_TIMEOUT:
+      "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u672a\u7ee7\u7eed\u8fdb\u5165\u4e1a\u52a1\u7cfb\u7edf\u3002",
     PAIRING_REQUIRED: "AgentBridge 服务器尚未获准连接 OpenClaw。",
     AUTHENTICATION_REQUIRED: "网页会话已失效，请重新登录。",
   };

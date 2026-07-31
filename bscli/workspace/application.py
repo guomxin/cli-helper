@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import sqlite3
+import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -26,6 +27,8 @@ class WorkspaceApplication:
         self.service = service
         self.store = service.workspace
         self.gateway = gateway
+        self._chat_state_lock = threading.Lock()
+        self._active_chat_accounts: set[str] = set()
 
     def start_enrollment(self) -> dict:
         return self.store.start_link()
@@ -270,40 +273,74 @@ class WorkspaceApplication:
         if not message or len(message) > 20_000:
             raise ValueError("chat message is empty or too long")
         effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
-        self._append_workspace_message(
-            account,
-            role="user",
-            text=message,
-            message_key=f"workspace:user:{effective_key}",
-        )
-        grant = self.store.issue_gateway_grant(account["account_id"])
-        source = self._gateway().send_stream(
-            session_key=grant["session_key"],
-            endpoint_key=grant["endpoint_key"],
-            grant=grant["grant"],
-            message=message,
-            idempotency_key=effective_key,
-            timeout_seconds=150,
-        )
 
         def synchronized_stream() -> Iterator[dict[str, Any]]:
-            for item in source:
-                if (
-                    item.get("type") == "chat"
-                    and item.get("state") == "final"
-                    and isinstance(item.get("text"), str)
-                    and item["text"].strip()
-                ):
-                    self._append_workspace_message(
+            source = None
+            claimed = False
+            assistant_recorded = False
+            self._append_workspace_message(
+                account,
+                role="user",
+                text=message,
+                message_key=f"workspace:user:{effective_key}",
+            )
+            try:
+                self._claim_chat_account(account)
+                claimed = True
+                gateway = self._gateway()
+                gateway.abort_chat(
+                    session_key=account["openclaw_session_key"],
+                    timeout_seconds=8,
+                )
+                grant = self.store.issue_gateway_grant(account["account_id"])
+                source = gateway.send_stream(
+                    session_key=grant["session_key"],
+                    endpoint_key=grant["endpoint_key"],
+                    grant=grant["grant"],
+                    message=message,
+                    idempotency_key=effective_key,
+                    timeout_seconds=120,
+                )
+                for item in source:
+                    if item.get("type") == "chat":
+                        state = item.get("state")
+                        if (
+                            state == "final"
+                            and isinstance(item.get("text"), str)
+                            and item["text"].strip()
+                        ):
+                            self._append_workspace_message(
+                                account,
+                                role="assistant",
+                                text=item["text"],
+                                message_key=(
+                                    "workspace:assistant:"
+                                    f"{_safe_text(item.get('runId'), 256) or effective_key}"
+                                ),
+                            )
+                            assistant_recorded = True
+                        elif state in {"error", "aborted"}:
+                            self._append_workspace_failure(
+                                account,
+                                effective_key=effective_key,
+                                text=_terminal_chat_failure_text(state),
+                            )
+                            assistant_recorded = True
+                    yield item
+            except GatewayRequestError as exc:
+                if not assistant_recorded:
+                    self._append_workspace_failure(
                         account,
-                        role="assistant",
-                        text=item["text"],
-                        message_key=(
-                            "workspace:assistant:"
-                            f"{_safe_text(item.get('runId'), 256) or effective_key}"
-                        ),
+                        effective_key=effective_key,
+                        text=_workspace_gateway_failure_text(exc),
                     )
-                yield item
+                raise
+            finally:
+                close = getattr(source, "close", None)
+                if callable(close):
+                    close()
+                if claimed:
+                    self._release_chat_account(account)
 
         return synchronized_stream()
 
@@ -314,46 +351,23 @@ class WorkspaceApplication:
         message: str,
         idempotency_key: str | None = None,
     ) -> WorkspaceChatResult:
-        message = str(message or "").strip()
-        if not message or len(message) > 20_000:
-            raise ValueError("chat message is empty or too long")
-        gateway = self._gateway()
-        effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
-        self._append_workspace_message(
+        run_id = ""
+        status = "completed"
+        for item in self.send_chat_stream(
             account,
-            role="user",
-            text=message,
-            message_key=f"workspace:user:{effective_key}",
-        )
-        grant = self.store.issue_gateway_grant(account["account_id"])
-        gateway.call(
-            "agentbridge.workspace.bind",
-            {
-                "sessionKey": grant["session_key"],
-                "endpointKey": grant["endpoint_key"],
-                "grant": grant["grant"],
-            },
-            timeout_seconds=20,
-        )
-        result = gateway.call(
-            "chat.send",
-            {
-                "sessionKey": grant["session_key"],
-                "message": message,
-                "deliver": False,
-                "idempotencyKey": effective_key,
-                "timeoutMs": 120_000,
-            },
-            timeout_seconds=30,
-        )
-        result = result if isinstance(result, dict) else {}
-        return WorkspaceChatResult(
-            run_id=_safe_text(
-                result.get("runId") or result.get("run_id"),
-                256,
-            ),
-            status=_safe_text(result.get("status"), 80) or "accepted",
-        )
+            message=message,
+            idempotency_key=idempotency_key,
+        ):
+            if item.get("type") != "accepted":
+                continue
+            run_id = _safe_text(item.get("runId"), 256)
+            status = _safe_text(item.get("status"), 80) or "accepted"
+        if not run_id:
+            raise GatewayRequestError(
+                "GATEWAY_RESPONSE_INVALID",
+                "OpenClaw Gateway did not accept the Workspace run.",
+            )
+        return WorkspaceChatResult(run_id=run_id, status=status)
 
     def _append_workspace_message(
         self,
@@ -378,6 +392,42 @@ class WorkspaceApplication:
             # Chat remains available if the optional cross-end projection fails.
             return
 
+    def _append_workspace_failure(
+        self,
+        account: dict,
+        *,
+        effective_key: str,
+        text: str,
+    ) -> None:
+        self._append_workspace_message(
+            account,
+            role="assistant",
+            text=text,
+            message_key=f"workspace:assistant:error:{effective_key}",
+        )
+
+    def _claim_chat_account(self, account: dict) -> None:
+        account_id = _safe_text(account.get("account_id"), 128)
+        if not account_id:
+            raise GatewayRequestError(
+                "WORKSPACE_IDENTITY_INVALID",
+                "Workspace identity is invalid.",
+            )
+        with self._chat_state_lock:
+            if account_id in self._active_chat_accounts:
+                raise GatewayRequestError(
+                    "WORKSPACE_RUN_IN_PROGRESS",
+                    "This Workspace already has an active agent run.",
+                )
+            self._active_chat_accounts.add(account_id)
+
+    def _release_chat_account(self, account: dict) -> None:
+        account_id = _safe_text(account.get("account_id"), 128)
+        if not account_id:
+            return
+        with self._chat_state_lock:
+            self._active_chat_accounts.discard(account_id)
+
     def _gateway(self) -> OpenClawGatewayClient:
         if self.gateway is None:
             raise GatewayRequestError(
@@ -385,6 +435,28 @@ class WorkspaceApplication:
                 "OpenClaw Gateway is not configured.",
             )
         return self.gateway
+
+
+def _workspace_gateway_failure_text(error: GatewayRequestError) -> str:
+    code = str(error.code or "GATEWAY_REQUEST_FAILED")
+    details = error.details if isinstance(error.details, dict) else {}
+    if code == "WORKSPACE_RUN_IN_PROGRESS":
+        return "\u4e0a\u4e00\u6761\u7f51\u9875\u4efb\u52a1\u4ecd\u5728\u5904\u7406\uff0c\u672c\u6b21\u8bf7\u6c42\u6ca1\u6709\u6392\u961f\u3002"
+    if code == "GATEWAY_RUN_TIMEOUT_ABORTED":
+        if details.get("hadToolActivity") is True:
+            return "\u667a\u80fd\u4f53\u8fd0\u884c\u8d85\u65f6\uff0c\u5df2\u505c\u6b62\u540e\u7eed\u5904\u7406\uff1b\u5982\u6d89\u53ca\u5199\u64cd\u4f5c\uff0c\u8bf7\u5148\u6838\u5bf9\u4e1a\u52a1\u7cfb\u7edf\u7ed3\u679c\u3002"
+        return "\u667a\u80fd\u4f53\u8fd0\u884c\u8d85\u65f6\uff0c\u5df2\u5b89\u5168\u4e2d\u6b62\uff1b\u672c\u6b21\u5c1a\u672a\u8c03\u7528\u4e1a\u52a1\u7cfb\u7edf\u3002"
+    if code == "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED":
+        return "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u5df2\u505c\u6b62\u7ee7\u7eed\u6392\u961f\uff1b\u5982\u6d89\u53ca\u5199\u64cd\u4f5c\uff0c\u8bf7\u5148\u6838\u5bf9\u4e1a\u52a1\u7cfb\u7edf\u7ed3\u679c\u3002"
+    if code.startswith("GATEWAY_"):
+        return "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u672a\u7ee7\u7eed\u8fdb\u5165\u4e1a\u52a1\u7cfb\u7edf\u3002"
+    return f"\u667a\u80fd\u4f53\u672a\u80fd\u5b8c\u6210\u672c\u6b21\u8bf7\u6c42\uff08\u9519\u8bef\u7801\uff1a{code}\uff09\u3002"
+
+
+def _terminal_chat_failure_text(state: object) -> str:
+    if state == "aborted":
+        return "\u672c\u6b21\u667a\u80fd\u4f53\u8fd0\u884c\u5df2\u505c\u6b62\uff0c\u6ca1\u6709\u7ee7\u7eed\u6392\u961f\u3002"
+    return "\u667a\u80fd\u4f53\u672a\u80fd\u5b8c\u6210\u672c\u6b21\u8bf7\u6c42\u3002"
 
 
 def _public_account(account: dict) -> dict:
