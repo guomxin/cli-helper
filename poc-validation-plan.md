@@ -182,15 +182,26 @@ workflow: flow-name
 - 同一遗留账号被标记为单会话时，手机和桌面调用共享同一中心会话，禁止分别重复登录；
 - 活跃会话先用真实服务端接口探测并刷新 Cookie 状态；仅在 OA 明确登录过期时返回 `LOGIN_REQUIRED` 和一次性 `AuthChallenge`，由用户完成认证卡片后再继续原 `operationId`；暂时网络失败返回 `SESSION_CHECK_UNAVAILABLE`，运行身份不匹配返回 `SESSION_RUNTIME_MISMATCH`，两者都保留会话且不索要凭据。
 
-双用户验证固定使用中心端两个独立、受限的 Worker OS 身份、容器或虚拟机，并分别持有浏览器和数据目录。首期不接受在同一 Worker 安全主体下仅依赖目录命名模拟两个用户；若 PoC 暂时使用同一主机，必须通过进程身份和 ACL 证明用户 A 的 Worker 无法读取用户 B 的 Profile、下载、截图、Cookie 和日志。
+当前内网 PoC 已在同一受限 Linux `agentbridge` 服务身份下完成两个真实用户的逻辑
+隔离验证：Token、`userSubject`、系统主体、Session、加密 Cookie、Profile、操作账本、
+任务和回复通道均独立，Profile 目录强制为 `0700`。这能够验证不会通过 AgentBridge
+业务路由串号，但不能证明同一服务身份下的文件对另一个用户 Worker 不可读，也不等同于
+生产级安全主体隔离。
 
-首期可以使用简单本地配置记录：
+企业试点或生产验收仍要求为不同用户使用独立、受限的 Worker OS 身份、容器或虚拟机，
+并验证用户 A 无法读取用户 B 的 Profile、下载、截图、Cookie 和日志。该项当前明确
+暂缓，恢复实施前需要单独确定 Worker 调度、密钥和迁移方案。
+
+当前中心身份与会话注册表记录：
 
 ```text
-userSubject → Worker安全身份 → systemId → profilePath → 非敏感账号说明
+userSubject → systemId → expected/verified principal → session/profile reference
 ```
 
-不开发完整 IdentityBinding 服务，但必须证明两个用户不会串会话，并在登录后从可信页面状态或后端接口核验实际遗留账号与预期说明一致。验收时还要验证用户 A 的 Worker 无法读取用户 B 的 Profile、下载、截图、Cookie 和日志目录；仅仅在文件名中使用不同用户名称不算隔离。
+当前已经实现 Token 身份、ClientEndpoint、系统级主体绑定和会话注册，不再依赖简单
+本地名称配置。登录后必须从可信页面状态或后端接口核验实际遗留账号与预期主体一致；
+任何主体冲突都 fail closed。独立 Worker 的文件不可交叉读取验证继续作为生产化验收项，
+不得仅凭目录名称或 `0700` 权限宣称完成。
 
 ### 4.4 可信认证卡片
 

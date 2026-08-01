@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-08-01
+> 文档日期：2026-08-02
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
 >
@@ -15,9 +15,10 @@
 > 内部调用，另有 10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
 > 静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
-> 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
-> `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；
-> 权限本身不代表自动执行，所有 OA 业务写入仍要求针对精确事项的独立可信授权。
+> 当前两个 OpenClaw 身份各自使用独立 Token。`guomao` 包含 OA 读取、草稿、审批、
+> 会议、正式提交、撤销及已开通的泰华/语雀权限；`lishiyu` 只包含 OA 读取、草稿、
+> 审批、正式提交和撤销，不含会议、泰华或语雀权限。权限本身不代表自动执行，所有
+> OA 业务写入仍要求针对精确事项的独立可信授权。
 
 ## 1. 方案结论
 
@@ -28,7 +29,8 @@
 - AgentBridge 通过中心 HTTP Session 和受控 Playwright Browser Worker 访问 OA；
 - 用户电脑不安装 Chrome 扩展、本地 Daemon 或 OA 连接器；
 - OpenClaw 通过 Streamable HTTPS MCP 调用 AgentBridge；
-- 普通用户可通过独立 Agent Workspace 网页端使用只读智能体对话和 Task Hub；
+- 普通用户可通过独立 Agent Workspace 网页端使用与聊天端一致的读取、受治理写入和
+  Task Hub；
 - 登录、业务字段填写和写操作授权通过 AgentBridge 可信卡片完成；
 - Telegram 对三类 HTTPS 卡片使用原生 Web App 按钮，在应用内 WebView 中展示；
 - 当前 PoC 使用固定私网 IP、HTTPS 和专用内部 CA，不要求域名或公网证书；
@@ -487,7 +489,7 @@ OpenClaw 侧需要配置以下连接信息：
 | --- | --- |
 | MCP Transport | Streamable HTTP |
 | MCP URL | `https://10.10.50.213:8790/mcp` |
-| HTTP Header | `Authorization: Bearer <bearerToken>` |
+| HTTP Header | 由插件按可信聊天身份从各自 `tokenEnv` 动态选择 |
 | 可信卡片地址 | 无需静态配置，由 interaction 动态返回 |
 
 当前仓库已提供可安装的原生插件 `integrations/openclaw-agentbridge`。插件把宿主无关的 interaction envelope 转为 OpenClaw presentation，在模型看到工具结果前移除短期卡片 URL，只在私聊显示卡片，并在模型循环之外轮询和单次恢复交互。`render_openclaw_interaction` 保留为 Python 参考适配器。
@@ -497,7 +499,7 @@ OpenClaw 侧需要配置以下连接信息：
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "plugins.entries.agentbridge-interactions.config.mcpUrl" https://10.10.50.213:8790/mcp
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 openclaw plugins enable agentbridge-interactions
@@ -506,7 +508,13 @@ openclaw plugins inspect agentbridge-interactions --runtime --json
 openclaw gateway status --deep --require-rpc
 ```
 
-链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.1.5, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+多用户部署还必须在插件 `identityBindings` 中为每个可信
+`channel + accountId + senderId` 指定独立 `tokenEnv`，Token 值只放入 OpenClaw
+托管 Gateway 的 `.env`。不要同时保留全局 `mcp.servers.agentbridge`，否则会重新暴露
+一套共享 Token 工具。完整配置见
+[OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)。
+
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.9, ..., agentTools=41, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
 `env.vars.NODE_EXTRA_CA_CERTS` 是 OpenClaw 的持久托管环境，不要只在一次性的
 PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
@@ -519,7 +527,7 @@ PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
 `loaded` 状态外，还必须在真实绑定的私聊会话中调用
 `agentbridge_identity_status`，防止“插件已加载但工具仍被策略过滤”的假通过。
 
-`allowedCardOrigins` 必须是精确 HTTPS 来源，不允许路径、通配符或从 MCP 结果自动学习。认证、业务字段和执行授权三类卡片在 Telegram 中都使用 Web App；卡片页面只通过自托管的无数据桥发送 ready、expand 和 close，不加载可读取表单的第三方脚本。插件会记录发起交互的可信私聊投递路由。可信页面完成后，后台恢复优先绕过模型，通过同一 Telegram 通道直接投递下一张可信卡；没有下一张卡时，成功、拒绝、过期和失败使用固定的宿主状态文本直接反馈。两类投递都不包含凭据或已提交业务字段。只有宿主直投不可用时，`wakeAgentOnComplete=true` 才以不含凭据、业务字段和卡片 URL 的状态事件请求一次模型心跳作为兜底。该唤醒使用 `hook:agentbridge-interaction-updated` 原因前缀，使 OpenClaw 按外部事件处理，不受空 `HEARTBEAT.md` 的定时心跳门控影响。`/agentbridge pending` 仍用于手工重显；若模型提供方策略禁止自动唤醒，可显式关闭该兜底。
+`allowedCardOrigins` 必须是精确 HTTPS 来源，不允许路径、通配符或从 MCP 结果自动学习。认证、业务字段和执行授权三类卡片在 Telegram 中都使用 Web App；卡片页面只通过自托管的无数据桥发送 ready、expand 和 close，不加载可读取表单的第三方脚本。插件把 Interaction 关联到 `taskId`，为同一用户的 Workspace、Telegram 和微信 Endpoint 生成各自可信展示入口，并通过 Task Hub/Outbox 投递下一张卡和终态。任一可信端可以先完成决定，但只有原任务协调器能够 resume 和执行 commit/verify。所有投递都不包含凭据或已提交业务字段。`/agentbridge pending` 仍用于手工重显；只有宿主直投不可用时才使用不含敏感数据的模型唤醒兜底。
 
 OpenClaw 不应要求用户在聊天里回复密码、业务字段或“同意执行”。这些内容必须在可信卡片中完成。
 

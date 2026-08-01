@@ -83,9 +83,9 @@ MCP App 只处理交互编排，不包含 OA 表单规则，也不接收 OA 密�
 当前 OpenClaw 通过 `integrations/openclaw-agentbridge` 适配器补足宿主交互能力：
 
 - 从 MCP 私有结果元数据识别可信交互；
-- 只向已绑定的私聊会话投递；
+- 只向属于同一 `userSubject` 的已绑定私聊或 Workspace Endpoint 投递；
 - 把 HTTPS 卡片映射为 Telegram Web App；
-- 在后台轮询、续跑，并直接投递下一张卡或固定终态；
+- 在后台轮询，由原任务协调器唯一续跑，并通过 Task Hub/Outbox 投递下一张卡或终态；
 - 在模型看到结果前移除卡片 URL。
 
 当 OpenClaw 原生支持 MCP Apps 并具备等价的私有会话约束、轮询和续跑能力后，该插件可以退化为可选增强，最终不再作为必需组件。
@@ -150,12 +150,50 @@ MCP Apps 或经过批准的宿主适配器可以读取该字段。宿主必须�
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
-openclaw config set "mcp.servers.agentbridge.timeout" 150
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
 openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 openclaw plugins enable agentbridge-interactions
 ```
+
+多用户模式不要创建 `mcp.servers.agentbridge` 全局共享配置。插件只共享 MCP 地址，
+每个聊天身份使用独立环境变量中的 Bearer Token：
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentbridge-interactions": {
+        "enabled": true,
+        "config": {
+          "mcpUrl": "https://10.10.50.213:8790/mcp",
+          "mcpTimeoutSeconds": 150,
+          "allowedCardOrigins": ["https://10.10.50.213:8780"],
+          "identityBindings": [
+            {
+              "channel": "telegram",
+              "senderId": "<telegram-user-id>",
+              "tokenEnv": "AGENTBRIDGE_MCP_TOKEN_USER_A",
+              "label": "用户A"
+            },
+            {
+              "channel": "openclaw-weixin",
+              "senderId": "<wechat-user-id>",
+              "accountId": "<wechat-account-id>",
+              "tokenEnv": "AGENTBRIDGE_MCP_TOKEN_USER_B",
+              "label": "用户B"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Token 值只写入 OpenClaw Gateway 读取的 `%USERPROFILE%\.openclaw\.env`，不写入
+上述 JSON、仓库、聊天或日志。启用 `identityBindings` 后，应删除旧的全局
+`mcp.servers.agentbridge` 配置，避免同一套共享 Token 工具再次出现在模型目录中。
+插件还会阻止旧全局工具名称，作为迁移期的第二道保护。
 
 `tools.profile: "coding"` 会过滤原生第三方插件工具，因此必须用
 `tools.alsoAllow` 精确放行 `agentbridge-interactions`。不要为了省事放行
@@ -163,7 +201,9 @@ openclaw plugins enable agentbridge-interactions
 `loaded` 只表示代码已加载，最终还要在真实私聊身份会话中确认
 `agentbridge_identity_status` 可调用。
 
-完整重启 Gateway 后至少等待 120 秒，再以深度 RPC、监听端口和插件版本日志判断结果。
+完整重启 Gateway 后至少等待 120 秒，再以深度 RPC、监听端口、插件版本日志和两个
+真实私聊中的 `agentbridge_identity_status` 判断结果。仅看到插件 `loaded` 不代表
+多用户身份选择已经生效。
 
 ## 6. 为什么暂不启用 MCP URL Elicitation
 

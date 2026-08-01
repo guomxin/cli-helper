@@ -34,8 +34,10 @@ python -m bscli.cli.main --home .bscli oa matter matrix --kind all --keyword 报
 
 旧 `oa matter matrix` 是退役桥接时期的只读发现产物，继续作为模板匹配和
 迁移线索，但不再是当前执行入口。当前智能体应以中心 Capability Registry
-和 MCP 工具目录为准：共 33 个 OA 能力，其中 7 个只读、26 个受治理写阶段；
-中心 MCP 总计 40 个工具。待办、已发、已办、跟踪是四个独立集合，不得互相替代：
+和 MCP 工具目录为准。2026-07-22 快照包含 33 个 OA 能力，其中 7 个只读、26 个
+受治理写阶段；当时中心 MCP 总计 40 个工具。当前中心工具数量和模型可见目录已经继续
+扩展，实时基线见 [当前内网部署](./current-deployment-plan.md)，不要把本历史快照用于
+校验当前 OpenClaw 工具总数。待办、已发、已办、跟踪是四个独立集合，不得互相替代：
 
 - 待办读取首页 `pendingSection`；
 - 已发读取完整列表页 `listSent` / `getSentList`；

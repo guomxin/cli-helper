@@ -1,6 +1,6 @@
 # Agent Workspace 网页端
 
-> 状态：二期网页端及多端执行授权一期已实现
+> 状态：二期网页端、多端执行授权、能力一致和文本同步一期已实现
 >
 > 更新日期：2026-08-01
 >
@@ -206,7 +206,8 @@ openclaw devices approve <requestId> --json
 - 双用户任务、事件和端点隔离；
 - 错误身份兑换、一次性凭证重放和 CSRF 拒绝；
 - Gateway Token 不进入子进程命令行或请求 JSON；
-- 网页会话只暴露读取工具及两个明确允许的受治理提交准备工具；
+- 网页、Telegram 和微信统一暴露 41 个智能体工具，其中包括读取能力和 17 个
+  受治理入口；15 个底层 commit/续办工具不向模型注册；
 - 插件 Gateway Method 使用 `operator.write` 并固定正确身份；
 - 桌面 `1440x900` 与移动端 `390x844` 的登录、对话、任务列表、详情和返回；
 - 浏览器控制台 0 错误。
@@ -247,6 +248,19 @@ openclaw devices approve <requestId> --json
 6. 原任务会话继续执行 commit/verify，旁端仅展示和确认。
 7. 提交 `420d890` 已推送，Linux Release `420d8902f534` 已部署；65 个 MCP 工具
    发布冒烟、OpenClaw Gateway 深度 RPC 和插件 `0.4.5` 运行时检查均通过。
+
+2026-08-01 能力一致与有序文本同步验收：
+
+1. OpenClaw 插件 `0.4.9` 注册 `agentTools=41`、`identities=2`，网页、Telegram 和
+   微信使用同一套读取与受治理入口；
+2. 保存草稿、正式提交、审批、撤销、会议创建、日志创建和
+   `agentbridge_interaction_resume` 等 15 个内部工具不向模型注册；
+3. 网页发起的真实 OA 查询和受治理流程能够在 Telegram 看到卡片、文本和终态，网页
+   应用卡按原位置更新，不再重复追加历史卡片；
+4. Python 多用户相关测试 90 项、OpenClaw 插件测试 94 项、Workspace Gateway
+   事件与 Run Guard 测试 19 项通过；
+5. 两个真实 OA 身份的只读会话检查保持独立有效；近期版本的双用户同时 Workspace
+   任务与跨端文件隔离仍待补充真实验收。
 
 ## 多端任务同步一期
 

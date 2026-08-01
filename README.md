@@ -481,10 +481,16 @@ managed Gateway launcher and survives future restarts:
 
 ~~~powershell
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-openclaw config set mcp.servers.agentbridge.url https://10.20.30.40:8790/mcp
+openclaw config set plugins.entries.agentbridge-interactions.config.mcpUrl https://10.20.30.40:8790/mcp
 openclaw config set plugins.entries.agentbridge-interactions.config.allowedCardOrigins.0 https://10.20.30.40:8780
 openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
 ~~~
+
+For a multi-user Gateway, configure one plugin `identityBindings` entry and one
+environment-backed Bearer token per trusted messaging identity. Do not keep a
+global `mcp.servers.agentbridge` Bearer alongside multi-user bindings; that
+would expose a second shared-identity tool surface. See
+`docs/openclaw-multi-user-identity-routing.md` for the complete mapping.
 
 When OpenClaw uses a restricted tool profile such as `coding`, the native
 AgentBridge adapter must be explicitly added through `tools.alsoAllow`.

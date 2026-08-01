@@ -1,8 +1,8 @@
 # OpenClaw 多用户身份路由方案
 
 > 本文记录当前已经运行的“一个聊天身份绑定一个 AgentBridge 身份”的实现与验收。
-> Telegram、微信当前已通过一期 Task Hub 共享持久任务骨架并支持 Gateway
-> 重启恢复；网页、跨端领取可信交互和多端状态通知的后续架构见
+> Telegram、微信和 Agent Workspace 当前已通过 Task Hub 共享持久任务骨架、
+> 可信交互展示、终态通知和非敏感文本时间线；跨客户端任务接续的后续架构见
 > [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
 > 目标设计不改变本文的用户隔离规则，也不要求修改 OpenClaw 核心源码。
 
@@ -17,7 +17,8 @@ Profile。
 - OpenClaw 插件通过运行时可信字段 `messageChannel`、`requesterSenderId` 和
   `agentAccountId` 识别请求者，模型参数中不允许传入用户身份；
 - 每个身份映射到一个环境变量名，Bearer Token 只从 Gateway 进程环境读取；
-- 插件把当前 40 个 AgentBridge MCP 工具注册为 OpenClaw 原生代理工具；
+- 插件把 40 个筛选后的 AgentBridge MCP 工具和 1 个身份状态工具注册为
+  OpenClaw 原生代理工具；
 - 同一会话一旦绑定身份便不可切换，发生身份变化时按冲突拒绝；
 - 卡片轮询、交互恢复和自动续办固定使用最初触发操作的用户客户端；
 - 每个身份在首次调用业务工具时建立持久 `ClientEndpoint` 和 `AgentTask`，
@@ -27,8 +28,9 @@ Profile。
 - 已用两个虚拟消息用户完成 Token 隔离、并发请求、未知用户拒绝和
   会话串号测试。
 
-第二个真实 OA 用户和微信私聊通道已经具备，真实双用户登录、会话保活和 OA
-并发验收将在完成 Token 签发与身份绑定后进行。
+两个真实 OA 用户、Telegram 与微信私聊通道已经完成 Token 签发、身份绑定、
+真实登录、会话保活和只读路由验收。近期多端版本仍需补充两个真实用户同时使用
+Workspace/聊天端时的任务、文本、卡片、文件和通知隔离验收。
 
 ## 2. 身份链路
 
@@ -171,11 +173,16 @@ python tools\export_openclaw_agentbridge_catalog.py
 python tools\export_openclaw_agentbridge_catalog.py --check
 ```
 
-当前目录包含 55 个模型可见的 AgentBridge 代理工具，插件再增加 1 个身份状态
-工具。`agentbridge_host_task_*` 属于宿主私有协调面，保留在远程 MCP 服务中，
-但导出脚本明确排除它们，模型工具目录不可见。Python 端新增或修改 MCP 工具后，
+导出目录当前包含 55 个 AgentBridge 代理工具。OpenClaw `0.4.9` 在运行时进一步
+过滤掉 15 个底层 commit/续办工具，只注册 40 个读取或受治理入口，再增加 1 个
+身份状态工具，因此模型最终看到 41 个工具。`agentbridge_host_task_*` 等宿主私有
+协调工具在导出阶段就被排除，模型工具目录不可见。Python 端新增或修改 MCP 工具后，
 CI/发布检查应先运行
 `--check`；失败时重新导出目录并审查差异，防止 OpenClaw 能力面悄悄落后。
+
+当前 41 个工具对所有已绑定身份使用同一份目录，真正能否执行由当前身份 Token 的
+scopes 在中央服务逐次校验。该模型不会造成越权，但低权限用户可能看见一个随后返回
+权限不足的工具。按 Token scopes 裁剪可见目录属于后续体验优化。
 
 ## 7. 真实双用户验收
 
@@ -201,3 +208,10 @@ CI/发布检查应先运行
 通道路由隔离。两个 Profile 当前仍由同一 Linux `agentbridge` 服务账户持有；每用户
 独立 OS/容器 Worker、下载和日志的跨安全主体不可读性仍是生产化验收项，不能据此
 宣称已经达到完整生产隔离。
+
+2026-08-01 在 OpenClaw 插件 `0.4.9` 上再次完成双身份只读检查：`guomao` 与
+`lishiyu` 各自只有一个有效 Token，两轮会话状态检查均解析到不同的 `userSubject`、
+OA 主体、Session 和 Profile；多用户相关 Python 测试 90 项、OpenClaw 插件测试
+94 项、Workspace Gateway 测试 19 项通过。该检查没有读取李世玉待办，也没有执行
+任何业务写入。它证明近期改动未破坏身份选择和会话隔离，但不替代两个真实用户同时
+操作多端任务的最终验收。

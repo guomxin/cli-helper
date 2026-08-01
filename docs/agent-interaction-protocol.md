@@ -1,5 +1,9 @@
 # Agent Interaction Protocol
 
+> Status: current protocol baseline for AgentBridge `0.4.9`
+>
+> Updated: 2026-08-02
+
 ## Purpose
 
 AgentBridge exposes one host-independent interaction contract for Codex,
@@ -220,8 +224,10 @@ The plugin:
   the bridge neither reads form controls nor loads third-party JavaScript;
 - polls `agentbridge_interaction_get` outside the model loop and resumes a
   completed interaction once with a stable idempotency key;
-- delivers a following interaction or terminal status directly through the
-  originating private channel, with `/agentbridge pending` as a manual redraw;
+- associates the interaction with the host-owned `taskId`, creates a separate
+  trusted presentation for each subscribed private endpoint, and publishes
+  following interactions or terminal status through Task Hub and the endpoint
+  Outbox, with `/agentbridge pending` as a manual redraw fallback;
 - after a successful credential resume explicitly requests
   `retry_original_request`, queues one value-free continuation event and wakes
   the same private agent once;
@@ -240,11 +246,19 @@ with three lifecycle hooks, the `/agentbridge` command, and the OpenClaw tool
 result middleware contract. Gateway RPC and the live startup log both confirmed
 the plugin was active alongside Telegram.
 
-Originating-channel delivery is the current v1 runtime behavior, not the target
-cross-device routing model. The planned evolution keeps this envelope and its
-single-use security ledgers, adds a channel-independent `taskId`, and lets any
-verified private endpoint for the same `userSubject` claim an interaction once.
-See [Omnichannel agent task continuity](./omnichannel-agent-task-continuity-design.md).
+The current runtime no longer limits presentation to the originating channel.
+Agent Workspace, Telegram, and WeChat can receive endpoint-specific trusted
+presentations for the same interaction, and any eligible endpoint may submit
+the first valid decision. The originating OpenClaw task remains the only
+execution owner: another endpoint can confirm or decline, but cannot inherit
+its token, write scope, or model execution context. AgentBridge consumes the
+decision once and the original coordinator performs resume, commit, and verify.
+
+Cross-end presentation is not collaborative form editing. Credential and
+business-input pages do not synchronize partially typed values between
+endpoints, and a new OpenClaw session does not yet receive the original model
+transcript or an OBO execution delegation. See
+[Omnichannel agent task continuity](./omnichannel-agent-task-continuity-design.md).
 
 Polling remains the universal completion mechanism. Until an authenticated,
 anti-replay callback path exists, execution authorization stays inside the
