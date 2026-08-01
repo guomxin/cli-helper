@@ -1680,6 +1680,14 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   早于 RPC 回执、超时前已有工具活动以及执行预算从真实进展起算。完整门禁通过 Python
   `468 passed, 3 skipped, 194 subtests passed`、Workspace Gateway Node `19/19`、
   OpenClaw 插件 `92/92`、`compileall`、`pip check` 和 npm pack dry-run。
+- 修复提交 `3283626` 已推送，Linux Release `3283626a54e9` 已部署。systemd 重启、
+  66 项 MCP 工具、辛国茂 OA 会话复用和登录复用冒烟均通过；本轮没有修改 OpenClaw
+  插件或配置，因此没有重启 Windows Gateway。
+- 部署后从真实 Workspace Gateway 链路发送一次“查看OA待办”，27.614 秒完成且只有一次
+  accepted，没有触发启动恢复。事件依次为 lifecycle start、tool start、tool result 和
+  lifecycle end；账本新增且仅新增一条 `oa.workflow.pending.list`，状态为 `succeeded`、
+  错误为空，没有其他业务 Operation。验收时间窗内 AgentBridge 日志没有 Gateway failure、
+  Traceback 或 ERROR，本轮未执行任何 OA 写动作。
 
 ## 16. 后续演进顺序
 
