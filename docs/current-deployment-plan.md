@@ -1627,6 +1627,26 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   失败或自动重试，未生成业务应用卡，也未调用任何 AgentBridge/OA 工具；四条用户与
   助手文本按序同步到 Telegram。
 
+## 15.42 2026-08-01 Workspace 会话空闲门禁与启动恢复
+
+- Workspace 在发送新请求前不再把 `chat.abort` 返回成功直接等同于旧任务已经退出。
+  它会继续通过 OpenClaw `sessions.list` 核对目标 Session 的 `hasActiveRun` 和
+  `activeRunIds`；只有可见 Run 与底层 embedded Run 都已释放，才执行身份绑定和
+  `chat.send`。15 秒内仍未空闲时返回 `GATEWAY_SESSION_NOT_IDLE`，本次请求不会进入
+  模型或业务系统。
+- `chat.send` accepted 后启动 15 秒进度看门狗。若尚未收到生命周期、回答或工具事件，
+  先查询当前 Run 是否已出现在 `activeRunIds`：已在内部运行则继续等待，不误中止；尚未
+  启动时才按精确 Run ID 中止，确认 Session 再次空闲后，以新的执行尝试恢复一次。
+- 自动恢复只覆盖“Run 尚未真正启动”的宿主调度故障。一旦出现任何工具事件，或无法确认
+  原 Run 已停止，均禁止自动重放；恢复尝试再次卡住时安全终止并返回明确错误，不形成循环。
+  原用户消息和业务任务保持一个，只有 OpenClaw 执行尝试 ID 变化。
+- 新增协议级假 Gateway 回归，覆盖旧 Run 释放后才发送、旧 Run 不释放时零发送、启动卡住
+  只恢复一次，以及当前 Run 已在内部运行时绝不恢复。全量验证脚本现在固定执行 Workspace
+  Gateway Node 测试，避免该安全边界只依赖人工验收。
+- 本地发布门禁通过 Python `466 passed, 3 skipped, 194 subtests passed`、Workspace
+  Gateway Node `13/13`、OpenClaw 插件 `92/92`、`compileall`、`pip check` 和 npm pack
+  dry-run。本轮自动化没有调用 OA、泰华或语雀业务写能力。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的

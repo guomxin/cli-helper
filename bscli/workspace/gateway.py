@@ -145,7 +145,10 @@ class OpenClawGatewayClient:
             "mode": "send-stream",
             **normalized,
             "preflightAbort": True,
-            "acceptTimeoutMs": 20_000,
+            "acceptTimeoutMs": 35_000,
+            "startupProgressTimeoutMs": 15_000,
+            "sessionIdleTimeoutMs": 15_000,
+            "sessionIdlePollMs": 250,
             "timeoutMs": min(
                 max(int(timeout_seconds * 1000), 1_000),
                 180_000,

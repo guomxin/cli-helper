@@ -127,6 +127,13 @@ if ($Mode -eq "Full") {
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pytest", "-q") -Label "Python full test suite" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "compileall", "-q", "bscli") -Label "Python compileall" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pip", "check") -Label "Python dependency check" -WorkingDirectory $repoRoot
+    $node = Get-Command node -ErrorAction Stop
+    Invoke-External -FilePath $node.Source -Arguments @(
+        "--test",
+        "tests\test_workspace_gateway_events.mjs",
+        "tests\test_workspace_gateway_run_guard.mjs",
+        "tests\test_workspace_gateway_client.mjs"
+    ) -Label "Workspace Gateway Node tests" -WorkingDirectory $repoRoot
 }
 elseif ($PythonTests.Count -gt 0) {
     $resolvedTests = @()

@@ -772,6 +772,9 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
         self.assertIn('method: "chat.abort"', source)
         self.assertIn("preflightAbortRequestId", source)
         self.assertIn("requestWorkspaceBind", source)
+        self.assertIn('method: "sessions.list"', source)
+        self.assertIn('requestStreamAbort(recover ? "startup_recovery"', source)
+        self.assertIn("startRecoveryAttempt", source)
         self.assertIn("GATEWAY_RUN_TIMEOUT_ABORTED", source)
 
     def test_gateway_token_is_passed_only_through_the_child_environment(self) -> None:
@@ -899,7 +902,10 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
             self.assertEqual(request["mode"], "send-stream")
             self.assertEqual(request["idempotencyKey"], "run-1")
             self.assertTrue(request["preflightAbort"])
-            self.assertEqual(request["acceptTimeoutMs"], 20_000)
+            self.assertEqual(request["acceptTimeoutMs"], 35_000)
+            self.assertEqual(request["startupProgressTimeoutMs"], 15_000)
+            self.assertEqual(request["sessionIdleTimeoutMs"], 15_000)
+            self.assertEqual(request["sessionIdlePollMs"], 250)
             self.assertNotIn("gateway-secret-token-value", input_pipe.value)
             command = popen.call_args.args[0]
             self.assertNotIn("gateway-secret-token-value", command)

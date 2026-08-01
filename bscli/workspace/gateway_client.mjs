@@ -14,6 +14,11 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { normalizeGatewayEvent } from "./gateway_events.mjs";
+import {
+  canRecoverStartup,
+  recoveryIdempotencyKey,
+  sessionRunState,
+} from "./gateway_run_guard.mjs";
 
 
 const gatewayUrl = requiredEnv("AB_GATEWAY_URL");
@@ -54,6 +59,18 @@ const acceptTimeoutMs =
   mode === "send-stream"
     ? clampInteger(input.acceptTimeoutMs, 5_000, 60_000, 20_000)
     : timeoutMs;
+const startupProgressTimeoutMs =
+  mode === "send-stream"
+    ? clampInteger(input.startupProgressTimeoutMs, 5_000, 60_000, 15_000)
+    : timeoutMs;
+const sessionIdleTimeoutMs =
+  mode === "send-stream"
+    ? clampInteger(input.sessionIdleTimeoutMs, 1_000, 30_000, 15_000)
+    : timeoutMs;
+const sessionIdlePollMs =
+  mode === "send-stream"
+    ? clampInteger(input.sessionIdlePollMs, 100, 2_000, 250)
+    : 250;
 const identity = loadOrCreateIdentity(identityPath);
 const scopes = ["operator.read", "operator.write"];
 
@@ -67,9 +84,20 @@ let methodSent = false;
 let connected = false;
 let streamRunId = mode === "send-stream" ? idempotencyKey : null;
 let streamAccepted = false;
+let streamHadProgress = false;
 let streamHadToolActivity = false;
+let recoveryUsed = false;
+let recoveryAttempt = 0;
+let currentIdempotencyKey = idempotencyKey;
+let recoveredFromRunId = null;
 let abortSent = false;
 let abortTimer = null;
+let abortPurpose = null;
+let startupTimer = null;
+let sessionStateTimer = null;
+let sessionStateRequestId = null;
+let sessionStatePurpose = null;
+let sessionIdleDeadline = 0;
 let requestStage = "connect";
 let preflightFallbackSent = false;
 const connectId = `connect-${randomUUID()}`;
@@ -77,8 +105,8 @@ const preflightAbortRequestId = `preflight-abort-${randomUUID()}`;
 const preflightAbortFallbackRequestId =
   `preflight-abort-fallback-${randomUUID()}`;
 const bindRequestId = `bind-${randomUUID()}`;
-const requestId = `rpc-${randomUUID()}`;
-const abortRequestId = `abort-${randomUUID()}`;
+let requestId = `rpc-${randomUUID()}`;
+let abortRequestId = `abort-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
 let timer = setTimeout(
   () => handleRequestTimeout(),
@@ -116,6 +144,8 @@ socket.addEventListener("message", (event) => {
       streamRunId,
     );
     if (normalized) {
+      streamHadProgress = true;
+      clearStartupTimer();
       if (normalized.type === "progress" && normalized.kind === "tool") {
         streamHadToolActivity = true;
       }
@@ -189,7 +219,15 @@ socket.addEventListener("message", (event) => {
       );
       return;
     }
-    requestWorkspaceBind();
+    beginSessionIdleWait("preflight");
+    return;
+  }
+  if (
+    mode === "send-stream" &&
+    sessionStateRequestId &&
+    frame.id === sessionStateRequestId
+  ) {
+    handleSessionStateResponse(frame);
     return;
   }
   if (frame.id === bindRequestId && mode === "send-stream") {
@@ -204,21 +242,7 @@ socket.addEventListener("message", (event) => {
       );
       return;
     }
-    requestStage = "send_accept";
-    socket.send(
-      JSON.stringify({
-        type: "req",
-        id: requestId,
-        method: "chat.send",
-        params: {
-          sessionKey: streamSessionKey,
-          message,
-          deliver: false,
-          idempotencyKey,
-          timeoutMs: Math.min(timeoutMs, 120_000),
-        },
-      }),
-    );
+    requestChatSend();
     return;
   }
   if (frame.id === abortRequestId && mode === "send-stream") {
@@ -226,27 +250,7 @@ socket.addEventListener("message", (event) => {
       clearTimeout(abortTimer);
       abortTimer = null;
     }
-    if (!frame.ok) {
-      finishError(
-        "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
-        "The timed-out OpenClaw run could not be confirmed as stopped.",
-        timeoutDetails(false),
-      );
-      return;
-    }
-    const payload = isRecord(frame.payload) ? frame.payload : {};
-    const abortConfirmed =
-      payload.aborted === true &&
-      (!Array.isArray(payload.runIds) || payload.runIds.includes(streamRunId));
-    finishError(
-      abortConfirmed
-        ? "GATEWAY_RUN_TIMEOUT_ABORTED"
-        : "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
-      abortConfirmed
-        ? "The timed-out OpenClaw run was stopped."
-        : "The timed-out OpenClaw run was no longer abortable.",
-      timeoutDetails(abortConfirmed),
-    );
+    handleAbortResponse(frame);
     return;
   }
   if (frame.id !== requestId) {
@@ -264,14 +268,15 @@ socket.addEventListener("message", (event) => {
     const payload = isRecord(frame.payload) ? frame.payload : {};
     streamRunId =
       requiredText(
-        payload.runId || payload.run_id || idempotencyKey,
+        payload.runId || payload.run_id || currentIdempotencyKey,
         "runId",
         256,
       );
     streamAccepted = true;
-    requestStage = "run";
+    requestStage = recoveryUsed ? "run_recovered" : "run";
     clearTimeout(timer);
     timer = setTimeout(() => handleRequestTimeout(), timeoutMs);
+    armStartupTimer();
     process.stdout.write(
       `${JSON.stringify({
         type: "accepted",
@@ -280,6 +285,8 @@ socket.addEventListener("message", (event) => {
           typeof payload.status === "string"
             ? payload.status.slice(0, 80)
             : "accepted",
+        attempt: recoveryAttempt,
+        ...(recoveredFromRunId ? { recoveredFromRunId } : {}),
       })}\n`,
     );
     return;
@@ -293,7 +300,7 @@ function handleRequestTimeout() {
     return;
   }
   if (mode === "send-stream" && connected && streamAccepted) {
-    requestStreamAbort();
+    requestStreamAbort("timeout");
     return;
   }
   finishError(
@@ -336,9 +343,212 @@ function requestWorkspaceBind() {
   );
 }
 
-function requestStreamAbort() {
+function requestChatSend() {
+  requestStage = recoveryUsed ? "send_accept_recovery" : "send_accept";
+  requestId = `rpc-${randomUUID()}`;
+  clearTimeout(timer);
+  timer = setTimeout(() => handleRequestTimeout(), acceptTimeoutMs);
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: requestId,
+      method: "chat.send",
+      params: {
+        sessionKey: streamSessionKey,
+        message,
+        deliver: false,
+        idempotencyKey: currentIdempotencyKey,
+        timeoutMs: Math.min(timeoutMs, 120_000),
+      },
+    }),
+  );
+}
+
+function beginSessionIdleWait(purpose) {
+  clearSessionStateTimer();
+  sessionStatePurpose = purpose;
+  sessionIdleDeadline = Date.now() + sessionIdleTimeoutMs;
+  requestSessionState();
+}
+
+function requestSessionState() {
+  if (settled || !sessionStatePurpose) return;
+  clearSessionStateTimer();
+  requestStage =
+    sessionStatePurpose === "startup_probe"
+      ? "startup_probe"
+      : `wait_idle_${sessionStatePurpose}`;
+  sessionStateRequestId = `session-state-${randomUUID()}`;
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: sessionStateRequestId,
+      method: "sessions.list",
+      params: {
+        limit: 20,
+        search: streamSessionKey,
+        includeGlobal: true,
+        includeUnknown: true,
+        archived: false,
+      },
+    }),
+  );
+  sessionStateTimer = setTimeout(
+    handleSessionStateTimeout,
+    Math.min(5_000, sessionIdleTimeoutMs),
+  );
+}
+
+function handleSessionStateResponse(frame) {
+  const purpose = sessionStatePurpose;
+  sessionStateRequestId = null;
+  clearSessionStateTimer();
+  if (!purpose) return;
+  if (!frame.ok) {
+    if (purpose === "startup_probe") {
+      sessionStatePurpose = null;
+      streamHadProgress = true;
+      return;
+    }
+    finishError(
+      "GATEWAY_SESSION_STATE_UNAVAILABLE",
+      "OpenClaw session state could not be confirmed before starting the run.",
+      stageDetails(),
+    );
+    return;
+  }
+  const payload = isRecord(frame.payload) ? frame.payload : {};
+  const runState = sessionRunState(payload, streamSessionKey, streamRunId);
+  if (purpose === "startup_probe") {
+    sessionStatePurpose = null;
+    handleStartupProbe(runState);
+    return;
+  }
+  if (!runState.active) {
+    sessionStatePurpose = null;
+    if (purpose === "preflight") {
+      requestWorkspaceBind();
+    } else {
+      startRecoveryAttempt();
+    }
+    return;
+  }
+  if (Date.now() >= sessionIdleDeadline) {
+    finishError(
+      "GATEWAY_SESSION_NOT_IDLE",
+      "The previous OpenClaw run did not release the session in time.",
+      {
+        ...stageDetails(),
+        activeRunIds: runState.activeRunIds,
+        waitPurpose: purpose,
+      },
+    );
+    return;
+  }
+  sessionStateTimer = setTimeout(requestSessionState, sessionIdlePollMs);
+}
+
+function handleSessionStateTimeout() {
+  sessionStateTimer = null;
+  sessionStateRequestId = null;
+  if (sessionStatePurpose === "startup_probe") {
+    sessionStatePurpose = null;
+    streamHadProgress = true;
+    return;
+  }
+  finishError(
+    "GATEWAY_SESSION_STATE_UNAVAILABLE",
+    "OpenClaw session state did not respond before starting the run.",
+    stageDetails(),
+  );
+}
+
+function armStartupTimer() {
+  clearStartupTimer();
+  startupTimer = setTimeout(() => {
+    startupTimer = null;
+    if (settled || streamHadProgress || streamHadToolActivity) return;
+    sessionStatePurpose = "startup_probe";
+    requestSessionState();
+  }, startupProgressTimeoutMs);
+}
+
+function clearStartupTimer() {
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+}
+
+function clearSessionStateTimer() {
+  if (sessionStateTimer) {
+    clearTimeout(sessionStateTimer);
+    sessionStateTimer = null;
+  }
+}
+
+function handleStartupProbe(runState) {
+  if (streamHadProgress || streamHadToolActivity) return;
+  if (runState.currentRunActive) {
+    streamHadProgress = true;
+    requestStage = recoveryUsed ? "run_recovered" : "run";
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "progress",
+        runId: streamRunId,
+        kind: "lifecycle",
+        phase: "start",
+        label: "\u667a\u80fd\u4f53\u5df2\u542f\u52a8\uff0c\u6b63\u5728\u5904\u7406",
+        source: "session-state",
+      })}\n`,
+    );
+    return;
+  }
+  const recover = canRecoverStartup({
+    progressObserved: streamHadProgress,
+    toolActivity: streamHadToolActivity,
+    recoveryUsed,
+    runState,
+  });
+  requestStreamAbort(recover ? "startup_recovery" : "startup_final");
+}
+
+function startRecoveryAttempt() {
+  recoveredFromRunId = streamRunId;
+  recoveryUsed = true;
+  recoveryAttempt += 1;
+  currentIdempotencyKey = recoveryIdempotencyKey(
+    idempotencyKey,
+    recoveryAttempt,
+  );
+  streamRunId = currentIdempotencyKey;
+  streamAccepted = false;
+  streamHadProgress = false;
+  streamHadToolActivity = false;
+  abortSent = false;
+  abortPurpose = null;
+  abortRequestId = `abort-${randomUUID()}`;
+  process.stdout.write(
+    `${JSON.stringify({
+      type: "progress",
+      runId: recoveredFromRunId,
+      kind: "system",
+      phase: "recovery",
+      label: "\u667a\u80fd\u4f53\u542f\u52a8\u5ef6\u8fdf\uff0c\u6b63\u5728\u81ea\u52a8\u6062\u590d",
+      attempt: recoveryAttempt,
+    })}\n`,
+  );
+  requestChatSend();
+}
+
+function requestStreamAbort(purpose = "timeout") {
   if (settled || abortSent) return;
+  clearStartupTimer();
+  clearTimeout(timer);
   abortSent = true;
+  abortPurpose = purpose;
+  abortRequestId = `abort-${randomUUID()}`;
+  requestStage = `abort_${purpose}`;
   try {
     socket.send(
       JSON.stringify({
@@ -352,21 +562,49 @@ function requestStreamAbort() {
       }),
     );
   } catch {
-    finishError(
-      "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
-      "The timed-out OpenClaw run could not be stopped.",
-      timeoutDetails(false),
-    );
+    finishAbortError(false);
     return;
   }
   abortTimer = setTimeout(
-    () =>
-      finishError(
-        "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
-        "OpenClaw did not confirm that the timed-out run stopped.",
-        timeoutDetails(false),
-      ),
+    () => finishAbortError(false),
     10_000,
+  );
+}
+
+function handleAbortResponse(frame) {
+  if (!frame.ok) {
+    finishAbortError(false);
+    return;
+  }
+  const payload = isRecord(frame.payload) ? frame.payload : {};
+  const abortConfirmed =
+    payload.aborted === true &&
+    (!Array.isArray(payload.runIds) || payload.runIds.includes(streamRunId));
+  if (abortPurpose === "startup_recovery" && abortConfirmed) {
+    beginSessionIdleWait("recovery");
+    return;
+  }
+  finishAbortError(abortConfirmed);
+}
+
+function finishAbortError(aborted) {
+  const startup = abortPurpose?.startsWith("startup_") === true;
+  finishError(
+    startup
+      ? aborted
+        ? "GATEWAY_START_STALLED_ABORTED"
+        : "GATEWAY_START_STALLED_ABORT_UNCONFIRMED"
+      : aborted
+        ? "GATEWAY_RUN_TIMEOUT_ABORTED"
+        : "GATEWAY_RUN_TIMEOUT_ABORT_UNCONFIRMED",
+    startup
+      ? aborted
+        ? "The stalled OpenClaw startup was stopped."
+        : "The stalled OpenClaw startup could not be confirmed as stopped."
+      : aborted
+        ? "The timed-out OpenClaw run was stopped."
+        : "The timed-out OpenClaw run could not be confirmed as stopped.",
+    timeoutDetails(aborted),
   );
 }
 
@@ -375,6 +613,10 @@ function timeoutDetails(aborted) {
     runId: streamRunId,
     abortRequested: abortSent,
     aborted,
+    abortPurpose,
+    recoveryUsed,
+    recoveryAttempt,
+    hadProgress: streamHadProgress,
     hadToolActivity: streamHadToolActivity,
   };
 }
@@ -383,6 +625,9 @@ function stageDetails() {
   return {
     stage: requestStage,
     accepted: streamAccepted,
+    recoveryUsed,
+    recoveryAttempt,
+    hadProgress: streamHadProgress,
     hadToolActivity: streamHadToolActivity,
   };
 }
@@ -495,6 +740,8 @@ function finish(payload) {
     clearTimeout(abortTimer);
     abortTimer = null;
   }
+  clearStartupTimer();
+  clearSessionStateTimer();
   if (streamingMode) {
     process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
   } else {
