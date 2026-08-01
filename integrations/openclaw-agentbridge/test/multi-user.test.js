@@ -636,10 +636,8 @@ test("exposes the governed catalog and proxies raw MCP metadata for a bound user
   });
 
   assert.equal(tools.length, AGENTBRIDGE_AGENT_FACING_TOOL_NAMES.length);
-  assert.equal(
-    AGENTBRIDGE_PROXY_TOOL_NAMES.length > tools.length,
-    true,
-  );
+  assert.equal(AGENTBRIDGE_PROXY_TOOL_NAMES.length, tools.length);
+  assert.equal(AGENTBRIDGE_TOOL_CATALOG.length > tools.length, true);
   assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
   const statusTool = tools.find((tool) => tool.name === "oa_session_status");
   const result = await statusTool.execute("tool-call", {});

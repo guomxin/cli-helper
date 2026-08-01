@@ -90,9 +90,13 @@ OpenClaw transcripts are never copied into this timeline. Set
 `syncTimeline=false` only to disable messaging-endpoint publication during
 diagnosis; the default is `true`.
 
-Agent Workspace sessions receive read-only catalog entries plus the explicitly
-allowlisted `oa_business_trip_submit_prepare` and `oa_leave_submit_prepare`
-governed flows. Messaging sessions keep their existing governed write tools.
+Version 0.4.9 gives Agent Workspace, Telegram, and WeChat the same agent-facing
+catalog: read-only tools, every governed prepare flow, and trusted session-login
+entries. Direct commit/save/approve/revoke/create tools and
+`agentbridge_interaction_resume` remain internal. After a user completes the
+trusted field and authorization surfaces, the originating coordinator resumes
+the frozen interaction and the central service rechecks the Bearer scopes before
+commit/verify.
 
 ## Local installation
 
@@ -128,7 +132,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.8, ...)
+AgentBridge interaction plugin registered (version=0.4.9, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

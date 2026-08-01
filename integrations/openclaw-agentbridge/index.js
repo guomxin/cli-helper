@@ -1,7 +1,10 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 import { createInteractionSharedState } from "./lib/coordinator.js";
-import { registerAgentBridgeInteractions } from "./lib/plugin.js";
+import {
+  PLUGIN_VERSION,
+  registerAgentBridgeInteractions,
+} from "./lib/plugin.js";
 
 const PROCESS_STATE_KEY = Symbol.for(
   "guomxin.agentbridge.openclaw.interaction-state.v1",
@@ -14,7 +17,7 @@ export default definePluginEntry({
   id: "agentbridge-interactions",
   name: "AgentBridge Interactions",
   description: "Trusted AgentBridge interaction cards for private OpenClaw chats",
-  version: "0.4.8",
+  version: PLUGIN_VERSION,
   register(api) {
     registerAgentBridgeInteractions(api, { sharedState });
   },

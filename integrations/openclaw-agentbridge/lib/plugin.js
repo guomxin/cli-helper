@@ -14,13 +14,14 @@ import {
 } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
 import {
+  AGENTBRIDGE_AGENT_FACING_TOOL_NAMES,
   AGENTBRIDGE_PROXY_TOOL_NAMES,
   createAgentBridgeProxyTools,
   hostContextMeta,
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-const PLUGIN_VERSION = "0.4.8";
+export const PLUGIN_VERSION = "0.4.9";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -343,7 +344,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   }
 
   api.logger.info(
-    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
+    `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, agentTools=${AGENTBRIDGE_AGENT_FACING_TOOL_NAMES.length}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
 }

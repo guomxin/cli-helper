@@ -1,16 +1,11 @@
 import {
   AGENTBRIDGE_TOOL_CATALOG,
-  AGENTBRIDGE_TOOL_NAMES,
 } from "./tool-catalog.js";
 import { extractToolPayload } from "./mcp-client.js";
 
 export const IDENTITY_STATUS_TOOL_NAME = "agentbridge_identity_status";
 export const HOST_CONTEXT_META_KEY = "io.agentbridge/host";
 export const TASK_CONTEXT_META_KEY = "io.agentbridge/task";
-export const AGENTBRIDGE_PROXY_TOOL_NAMES = Object.freeze([
-  IDENTITY_STATUS_TOOL_NAME,
-  ...AGENTBRIDGE_TOOL_NAMES,
-]);
 export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
   "oa_efficiency_data_approval_prepare",
   "oa_travel_expense_approval_prepare",
@@ -44,6 +39,7 @@ export const AGENTBRIDGE_AGENT_FACING_TOOL_NAMES = Object.freeze([
   IDENTITY_STATUS_TOOL_NAME,
   ...AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.map((tool) => tool.name),
 ]);
+export const AGENTBRIDGE_PROXY_TOOL_NAMES = AGENTBRIDGE_AGENT_FACING_TOOL_NAMES;
 
 export function createAgentBridgeProxyTools({
   context,

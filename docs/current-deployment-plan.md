@@ -1,6 +1,6 @@
 # AgentBridge 当前内网 PoC 部署方案
 
-> 文档日期：2026-07-31
+> 文档日期：2026-08-01
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
 >
@@ -9,9 +9,11 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.8 为当前代码版本。
-> 中心端当前定义 66 个 MCP 工具。OpenClaw 模型目录包含 55 个 AgentBridge 业务代理工具，
-> 插件另提供 1 个身份状态工具；10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用，不向模型暴露。静态业务字段卡统一支持
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.9 为当前代码版本。
+> 中心端当前定义 66 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
+> AgentBridge 业务工具和 1 个身份状态工具；15 个 commit/continuation 工具只供协调器
+> 内部调用，另有 10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
+> 静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前 OpenClaw Token 已经用户明确授权包含 `oa:read`、`oa:write:draft`、
 > `oa:write:approval`、`oa:write:meeting`、`oa:write:submit` 和 `oa:write:revoke`；

@@ -2,8 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { registerAgentBridgeInteractions } from "../lib/plugin.js";
+import {
+  PLUGIN_VERSION,
+  registerAgentBridgeInteractions,
+} from "../lib/plugin.js";
 import { AGENTBRIDGE_PROXY_TOOL_NAMES } from "../lib/proxy-tools.js";
+
+test("keeps the package and runtime plugin versions aligned", () => {
+  const packageManifest = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+
+  assert.equal(PLUGIN_VERSION, packageManifest.version);
+});
 
 test("declares every native AgentBridge tool in the plugin contract", () => {
   const manifest = JSON.parse(
