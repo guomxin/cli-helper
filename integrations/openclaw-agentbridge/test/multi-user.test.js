@@ -8,7 +8,10 @@ import {
 } from "../lib/config.js";
 import { InteractionCoordinator } from "../lib/coordinator.js";
 import { AgentBridgeIdentityRouter } from "../lib/identity-router.js";
+import { AGENTBRIDGE_TOOL_CATALOG } from "../lib/tool-catalog.js";
 import {
+  AGENTBRIDGE_AGENT_FACING_TOOL_NAMES,
+  AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
   AGENTBRIDGE_PROXY_TOOL_NAMES,
   createAgentBridgeProxyTools,
 } from "../lib/proxy-tools.js";
@@ -335,7 +338,7 @@ test("keeps a one-use-bound workspace session pinned across web channel metadata
   assert.equal(identity.binding.key, bindingKey);
 });
 
-test("workspace sessions expose reads plus two governed submit preparations", () => {
+test("workspace and direct sessions expose the same governed capabilities", () => {
   const router = createRouter({
     requests: [],
     env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
@@ -348,7 +351,7 @@ test("workspace sessions expose reads plus two governed submit preparations", ()
     true,
   );
 
-  const tools = createAgentBridgeProxyTools({
+  const workspaceTools = createAgentBridgeProxyTools({
     context: {
       sessionKey,
       messageChannel: "webchat",
@@ -356,18 +359,70 @@ test("workspace sessions expose reads plus two governed submit preparations", ()
     identityRouter: router,
     serverName: "agentbridge",
   });
+  const directTools = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
 
-  assert.equal(tools[0].name, "agentbridge_identity_status");
-  assert.equal(tools.length > 1, true);
-  const governedWrites = tools
+  assert.deepEqual(
+    workspaceTools.map((tool) => tool.name),
+    directTools.map((tool) => tool.name),
+  );
+  assert.deepEqual(
+    workspaceTools.map((tool) => tool.name),
+    AGENTBRIDGE_AGENT_FACING_TOOL_NAMES,
+  );
+  const governedWrites = workspaceTools
     .slice(1)
     .filter((tool) => tool.annotations?.readOnlyHint !== true)
     .map((tool) => tool.name)
     .sort();
-  assert.deepEqual(governedWrites, [
-    "oa_business_trip_submit_prepare",
-    "oa_leave_submit_prepare",
-  ]);
+  assert.deepEqual(
+    governedWrites,
+    [...AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES].sort(),
+  );
+});
+
+test("agent-facing catalogs hide internal commit and continuation tools", () => {
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+  });
+  const tools = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+  const visible = new Set(tools.map((tool) => tool.name));
+  const governed = new Set(AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES);
+
+  assert.equal(visible.has("oa_business_trip_submit_prepare"), true);
+  assert.equal(visible.has("oa_missed_punch_approval_prepare"), true);
+  assert.equal(visible.has("oa_workflow_revoke_prepare"), true);
+  assert.equal(visible.has("oa_meeting_create_prepare"), true);
+  assert.equal(visible.has("taihua_work_log_create_prepare"), true);
+  const expectedGoverned = AGENTBRIDGE_TOOL_CATALOG
+    .filter(
+      (tool) =>
+        tool.name.endsWith("_prepare") ||
+        tool.name.endsWith("_session_login"),
+    )
+    .map((tool) => tool.name)
+    .sort();
+  assert.deepEqual(
+    [...AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES].sort(),
+    expectedGoverned,
+  );
+  for (const descriptor of AGENTBRIDGE_TOOL_CATALOG) {
+    if (
+      descriptor.annotations?.readOnlyHint === true ||
+      governed.has(descriptor.name)
+    ) {
+      continue;
+    }
+    assert.equal(visible.has(descriptor.name), false, descriptor.name);
+  }
 });
 
 test("workspace sessions recover a missing in-memory identity binding", async () => {
@@ -563,7 +618,7 @@ test("withholds OA tools from an unprovisioned Telegram user", async () => {
   );
 });
 
-test("exposes the full catalog and proxies raw MCP metadata for a bound user", async () => {
+test("exposes the governed catalog and proxies raw MCP metadata for a bound user", async () => {
   const requests = [];
   const router = createRouter({
     requests,
@@ -580,7 +635,11 @@ test("exposes the full catalog and proxies raw MCP metadata for a bound user", a
     serverName: "agentbridge",
   });
 
-  assert.equal(tools.length, AGENTBRIDGE_PROXY_TOOL_NAMES.length);
+  assert.equal(tools.length, AGENTBRIDGE_AGENT_FACING_TOOL_NAMES.length);
+  assert.equal(
+    AGENTBRIDGE_PROXY_TOOL_NAMES.length > tools.length,
+    true,
+  );
   assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
   const statusTool = tools.find((tool) => tool.name === "oa_session_status");
   const result = await statusTool.execute("tool-call", {});

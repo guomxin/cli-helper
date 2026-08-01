@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.5，多端执行授权和有序文本同步一期已实现
+> 文档状态：Approved v0.6，多端能力一致和有序文本同步一期已实现
 >
-> 更新日期：2026-07-31
+> 更新日期：2026-08-01
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.8、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.9、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace 和执行授权多端展示已进入代码与
@@ -29,8 +29,10 @@
 - 独立 Agent Workspace 提供持久网页登录、只读智能体对话、任务时间线和端点查看；
 - 网页账号通过已可信 Telegram/微信的一次性配对码绑定到既有 `userSubject`；
 - BFF 使用 OpenClaw 正式 Gateway 协议，浏览器不持有 MCP 或 Gateway Token；
-- 网页 Session 通过 90 秒一次性凭证固定到正确 MCP 身份，并只暴露
--  `readOnlyHint=true` 的能力及请假、出差两个受治理正式提交准备入口；
+- 网页 Session 通过 90 秒一次性凭证固定到正确 MCP 身份；网页、Telegram 和微信
+  暴露相同的读取工具、受治理业务准备入口和可信登录入口；
+- 底层 commit 与 `agentbridge_interaction_resume` 不向模型注册，用户确认后由原任务
+  协调器内部续办，中心端按当前 Token scopes 再次鉴权并执行 commit/verify；
 - 桌面和移动端布局、双用户隔离、CSRF、凭证重放和错误身份兑换已纳入测试。
 - 同一执行授权可为 Workspace、Telegram 和微信生成端点专属展示入口；
 - 任一可信端都可确认或取消，中心数据库事务只接受第一个有效决定；

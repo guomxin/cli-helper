@@ -2,10 +2,10 @@
 
 > 状态：二期网页端及多端执行授权一期已实现
 >
-> 更新日期：2026-07-31
+> 更新日期：2026-08-01
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.8
+> `agentbridge-interactions` 0.4.9
 
 ## 1. 定位
 
@@ -19,14 +19,13 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 - 通过 OpenClaw Gateway 使用智能体对话；
 - 查看当前用户的 AgentBridge 任务、事件时间线和关联端点；
 - 打开当前任务的可信登录、字段或授权页面；
-- 网页发起只读 AgentBridge 能力；
-- 网页发起 OA 请假、出差两个正式提交的受治理填单流程；
+- 网页发起与 Telegram、微信相同的 AgentBridge 读取和受治理业务能力；
+- 发起 OA 草稿/正式提交、待办处理、已发撤销和会议创建，以及泰华日志填写；
 - 最终执行授权同时显示在网页并主动投递到已绑定 Telegram、微信；
 - 用户和助手的非敏感文本按中心序号同步到同一用户的已绑定端点。
 
 当前二期不提供：
 
-- 除请假、出差正式提交准备之外的网页端业务写工具；
 - 登录卡、字段卡的多端共同填写；
 - 跨端共享同一个模型运行上下文和 OBO 执行宿主切换；
 - 企业 OIDC、找回密码和自助解绑。
@@ -82,11 +81,19 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 agent:main:agentbridge-workspace:direct:<workspace-account-id>
 ```
 
-网页会话注册 MCP 目录中 `readOnlyHint=true` 的 AgentBridge 工具，并额外允许
-`oa_business_trip_submit_prepare`、`oa_leave_submit_prepare` 两个受治理入口。
-这两个入口先产生字段卡和冻结计划，最终提交仍必须经过执行授权卡；网页模型看不到
-对应 commit 工具，确认后的 commit/verify 由原任务协调器续办。Telegram 和微信的
-既有权限与行为不受此限制。
+网页、Telegram 和微信会话注册同一份智能体可见目录：
+
+- MCP 目录中 `readOnlyHint=true` 的读取工具；
+- OA 发起、待办处理、撤销和会议创建的全部受治理 `prepare` 入口；
+- 泰华日志填写的受治理 `prepare` 入口；
+- OA、泰华和语雀的可信登录入口。
+
+各入口是否能够执行，继续由当前 `userSubject` 对应 MCP Token 的 scopes 在中心端
+逐次校验。模型看不到保存草稿、正式提交、审批、撤销、会议创建、日志创建等内部
+commit 工具，也看不到 `agentbridge_interaction_resume`。受治理入口先产生字段卡、
+冻结计划和执行授权卡；用户在任一可信端确认后，原任务协调器内部调用 resume，中心端
+再次校验所需 scope，再执行 commit/verify。这样各渠道业务能力一致，同时不能绕过卡片
+直接写入下游系统。
 
 OpenClaw 核心源码没有修改。接入只使用正式插件 API、Gateway WebSocket 协议和
 自定义 Gateway Method，因此 OpenClaw 升级后只需执行插件兼容测试。

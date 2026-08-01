@@ -11,9 +11,38 @@ export const AGENTBRIDGE_PROXY_TOOL_NAMES = Object.freeze([
   IDENTITY_STATUS_TOOL_NAME,
   ...AGENTBRIDGE_TOOL_NAMES,
 ]);
-const WORKSPACE_GOVERNED_WRITE_TOOLS = new Set([
+export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
+  "oa_efficiency_data_approval_prepare",
+  "oa_travel_expense_approval_prepare",
+  "oa_labor_contract_renewal_approval_prepare",
+  "oa_weekly_report_acknowledgement_prepare",
+  "oa_standard_collaboration_approval_prepare",
+  "oa_workflow_revoke_prepare",
+  "oa_business_trip_prepare",
   "oa_business_trip_submit_prepare",
+  "oa_leave_prepare",
   "oa_leave_submit_prepare",
+  "oa_missed_punch_prepare",
+  "oa_missed_punch_approval_prepare",
+  "oa_meeting_create_prepare",
+  "yuque_session_login",
+  "taihua_work_log_create_prepare",
+  "taihua_session_login",
+  "oa_session_login",
+]);
+const AGENTBRIDGE_GOVERNED_ENTRY_TOOLS = new Set(
+  AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
+);
+const AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG = Object.freeze(
+  AGENTBRIDGE_TOOL_CATALOG.filter(
+    (descriptor) =>
+      descriptor.annotations?.readOnlyHint === true ||
+      AGENTBRIDGE_GOVERNED_ENTRY_TOOLS.has(descriptor.name),
+  ),
+);
+export const AGENTBRIDGE_AGENT_FACING_TOOL_NAMES = Object.freeze([
+  IDENTITY_STATUS_TOOL_NAME,
+  ...AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.map((tool) => tool.name),
 ]);
 
 export function createAgentBridgeProxyTools({
@@ -42,16 +71,9 @@ export function createAgentBridgeProxyTools({
   if (!identity.bound && !workspaceSession) {
     return [statusTool];
   }
-  const catalog = workspaceSession
-    ? AGENTBRIDGE_TOOL_CATALOG.filter(
-        (descriptor) =>
-          descriptor.annotations?.readOnlyHint === true ||
-          WORKSPACE_GOVERNED_WRITE_TOOLS.has(descriptor.name),
-      )
-    : AGENTBRIDGE_TOOL_CATALOG;
   return [
     statusTool,
-    ...catalog.map((descriptor) =>
+    ...AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.map((descriptor) =>
       createProxyTool({
         descriptor,
         resolveIdentity,

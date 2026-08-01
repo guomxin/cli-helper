@@ -1689,6 +1689,21 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   错误为空，没有其他业务 Operation。验收时间窗内 AgentBridge 日志没有 Gateway failure、
   Traceback 或 ERROR，本轮未执行任何 OA 写动作。
 
+## 15.44 2026-08-01 多渠道受治理能力一致
+
+- Agent Workspace 原有“全部读取 + 请假/出差正式提交”临时白名单被统一的智能体可见
+  目录替代。网页、Telegram 和微信现在注册相同的读取工具、OA 全部受治理准备入口、
+  泰华日志准备入口及三个系统的可信登录入口；渠道只负责不同的卡片展示与消息投递，
+  不再决定业务能力范围。
+- 模型目录不再包含保存草稿、正式提交、审批、撤销、会议创建、泰华日志创建等内部
+  commit 工具，也不包含 `agentbridge_interaction_resume`。字段卡和授权卡确认后，
+  OpenClaw 协调器仍通过独立 MCP 客户端内部续办；中心端根据 Interaction 冻结的能力
+  重新计算所需 scope、验证当前 Bearer，再执行 commit/verify。
+- 用户可用能力仍受对应 MCP Token scopes 限制。目录一致不代表扩大 Token 权限，
+  也不会让浏览器获得 MCP Token；无 scope 的调用由中心端拒绝，不能由渠道或模型绕过。
+- 插件版本升级为 `0.4.9`。自动化新增网页与私聊目录完全一致、全部受治理入口可见，
+  以及内部提交和续办工具不可见的回归合同。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
