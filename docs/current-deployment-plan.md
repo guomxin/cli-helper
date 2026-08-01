@@ -1705,6 +1705,18 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   也不会让浏览器获得 MCP Token；无 scope 的调用由中心端拒绝，不能由渠道或模型绕过。
 - 插件版本升级为 `0.4.9`。自动化新增网页与私聊目录完全一致、全部受治理入口可见，
   以及内部提交和续办工具不可见的回归合同。
+- 完整发布门禁通过 Python `468 passed, 3 skipped, 194 subtests passed`、Workspace
+  Gateway Node `19/19`、OpenClaw 插件 `94/94`、`compileall`、`pip check`、静态 MCP
+  目录一致性和 npm pack dry-run。测试没有调用 OA、泰华或语雀业务写能力。
+- 功能提交 `81cbf6e` 和运行合同修复 `0a9ad0c` 已推送 GitHub。Linux Release
+  `81cbf6e2d895` 已部署，66 项 MCP 工具、OA 活动会话及登录复用检查通过。
+- 首轮运行态核查发现 `package.json` 已为 `0.4.9`，但插件入口和日志常量仍为
+  `0.4.8`，同时 OpenClaw 静态合同仍登记 56 个名称。修复后代码只保留一个运行版本
+  常量，并用自动化约束其必须与包版本一致；宿主静态合同也收敛到 41 个智能体可见工具。
+- 最终只执行一次 Gateway 重启，96.9 秒完成。深度 RPC 正常，OpenClaw 运行清单为
+  `0.4.9`、`loaded`、41 个工具；启动日志明确记录 `agentTools=41`，内部 commit 和
+  `agentbridge_interaction_resume` 均不再出现。无工具冷/热预热分别为 85.516 秒和
+  36.878 秒，Release 复查显示辛国茂 OA 会话仍为 active。
 
 ## 16. 后续演进顺序
 
