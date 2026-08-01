@@ -1646,6 +1646,11 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 本地发布门禁通过 Python `466 passed, 3 skipped, 194 subtests passed`、Workspace
   Gateway Node `13/13`、OpenClaw 插件 `92/92`、`compileall`、`pip check` 和 npm pack
   dry-run。本轮自动化没有调用 OA、泰华或语雀业务写能力。
+- 提交 `83b6988` 已推送，Linux Release `83b6988fb781` 已部署。systemd 重启、Release
+  冒烟和辛国茂 OA 会话只读检查通过，OpenClaw 未重启。部署后使用现有 Workspace
+  身份运行真实 Gateway 探针，形成同一 Run 的 `start -> end -> READY` 终态，工具事件为
+  0；探针时间窗内业务 Operation 为 0，只新增并消费一张短期 Workspace grant，
+  AgentBridge 日志没有 Gateway failure、`GATEWAY_*`、Traceback 或 ERROR。
 
 ## 16. 后续演进顺序
 
