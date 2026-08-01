@@ -570,7 +570,7 @@ def create_workspace_http_server(
                 self.wfile.flush()
             except GatewayRequestError as exc:
                 payload = json.dumps(
-                    {"code": exc.code},
+                    _public_gateway_stream_error(exc),
                     separators=(",", ":"),
                 )
                 try:
@@ -816,6 +816,48 @@ def create_workspace_http_server(
         context.load_cert_chain(config.tls_cert, config.tls_key)
         server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
+
+
+_PUBLIC_GATEWAY_DETAIL_KEYS = {
+    "abortPurpose",
+    "abortRequested",
+    "aborted",
+    "accepted",
+    "acceptedElapsedMs",
+    "firstProgressElapsedMs",
+    "hadProgress",
+    "hadToolActivity",
+    "promptObserved",
+    "recoveryAttempt",
+    "recoveryUsed",
+    "stage",
+}
+
+
+def _public_gateway_stream_error(error: GatewayRequestError) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for key in _PUBLIC_GATEWAY_DETAIL_KEYS:
+        value = error.details.get(key)
+        if isinstance(value, bool) or isinstance(value, int):
+            details[key] = value
+        elif isinstance(value, str):
+            details[key] = value[:80]
+    safe_to_retry = error.details.get("safeToRetry") is True
+    if (
+        error.code
+        in {
+            "GATEWAY_RUN_TIMEOUT_ABORTED",
+            "GATEWAY_START_STALLED_ABORTED",
+        }
+        and details.get("aborted") is True
+        and details.get("hadToolActivity") is not True
+    ):
+        safe_to_retry = True
+    return {
+        "code": error.code,
+        "safeToRetry": safe_to_retry,
+        **({"details": details} if details else {}),
+    }
 
 
 def _required_string(body: dict, name: str) -> str:

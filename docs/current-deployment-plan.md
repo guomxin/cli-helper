@@ -1652,6 +1652,35 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   0；探针时间窗内业务 Operation 为 0，只新增并消费一张短期 Workspace grant，
   AgentBridge 日志没有 Gateway failure、`GATEWAY_*`、Traceback 或 ERROR。
 
+## 15.43 2026-08-01 Workspace 假启动与超时遮蔽根因修复
+
+- 用户在网页端实际发送的是“查看OA待办”。中心时间线于 13:15:22 接受请求，13:15:45
+  记录一次 `GATEWAY_CONNECTION_CLOSED` 并在受理前恢复；OpenClaw 直到 13:17:41 才
+  出现真实 `session.started`，比网页受理晚约 139 秒。模型于 13:17:47 选择
+  `oa_workflow_pending_list`，但 13:18:08 已被外部中止，13:18:13 以 aborted 结束。
+  本轮没有创建 OA Operation，故障发生在 OpenClaw 调度与 AgentBridge 超时边界，不是
+  OA 接口慢、OA 登录失效或业务写结果未知。
+- 原 15 秒启动看门狗把 `sessions.list.activeRunIds` 当成真实生命周期进展。源码核对确认
+  该字段来自 `chatAbortControllers`：`chat.send` accepted 后即可能出现，但模型运行可以
+  尚未开始。旧逻辑因此关闭了启动恢复，同时 120 秒 Run 预算仍从 accepted 起算，139 秒
+  排队耗尽预算，最终中止正在开始的只读工具。
+- 新逻辑只承认真实生命周期、回答或工具事件。15 秒没有真实进展时，即使当前 Run ID 已
+  登记为 active，也先精确中止并等待 Session 空闲；若 Run 已消失则直接核验证据。随后通过
+  `chat.history` 查找 `${runId}:user` 幂等键及后续工具痕迹，确认没有触碰业务工具才使用
+  新尝试 ID 恢复一次。发现工具痕迹、证据不可用、中止未确认或第二次仍卡住时一律停止，
+  不自动重放。
+- OpenClaw 真实历史只读探针确认目标失败 Run 保留 `idempotencyKey`，后续角色为
+  `assistant -> toolResult -> assistant`，并可稳定识别工具活动。该探针只读取 OpenClaw
+  会话历史，没有访问 OA、泰华或语雀，也没有产生业务 Operation。
+- Run 执行上限提高到 300 秒，并在首个真实进展事件到达时重新起算；15 秒启动看门狗保持
+  不变。AgentBridge 主动中止产生的 aborted 广播回声不再抢先结束事件流，客户端会等待
+  `chat.abort` RPC 回执，保留 `hadToolActivity`、恢复次数和阶段等脱敏诊断。SSE 与网页端
+  据此显示是否可安全重发；恢复前后的 Run ID 复用同一临时进度区，不留下重复“处理中”。
+- 回归覆盖 active 但未启动、accepted 后消失、工具痕迹阻止重放、最多恢复一次、中止回声
+  早于 RPC 回执、超时前已有工具活动以及执行预算从真实进展起算。完整门禁通过 Python
+  `468 passed, 3 skipped, 194 subtests passed`、Workspace Gateway Node `19/19`、
+  OpenClaw 插件 `92/92`、`compileall`、`pip check` 和 npm pack dry-run。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的

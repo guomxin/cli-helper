@@ -38,12 +38,10 @@ export function canRecoverStartup({
   progressObserved,
   toolActivity,
   recoveryUsed,
-  runState,
 }) {
   return (
     !progressObserved &&
     !toolActivity &&
-    !recoveryUsed &&
-    !runState.currentRunActive
+    !recoveryUsed
   );
 }

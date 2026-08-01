@@ -10,6 +10,8 @@ from typing import Any, Iterator
 
 _LOG = logging.getLogger(__name__)
 
+_MAX_GATEWAY_TIMEOUT_MS = 300_000
+
 _PRE_ACCEPT_RETRY_CODES = {
     "GATEWAY_CONNECTION_CLOSED",
     "GATEWAY_CONNECTION_FAILED",
@@ -58,7 +60,10 @@ class OpenClawGatewayClient:
         payload = {
             "method": str(method),
             "params": params or {},
-            "timeoutMs": min(max(int(timeout_seconds * 1000), 1_000), 180_000),
+            "timeoutMs": min(
+                max(int(timeout_seconds * 1000), 1_000),
+                _MAX_GATEWAY_TIMEOUT_MS,
+            ),
         }
         try:
             completed = subprocess.run(
@@ -113,7 +118,7 @@ class OpenClawGatewayClient:
             "sessionKey": session_key,
             "timeoutMs": min(
                 max(int(timeout_seconds * 1000), 1_000),
-                180_000,
+                _MAX_GATEWAY_TIMEOUT_MS,
             ),
         }
         return self._stream_payload(payload)
@@ -126,7 +131,7 @@ class OpenClawGatewayClient:
         grant: str,
         message: str,
         idempotency_key: str,
-        timeout_seconds: float = 150,
+        timeout_seconds: float = 300,
     ) -> Iterator[dict[str, Any]]:
         values = {
             "sessionKey": (session_key, 16, 1_024),
@@ -151,7 +156,7 @@ class OpenClawGatewayClient:
             "sessionIdlePollMs": 250,
             "timeoutMs": min(
                 max(int(timeout_seconds * 1000), 1_000),
-                180_000,
+                _MAX_GATEWAY_TIMEOUT_MS,
             ),
         }
 

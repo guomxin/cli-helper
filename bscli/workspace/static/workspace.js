@@ -437,13 +437,14 @@ async function executeChatMessage(message, form = $("#chat-form")) {
     scheduleChatRefresh(500, 1);
   } catch (error) {
     if (!error.rendered) {
+      const text = friendlyError(error);
       renderRunFailure(
         error.runId || idempotencyKey,
-        friendlyError(error),
-        false,
+        text,
+        error.safeToRetry === true,
         message,
       );
-      toast(friendlyError(error), true, error.code || "chat-failed");
+      toast(text, true, error.code || "chat-failed");
     }
   } finally {
     setBusy(form, false);
@@ -488,7 +489,7 @@ async function consumeChatStream({ message, idempotencyKey }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let streamError = null;
+  let streamFailure = null;
   let runId = idempotencyKey;
   let hadToolActivity = false;
   let terminalFailure = null;
@@ -501,8 +502,9 @@ async function consumeChatStream({ message, idempotencyKey }) {
       const event = parseSseBlock(block);
       if (!event) continue;
       if (event.name === "accepted" && event.data.runId) {
+        const previousRunId = runId;
         runId = event.data.runId;
-        adoptLiveMessage(idempotencyKey, runId, message);
+        adoptLiveMessage(previousRunId, runId, message);
         addLiveProgress(runId, "请求已交给智能体", "active");
       } else if (event.name === "progress") {
         if (event.data.kind === "tool") hadToolActivity = true;
@@ -514,20 +516,26 @@ async function consumeChatStream({ message, idempotencyKey }) {
           handleChatDelta(event.data);
         }
       } else if (event.name === "stream-error") {
-        streamError = event.data.code || "GATEWAY_STREAM_FAILED";
+        streamFailure = event.data;
       }
     }
     if (done) break;
   }
-  if (streamError) {
-    const error = new Error(streamError);
-    error.code = streamError;
+  if (streamFailure) {
+    const code = streamFailure.code || "GATEWAY_STREAM_FAILED";
+    const error = new Error(code);
+    error.code = code;
     error.runId = runId;
+    error.details = streamFailure.details || {};
+    error.safeToRetry = streamFailure.safeToRetry === true;
     throw error;
   }
   if (terminalFailure) {
+    const effectiveToolActivity =
+      hadToolActivity || terminalFailure.hadToolActivity === true;
     const safeToRetry =
-      terminalFailure.state === "error" && !hadToolActivity;
+      terminalFailure.safeToRetry === true ||
+      (terminalFailure.state === "error" && !effectiveToolActivity);
     const text = agentFailureMessage(
       terminalFailure.text,
       safeToRetry,
@@ -697,8 +705,14 @@ function dismissTerminalLiveMessages() {
 }
 
 function agentFailureMessage(value, safeToRetry, state) {
-  if (state === "aborted") return "智能体处理已停止。";
   const text = String(value || "").trim();
+  if (state === "aborted" && text) return text;
+  if (state === "aborted" && safeToRetry) {
+    return "智能体处理已停止，尚未调用业务工具，可以安全地重新发送。";
+  }
+  if (state === "aborted") {
+    return "智能体处理已停止；请先核对业务系统状态再决定是否重试。";
+  }
   const networkFailure =
     /network|connection|econnreset|before producing a reply/i.test(text);
   if (networkFailure && safeToRetry) {
@@ -1186,6 +1200,11 @@ function showAuthError(message) {
 }
 
 function friendlyError(error) {
+  if (error.code === "GATEWAY_RUN_TIMEOUT_ABORTED") {
+    return error.details?.hadToolActivity === true
+      ? "智能体运行超时，已停止后续处理；任务已经调用业务工具，请先核对业务系统结果。"
+      : "智能体运行超时，已安全中止；本次尚未调用业务系统，可以重新发送。";
+  }
   const labels = {
     LOGIN_FAILED: "用户名或密码不正确。",
     LOGIN_RATE_LIMITED: "登录尝试过多，请稍后再试。",
@@ -1206,6 +1225,10 @@ function friendlyError(error) {
       "\u667a\u80fd\u4f53\u81ea\u52a8\u6062\u590d\u540e\u4ecd\u672a\u80fd\u542f\u52a8\uff0c\u5df2\u5b89\u5168\u4e2d\u6b62\u3002",
     GATEWAY_START_STALLED_ABORT_UNCONFIRMED:
       "\u667a\u80fd\u4f53\u542f\u52a8\u72b6\u6001\u65e0\u6cd5\u786e\u8ba4\uff0c\u5df2\u505c\u6b62\u81ea\u52a8\u6062\u590d\u3002",
+    GATEWAY_START_RECOVERY_BLOCKED_TOOL_ACTIVITY:
+      "智能体启动异常，但本轮已经触碰业务工具；已停止自动重放，请先核对业务系统状态。",
+    GATEWAY_START_RECOVERY_EVIDENCE_UNAVAILABLE:
+      "智能体启动异常，且无法确认是否已调用业务工具；已停止自动重放。",
     GATEWAY_TIMEOUT:
       "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u672a\u7ee7\u7eed\u8fdb\u5165\u4e1a\u52a1\u7cfb\u7edf\u3002",
     PAIRING_REQUIRED: "AgentBridge 服务器尚未获准连接 OpenClaw。",

@@ -20,6 +20,7 @@ from bscli.workspace.gateway import (
     OpenClawGatewayClient,
 )
 from bscli.workspace.server import (
+    _public_gateway_stream_error,
     create_workspace_http_server,
     validate_workspace_server_config,
 )
@@ -550,6 +551,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 streamed_send["idempotencyKey"],
                 "web-message-stream-1",
             )
+            self.assertEqual(streamed_send["timeoutSeconds"], 300)
             self.assertEqual(
                 compatibility_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -673,6 +675,54 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 ["user", "assistant"],
             )
             self.assertIn("\u5b89\u5168\u4e2d\u6b62", timeline[-1]["text"])
+
+    def test_terminal_abort_keeps_tool_aware_text_in_the_timeline(self) -> None:
+        class AbortedGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                self.calls.append(("send_stream", kwargs))
+                return iter(
+                    [
+                        {
+                            "type": "accepted",
+                            "runId": "aborted-run-1",
+                            "status": "started",
+                        },
+                        {
+                            "type": "chat",
+                            "runId": "aborted-run-1",
+                            "state": "aborted",
+                            "hadToolActivity": True,
+                            "safeToRetry": False,
+                            "text": "Run stopped after a business tool call.",
+                        },
+                    ]
+                )
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            app = WorkspaceApplication(
+                service=service,
+                gateway=AbortedGateway(),
+            )
+
+            list(
+                app.send_chat_stream(
+                    account,
+                    message="Read OA pending workflows",
+                    idempotency_key="aborted-run-1",
+                )
+            )
+
+            self.assertEqual(
+                app.list_timeline(account)[-1]["text"],
+                "Run stopped after a business tool call.",
+            )
 
     def test_second_workspace_run_is_rejected_instead_of_queued(self) -> None:
         entered = threading.Event()
@@ -1088,6 +1138,26 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
 
 
 class WorkspaceHttpServerTests(unittest.TestCase):
+    def test_stream_error_exposes_only_safe_retry_diagnostics(self) -> None:
+        payload = _public_gateway_stream_error(
+            GatewayRequestError(
+                "GATEWAY_RUN_TIMEOUT_ABORTED",
+                "stopped",
+                {
+                    "runId": "private-run-id",
+                    "aborted": True,
+                    "hadToolActivity": False,
+                    "recoveryUsed": True,
+                    "recoveryAttempt": 1,
+                    "acceptedElapsedMs": 1234,
+                },
+            )
+        )
+
+        self.assertTrue(payload["safeToRetry"])
+        self.assertNotIn("runId", payload["details"])
+        self.assertEqual(payload["details"]["recoveryAttempt"], 1)
+
     def test_enrollment_login_csrf_and_read_only_workspace_routes(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -1271,6 +1341,9 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("parseSseBlock", script)
         self.assertIn("handleChatProgress", script)
         self.assertIn("handleChatDelta", script)
+        self.assertIn("const previousRunId = runId", script)
+        self.assertIn("adoptLiveMessage(previousRunId, runId", script)
+        self.assertIn("streamFailure.safeToRetry === true", script)
         self.assertIn("hydrateTaskCards", script)
         self.assertIn("upsertTaskCard", script)
         self.assertIn('api("/api/timeline?limit=240")', script)

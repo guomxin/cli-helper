@@ -13,7 +13,7 @@ const fake = join(import.meta.dirname, "support", "fake_gateway_websocket.mjs");
 const sessionKey =
   "agent:main:agentbridge-workspace:direct:account-a";
 
-function runScenario(scenario) {
+function runScenario(scenario, overrides = {}) {
   const state = mkdtempSync(join(tmpdir(), "agentbridge-gateway-test-"));
   const tokenFile = join(state, "gateway.token");
   const traceFile = join(state, "trace.jsonl");
@@ -40,6 +40,7 @@ function runScenario(scenario) {
         sessionIdleTimeoutMs: 15_000,
         sessionIdlePollMs: 250,
         timeoutMs: 60_000,
+        ...overrides,
       }),
       env: {
         ...process.env,
@@ -119,21 +120,106 @@ test("recovers a not-started accepted run exactly once", () => {
   assert.equal(events.at(-1).state, "final");
 });
 
-test("does not recover a current run already active inside OpenClaw", () => {
+test("recovers a registered current run that emitted no real progress", () => {
   const { events, trace } = runScenario("startup_active");
+  assert.equal(
+    trace.filter((item) => item.method === "chat.send").length,
+    2,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.abort" && item.runId).length,
+    1,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.history").length,
+    1,
+  );
+  assert.equal(events.at(-1).state, "final");
+});
+
+test("recovers an accepted run that disappeared before startup", () => {
+  const { events, trace } = runScenario("startup_missing");
+  assert.equal(
+    trace.filter((item) => item.method === "chat.send").length,
+    2,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.abort" && item.runId).length,
+    0,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.history").length,
+    1,
+  );
+  assert.equal(events.at(-1).state, "final");
+});
+
+test("blocks startup replay when session history shows tool activity", () => {
+  const { events, trace } = runScenario("startup_tool_activity");
   assert.equal(
     trace.filter((item) => item.method === "chat.send").length,
     1,
   );
   assert.equal(
     trace.filter((item) => item.method === "chat.abort" && item.runId).length,
-    0,
+    1,
   );
-  assert.ok(
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(
+    events.at(-1).error.code,
+    "GATEWAY_START_RECOVERY_BLOCKED_TOOL_ACTIVITY",
+  );
+  assert.equal(events.at(-1).error.details.hadToolActivity, true);
+  assert.equal(events.at(-1).error.details.safeToRetry, false);
+});
+
+test("uses at most one startup recovery", () => {
+  const { events, trace } = runScenario("startup_recovery_stalls_twice");
+  assert.equal(
+    trace.filter((item) => item.method === "chat.send").length,
+    2,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.abort" && item.runId).length,
+    2,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.history").length,
+    1,
+  );
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(
+    events.at(-1).error.code,
+    "GATEWAY_START_STALLED_ABORTED",
+  );
+});
+
+test("waits for timeout abort confirmation instead of forwarding its echo", () => {
+  const { events } = runScenario("timeout_abort_race");
+  assert.equal(
     events.some(
-      (event) =>
-        event.type === "progress" && event.source === "session-state",
+      (event) => event.type === "chat" && event.state === "aborted",
     ),
+    false,
   );
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).error.code, "GATEWAY_RUN_TIMEOUT_ABORTED");
+  assert.equal(events.at(-1).error.details.hadToolActivity, false);
+  assert.equal(events.at(-1).error.details.safeToRetry, true);
+});
+
+test("reports tool activity when a timed-out run is stopped", () => {
+  const { events } = runScenario("timeout_abort_race_with_tool");
+  assert.equal(events.at(-1).type, "error");
+  assert.equal(events.at(-1).error.code, "GATEWAY_RUN_TIMEOUT_ABORTED");
+  assert.equal(events.at(-1).error.details.hadToolActivity, true);
+  assert.equal(events.at(-1).error.details.safeToRetry, false);
+});
+
+test("starts the execution budget at the first real progress event", () => {
+  const { events } = runScenario("late_start", {
+    startupProgressTimeoutMs: 55_000,
+  });
+  assert.equal(events.at(-1).type, "chat");
   assert.equal(events.at(-1).state, "final");
 });

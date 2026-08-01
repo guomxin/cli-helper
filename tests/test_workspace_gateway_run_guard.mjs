@@ -87,7 +87,7 @@ test("startup recovery is allowed only before progress or tool activity", () => 
   );
 });
 
-test("an internally active current run is never replayed", () => {
+test("a registered run without real progress can be recovered after abort", () => {
   assert.equal(
     canRecoverStartup({
       progressObserved: false,
@@ -100,7 +100,7 @@ test("an internally active current run is never replayed", () => {
         activeRunIds: ["run-a"],
       },
     }),
-    false,
+    true,
   );
 });
 

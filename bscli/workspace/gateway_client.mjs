@@ -25,7 +25,7 @@ const gatewayUrl = requiredEnv("AB_GATEWAY_URL");
 const gatewayToken = requiredEnv("AB_GATEWAY_TOKEN");
 const identityPath = requiredEnv("AB_GATEWAY_IDENTITY_PATH");
 const input = JSON.parse(readFileSync(0, "utf8"));
-const timeoutMs = clampInteger(input.timeoutMs, 1_000, 180_000, 30_000);
+const timeoutMs = clampInteger(input.timeoutMs, 1_000, 300_000, 30_000);
 const mode = ["stream", "send-stream"].includes(input.mode)
   ? input.mode
   : "call";
@@ -86,6 +86,8 @@ let streamRunId = mode === "send-stream" ? idempotencyKey : null;
 let streamAccepted = false;
 let streamHadProgress = false;
 let streamHadToolActivity = false;
+let streamAcceptedAtMs = null;
+let streamFirstProgressAtMs = null;
 let recoveryUsed = false;
 let recoveryAttempt = 0;
 let currentIdempotencyKey = idempotencyKey;
@@ -97,6 +99,8 @@ let startupTimer = null;
 let sessionStateTimer = null;
 let sessionStateRequestId = null;
 let sessionStatePurpose = null;
+let recoveryEvidenceTimer = null;
+let recoveryEvidenceRequestId = null;
 let sessionIdleDeadline = 0;
 let requestStage = "connect";
 let preflightFallbackSent = false;
@@ -144,10 +148,23 @@ socket.addEventListener("message", (event) => {
       streamRunId,
     );
     if (normalized) {
-      streamHadProgress = true;
+      if (isAbortEcho(normalized)) return;
+      recordStreamProgress();
       clearStartupTimer();
       if (normalized.type === "progress" && normalized.kind === "tool") {
         streamHadToolActivity = true;
+      }
+      if (
+        normalized.type === "chat" &&
+        ["final", "error", "aborted"].includes(normalized.state)
+      ) {
+        if (normalized.state === "aborted") {
+          normalized.hadToolActivity = streamHadToolActivity;
+          normalized.safeToRetry = !streamHadToolActivity;
+          normalized.text = streamHadToolActivity
+            ? "智能体运行被外部停止；任务已经开始调用业务工具，请先核对业务系统状态。"
+            : "智能体运行被外部停止，尚未调用业务工具，可以安全地重新发送。";
+        }
       }
       process.stdout.write(`${JSON.stringify(normalized)}\n`);
       if (
@@ -230,6 +247,14 @@ socket.addEventListener("message", (event) => {
     handleSessionStateResponse(frame);
     return;
   }
+  if (
+    mode === "send-stream" &&
+    recoveryEvidenceRequestId &&
+    frame.id === recoveryEvidenceRequestId
+  ) {
+    handleRecoveryEvidenceResponse(frame);
+    return;
+  }
   if (frame.id === bindRequestId && mode === "send-stream") {
     if (!frame.ok) {
       finishError(
@@ -273,6 +298,7 @@ socket.addEventListener("message", (event) => {
         256,
       );
     streamAccepted = true;
+    streamAcceptedAtMs = Date.now();
     requestStage = recoveryUsed ? "run_recovered" : "run";
     clearTimeout(timer);
     timer = setTimeout(() => handleRequestTimeout(), timeoutMs);
@@ -358,7 +384,7 @@ function requestChatSend() {
         message,
         deliver: false,
         idempotencyKey: currentIdempotencyKey,
-        timeoutMs: Math.min(timeoutMs, 120_000),
+        timeoutMs,
       },
     }),
   );
@@ -407,7 +433,9 @@ function handleSessionStateResponse(frame) {
   if (!frame.ok) {
     if (purpose === "startup_probe") {
       sessionStatePurpose = null;
-      streamHadProgress = true;
+      requestStreamAbort(
+        recoveryUsed ? "startup_final" : "startup_recovery",
+      );
       return;
     }
     finishError(
@@ -429,7 +457,7 @@ function handleSessionStateResponse(frame) {
     if (purpose === "preflight") {
       requestWorkspaceBind();
     } else {
-      startRecoveryAttempt();
+      requestRecoveryEvidence();
     }
     return;
   }
@@ -453,7 +481,9 @@ function handleSessionStateTimeout() {
   sessionStateRequestId = null;
   if (sessionStatePurpose === "startup_probe") {
     sessionStatePurpose = null;
-    streamHadProgress = true;
+    requestStreamAbort(
+      recoveryUsed ? "startup_final" : "startup_recovery",
+    );
     return;
   }
   finishError(
@@ -487,30 +517,87 @@ function clearSessionStateTimer() {
   }
 }
 
+function clearRecoveryEvidenceTimer() {
+  if (recoveryEvidenceTimer) {
+    clearTimeout(recoveryEvidenceTimer);
+    recoveryEvidenceTimer = null;
+  }
+}
+
 function handleStartupProbe(runState) {
   if (streamHadProgress || streamHadToolActivity) return;
-  if (runState.currentRunActive) {
-    streamHadProgress = true;
-    requestStage = recoveryUsed ? "run_recovered" : "run";
-    process.stdout.write(
-      `${JSON.stringify({
-        type: "progress",
-        runId: streamRunId,
-        kind: "lifecycle",
-        phase: "start",
-        label: "\u667a\u80fd\u4f53\u5df2\u542f\u52a8\uff0c\u6b63\u5728\u5904\u7406",
-        source: "session-state",
-      })}\n`,
-    );
+  if (!runState.active) {
+    requestRecoveryEvidence();
     return;
   }
   const recover = canRecoverStartup({
     progressObserved: streamHadProgress,
     toolActivity: streamHadToolActivity,
     recoveryUsed,
-    runState,
   });
   requestStreamAbort(recover ? "startup_recovery" : "startup_final");
+}
+
+function requestRecoveryEvidence() {
+  clearRecoveryEvidenceTimer();
+  requestStage = "recovery_evidence";
+  recoveryEvidenceRequestId = `recovery-evidence-${randomUUID()}`;
+  socket.send(
+    JSON.stringify({
+      type: "req",
+      id: recoveryEvidenceRequestId,
+      method: "chat.history",
+      params: {
+        sessionKey: streamSessionKey,
+        limit: 200,
+      },
+    }),
+  );
+  recoveryEvidenceTimer = setTimeout(
+    handleRecoveryEvidenceTimeout,
+    5_000,
+  );
+}
+
+function handleRecoveryEvidenceResponse(frame) {
+  recoveryEvidenceRequestId = null;
+  clearRecoveryEvidenceTimer();
+  if (!frame.ok) {
+    finishRecoveryEvidenceUnavailable();
+    return;
+  }
+  const evidence = recoveryEvidenceForRun(frame.payload, streamRunId);
+  if (evidence.toolActivity) {
+    streamHadToolActivity = true;
+    finishError(
+      "GATEWAY_START_RECOVERY_BLOCKED_TOOL_ACTIVITY",
+      "The stalled OpenClaw run reached a business tool, so it was not replayed.",
+      {
+        ...timeoutDetails(abortSent),
+        promptObserved: evidence.promptObserved,
+        safeToRetry: false,
+      },
+    );
+    return;
+  }
+  startRecoveryAttempt();
+}
+
+function handleRecoveryEvidenceTimeout() {
+  recoveryEvidenceTimer = null;
+  recoveryEvidenceRequestId = null;
+  finishRecoveryEvidenceUnavailable();
+}
+
+function finishRecoveryEvidenceUnavailable() {
+  finishError(
+    "GATEWAY_START_RECOVERY_EVIDENCE_UNAVAILABLE",
+    "The stalled OpenClaw run was stopped, but tool activity could not be verified.",
+    {
+      ...timeoutDetails(abortSent),
+      safeToRetry: false,
+    },
+  );
 }
 
 function startRecoveryAttempt() {
@@ -525,6 +612,8 @@ function startRecoveryAttempt() {
   streamAccepted = false;
   streamHadProgress = false;
   streamHadToolActivity = false;
+  streamAcceptedAtMs = null;
+  streamFirstProgressAtMs = null;
   abortSent = false;
   abortPurpose = null;
   abortRequestId = `abort-${randomUUID()}`;
@@ -618,6 +707,9 @@ function timeoutDetails(aborted) {
     recoveryAttempt,
     hadProgress: streamHadProgress,
     hadToolActivity: streamHadToolActivity,
+    safeToRetry: aborted && !streamHadToolActivity,
+    acceptedElapsedMs: elapsedSince(streamAcceptedAtMs),
+    firstProgressElapsedMs: elapsedSince(streamFirstProgressAtMs),
   };
 }
 
@@ -629,7 +721,80 @@ function stageDetails() {
     recoveryAttempt,
     hadProgress: streamHadProgress,
     hadToolActivity: streamHadToolActivity,
+    acceptedElapsedMs: elapsedSince(streamAcceptedAtMs),
   };
+}
+
+function isAbortEcho(event) {
+  if (!abortSent) return false;
+  return (
+    (event.type === "chat" && event.state === "aborted") ||
+    (event.type === "progress" &&
+      event.kind === "lifecycle" &&
+      event.phase === "aborted")
+  );
+}
+
+function recordStreamProgress() {
+  streamHadProgress = true;
+  if (streamFirstProgressAtMs !== null) return;
+  streamFirstProgressAtMs = Date.now();
+  clearTimeout(timer);
+  timer = setTimeout(() => handleRequestTimeout(), timeoutMs);
+}
+
+function recoveryEvidenceForRun(payload, runId) {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const promptKey = `${runId}:user`;
+  let promptIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = isRecord(messages[index]) ? messages[index] : {};
+    if (
+      message.role === "user" &&
+      (message.idempotencyKey === promptKey || message.runId === runId)
+    ) {
+      promptIndex = index;
+      break;
+    }
+  }
+  if (promptIndex < 0) {
+    return { promptObserved: false, toolActivity: false };
+  }
+  for (let index = promptIndex + 1; index < messages.length; index += 1) {
+    const message = isRecord(messages[index]) ? messages[index] : {};
+    if (message.role === "user") break;
+    if (messageHasToolActivity(message)) {
+      return { promptObserved: true, toolActivity: true };
+    }
+  }
+  return { promptObserved: true, toolActivity: false };
+}
+
+function messageHasToolActivity(message) {
+  if (
+    ["tool", "toolResult"].includes(message.role) ||
+    typeof message.toolCallId === "string" ||
+    typeof message.toolName === "string"
+  ) {
+    return true;
+  }
+  if (!Array.isArray(message.content)) return false;
+  return message.content.some((item) => {
+    if (!isRecord(item)) return false;
+    return [
+      "tool",
+      "toolCall",
+      "toolResult",
+      "tool_use",
+      "tool_result",
+    ].includes(item.type);
+  });
+}
+
+function elapsedSince(startedAtMs) {
+  return Number.isFinite(startedAtMs)
+    ? Math.max(0, Date.now() - startedAtMs)
+    : null;
 }
 
 socket.addEventListener("error", () => {
@@ -742,6 +907,7 @@ function finish(payload) {
   }
   clearStartupTimer();
   clearSessionStateTimer();
+  clearRecoveryEvidenceTimer();
   if (streamingMode) {
     process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
   } else {

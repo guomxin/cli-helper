@@ -58,6 +58,15 @@ class FakeWebSocket {
     }
     if (request.method === "chat.abort") {
       if (request.params?.runId) targetedAbortCount += 1;
+      if (
+        request.params?.runId &&
+        scenario.startsWith("timeout_abort_race")
+      ) {
+        this.emitChatAbort(
+          request.params.sessionKey,
+          request.params.runId,
+        );
+      }
       this.respond(request, {
         ok: true,
         aborted: true,
@@ -65,6 +74,10 @@ class FakeWebSocket {
           ? [request.params.runId]
           : ["old-run"],
       });
+      return;
+    }
+    if (request.method === "chat.history") {
+      this.respond(request, this.chatHistoryPayload());
       return;
     }
     if (request.method === "sessions.list") {
@@ -84,9 +97,29 @@ class FakeWebSocket {
         if (
           scenario === "normal" ||
           scenario === "preflight_wait" ||
-          (scenario === "startup_recovery" && sendCount > 1)
+          ([
+            "startup_recovery",
+            "startup_active",
+            "startup_missing",
+          ].includes(scenario) &&
+            sendCount > 1)
         ) {
           this.emitRunCompletion(request.params.sessionKey, runId);
+        } else if (scenario.startsWith("timeout_abort_race")) {
+          this.emitRunStart(
+            request.params.sessionKey,
+            runId,
+            scenario.endsWith("_with_tool"),
+          );
+        } else if (scenario === "late_start") {
+          realSetTimeout(
+            () => this.emitRunStart(request.params.sessionKey, runId),
+            400,
+          );
+          realSetTimeout(
+            () => this.emitRunFinal(request.params.sessionKey, runId),
+            750,
+          );
         }
       });
       return;
@@ -115,31 +148,50 @@ class FakeWebSocket {
       };
     }
     if (
-      scenario === "startup_recovery" &&
-      sendCount === 1 &&
-      targetedAbortCount === 0
+      [
+        "startup_recovery",
+        "startup_active",
+        "startup_tool_activity",
+        "startup_recovery_stalls_twice",
+      ].includes(scenario) &&
+      sendCount > targetedAbortCount
     ) {
       return {
         sessions: [
-          { key, hasActiveRun: true, activeRunIds: ["old-run"] },
+          { key, hasActiveRun: true, activeRunIds: [lastRunId] },
         ],
-      };
-    }
-    if (
-      scenario === "startup_active" &&
-      sendCount === 1 &&
-      targetedAbortCount === 0
-    ) {
-      const runId = lastRunId;
-      realSetTimeout(() => this.emitRunCompletion(key, runId), 10);
-      return {
-        sessions: [{ key, hasActiveRun: true, activeRunIds: [runId] }],
       };
     }
     return { sessions: [{ key, hasActiveRun: false }] };
   }
 
-  emitRunCompletion(sessionKey, runId) {
+  chatHistoryPayload() {
+    if (scenario !== "startup_tool_activity") {
+      return { messages: [] };
+    }
+    return {
+      messages: [
+        {
+          role: "user",
+          content: "write something",
+          idempotencyKey: `${lastRunId}:user`,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tool-call-1",
+              name: "oa_leave_submit",
+              arguments: {},
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  emitRunStart(sessionKey, runId, withTool = false) {
     this.emit("message", {
       data: JSON.stringify({
         type: "event",
@@ -152,6 +204,37 @@ class FakeWebSocket {
         },
       }),
     });
+    if (!withTool) return;
+    this.emit("message", {
+      data: JSON.stringify({
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey,
+          runId,
+          stream: "tool",
+          data: { phase: "start", name: "oa_workflow_pending_list" },
+        },
+      }),
+    });
+  }
+
+  emitChatAbort(sessionKey, runId) {
+    this.emit("message", {
+      data: JSON.stringify({
+        type: "event",
+        event: "chat",
+        payload: { sessionKey, runId, state: "aborted" },
+      }),
+    });
+  }
+
+  emitRunCompletion(sessionKey, runId) {
+    this.emitRunStart(sessionKey, runId);
+    this.emitRunFinal(sessionKey, runId);
+  }
+
+  emitRunFinal(sessionKey, runId) {
     this.emit("message", {
       data: JSON.stringify({
         type: "event",

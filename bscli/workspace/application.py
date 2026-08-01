@@ -282,6 +282,8 @@ class WorkspaceApplication:
             source = None
             claimed = False
             assistant_recorded = False
+            accepted_run_id = ""
+            had_tool_activity = False
             self._append_workspace_message(
                 account,
                 role="user",
@@ -299,10 +301,24 @@ class WorkspaceApplication:
                     grant=grant["grant"],
                     message=message,
                     idempotency_key=effective_key,
-                    timeout_seconds=120,
+                    timeout_seconds=300,
                 )
                 for item in source:
-                    if item.get("type") == "chat":
+                    if item.get("type") == "accepted":
+                        accepted_run_id = _safe_text(item.get("runId"), 256)
+                        _LOG.info(
+                            "Workspace chat accepted account_id=%s run_id=%s "
+                            "attempt=%s",
+                            _safe_text(account.get("account_id"), 128),
+                            accepted_run_id,
+                            item.get("attempt", 0),
+                        )
+                    elif (
+                        item.get("type") == "progress"
+                        and item.get("kind") == "tool"
+                    ):
+                        had_tool_activity = True
+                    elif item.get("type") == "chat":
                         state = item.get("state")
                         if (
                             state == "final"
@@ -323,16 +339,35 @@ class WorkspaceApplication:
                             self._append_workspace_failure(
                                 account,
                                 effective_key=effective_key,
-                                text=_terminal_chat_failure_text(state),
+                                text=_terminal_chat_failure_text(item),
                             )
                             assistant_recorded = True
+                        if state in {"final", "error", "aborted"}:
+                            _LOG.info(
+                                "Workspace chat terminal account_id=%s "
+                                "run_id=%s state=%s had_tool_activity=%s "
+                                "safe_to_retry=%s",
+                                _safe_text(account.get("account_id"), 128),
+                                _safe_text(item.get("runId"), 256)
+                                or accepted_run_id,
+                                _safe_text(state, 32),
+                                had_tool_activity
+                                or item.get("hadToolActivity") is True,
+                                item.get("safeToRetry") is True,
+                            )
                     yield item
             except GatewayRequestError as exc:
                 _LOG.warning(
-                    "Workspace chat Gateway failure account_id=%s code=%s stage=%s",
+                    "Workspace chat Gateway failure account_id=%s "
+                    "run_id=%s code=%s stage=%s had_tool_activity=%s "
+                    "recovery_used=%s recovery_attempt=%s",
                     _safe_text(account.get("account_id"), 128),
+                    accepted_run_id,
                     exc.code,
                     _safe_text(exc.details.get("stage"), 80),
+                    exc.details.get("hadToolActivity") is True,
+                    exc.details.get("recoveryUsed") is True,
+                    exc.details.get("recoveryAttempt", 0),
                 )
                 if not assistant_recorded:
                     self._append_workspace_failure(
@@ -462,14 +497,23 @@ def _workspace_gateway_failure_text(error: GatewayRequestError) -> str:
         return "\u667a\u80fd\u4f53\u81ea\u52a8\u6062\u590d\u540e\u4ecd\u672a\u80fd\u542f\u52a8\uff0c\u5df2\u5b89\u5168\u4e2d\u6b62\uff1b\u672c\u6b21\u5c1a\u672a\u8c03\u7528\u4e1a\u52a1\u7cfb\u7edf\u3002"
     if code == "GATEWAY_START_STALLED_ABORT_UNCONFIRMED":
         return "\u667a\u80fd\u4f53\u542f\u52a8\u72b6\u6001\u65e0\u6cd5\u786e\u8ba4\uff0c\u5df2\u505c\u6b62\u81ea\u52a8\u6062\u590d\uff1b\u8bf7\u7a0d\u540e\u67e5\u8be2\u4efb\u52a1\u72b6\u6001\u3002"
+    if code == "GATEWAY_START_RECOVERY_BLOCKED_TOOL_ACTIVITY":
+        return "\u667a\u80fd\u4f53\u542f\u52a8\u5f02\u5e38\uff0c\u4f46\u68c0\u6d4b\u5230\u672c\u8f6e\u5df2\u5c1d\u8bd5\u8c03\u7528\u4e1a\u52a1\u5de5\u5177\uff1b\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u653e\uff0c\u8bf7\u5148\u6838\u5bf9\u4e1a\u52a1\u7cfb\u7edf\u72b6\u6001\u3002"
+    if code == "GATEWAY_START_RECOVERY_EVIDENCE_UNAVAILABLE":
+        return "\u667a\u80fd\u4f53\u542f\u52a8\u5f02\u5e38\uff0c\u4e14\u65e0\u6cd5\u786e\u8ba4\u672c\u8f6e\u662f\u5426\u5df2\u8c03\u7528\u4e1a\u52a1\u5de5\u5177\uff1b\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u653e\u3002"
     if code.startswith("GATEWAY_"):
         return "OpenClaw \u6682\u65f6\u65e0\u54cd\u5e94\uff0c\u672c\u6b21\u8bf7\u6c42\u672a\u7ee7\u7eed\u8fdb\u5165\u4e1a\u52a1\u7cfb\u7edf\u3002"
     return f"\u667a\u80fd\u4f53\u672a\u80fd\u5b8c\u6210\u672c\u6b21\u8bf7\u6c42\uff08\u9519\u8bef\u7801\uff1a{code}\uff09\u3002"
 
 
-def _terminal_chat_failure_text(state: object) -> str:
-    if state == "aborted":
-        return "\u672c\u6b21\u667a\u80fd\u4f53\u8fd0\u884c\u5df2\u505c\u6b62\uff0c\u6ca1\u6709\u7ee7\u7eed\u6392\u961f\u3002"
+def _terminal_chat_failure_text(item: dict[str, Any]) -> str:
+    supplied = _safe_text(item.get("text"), 2_000)
+    if supplied:
+        return supplied
+    if item.get("state") == "aborted":
+        if item.get("hadToolActivity") is True:
+            return "\u667a\u80fd\u4f53\u8fd0\u884c\u5df2\u505c\u6b62\uff1b\u4efb\u52a1\u5df2\u7ecf\u8c03\u7528\u4e1a\u52a1\u5de5\u5177\uff0c\u8bf7\u5148\u6838\u5bf9\u4e1a\u52a1\u7cfb\u7edf\u72b6\u6001\u3002"
+        return "\u667a\u80fd\u4f53\u8fd0\u884c\u5df2\u505c\u6b62\uff0c\u5c1a\u672a\u8c03\u7528\u4e1a\u52a1\u5de5\u5177\uff0c\u53ef\u4ee5\u5b89\u5168\u5730\u91cd\u65b0\u53d1\u9001\u3002"
     return "\u667a\u80fd\u4f53\u672a\u80fd\u5b8c\u6210\u672c\u6b21\u8bf7\u6c42\u3002"
 
 
