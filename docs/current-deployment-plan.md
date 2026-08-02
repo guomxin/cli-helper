@@ -1741,6 +1741,24 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   Workspace Gateway Node `19/19`、OpenClaw 插件 `98/98`、MCP App 构建和 npm pack dry-run。
 - 本轮自动化没有调用 OA、泰华或语雀业务读写能力。
 
+### 15.46 2026-08-02 双用户多端收口一期
+
+- OpenClaw 按每个身份的 MCP scopes 获取并缓存智能体可见工具目录；同一用户的网页与
+  聊天端看到一致能力，不同用户不能借用另一身份的工具入口，中央执行鉴权仍为最终边界。
+- 管理端和 `diagnostics omnichannel` 增加按用户聚合的活动端点、任务、Outbox、时间线、
+  Workspace 账号及九类身份一致性诊断；只记录状态、计数和耗时，不返回聊天正文、业务
+  参数、外部账号标识、Cookie 或凭据。
+- 真实只读验收确认辛国茂、李世玉的 OA Session 均为 active，`sessionId`、
+  `userSubject` 和下游主体相互独立；`guomao=web/telegram`、
+  `lishiyu=web/openclaw-weixin` 四个活动端点全部存在，身份一致性违规为 0。验收没有读取
+  任一用户待办，也没有执行 OA、泰华或语雀业务写入。
+- 诊断同时发现 `guomao` 网页端积压 126 条从未领取的历史 `task_event`。根因是网页通过
+  SSE/时间线拉取状态，却仍被旧逻辑注册为 Outbox 推送订阅。网页与 `webchat` 现不再建立
+  任务事件推送订阅；已有网页 Outbox 记录在初始化时标记为已由时间线承接并停用旧订阅，
+  Telegram/微信的实时卡片和终态推送不受影响。
+- 完整门禁通过 Python `477 passed, 3 skipped, 197 subtests passed`、Workspace Gateway
+  Node `19/19`、OpenClaw 插件 `99/99`、`pip check` 和 npm pack dry-run。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的

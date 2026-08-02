@@ -259,8 +259,9 @@ openclaw devices approve <requestId> --json
    应用卡按原位置更新，不再重复追加历史卡片；
 4. Python 多用户相关测试 90 项、OpenClaw 插件测试 94 项、Workspace Gateway
    事件与 Run Guard 测试 19 项通过；
-5. 两个真实 OA 身份的只读会话检查保持独立有效；近期版本的双用户同时 Workspace
-   任务与跨端文件隔离仍待补充真实验收。
+5. 两个真实 OA 身份的只读会话检查保持独立有效；2026-08-02 已确认
+   `guomao` 的网页/Telegram 与 `lishiyu` 的网页/微信四个活动端点归属正确，
+   Task Hub 九类身份一致性检查均为 0；双用户并发业务任务与跨端文件仍待补充真实验收。
 
 ## 多端任务同步一期
 
@@ -292,8 +293,9 @@ TaskEvent、跨端文本和应用卡更新共用 Task Hub 追加式时间线序�
 
 Telegram、微信等推送端只主动接收可操作的可信卡片、取消、过期以及最终成功、
 失败或结果未知。任务创建、操作关联、执行中和交互完成等高频中间事件仍写入
-Task Hub，但不再逐条发送聊天消息。Agent Workspace 是拉取式端点，插件直接确认
-其 Outbox 投递，由网页事件流负责呈现，避免无效的 `webchat` 直投和重复告警。
+Task Hub，但不再逐条发送聊天消息。Agent Workspace 是拉取式端点，直接读取统一
+时间线和任务状态，不建立任务事件 Outbox 订阅。旧版本遗留的网页待投递任务事件
+会在初始化时标记为已由时间线承接，避免离线网页形成历史重放积压。
 
 网页、Telegram 和微信产生的用户/助手文本通过宿主私有
 `agentbridge_host_timeline_append` 写入中心时间线。每条消息带稳定幂等键；同一

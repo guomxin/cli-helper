@@ -21,6 +21,8 @@ TASK_STATUSES = {
     "expired",
 }
 
+PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
+
 
 class TaskNotFound(KeyError):
     pass
@@ -28,6 +30,10 @@ class TaskNotFound(KeyError):
 
 class TaskIntegrityError(RuntimeError):
     pass
+
+
+def _is_pull_based_endpoint(endpoint: sqlite3.Row | dict[str, Any]) -> bool:
+    return str(endpoint["client_type"] or "").lower() in PULL_BASED_CLIENT_TYPES
 
 
 class TaskHubStore:
@@ -185,6 +191,7 @@ class TaskHubStore:
             )
             self._migrate_task_interaction_observations(connection)
             self._repair_terminal_task_statuses(connection)
+            self._reconcile_pull_based_deliveries(connection)
 
     @staticmethod
     def _migrate_task_interaction_observations(
@@ -297,6 +304,40 @@ class TaskHubStore:
                     AND operations.status = 'succeeded'
               )
             """
+        )
+
+    @staticmethod
+    def _reconcile_pull_based_deliveries(
+        connection: sqlite3.Connection,
+    ) -> None:
+        now = _utc_now()
+        placeholders = ", ".join("?" for _ in PULL_BASED_CLIENT_TYPES)
+        client_types = tuple(sorted(PULL_BASED_CLIENT_TYPES))
+        connection.execute(
+            f"""
+            UPDATE task_subscriptions
+            SET state = 'inactive', updated_at = ?
+            WHERE state = 'active'
+              AND endpoint_id IN (
+                  SELECT endpoint_id FROM client_endpoints
+                  WHERE LOWER(client_type) IN ({placeholders})
+              )
+            """,
+            (now, *client_types),
+        )
+        connection.execute(
+            f"""
+            UPDATE notification_outbox
+            SET state = 'acknowledged', updated_at = ?,
+                acknowledged_at = COALESCE(acknowledged_at, ?)
+            WHERE payload_type = 'task_event'
+              AND state IN ('pending', 'delivering', 'failed')
+              AND endpoint_id IN (
+                  SELECT endpoint_id FROM client_endpoints
+                  WHERE LOWER(client_type) IN ({placeholders})
+              )
+            """,
+            (now, now, *client_types),
         )
 
     def ensure_endpoint(
@@ -504,23 +545,24 @@ class TaskHubStore:
                     now,
                 ),
             )
-            connection.execute(
-                """
-                INSERT INTO task_subscriptions (
-                    subscription_id, task_id, endpoint_id, user_subject,
-                    event_filters_json, state, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-                """,
-                (
-                    str(uuid4()),
-                    task_id,
-                    origin_endpoint_id,
-                    user_subject,
-                    _canonical_json(["*"]),
-                    now,
-                    now,
-                ),
-            )
+            if not _is_pull_based_endpoint(endpoint):
+                connection.execute(
+                    """
+                    INSERT INTO task_subscriptions (
+                        subscription_id, task_id, endpoint_id, user_subject,
+                        event_filters_json, state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        task_id,
+                        origin_endpoint_id,
+                        user_subject,
+                        _canonical_json(["*"]),
+                        now,
+                        now,
+                    ),
+                )
             self._subscribe_companion_endpoints(
                 connection,
                 task_id=task_id,
@@ -1536,13 +1578,15 @@ class TaskHubStore:
     ) -> None:
         endpoints = connection.execute(
             """
-            SELECT endpoint_id, capabilities_json
+            SELECT endpoint_id, client_type, capabilities_json
             FROM client_endpoints
             WHERE user_subject = ? AND state = 'active'
             """,
             (user_subject,),
         ).fetchall()
         for endpoint in endpoints:
+            if _is_pull_based_endpoint(endpoint):
+                continue
             capabilities = set(json.loads(endpoint["capabilities_json"]))
             if not capabilities.intersection(
                 {

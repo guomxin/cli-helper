@@ -732,6 +732,67 @@ class TaskHubStoreTests(unittest.TestCase):
             )
         )
 
+    def test_web_task_uses_timeline_without_push_outbox(self):
+        workspace, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref="agent:main:workspace:direct:account-a",
+            capabilities=["workspace.task.read"],
+        )
+
+        task, _ = self._task(workspace["endpoint_id"])
+
+        self.assertEqual(
+            self.store.list_outbox(
+                user_subject="user-a",
+                endpoint_id=workspace["endpoint_id"],
+            ),
+            [],
+        )
+        timeline = self.store.list_timeline(user_subject="user-a")
+        self.assertTrue(
+            any(
+                entry["entry_type"] == "task_event"
+                and entry["task_id"] == task["task_id"]
+                for entry in timeline
+            )
+        )
+
+    def test_initialization_reconciles_legacy_web_push_deliveries(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE client_endpoints SET client_type = 'web'
+                WHERE endpoint_id = ?
+                """,
+                (endpoint["endpoint_id"],),
+            )
+
+        repaired_store = TaskHubStore(self.store.db_path)
+        deliveries = repaired_store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+        )
+        with repaired_store._connect() as connection:
+            subscription = connection.execute(
+                """
+                SELECT state FROM task_subscriptions
+                WHERE task_id = ? AND endpoint_id = ?
+                """,
+                (task["task_id"], endpoint["endpoint_id"]),
+            ).fetchone()
+
+        self.assertEqual(len(deliveries), 1)
+        self.assertEqual(deliveries[0]["state"], "acknowledged")
+        self.assertIsNotNone(deliveries[0]["acknowledged_at"])
+        self.assertEqual(subscription["state"], "inactive")
+
     def test_initialization_repairs_legacy_active_successful_tasks(self):
         db_path = Path(self.temp.name) / "repair-agentbridge.db"
         operations = OperationStore(db_path)
