@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.9";
+export const PLUGIN_VERSION = "0.4.10";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -60,6 +60,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       : null,
     sharedState,
     sleep: dependencies.sleep,
+    notificationSleep: dependencies.notificationSleep,
     now: dependencies.now,
     fetchImpl: dependencies.documentFetchImpl || globalThis.fetch,
     saveMediaBufferImpl: dependencies.saveMediaBufferImpl,
@@ -80,6 +81,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           logger: api.logger,
           sharedState,
           now: dependencies.now,
+          sleep: dependencies.timelineSleep,
         })
       : null;
   coordinator.timelinePublisher = timelinePublisher;
@@ -140,10 +142,10 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     }
   });
 
-  api.on("message_received", async (event, context) => {
+  api.on("message_received", (event, context) => {
     coordinator.recordUserMessage(event, context);
     bindTrustedDeliveryRoute(coordinator, identityRouter, event, context);
-    await timelinePublisher?.capture({
+    void timelinePublisher?.capture({
       sessionKey: event.sessionKey || context.sessionKey,
       role: "user",
       text: event.content ?? event.text,

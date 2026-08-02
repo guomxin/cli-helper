@@ -1,10 +1,11 @@
+import asyncio
 import json
 import threading
 import warnings
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from starlette.exceptions import StarletteDeprecationWarning
 
@@ -21,6 +22,7 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.auth.server import AuthServerConfig
 from bscli.mcp.central import (
     CentralSessionKeepalive,
+    _run_host_control,
     create_central_mcp_server,
     serve_central_mcp,
     validate_central_mcp_server_config,
@@ -34,6 +36,26 @@ from bscli.mcp.presentation import (
 
 
 class CentralMcpTests(unittest.TestCase):
+    def test_slow_host_control_logs_non_sensitive_latency_context(self):
+        with patch("bscli.mcp.central._LOGGER") as logger:
+            result = asyncio.run(
+                _run_host_control(
+                    "agentbridge_host_timeline_append",
+                    lambda **_kwargs: "ok",
+                    user_subject="user-a",
+                    warn_after_seconds=0,
+                )
+            )
+
+        self.assertEqual(result, "ok")
+        logger.warning.assert_called_once_with(
+            "AgentBridge host control slow: tool=%s elapsed_ms=%d "
+            "user_subject=%s",
+            "agentbridge_host_timeline_append",
+            ANY,
+            "user-a",
+        )
+
     def test_controlled_keepalive_worker_runs_and_stops(self):
         service = MagicMock()
         called = threading.Event()

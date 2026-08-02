@@ -7,6 +7,7 @@ import ipaddress
 import logging
 from pathlib import Path
 import threading
+from time import perf_counter
 from typing import Annotated, Any, Literal, Mapping
 from urllib.parse import urlparse
 
@@ -115,6 +116,29 @@ from bscli.workspace.server import (
 _LOGGER = logging.getLogger("uvicorn.error")
 HOST_CONTEXT_META_KEY = "io.agentbridge/host"
 TASK_CONTEXT_META_KEY = "io.agentbridge/task"
+
+
+async def _run_host_control(
+    operation_name: str,
+    operation: Any,
+    *,
+    warn_after_seconds: float = 1.0,
+    **kwargs: Any,
+) -> Any:
+    user_subject = str(kwargs.get("user_subject") or "unknown")
+    started_at = perf_counter()
+    try:
+        return await asyncio.to_thread(operation, **kwargs)
+    finally:
+        elapsed_seconds = perf_counter() - started_at
+        if elapsed_seconds >= warn_after_seconds:
+            _LOGGER.warning(
+                "AgentBridge host control slow: tool=%s elapsed_ms=%d "
+                "user_subject=%s",
+                operation_name,
+                round(elapsed_seconds * 1000),
+                user_subject,
+            )
 
 
 @dataclass(frozen=True)
@@ -2018,7 +2042,8 @@ def create_central_mcp_server(
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        return await _run_host_control(
+            "agentbridge_host_task_ensure",
             service.ensure_host_task,
             user_subject=identity["user_subject"],
             token_id=identity["token_id"],
@@ -2068,7 +2093,8 @@ def create_central_mcp_server(
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        return await _run_host_control(
+            "agentbridge_host_timeline_append",
             service.append_host_timeline_message,
             user_subject=identity["user_subject"],
             token_id=identity["token_id"],
@@ -2224,7 +2250,8 @@ def create_central_mcp_server(
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        return await _run_host_control(
+            "agentbridge_host_notification_claim",
             service.claim_host_notifications,
             user_subject=identity["user_subject"],
             agent_host=agent_host,
@@ -2257,7 +2284,8 @@ def create_central_mcp_server(
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
-        return await asyncio.to_thread(
+        return await _run_host_control(
+            "agentbridge_host_notification_ack",
             service.acknowledge_host_notification,
             user_subject=identity["user_subject"],
             agent_host=agent_host,

@@ -1,3 +1,5 @@
+import sqlite3
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -292,6 +294,42 @@ class TaskHubStoreTests(unittest.TestCase):
                 succeeded=True,
             )
         self.assertEqual(task["status"], "active")
+
+    def test_empty_outbox_claim_does_not_wait_for_writer_lock(self):
+        endpoint, _ = self._endpoint()
+        blocker = sqlite3.connect(self.store.db_path, timeout=1)
+        completed = threading.Event()
+        result = {}
+        thread = None
+
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+
+            def claim():
+                try:
+                    result["value"] = self.store.claim_outbox(
+                        user_subject="user-a",
+                        endpoint_id=endpoint["endpoint_id"],
+                    )
+                except Exception as exc:  # pragma: no cover - assertion reports it
+                    result["error"] = exc
+                finally:
+                    completed.set()
+
+            thread = threading.Thread(target=claim, daemon=True)
+            thread.start()
+            self.assertTrue(
+                completed.wait(timeout=0.5),
+                "empty outbox claim waited for an unrelated writer lock",
+            )
+        finally:
+            blocker.rollback()
+            blocker.close()
+
+        self.assertIsNotNone(thread)
+        thread.join(timeout=1)
+        self.assertNotIn("error", result)
+        self.assertEqual(result["value"], [])
 
     def test_outbox_delivery_stops_after_five_failed_attempts(self):
         endpoint, _ = self._endpoint()

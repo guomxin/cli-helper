@@ -1093,6 +1093,37 @@ class TaskHubStore:
         now = _utc_now()
         lease_until = _utc_after(lease_seconds)
         with self._connect() as connection:
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            candidate = connection.execute(
+                """
+                SELECT 1 FROM notification_outbox
+                WHERE user_subject = ? AND endpoint_id = ?
+                  AND (
+                    (
+                      attempt_count < 5
+                      AND (
+                        state = 'pending'
+                        OR (state = 'delivering' AND next_attempt_at <= ?)
+                      )
+                    )
+                    OR (
+                      state = 'delivering'
+                      AND attempt_count >= 5
+                      AND next_attempt_at <= ?
+                    )
+                  )
+                LIMIT 1
+                """,
+                (user_subject, endpoint_id, now, now),
+            ).fetchone()
+            if candidate is None:
+                return []
+
             connection.execute("BEGIN IMMEDIATE")
             endpoint = self._select_endpoint(connection, endpoint_id)
             if (

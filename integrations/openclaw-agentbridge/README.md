@@ -98,6 +98,14 @@ trusted field and authorization surfaces, the originating coordinator resumes
 the frozen interaction and the central service rechecks the Bearer scopes before
 commit/verify.
 
+Version 0.4.10 hardens cross-end coordination under multiple identities. Empty
+notification claims use a read-only fast path, each identity polls independently,
+and idle polling backs off from two to ten seconds before resetting immediately
+when work appears. Timeline publication no longer blocks inbound chat hooks and
+retries transient failures with one stable idempotency key. The central MCP logs
+host-control calls slower than one second without recording message content or
+credentials.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -132,7 +140,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.9, ...)
+AgentBridge interaction plugin registered (version=0.4.10, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

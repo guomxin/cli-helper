@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 
 const RECENT_KEY_TTL_MS = 10_000;
 const MAX_RECENT_KEYS = 500;
+const TIMELINE_ATTEMPT_TIMEOUT_MS = 5_000;
+const TIMELINE_MAX_ATTEMPTS = 3;
+const TIMELINE_RETRY_DELAYS_MS = [250, 1_000];
 
 export class TimelinePublisher {
   constructor({
@@ -9,10 +12,12 @@ export class TimelinePublisher {
     logger,
     sharedState = {},
     now = Date.now,
+    sleep = retrySleep,
   }) {
     this.identityRouter = identityRouter;
     this.logger = logger;
     this.now = now;
+    this.sleep = sleep;
     this.queues =
       sharedState.timelineQueues ||
       (sharedState.timelineQueues = new Map());
@@ -77,40 +82,50 @@ export class TimelinePublisher {
       threadId: safeText(context.threadId || event.threadId, 512),
     };
     const publication = this.enqueue(binding.key, async () => {
-      try {
-        await resolved.client.callTool(
-          "agentbridge_host_timeline_append",
-          {
-            agent_host: "openclaw",
-            endpoint_key: endpointKey,
-            client_type: binding.channel,
-            external_subject: binding.senderId,
-            conversation_ref: sessionKey,
-            message_key: messageKey,
-            role,
-            text: normalizedText,
-            account_id: binding.accountId,
-            label: binding.label,
-            route,
-            task_id: safeText(taskId, 128),
-          },
-          {
-            signal: AbortSignal.timeout(3_000),
-            meta: {
-              "io.agentbridge/host": {
-                version: "1",
-                agentHost: "openclaw",
+      let lastError = null;
+      for (let attempt = 1; attempt <= TIMELINE_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await resolved.client.callTool(
+            "agentbridge_host_timeline_append",
+            {
+              agent_host: "openclaw",
+              endpoint_key: endpointKey,
+              client_type: binding.channel,
+              external_subject: binding.senderId,
+              conversation_ref: sessionKey,
+              message_key: messageKey,
+              role,
+              text: normalizedText,
+              account_id: binding.accountId,
+              label: binding.label,
+              route,
+              task_id: safeText(taskId, 128),
+            },
+            {
+              signal: AbortSignal.timeout(TIMELINE_ATTEMPT_TIMEOUT_MS),
+              meta: {
+                "io.agentbridge/host": {
+                  version: "1",
+                  agentHost: "openclaw",
+                },
               },
             },
-          },
-        );
-        return true;
-      } catch (error) {
-        this.logger?.warn?.(
-          `AgentBridge cross-end text synchronization failed (${safeErrorCode(error)})`,
-        );
-        return false;
+          );
+          return true;
+        } catch (error) {
+          lastError = error;
+          if (attempt < TIMELINE_MAX_ATTEMPTS) {
+            this.logger?.debug?.(
+              `AgentBridge cross-end text synchronization retry (${attempt}/${TIMELINE_MAX_ATTEMPTS}, ${safeErrorCode(error)})`,
+            );
+            await this.sleep(TIMELINE_RETRY_DELAYS_MS[attempt - 1]);
+          }
+        }
       }
+      this.logger?.warn?.(
+        `AgentBridge cross-end text synchronization failed after ${TIMELINE_MAX_ATTEMPTS} attempts (${safeErrorCode(lastError)})`,
+      );
+      return false;
     });
     const publishedAt = this.now();
     this.publications.set(messageKey, {
@@ -213,4 +228,11 @@ function safeErrorCode(error) {
     .toUpperCase()
     .replace(/[^A-Z0-9_.-]/g, "_")
     .slice(0, 80);
+}
+
+function retrySleep(milliseconds) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    timer.unref?.();
+  });
 }

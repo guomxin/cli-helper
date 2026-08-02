@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createInteractionSharedState } from "../lib/coordinator.js";
+import {
+  createInteractionSharedState,
+  notificationPumpDelay,
+} from "../lib/coordinator.js";
 import { normalizeInteraction } from "../lib/interaction.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import {
@@ -875,7 +878,7 @@ test("delivers an ordered timeline message once and acknowledges it", async () =
     },
   };
 
-  await coordinator.deliverEndpointNotifications(
+  const notificationCount = await coordinator.deliverEndpointNotifications(
     { restoreSessionBinding: () => true },
     {
       key: "telegram:*:1001",
@@ -888,6 +891,7 @@ test("delivers an ordered timeline message once and acknowledges it", async () =
   );
 
   assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(notificationCount, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
     "[Web - You]\nSubmit a business trip request.",
@@ -897,6 +901,176 @@ test("delivers an ordered timeline message once and acknowledges it", async () =
   );
   assert.equal(acknowledgements.length, 1);
   assert.equal(acknowledgements[0].params.succeeded, true);
+});
+
+test("backs off idle notification polling and resets after activity", () => {
+  assert.deepEqual(
+    [1, 2, 3, 4, 5].map((idleRounds) =>
+      notificationPumpDelay(2_000, idleRounds),
+    ),
+    [2_000, 4_000, 8_000, 10_000, 10_000],
+  );
+  assert.equal(notificationPumpDelay(2_000, 0), 2_000);
+});
+
+test("starts an independent notification pump for every configured identity", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const started = [];
+  const releases = [];
+  coordinator.runEndpointNotificationPump = async (
+    _identityRouter,
+    binding,
+  ) =>
+    new Promise((resolve) => {
+      started.push(binding.key);
+      releases.push(resolve);
+    });
+  const identityRouter = {
+    configuredIdentities: () => [
+      { binding: { key: "telegram:*:1001" }, client: { id: "a" } },
+      { binding: { key: "openclaw-weixin:*:user-2" }, client: { id: "b" } },
+    ],
+  };
+
+  const pump = coordinator.runNotificationPump(
+    identityRouter,
+    new AbortController().signal,
+    2_000,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(started, [
+    "telegram:*:1001",
+    "openclaw-weixin:*:user-2",
+  ]);
+  releases.forEach((release) => release());
+  await pump;
+});
+
+test("does not block inbound processing on timeline publication", async () => {
+  const senderId = "wechat-user-nonblocking";
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-nonblocking";
+  let releaseFetch;
+  const harness = fakeApi({
+    autoPoll: false,
+    syncTimeline: true,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+      },
+    ],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) =>
+      new Promise((resolve) => {
+        releaseFetch = () => {
+          const body = JSON.parse(options.body);
+          resolve(
+            new Response(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: body.id,
+                result: { structuredContent: { status: "succeeded" } },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        };
+      }),
+  });
+
+  const hookResult = harness.hooks.message_received(
+    {
+      from: senderId,
+      senderId,
+      sessionKey,
+      content: "Check OA session status.",
+      messageId: "incoming-nonblocking-1",
+    },
+    {
+      channelId: "openclaw-weixin",
+      conversationId: senderId,
+      sessionKey,
+    },
+  );
+
+  assert.equal(hookResult, undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof releaseFetch, "function");
+  releaseFetch();
+  await coordinator.waitForIdle();
+});
+
+test("retries timeline publication with one stable idempotency key", async () => {
+  const senderId = "wechat-user-retry";
+  const sessionKey = "agent:main:openclaw-weixin:direct:wechat-user-retry";
+  const requests = [];
+  const retryDelays = [];
+  const harness = fakeApi({
+    autoPoll: false,
+    syncTimeline: true,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        tokenEnv: "USER_TOKEN",
+      },
+    ],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    timelineSleep: async (milliseconds) => retryDelays.push(milliseconds),
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (requests.length < 3) {
+        throw new TypeError("temporary network failure");
+      }
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { structuredContent: { status: "succeeded" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  harness.hooks.message_received(
+    {
+      from: senderId,
+      senderId,
+      sessionKey,
+      content: "Check OA session status.",
+      messageId: "incoming-retry-1",
+    },
+    {
+      channelId: "openclaw-weixin",
+      conversationId: senderId,
+      sessionKey,
+    },
+  );
+  await coordinator.waitForIdle();
+
+  assert.equal(requests.length, 3);
+  assert.deepEqual(retryDelays, [250, 1_000]);
+  assert.equal(
+    new Set(
+      requests.map((body) => body.params.arguments.message_key),
+    ).size,
+    1,
+  );
+  assert.equal(harness.logs.warn.length, 0);
 });
 
 test("synchronizes user and assistant text once across duplicate WeChat hooks", async () => {

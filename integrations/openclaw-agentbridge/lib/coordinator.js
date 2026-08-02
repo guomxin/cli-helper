@@ -37,6 +37,7 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.interaction.completed",
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
+const MAX_NOTIFICATION_IDLE_INTERVAL_MS = 10_000;
 const LOGIN_READ_TOOLS = new Map([
   [
     "oa_workflow_pending_list",
@@ -108,6 +109,7 @@ export class InteractionCoordinator {
     mcpClientResolver = null,
     sharedState = createInteractionSharedState(),
     sleep = defaultSleep,
+    notificationSleep = backgroundSleep,
     now = Date.now,
     fetchImpl = globalThis.fetch,
     saveMediaBufferImpl = saveOpenClawMediaBuffer,
@@ -118,6 +120,7 @@ export class InteractionCoordinator {
     this.mcpClient = mcpClient;
     this.mcpClientResolver = mcpClientResolver;
     this.sleep = sleep;
+    this.notificationSleep = notificationSleep;
     this.now = now;
     this.fetchImpl = fetchImpl;
     this.saveMediaBufferImpl = saveMediaBufferImpl;
@@ -603,19 +606,42 @@ export class InteractionCoordinator {
   }
 
   async runNotificationPump(identityRouter, signal, intervalMs) {
-    while (!signal.aborted) {
-      for (const { binding, client } of identityRouter.configuredIdentities()) {
-        if (signal.aborted) {
-          return;
-        }
-        await this.deliverEndpointNotifications(
+    await Promise.all(
+      identityRouter.configuredIdentities().map(({ binding, client }) =>
+        this.runEndpointNotificationPump(
           identityRouter,
           binding,
           client,
           signal,
-        );
+          intervalMs,
+        ),
+      ),
+    );
+  }
+
+  async runEndpointNotificationPump(
+    identityRouter,
+    binding,
+    client,
+    signal,
+    intervalMs,
+  ) {
+    let idleRounds = 0;
+    while (!signal.aborted) {
+      const notificationCount = await this.deliverEndpointNotifications(
+        identityRouter,
+        binding,
+        client,
+        signal,
+      );
+      if (signal.aborted) {
+        return;
       }
-      await backgroundSleep(intervalMs, signal);
+      idleRounds = notificationCount > 0 ? 0 : idleRounds + 1;
+      await this.notificationSleep(
+        notificationPumpDelay(intervalMs, idleRounds),
+        signal,
+      );
     }
   }
 
@@ -643,7 +669,7 @@ export class InteractionCoordinator {
           `AgentBridge endpoint notification claim unavailable (${safeErrorCode(error)})`,
         );
       }
-      return;
+      return 0;
     }
     const endpoint = response?.endpoint;
     for (const notification of Array.isArray(response?.notifications)
@@ -723,6 +749,9 @@ export class InteractionCoordinator {
         }
       }
     }
+    return Array.isArray(response?.notifications)
+      ? response.notifications.length
+      : 0;
   }
 
   async waitForIdle() {
@@ -2087,4 +2116,15 @@ function backgroundSleep(milliseconds, signal) {
       { once: true },
     );
   });
+}
+
+export function notificationPumpDelay(
+  intervalMs,
+  idleRounds,
+  maximumMs = MAX_NOTIFICATION_IDLE_INTERVAL_MS,
+) {
+  const base = Math.max(250, Number(intervalMs) || 0);
+  const maximum = Math.max(base, Number(maximumMs) || base);
+  const exponent = Math.min(Math.max(Number(idleRounds) - 1, 0), 8);
+  return Math.min(maximum, base * 2 ** exponent);
 }
