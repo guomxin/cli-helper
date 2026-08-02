@@ -12,6 +12,7 @@ from bscli.admin.stores import (
 )
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
 
 
@@ -153,6 +154,10 @@ class AdminControlPlane:
             "session_keepalive": {
                 "enabled": self.service.session_keepalive_lease_seconds is not None,
                 "activity_lease_seconds": self.service.session_keepalive_lease_seconds,
+            },
+            "coordination": {
+                "task_hub": self.service.tasks.runtime_diagnostics(),
+                "host_control": HOST_CONTROL_DIAGNOSTICS.snapshot(),
             },
         }
 

@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
+import sqlite3
 import sys
 from urllib.parse import urlparse
 
@@ -40,6 +41,7 @@ from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.session_secrets import WindowsDpapiProtector
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
+from bscli.core.tasks import TaskHubStore
 from bscli.mcp.central import (
     serve_central_mcp,
     validate_central_mcp_server_config,
@@ -73,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         return handle_pki(args)
     if args.area == "mcp":
         return handle_mcp(args)
+    if args.area == "diagnostics":
+        return handle_diagnostics(args, home)
     parser.error("missing command")
     return 2
 
@@ -311,7 +315,68 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_token_revoke = mcp_token_sub.add_parser("revoke")
     mcp_token_revoke.add_argument("token_id")
 
+    diagnostics = subparsers.add_parser("diagnostics")
+    diagnostics_sub = diagnostics.add_subparsers(dest="action", required=True)
+    omnichannel = diagnostics_sub.add_parser("omnichannel")
+    omnichannel.add_argument(
+        "--expect-endpoint",
+        action="append",
+        default=[],
+        metavar="USER_SUBJECT=CLIENT_TYPE",
+        help="required active endpoint; may be repeated",
+    )
+
     return parser
+
+
+def handle_diagnostics(args: argparse.Namespace, home: Path) -> int:
+    if args.action != "omnichannel":
+        raise ValueError(f"unknown diagnostics action: {args.action}")
+    try:
+        report = TaskHubStore.inspect_runtime(_central_db_path(home))
+        expectations = []
+        missing = []
+        user_endpoints = {
+            item["user_subject"]: {
+                endpoint["client_type"]
+                for endpoint in item["endpoints"]
+                if endpoint["state"] == "active" and endpoint["count"] > 0
+            }
+            for item in report["users"]
+        }
+        for raw in args.expect_endpoint:
+            if "=" not in raw:
+                raise ValueError(
+                    "--expect-endpoint must use USER_SUBJECT=CLIENT_TYPE"
+                )
+            user_subject, client_type = (
+                part.strip() for part in raw.split("=", 1)
+            )
+            if not user_subject or not client_type:
+                raise ValueError(
+                    "--expect-endpoint must use USER_SUBJECT=CLIENT_TYPE"
+                )
+            expectation = {
+                "user_subject": user_subject,
+                "client_type": client_type,
+                "present": client_type in user_endpoints.get(user_subject, set()),
+            }
+            expectations.append(expectation)
+            if not expectation["present"]:
+                missing.append(expectation)
+        passed = report["isolation"]["passed"] and not missing
+        print_json(
+            {
+                "protocolVersion": "0.1",
+                "status": "succeeded" if passed else "failed",
+                "expectations": expectations,
+                "report": report,
+            }
+        )
+        return 0 if passed else 1
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        print_json(_central_cli_error("DIAGNOSTICS_FAILED", str(exc)))
+        return 2
 
 
 def handle_admin(args: argparse.Namespace, home: Path) -> int:

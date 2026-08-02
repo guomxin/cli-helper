@@ -19,6 +19,7 @@ export class AgentBridgeIdentityRouter {
       config.identityBindings.map((binding) => [binding.key, binding]),
     );
     this.clients = new Map();
+    this.identityProfiles = new Map();
     this.sessionBindings = sessionBindings;
     this.sessionEndpoints = sessionEndpoints;
   }
@@ -133,6 +134,64 @@ export class AgentBridgeIdentityRouter {
         client: this.clientForBinding(binding),
       }))
       .filter((item) => item.client);
+  }
+
+  async refreshIdentityProfiles({ logger = null, signal } = {}) {
+    const profiles = [];
+    for (const { binding, client } of this.configuredIdentities()) {
+      try {
+        const result = await client.callTool(
+          "agentbridge_host_identity_profile",
+          { agent_host: "openclaw" },
+          {
+            signal,
+            meta: {
+              "io.agentbridge/host": {
+                version: "1",
+                agentHost: "openclaw",
+              },
+            },
+          },
+        );
+        const allowedToolNames = Array.isArray(
+          result?.agentToolAccess?.allowedToolNames,
+        )
+          ? result.agentToolAccess.allowedToolNames.filter(
+              (name) => typeof name === "string" && name.trim(),
+            )
+          : null;
+        if (!allowedToolNames) {
+          throw new Error("AgentBridge identity profile omitted tool access");
+        }
+        const profile = Object.freeze({
+          userSubject: identityPart(result?.identity?.userSubject, false),
+          scopes: Object.freeze(
+            Array.isArray(result?.identity?.scopes)
+              ? result.identity.scopes.filter(
+                  (scope) => typeof scope === "string" && scope.trim(),
+                )
+              : [],
+          ),
+          allowedToolNames: new Set(allowedToolNames),
+          expiresAt: identityPart(result?.identity?.expiresAt, false),
+        });
+        this.identityProfiles.set(binding.key, profile);
+        profiles.push({
+          bindingKey: binding.key,
+          userSubject: profile.userSubject,
+          allowedToolCount: profile.allowedToolNames.size,
+        });
+      } catch (error) {
+        logger?.warn?.(
+          `AgentBridge identity tool profile unavailable for ${binding.label || binding.key}; existing fail-open catalog is retained (${safeErrorCode(error)})`,
+        );
+      }
+    }
+    return profiles;
+  }
+
+  allowedToolNamesForBinding(binding) {
+    return binding ? this.identityProfiles.get(binding.key)?.allowedToolNames || null : null;
   }
 
   restoreSessionBinding({ sessionKey, bindingKey, endpointKey = null }) {
@@ -328,4 +387,11 @@ function identityPart(value, lowercase) {
   }
   const normalized = String(value).trim().slice(0, 512);
   return normalized ? (lowercase ? normalized.toLowerCase() : normalized) : null;
+}
+
+function safeErrorCode(error) {
+  return String(error?.code || error?.name || "IDENTITY_PROFILE_ERROR")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_.-]/g, "_")
+    .slice(0, 80);
 }

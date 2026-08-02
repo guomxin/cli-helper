@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.10";
+export const PLUGIN_VERSION = "0.4.11";
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -263,6 +263,15 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   });
 
   api.on("gateway_start", async () => {
+    const identityProfiles =
+      (await identityRouter.refreshIdentityProfiles?.({
+        logger: api.logger,
+      })) || [];
+    if (identityProfiles.length > 0) {
+      api.logger.info(
+        `AgentBridge identity tool profiles loaded (identities=${identityProfiles.length})`,
+      );
+    }
     await recoverHostTasks({
       coordinator,
       identityRouter,

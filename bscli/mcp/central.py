@@ -95,6 +95,7 @@ from bscli.broker.remote_browser import (
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
+from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.mcp.presentation import (
     MCP_APP_MIME_TYPE,
     MCP_APP_RESOURCE_URI,
@@ -118,6 +119,65 @@ HOST_CONTEXT_META_KEY = "io.agentbridge/host"
 TASK_CONTEXT_META_KEY = "io.agentbridge/task"
 
 
+AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
+    "agentbridge_server_profile": frozenset(),
+    "agentbridge_interaction_get": frozenset(),
+    "agentbridge_operation_get": frozenset(),
+    "agentbridge_operation_list": frozenset(),
+    "oa_template_list": frozenset({"oa:read"}),
+    "oa_certificate_search": frozenset({"oa:read"}),
+    "oa_certificate_prepare_download": frozenset({"oa:read"}),
+    "oa_workflow_pending_list": frozenset({"oa:read"}),
+    "oa_workflow_sent_list": frozenset({"oa:read"}),
+    "oa_workflow_done_list": frozenset({"oa:read"}),
+    "oa_workflow_tracked_list": frozenset({"oa:read"}),
+    "oa_workflow_detail_get": frozenset({"oa:read"}),
+    "oa_workflow_opinions_list": frozenset({"oa:read"}),
+    "oa_session_status": frozenset({"oa:read"}),
+    "oa_session_login": frozenset({"oa:read"}),
+    "oa_efficiency_data_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_travel_expense_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_labor_contract_renewal_approval_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
+    "oa_weekly_report_acknowledgement_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
+    "oa_standard_collaboration_approval_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
+    "oa_workflow_revoke_prepare": frozenset({"oa:write:revoke"}),
+    "oa_business_trip_prepare": frozenset({"oa:write:draft"}),
+    "oa_business_trip_submit_prepare": frozenset({"oa:write:submit"}),
+    "oa_leave_prepare": frozenset({"oa:write:draft"}),
+    "oa_leave_submit_prepare": frozenset({"oa:write:submit"}),
+    "oa_missed_punch_prepare": frozenset({"oa:write:draft"}),
+    "oa_missed_punch_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
+    "taihua_work_log_my_list": frozenset({"taihua:read"}),
+    "taihua_work_log_team_list": frozenset({"taihua:read"}),
+    "taihua_project_search": frozenset({"taihua:read"}),
+    "taihua_work_log_create_prepare": frozenset({"taihua:write:worklog"}),
+    "taihua_session_status": frozenset({"taihua:read"}),
+    "taihua_session_login": frozenset({"taihua:read"}),
+    "yuque_public_books_list": frozenset({"yuque:read"}),
+    "yuque_document_catalog": frozenset({"yuque:read"}),
+    "yuque_document_search": frozenset({"yuque:read"}),
+    "yuque_document_read": frozenset({"yuque:read"}),
+    "yuque_session_status": frozenset({"yuque:read"}),
+    "yuque_session_login": frozenset({"yuque:read"}),
+}
+
+
+def agent_facing_tools_for_scopes(scopes: list[str] | set[str]) -> list[str]:
+    granted = set(scopes)
+    return [
+        name
+        for name, required in AGENT_FACING_TOOL_SCOPE_REQUIREMENTS.items()
+        if required.issubset(granted)
+    ]
+
+
 async def _run_host_control(
     operation_name: str,
     operation: Any,
@@ -127,16 +187,27 @@ async def _run_host_control(
 ) -> Any:
     user_subject = str(kwargs.get("user_subject") or "unknown")
     started_at = perf_counter()
+    error_code = None
     try:
         return await asyncio.to_thread(operation, **kwargs)
+    except Exception as exc:
+        error_code = exc.__class__.__name__
+        raise
     finally:
         elapsed_seconds = perf_counter() - started_at
+        elapsed_ms = round(elapsed_seconds * 1000)
+        HOST_CONTROL_DIAGNOSTICS.record(
+            operation_name=operation_name,
+            user_subject=user_subject,
+            elapsed_ms=elapsed_ms,
+            error_code=error_code,
+        )
         if elapsed_seconds >= warn_after_seconds:
             _LOGGER.warning(
                 "AgentBridge host control slow: tool=%s elapsed_ms=%d "
                 "user_subject=%s",
                 operation_name,
-                round(elapsed_seconds * 1000),
+                elapsed_ms,
                 user_subject,
             )
 
@@ -2010,6 +2081,44 @@ def create_central_mcp_server(
             user_subject=identity["user_subject"],
             limit=limit,
         )
+
+    @mcp.tool(
+        name="agentbridge_host_identity_profile",
+        title="Resolve Host Identity Tool Access",
+        description=(
+            "Host-private authenticated identity and agent-tool access profile. "
+            "It exposes no bearer secret or downstream credential."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_identity_profile(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        allowed_tools = agent_facing_tools_for_scopes(identity["scopes"])
+        return {
+            "schemaVersion": "agentbridge.host-identity-profile.v1",
+            "status": "succeeded",
+            "identity": {
+                "tokenId": identity["token_id"],
+                "userSubject": identity["user_subject"],
+                "label": identity.get("label"),
+                "scopes": identity["scopes"],
+                "expiresAt": identity["expires_at"],
+            },
+            "agentToolAccess": {
+                "allowedToolNames": allowed_tools,
+                "allowedToolCount": len(allowed_tools),
+            },
+        }
 
     @mcp.tool(
         name="agentbridge_host_task_ensure",

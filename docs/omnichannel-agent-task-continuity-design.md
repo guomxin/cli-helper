@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-08-02
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.10、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.11、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示和展示层文本
@@ -42,7 +42,7 @@
   同步到 Workspace、Telegram 和微信；
 - 消息幂等键、Interaction 状态语义去重和任务终态保护共同防止重复卡片、重复文本
   以及成功任务被旧交互重新打开。
-- OpenClaw `0.4.10` 向已绑定网页、Telegram 和微信会话注册同一套 41 个智能体工具：
+- OpenClaw `0.4.11` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
   1 个身份状态工具、读取工具和 17 个受治理入口；15 个底层 commit/续办工具保留在
   宿主内部，不向模型注册。
 

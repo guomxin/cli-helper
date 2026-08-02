@@ -15,6 +15,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$npmCache = Join-Path $repoRoot ".npm-cache"
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 $dependenciesUpdated = $false
 
@@ -35,6 +36,31 @@ function Invoke-External {
     }
     finally {
         Pop-Location
+    }
+}
+
+function Invoke-NpmExternal {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    )
+
+    New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+    $hadCache = Test-Path Env:NPM_CONFIG_CACHE
+    $previousCache = $env:NPM_CONFIG_CACHE
+    try {
+        $env:NPM_CONFIG_CACHE = $npmCache
+        Invoke-External -FilePath $FilePath -Arguments $Arguments -Label $Label -WorkingDirectory $WorkingDirectory
+    }
+    finally {
+        if ($hadCache) {
+            $env:NPM_CONFIG_CACHE = $previousCache
+        }
+        else {
+            Remove-Item Env:NPM_CONFIG_CACHE -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -161,18 +187,18 @@ if ($runOpenClaw -or $McpApp) {
 
 if ($runOpenClaw) {
     $pluginRoot = Join-Path $repoRoot "integrations\openclaw-agentbridge"
-    Invoke-External -FilePath $npm.Source -Arguments @("test") -Label "OpenClaw plugin tests" -WorkingDirectory $pluginRoot
+    Invoke-NpmExternal -FilePath $npm.Source -Arguments @("test") -Label "OpenClaw plugin tests" -WorkingDirectory $pluginRoot
 }
 
 if ($runOpenClaw -and ($Mode -eq "Full" -or $PackCheck)) {
     $pluginRoot = Join-Path $repoRoot "integrations\openclaw-agentbridge"
-    Invoke-External -FilePath $npm.Source -Arguments @("run", "pack:check") -Label "OpenClaw package manifest check" -WorkingDirectory $pluginRoot
+    Invoke-NpmExternal -FilePath $npm.Source -Arguments @("run", "pack:check") -Label "OpenClaw package manifest check" -WorkingDirectory $pluginRoot
 }
 
 if ($McpApp) {
     $appRoot = Join-Path $repoRoot "integrations\mcp-app"
-    Invoke-External -FilePath $npm.Source -Arguments @("run", "check") -Label "MCP App checks" -WorkingDirectory $appRoot
-    Invoke-External -FilePath $npm.Source -Arguments @("run", "build") -Label "MCP App build" -WorkingDirectory $appRoot
+    Invoke-NpmExternal -FilePath $npm.Source -Arguments @("run", "check") -Label "MCP App checks" -WorkingDirectory $appRoot
+    Invoke-NpmExternal -FilePath $npm.Source -Arguments @("run", "build") -Label "MCP App build" -WorkingDirectory $appRoot
 }
 
 $stopwatch.Stop()

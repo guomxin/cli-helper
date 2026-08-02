@@ -202,14 +202,31 @@ async function renderInteractions() {
 async function renderRuntime() {
   const [data, accounts] = await Promise.all([api("/api/runtime"), api("/api/admin-accounts")]);
   const accountRows = accounts.items.map(account => `<tr><td>${escapeHtml(account.username)}</td><td>${escapeHtml(account.role)}</td><td>${badge(account.state)}</td><td>${account.must_change_password ? badge("pending") : badge("active")}</td><td>${fmtTime(account.last_login_at)}</td><td>${fmtTime(account.created_at)}</td></tr>`);
+  const taskHub = data.coordination?.task_hub || { summary: {}, users: [], isolation: { passed: false, violations: {} } };
+  const hostControl = data.coordination?.host_control || { operations: [], recent_slow_calls: [], slow_after_ms: 1000 };
+  const endpointRows = taskHub.users.map(user => `<tr><td>${escapeHtml(user.user_subject)}</td><td>${user.endpoints.map(endpoint => `${escapeHtml(endpoint.client_type)} ${badge(endpoint.state)} × ${endpoint.count}`).join("<br>") || "--"}</td><td>${user.active_workspace_accounts}</td><td>${Object.entries(user.task_statuses).map(([status, count]) => `${badge(status)} × ${count}`).join(" ") || "--"}</td><td>${user.timeline_entries}</td><td>${Object.entries(user.outbox_states).map(([status, count]) => `${badge(status)} × ${count}`).join(" ") || "--"}</td><td>${fmtTime(user.oldest_outstanding_delivery_at)}</td></tr>`);
+  const operationRows = hostControl.operations.map(operation => `<tr><td class="code">${escapeHtml(operation.operation_name)}</td><td>${operation.call_count}</td><td>${operation.slow_count}</td><td>${operation.error_count}</td><td>${operation.average_elapsed_ms} ms</td><td>${operation.max_elapsed_ms} ms</td><td>${fmtTime(operation.last_called_at)}</td></tr>`);
+  const slowRows = hostControl.recent_slow_calls.map(call => `<tr><td>${fmtTime(call.called_at)}</td><td>${escapeHtml(call.user_subject)}</td><td class="code">${escapeHtml(call.operation_name)}</td><td>${call.elapsed_ms} ms</td><td>${escapeHtml(call.error_code || "--")}</td></tr>`);
+  const violationRows = Object.entries(taskHub.isolation?.violations || {}).map(([name, count]) => `<tr><td class="code">${escapeHtml(name)}</td><td>${count}</td><td>${badge(count === 0 ? "succeeded" : "failed")}</td></tr>`);
   content.innerHTML = `<div class="metric-grid">
     ${metric("发布版本", data.release_id, "当前服务构建")}
     ${metric("启动时间", fmtTime(data.started_at), "中心进程")}
     ${metric("管理 API", data.admin_api, "独立认证域")}
     ${metric("数据库", data.database, "SQLite WAL")}
     ${metric("保活租约", data.session_keepalive.activity_lease_seconds ? `${Math.round(data.session_keepalive.activity_lease_seconds / 86400)} 天` : "关闭", "仅真实活动续租")}
+    ${metric("活动端点", taskHub.summary.active_endpoints ?? "--", `${taskHub.summary.users ?? 0} 个用户`)}
+    ${metric("待投递", taskHub.summary.outstanding_deliveries ?? "--", `失败 ${taskHub.summary.failed_deliveries ?? 0}`)}
+    ${metric("隔离完整性", taskHub.isolation?.passed ? "通过" : "异常", `${taskHub.summary.isolation_violation_count ?? "--"} 项异常`)}
   </div><div class="view-head section-spaced"><div><h2>已配置系统</h2><p>控制台只报告状态，不提供 systemd 重启或业务代操作。</p></div></div>
   ${table(["系统 ID", "名称", "状态"], data.systems.map(system => `<tr><td class="code">${escapeHtml(system.system_id)}</td><td>${escapeHtml(system.label)}</td><td>${badge(system.configured ? "active" : "failed")}</td></tr>`))}
+  <div class="view-head section-spaced"><div><h2>多端协调诊断</h2><p>只显示端点、状态、数量和耗时，不读取聊天正文、表单值或业务结果。</p></div></div>
+  ${table(["用户", "活动端点", "网页账户", "任务状态", "时间线", "Outbox", "最早待投递"], endpointRows)}
+  <div class="view-head section-spaced"><div><h2>隔离完整性</h2><p>所有任务、时间线和通知都必须与所属用户和端点一致。</p></div></div>
+  ${table(["检查项", "异常数", "结果"], violationRows)}
+  <div class="view-head section-spaced"><div><h2>协调调用耗时</h2><p>慢调用阈值 ${hostControl.slow_after_ms} ms；统计随中心进程重启清零。</p></div></div>
+  ${table(["调用", "次数", "慢调用", "错误", "平均", "最大", "最近调用"], operationRows)}
+  <div class="view-head section-spaced"><div><h2>最近慢调用</h2><p>仅保留工具名、用户标识、耗时和错误类型。</p></div></div>
+  ${table(["时间", "用户", "调用", "耗时", "错误"], slowRows)}
   <div class="toolbar section-spaced"><div><strong>管理账户</strong><div class="muted">管理员可执行控制动作，审计员仅可查看。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-create-admin>新建账户</button>' : ""}</div>
   ${table(["用户名", "角色", "状态", "初始密码", "最近登录", "创建时间"], accountRows)}`;
 }

@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -1237,6 +1238,68 @@ class TaskHubStoreTests(unittest.TestCase):
             title="Migrated task",
         )
         self.assertEqual(task["status"], "active")
+
+    def test_runtime_diagnostics_report_counts_without_message_content(self):
+        first, _ = self._endpoint()
+        second, _ = self.store.ensure_endpoint(
+            user_subject="user-b",
+            token_id="token-b",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:2002",
+            client_type="openclaw-weixin",
+            external_subject="2002",
+            conversation_ref="agent:main:openclaw-weixin:direct:2002",
+            capabilities=["direct_status", "trusted_interaction"],
+        )
+        task, _ = self._task(first["endpoint_id"])
+        self.store.append_timeline_message(
+            user_subject="user-a",
+            source_endpoint_id=first["endpoint_id"],
+            message_key="message-secret",
+            role="user",
+            text="sensitive business text",
+            task_id=task["task_id"],
+        )
+        self.store.append_timeline_message(
+            user_subject="user-a",
+            source_endpoint_id=first["endpoint_id"],
+            message_key="message-without-task",
+            role="assistant",
+            text="ordinary cross-end status",
+        )
+
+        report = self.store.runtime_diagnostics()
+
+        self.assertTrue(report["isolation"]["passed"])
+        self.assertEqual(report["summary"]["users"], 2)
+        self.assertEqual(report["summary"]["active_endpoints"], 2)
+        self.assertGreaterEqual(report["summary"]["timeline_entries"], 1)
+        user_b = next(
+            item for item in report["users"]
+            if item["user_subject"] == "user-b"
+        )
+        self.assertEqual(user_b["endpoints"][0]["client_type"], "openclaw-weixin")
+        self.assertNotIn("sensitive business text", str(report))
+        self.assertNotIn(first["external_subject"], str(report))
+        self.assertNotIn(second["external_subject"], str(report))
+
+    def test_runtime_diagnostics_detect_cross_user_task_corruption(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        with closing(sqlite3.connect(self.store.db_path)) as connection:
+            connection.execute(
+                "UPDATE agent_tasks SET user_subject = 'user-b' WHERE task_id = ?",
+                (task["task_id"],),
+            )
+            connection.commit()
+
+        report = self.store.runtime_diagnostics()
+
+        self.assertFalse(report["isolation"]["passed"])
+        self.assertGreater(
+            report["isolation"]["violations"]["task_origin_user_mismatch"],
+            0,
+        )
 
     def _endpoint(self):
         return self.store.ensure_endpoint(

@@ -23,6 +23,7 @@ from bscli.auth.server import AuthServerConfig
 from bscli.mcp.central import (
     CentralSessionKeepalive,
     _run_host_control,
+    agent_facing_tools_for_scopes,
     create_central_mcp_server,
     serve_central_mcp,
     validate_central_mcp_server_config,
@@ -190,6 +191,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)
         self.assertIn("agentbridge_host_task_ensure", names)
+        self.assertIn("agentbridge_host_identity_profile", names)
         self.assertIn("agentbridge_host_task_observe", names)
         self.assertIn("agentbridge_host_task_recovery_list", names)
         self.assertIn("agentbridge_host_task_list", names)
@@ -981,6 +983,52 @@ class CentralMcpTests(unittest.TestCase):
 
         self.assertTrue(denied.json()["result"]["isError"])
         service.ensure_host_task.assert_not_called()
+
+    def test_host_identity_profile_returns_scope_filtered_agent_tools(self):
+        with self._server() as (_service, store, _token, client):
+            issued = store.issue(
+                user_subject="user-b",
+                expected_principal_ref="Bob",
+                label="limited-client",
+                scopes=["oa:read", "oa:write:submit"],
+                ttl_seconds=3600,
+            )
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=611,
+                token=issued["token"],
+                params={
+                    "name": "agentbridge_host_identity_profile",
+                    "arguments": {"agent_host": "openclaw"},
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        result = response.json()["result"]["structuredContent"]
+        self.assertFalse(response.json()["result"]["isError"])
+        self.assertEqual(result["identity"]["userSubject"], "user-b")
+        self.assertEqual(
+            result["agentToolAccess"]["allowedToolNames"],
+            agent_facing_tools_for_scopes(
+                ["oa:read", "oa:write:submit"]
+            ),
+        )
+        self.assertIn(
+            "oa_business_trip_submit_prepare",
+            result["agentToolAccess"]["allowedToolNames"],
+        )
+        self.assertNotIn(
+            "oa_business_trip_prepare",
+            result["agentToolAccess"]["allowedToolNames"],
+        )
+        self.assertNotIn("yuque_document_search", str(result))
+        self.assertNotIn("abmcp_", str(result))
 
     def test_host_task_ensure_uses_token_identity_and_private_metadata(self):
         with self._server() as (service, store, token, client):

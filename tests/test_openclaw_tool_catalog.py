@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
+from bscli.mcp.central import AGENT_FACING_TOOL_SCOPE_REQUIREMENTS
 from tools.export_openclaw_agentbridge_catalog import build_catalog
 
 
@@ -27,6 +28,17 @@ class OpenClawToolCatalogTests(unittest.TestCase):
                 tool["name"].startswith("agentbridge_host_")
                 for tool in committed["tools"]
             )
+        )
+        expected_agent_tools = {
+            tool["name"]
+            for tool in committed["tools"]
+            if tool.get("annotations", {}).get("readOnlyHint") is True
+            or tool["name"].endswith("_prepare")
+            or tool["name"].endswith("_session_login")
+        }
+        self.assertEqual(
+            set(AGENT_FACING_TOOL_SCOPE_REQUIREMENTS),
+            expected_agent_tools,
         )
 
 

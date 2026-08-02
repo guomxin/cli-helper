@@ -7,9 +7,40 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 from bscli.cli.main import main
+from bscli.core.tasks import TaskHubStore
 
 
 class CentralCliTests(unittest.TestCase):
+    def test_omnichannel_diagnostics_enforces_expected_active_endpoints(self):
+        with TemporaryDirectory() as tmp:
+            tasks = TaskHubStore(Path(tmp) / "agentbridge.db")
+            tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                client_type="telegram",
+                external_subject="1001",
+                conversation_ref="agent:main:telegram:direct:1001",
+            )
+            with redirect_stdout(io.StringIO()) as stdout:
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "diagnostics",
+                        "omnichannel",
+                        "--expect-endpoint",
+                        "user-a=telegram",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "succeeded")
+        self.assertTrue(payload["report"]["isolation"]["passed"])
+        self.assertTrue(payload["expectations"][0]["present"])
+
     def test_capability_list_exposes_reads_and_governed_write_workflows(self):
         with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
             exit_code = main(["--home", tmp, "capability", "list"])

@@ -607,12 +607,17 @@ test("restores a pending interaction and its original route on gateway start", a
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body);
       requests.push(body);
-      return new Response(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: body.id,
-          result: {
-            structuredContent: {
+      const structuredContent =
+        body.params.name === "agentbridge_host_identity_profile"
+          ? {
+              status: "succeeded",
+              identity: {
+                userSubject: "user-a",
+                scopes: ["oa:read"],
+              },
+              agentToolAccess: { allowedToolNames: [] },
+            }
+          : {
               status: "succeeded",
               count: 1,
               recoveries: [
@@ -633,8 +638,12 @@ test("restores a pending interaction and its original route on gateway start", a
                   interaction: recoveredInteraction,
                 },
               ],
-            },
-          },
+            };
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { structuredContent },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -643,16 +652,20 @@ test("restores a pending interaction and its original route on gateway start", a
 
   await harness.hooks.gateway_start();
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 3);
   assert.equal(
     requests[0].params.name,
-    "agentbridge_host_task_recovery_list",
+    "agentbridge_host_identity_profile",
   );
   assert.equal(
     requests[1].params.name,
+    "agentbridge_host_task_recovery_list",
+  );
+  assert.equal(
+    requests[2].params.name,
     "agentbridge_host_notification_claim",
   );
-  assert.deepEqual(requests[0].params._meta, {
+  assert.deepEqual(requests[1].params._meta, {
     "io.agentbridge/host": {
       version: "1",
       agentHost: "openclaw",

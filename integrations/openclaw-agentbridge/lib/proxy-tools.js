@@ -67,9 +67,17 @@ export function createAgentBridgeProxyTools({
   if (!identity.bound && !workspaceSession) {
     return [statusTool];
   }
+  const allowedToolNames = identity.bound
+    ? identityRouter.allowedToolNamesForBinding?.(identity.binding)
+    : null;
+  const visibleCatalog = allowedToolNames
+    ? AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.filter((descriptor) =>
+        allowedToolNames.has(descriptor.name),
+      )
+    : AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG;
   return [
     statusTool,
-    ...AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.map((descriptor) =>
+    ...visibleCatalog.map((descriptor) =>
       createProxyTool({
         descriptor,
         resolveIdentity,

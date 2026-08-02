@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
+from urllib.parse import quote
 from uuid import uuid4
 
 
@@ -966,6 +967,286 @@ class TaskHubStore:
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [_endpoint_from_row(row) for row in rows]
+
+    def runtime_diagnostics(self) -> dict[str, Any]:
+        return self.inspect_runtime(self.db_path)
+
+    @staticmethod
+    def inspect_runtime(db_path: Path | str) -> dict[str, Any]:
+        """Read task-hub health without exposing message or business payloads."""
+
+        resolved = Path(db_path).resolve().as_posix()
+        connection = sqlite3.connect(
+            f"file:{quote(resolved, safe='/:')}?mode=ro",
+            uri=True,
+            timeout=10,
+        )
+        connection.row_factory = sqlite3.Row
+        try:
+            users = {
+                str(row["user_subject"])
+                for table in (
+                    "client_endpoints",
+                    "agent_tasks",
+                    "user_timeline",
+                    "notification_outbox",
+                )
+                for row in connection.execute(
+                    f"SELECT DISTINCT user_subject FROM {table}"
+                ).fetchall()
+            }
+            has_workspace_accounts = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'workspace_accounts'
+                """
+            ).fetchone() is not None
+            has_identity_tokens = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'mcp_identity_tokens'
+                """
+            ).fetchone() is not None
+            if has_workspace_accounts:
+                users.update(
+                    str(row["user_subject"])
+                    for row in connection.execute(
+                        "SELECT DISTINCT user_subject FROM workspace_accounts"
+                    ).fetchall()
+                )
+
+            user_records = []
+            for user_subject in sorted(users):
+                endpoint_rows = connection.execute(
+                    """
+                    SELECT client_type, state, COUNT(*) AS count,
+                           MAX(last_seen_at) AS last_seen_at
+                    FROM client_endpoints
+                    WHERE user_subject = ?
+                    GROUP BY client_type, state
+                    ORDER BY client_type, state
+                    """,
+                    (user_subject,),
+                ).fetchall()
+                task_rows = connection.execute(
+                    """
+                    SELECT status, COUNT(*) AS count
+                    FROM agent_tasks
+                    WHERE user_subject = ?
+                    GROUP BY status ORDER BY status
+                    """,
+                    (user_subject,),
+                ).fetchall()
+                outbox_rows = connection.execute(
+                    """
+                    SELECT state, COUNT(*) AS count
+                    FROM notification_outbox
+                    WHERE user_subject = ?
+                    GROUP BY state ORDER BY state
+                    """,
+                    (user_subject,),
+                ).fetchall()
+                timeline = connection.execute(
+                    """
+                    SELECT COUNT(*) AS count, MAX(sequence) AS latest_sequence,
+                           MAX(created_at) AS latest_at
+                    FROM user_timeline WHERE user_subject = ?
+                    """,
+                    (user_subject,),
+                ).fetchone()
+                oldest_outstanding = connection.execute(
+                    """
+                    SELECT MIN(created_at) AS oldest_at
+                    FROM notification_outbox
+                    WHERE user_subject = ? AND state IN ('pending', 'delivering')
+                    """,
+                    (user_subject,),
+                ).fetchone()
+                workspace_count = 0
+                if has_workspace_accounts:
+                    workspace_count = int(
+                        connection.execute(
+                            """
+                            SELECT COUNT(*) AS count FROM workspace_accounts
+                            WHERE user_subject = ? AND state = 'active'
+                            """,
+                            (user_subject,),
+                        ).fetchone()["count"]
+                    )
+                user_records.append(
+                    {
+                        "user_subject": user_subject,
+                        "endpoints": [
+                            {
+                                "client_type": row["client_type"],
+                                "state": row["state"],
+                                "count": int(row["count"]),
+                                "last_seen_at": row["last_seen_at"],
+                            }
+                            for row in endpoint_rows
+                        ],
+                        "active_workspace_accounts": workspace_count,
+                        "task_statuses": {
+                            str(row["status"]): int(row["count"])
+                            for row in task_rows
+                        },
+                        "timeline_entries": int(timeline["count"] or 0),
+                        "latest_timeline_sequence": int(
+                            timeline["latest_sequence"] or 0
+                        ),
+                        "latest_timeline_at": timeline["latest_at"],
+                        "outbox_states": {
+                            str(row["state"]): int(row["count"])
+                            for row in outbox_rows
+                        },
+                        "oldest_outstanding_delivery_at": oldest_outstanding[
+                            "oldest_at"
+                        ],
+                    }
+                )
+
+            violation_queries = {
+                "task_origin_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM agent_tasks AS task
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = task.origin_endpoint_id
+                    WHERE endpoint.endpoint_id IS NULL
+                       OR endpoint.user_subject <> task.user_subject
+                """,
+                "task_event_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_events AS event
+                    LEFT JOIN agent_tasks AS task ON task.task_id = event.task_id
+                    WHERE task.task_id IS NULL
+                       OR task.user_subject <> event.user_subject
+                """,
+                "task_operation_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_operations AS link
+                    LEFT JOIN agent_tasks AS task ON task.task_id = link.task_id
+                    WHERE task.task_id IS NULL
+                       OR task.user_subject <> link.user_subject
+                """,
+                "task_interaction_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_interactions AS link
+                    LEFT JOIN agent_tasks AS task ON task.task_id = link.task_id
+                    WHERE task.task_id IS NULL
+                       OR task.user_subject <> link.user_subject
+                """,
+                "subscription_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_subscriptions AS subscription
+                    LEFT JOIN agent_tasks AS task
+                      ON task.task_id = subscription.task_id
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = subscription.endpoint_id
+                    WHERE task.task_id IS NULL OR endpoint.endpoint_id IS NULL
+                       OR task.user_subject <> subscription.user_subject
+                       OR endpoint.user_subject <> subscription.user_subject
+                """,
+                "outbox_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM notification_outbox AS delivery
+                    LEFT JOIN agent_tasks AS task
+                      ON task.task_id = NULLIF(delivery.task_id, '')
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = delivery.endpoint_id
+                    WHERE endpoint.endpoint_id IS NULL
+                       OR endpoint.user_subject <> delivery.user_subject
+                       OR (
+                           delivery.task_id <> ''
+                           AND (
+                               task.task_id IS NULL
+                               OR task.user_subject <> delivery.user_subject
+                           )
+                       )
+                """,
+                "timeline_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM user_timeline AS timeline
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = timeline.source_endpoint_id
+                    LEFT JOIN agent_tasks AS task ON task.task_id = timeline.task_id
+                    WHERE (
+                        timeline.source_endpoint_id IS NOT NULL
+                        AND (
+                            endpoint.endpoint_id IS NULL
+                            OR endpoint.user_subject <> timeline.user_subject
+                        )
+                    ) OR (
+                        timeline.task_id IS NOT NULL
+                        AND (
+                            task.task_id IS NULL
+                            OR task.user_subject <> timeline.user_subject
+                        )
+                    )
+                """,
+            }
+            if has_identity_tokens:
+                violation_queries["endpoint_token_user_mismatch"] = """
+                    SELECT COUNT(*) AS count
+                    FROM client_endpoints AS endpoint
+                    LEFT JOIN mcp_identity_tokens AS token
+                      ON token.token_id = endpoint.token_id
+                    WHERE endpoint.token_id NOT LIKE 'workspace-account:%'
+                      AND (
+                          token.token_id IS NULL
+                          OR token.user_subject <> endpoint.user_subject
+                      )
+                """
+            if has_workspace_accounts:
+                violation_queries["workspace_endpoint_user_mismatch"] = """
+                    SELECT COUNT(*) AS count
+                    FROM workspace_accounts AS account
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = account.endpoint_id
+                    WHERE account.endpoint_id IS NULL
+                       OR endpoint.endpoint_id IS NULL
+                       OR endpoint.user_subject <> account.user_subject
+                """
+            violations = {
+                name: int(connection.execute(query).fetchone()["count"])
+                for name, query in violation_queries.items()
+            }
+            totals = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM client_endpoints
+                     WHERE state = 'active') AS active_endpoints,
+                    (SELECT COUNT(*) FROM agent_tasks
+                     WHERE status IN ('active', 'waiting_user', 'running'))
+                        AS active_tasks,
+                    (SELECT COUNT(*) FROM notification_outbox
+                     WHERE state IN ('pending', 'delivering'))
+                        AS outstanding_deliveries,
+                    (SELECT COUNT(*) FROM notification_outbox
+                     WHERE state = 'failed') AS failed_deliveries,
+                    (SELECT COUNT(*) FROM user_timeline) AS timeline_entries
+                """
+            ).fetchone()
+        finally:
+            connection.close()
+
+        violation_count = sum(violations.values())
+        return {
+            "generated_at": _utc_now(),
+            "summary": {
+                "users": len(user_records),
+                "active_endpoints": int(totals["active_endpoints"]),
+                "active_tasks": int(totals["active_tasks"]),
+                "outstanding_deliveries": int(totals["outstanding_deliveries"]),
+                "failed_deliveries": int(totals["failed_deliveries"]),
+                "timeline_entries": int(totals["timeline_entries"]),
+                "isolation_violation_count": violation_count,
+            },
+            "users": user_records,
+            "isolation": {
+                "passed": violation_count == 0,
+                "violations": violations,
+            },
+        }
 
     def list_user_events(
         self,

@@ -193,6 +193,41 @@ class GovernanceRuntimeTests(unittest.TestCase):
 
 
 class AdminControlPlaneTests(unittest.TestCase):
+    def test_runtime_exposes_non_sensitive_coordination_diagnostics(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            identities = McpIdentityTokenStore(service.db_path)
+            issued = identities.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read"],
+                ttl_seconds=3600,
+            )
+            service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id=issued["token_id"],
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                client_type="telegram",
+                external_subject="1001",
+                conversation_ref="agent:main:telegram:direct:1001",
+            )
+
+            runtime = AdminControlPlane(
+                service=service,
+                identity_store=identities,
+            ).runtime()
+
+        task_hub = runtime["coordination"]["task_hub"]
+        self.assertTrue(task_hub["isolation"]["passed"])
+        self.assertEqual(task_hub["summary"]["active_endpoints"], 1)
+        self.assertEqual(task_hub["users"][0]["user_subject"], "user-a")
+        self.assertNotIn("1001", json.dumps(task_hub))
+        self.assertIn("operations", runtime["coordination"]["host_control"])
+
     def test_token_issue_adds_base_read_scope_and_identity_sessions(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
@@ -584,7 +619,7 @@ def _request(
     cookies: dict[str, str] | None = None,
     csrf: str | None = None,
 ) -> tuple[int, http.client.HTTPMessage, dict]:
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
     headers = {"Host": f"127.0.0.1:{port}"}
     payload = None
     if body is not None:
@@ -596,13 +631,14 @@ def _request(
         headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
     if csrf:
         headers["X-AgentBridge-CSRF"] = csrf
-    connection.request(method, path, body=payload, headers=headers)
-    response = connection.getresponse()
-    raw = response.read()
-    parsed = json.loads(raw.decode("utf-8")) if raw else {}
-    result = (response.status, response.headers, parsed)
-    connection.close()
-    return result
+    try:
+        connection.request(method, path, body=payload, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        parsed = json.loads(raw.decode("utf-8")) if raw else {}
+        return response.status, response.headers, parsed
+    finally:
+        connection.close()
 
 
 def _cookies(headers: http.client.HTTPMessage) -> dict[str, str]:

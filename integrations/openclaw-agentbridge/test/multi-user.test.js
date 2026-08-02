@@ -384,6 +384,76 @@ test("workspace and direct sessions expose the same governed capabilities", () =
   );
 });
 
+test("scope profiles give one identity the same reduced catalog on web and chat", async () => {
+  const requests = [];
+  const config = multiUserConfig({
+    identityBindings: [binding("1001", "TOKEN_A", { label: "limited" })],
+  });
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a" },
+    config,
+    responseForTool(name) {
+      if (name === "agentbridge_host_identity_profile") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            identity: {
+              userSubject: "user-a",
+              scopes: ["oa:read"],
+              expiresAt: "2099-01-01T00:00:00+00:00",
+            },
+            agentToolAccess: {
+              allowedToolNames: [
+                "agentbridge_server_profile",
+                "oa_template_list",
+                "oa_session_status",
+                "oa_session_login",
+              ],
+            },
+          },
+        };
+      }
+      return null;
+    },
+  });
+  const profiles = await router.refreshIdentityProfiles();
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  const bindingKey = router.config.identityBindings[0].key;
+  assert.equal(
+    router.restoreSessionBinding({ sessionKey, bindingKey }),
+    true,
+  );
+
+  const workspaceNames = createAgentBridgeProxyTools({
+    context: { sessionKey, messageChannel: "webchat" },
+    identityRouter: router,
+    serverName: "agentbridge",
+  }).map((tool) => tool.name);
+  const directNames = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+  }).map((tool) => tool.name);
+
+  assert.equal(profiles.length, 1);
+  assert.deepEqual(workspaceNames, directNames);
+  assert.deepEqual(workspaceNames, [
+    "agentbridge_identity_status",
+    "agentbridge_server_profile",
+    "oa_template_list",
+    "oa_session_status",
+    "oa_session_login",
+  ]);
+  assert.equal(workspaceNames.includes("oa_business_trip_prepare"), false);
+  assert.equal(workspaceNames.includes("yuque_document_search"), false);
+  assert.equal(
+    requests[0].body.params.name,
+    "agentbridge_host_identity_profile",
+  );
+});
+
 test("agent-facing catalogs hide internal commit and continuation tools", () => {
   const router = createRouter({
     requests: [],
