@@ -1,8 +1,8 @@
 # Agent Interaction Protocol
 
-> Status: current protocol baseline for AgentBridge `0.4.14`
+> Status: current protocol baseline for AgentBridge `0.4.15`
 >
-> Updated: 2026-08-02
+> Updated: 2026-08-03
 
 ## Purpose
 

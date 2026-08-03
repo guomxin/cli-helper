@@ -5,7 +5,7 @@
 > 更新日期：2026-08-03
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.14
+> `agentbridge-interactions` 0.4.15
 
 ## 1. 定位
 
@@ -253,7 +253,7 @@ openclaw devices approve <requestId> --json
 
 2026-08-01 能力一致与有序文本同步验收：
 
-1. OpenClaw 插件 `0.4.14` 启动时按身份 scope 加载工具目录；同一用户在网页、Telegram 和
+1. OpenClaw 插件 `0.4.15` 启动时按身份 scope 加载工具目录；同一用户在网页、Telegram 和
    微信使用同一套读取与受治理入口；
 2. 保存草稿、正式提交、审批、撤销、会议创建、日志创建和
    `agentbridge_interaction_resume` 等 15 个内部工具不向模型注册；

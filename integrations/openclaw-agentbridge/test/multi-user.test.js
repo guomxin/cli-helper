@@ -360,6 +360,32 @@ test("fails closed when pinned session account changes", () => {
   assert.equal(identity.reason, "session_identity_conflict");
   assert.equal(router.clientForSession(sessionKey), null);
 });
+
+test("does not poison a pinned Telegram identity when webchat inspects its session", () => {
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+  });
+  const sessionKey = "agent:main:telegram:direct:1001";
+
+  assert.equal(
+    router.resolveToolContext(toolContext("1001", sessionKey)).bound,
+    true,
+  );
+  const webchatContext = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "webchat",
+  });
+
+  assert.equal(webchatContext.bound, false);
+  assert.equal(webchatContext.reason, "session_identity_conflict");
+  assert.notEqual(router.clientForSession(sessionKey), null);
+  assert.equal(
+    router.resolveToolContext(toolContext("1001", sessionKey)).bound,
+    true,
+  );
+});
+
 test("fails closed when one OpenClaw session changes Telegram identity", () => {
   const router = createRouter({
     requests: [],

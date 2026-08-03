@@ -280,10 +280,18 @@ export class AgentBridgeIdentityRouter {
     const normalizedAccountId = identityPart(accountId, false);
     if (
       !workspaceSession &&
-      ((normalizedChannel && normalizedChannel !== binding.channel) ||
-        (normalizedAccountId &&
-          binding.accountId !== null &&
-          normalizedAccountId !== binding.accountId))
+      normalizedChannel &&
+      normalizedChannel !== binding.channel
+    ) {
+      // Control-plane clients can inspect a channel session through webchat/http.
+      // Reject that invocation without permanently poisoning the channel binding.
+      return unbound("session_identity_conflict");
+    }
+    if (
+      !workspaceSession &&
+      normalizedAccountId &&
+      binding.accountId !== null &&
+      normalizedAccountId !== binding.accountId
     ) {
       this.sessionBindings.set(sessionKey, "conflict");
       return unbound("session_identity_conflict");

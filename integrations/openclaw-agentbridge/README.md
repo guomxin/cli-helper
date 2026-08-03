@@ -115,6 +115,11 @@ within six hours. The current endpoint is excluded, injected text is capped at
 6,000 characters and marked as untrusted conversation data, and no execution
 authority moves between sessions. Ordinary prompts do not perform this read.
 
+Version 0.4.15 keeps control-plane `webchat`/`http` inspection of an existing
+channel session from permanently poisoning that channel's pinned identity. The
+inspecting invocation still fails closed, while a real account change on the
+same channel remains a sticky identity conflict.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -149,7 +154,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.14, ...)
+AgentBridge interaction plugin registered (version=0.4.15, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
