@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.18";
+export const PLUGIN_VERSION = "0.4.19";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -443,9 +443,10 @@ async function resolveTaskContinuationContext({
   let identity = identityRouter.resolveToolContext({
     sessionKey,
     messageChannel:
+      channelFromPrivateSessionKey(sessionKey) ||
       context.messageProvider ||
       context.channel ||
-      channelFromPrivateSessionKey(sessionKey),
+      null,
     requesterSenderId: context.senderId || context.chatId,
     agentAccountId: context.channelContext?.accountId,
   });
@@ -546,9 +547,10 @@ async function crossEndpointPromptContext({
   let identity = identityRouter.resolveToolContext({
     sessionKey,
     messageChannel:
+      channelFromPrivateSessionKey(sessionKey) ||
       context.messageProvider ||
       context.channel ||
-      channelFromPrivateSessionKey(sessionKey),
+      null,
     requesterSenderId: context.senderId || context.chatId,
     agentAccountId: context.channelContext?.accountId,
   });

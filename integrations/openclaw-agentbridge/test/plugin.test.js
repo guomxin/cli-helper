@@ -65,7 +65,8 @@ test("injects bounded same-user context only for explicit cross-end references",
   registerAgentBridgeInteractions(harness.api, { identityRouter });
   const context = {
     sessionKey,
-    messageProvider: "telegram",
+    messageProvider: "openclaw",
+    channel: "cli",
     channelId: "user-a",
     chatId: "user-a",
     senderId: "user-a",
