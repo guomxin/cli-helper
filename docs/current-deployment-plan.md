@@ -1852,6 +1852,23 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   必备目录。为避免在真实 Telegram/Workspace Endpoint 留下测试选择，本次发布只验证工具
   注册、鉴权和自动化行为；真实“网页选择、聊天端接续”由用户下一轮按既有任务验收。
 
+### 15.51 2026-08-03 跨端任务接续真实验收
+
+- 以辛国茂 Workspace 当日已成功的“读取 OA 待办”任务为样本。验收前该任务只关联一个
+  `oa.workflow.pending.list` Operation，状态为 `succeeded`；TG 端发送“继续刚才网页里的
+  待办任务”后，服务端按 `source_client_type=web` 返回 4 个同用户候选并持久化
+  `awaiting_selection`，没有调用 OA，也没有创建第二个待办列表 Operation。
+- TG 端随后按显式任务选择并请求“读取原结果中的第 1 条详情”。Task Hub 将接续模式切换为
+  `follow_up`，复用原 `taskId`，只新增一个成功的 `oa.workflow.detail.get` Operation；原
+  `oa.workflow.pending.list` 仍保持一个，任务终态仍为 `succeeded`，活动会话切换到 TG。
+- OpenClaw 最终报告 `deliverySucceeded=true`，详情摘要已送达原 Telegram 私聊。验收时段中央
+  Operation 增量仅为上述详情读取，没有审批、提交、撤销、创建或其他业务写能力。
+- 首轮候选解析的 CLI 调用在 334 秒外层时限内未返回，但 Gateway 后续完成了同一回合；会话
+  记录显示候选生成阶段没有工具调用，AgentBridge 也没有 Operation 增量，说明延迟发生在
+  OpenClaw 本机回合进入/返回链路，而不是 OA 或任务接续解析。第二轮热路径端到端 56.6 秒，
+  其中 OpenClaw agent 执行约 29.0 秒并一次成功。
+- 本轮只增加验收记录，没有修改代码、重启 AgentBridge/OpenClaw 或重新部署服务。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
