@@ -6,7 +6,6 @@ import {
   buildPresentation,
   isPrivateSessionKey,
   processToolResult,
-  senderFromPrivateSessionKey,
   WITHHELD_URL,
 } from "../lib/interaction.js";
 import {
@@ -143,22 +142,4 @@ test("classifies only main and direct sessions as private", () => {
   assert.equal(isPrivateSessionKey("agent:main:telegram:group:-100"), false);
   assert.equal(isPrivateSessionKey("agent:main:discord:channel:123"), false);
   assert.equal(isPrivateSessionKey(undefined), false);
-});
-
-test("extracts the trusted peer only from private direct sessions", () => {
-  assert.equal(
-    senderFromPrivateSessionKey("agent:main:telegram:direct:1001"),
-    "1001",
-  );
-  assert.equal(
-    senderFromPrivateSessionKey(
-      "agent:main:openclaw-weixin:direct:o9cq806qdyig1p-49qijq1wlpimo@im.wechat",
-    ),
-    "o9cq806qdyig1p-49qijq1wlpimo@im.wechat",
-  );
-  assert.equal(
-    senderFromPrivateSessionKey("agent:main:telegram:group:-100"),
-    null,
-  );
-  assert.equal(senderFromPrivateSessionKey("agent:main:main"), null);
 });

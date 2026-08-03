@@ -88,7 +88,8 @@ test("injects bounded same-user context only for explicit cross-end references",
   assert.equal(calls.length, 1);
   assert.equal(routeContexts.length, 1);
   assert.equal(routeContexts[0].messageChannel, "telegram");
-  assert.equal(routeContexts[0].requesterSenderId, "user-a");
+  assert.equal(routeContexts[0].requesterSenderId, null);
+  assert.equal(routeContexts[0].agentAccountId, null);
   assert.equal(calls[0].name, "agentbridge_host_cross_endpoint_context");
   assert.deepEqual(calls[0].arguments_, {
     agent_host: "openclaw",

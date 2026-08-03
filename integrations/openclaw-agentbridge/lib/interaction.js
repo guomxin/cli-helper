@@ -307,17 +307,6 @@ export function channelFromPrivateSessionKey(sessionKey) {
   return match ? match[1].toLowerCase() : null;
 }
 
-export function senderFromPrivateSessionKey(sessionKey) {
-  if (!isPrivateSessionKey(sessionKey)) {
-    return null;
-  }
-  const match = sessionKey
-    .trim()
-    .match(/^agent:[^:]+:[a-z0-9][a-z0-9._-]{0,63}:(?:direct|dm):(.+)$/i);
-  const senderId = match?.[1]?.trim();
-  return senderId || null;
-}
-
 export function isInteractionExpired(interaction, now = Date.now()) {
   if (!interaction.expiresAt) {
     return false;
