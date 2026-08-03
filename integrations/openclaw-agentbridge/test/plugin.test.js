@@ -16,6 +16,90 @@ import {
   toolResult,
 } from "./fixtures.js";
 
+test("injects bounded same-user context only for explicit cross-end references", async () => {
+  const calls = [];
+  const routeContexts = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const client = {
+    async callTool(name, arguments_, options) {
+      calls.push({ name, arguments_, options });
+      return {
+        status: "succeeded",
+        entries: [
+          {
+            sequence: 40,
+            role: "user",
+            text: "读取我的 OA 待办",
+            source: { clientType: "web", label: "Agent Workspace" },
+          },
+          {
+            sequence: 41,
+            role: "assistant",
+            text: "第 1 条 affair_id 是 affair-new-123",
+            source: { clientType: "web", label: "Agent Workspace" },
+          },
+        ],
+      };
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext(context) {
+      routeContexts.push(context);
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+  const context = {
+    sessionKey,
+    messageProvider: "telegram",
+    channelId: "user-a",
+    chatId: "user-a",
+    senderId: "user-a",
+  };
+
+  const sameEndpoint = await harness.hooks.before_prompt_build(
+    { prompt: "查看第 1 条详情", messages: [] },
+    context,
+  );
+  const crossEndpoint = await harness.hooks.before_prompt_build(
+    {
+      prompt: "查看刚才网页端列表中的第 1 条详情",
+      messages: [],
+    },
+    context,
+  );
+
+  assert.equal(sameEndpoint, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(routeContexts.length, 1);
+  assert.equal(routeContexts[0].messageChannel, "telegram");
+  assert.equal(routeContexts[0].requesterSenderId, "user-a");
+  assert.equal(calls[0].name, "agentbridge_host_cross_endpoint_context");
+  assert.deepEqual(calls[0].arguments_, {
+    agent_host: "openclaw",
+    endpoint_key: "telegram:*:user-a",
+    max_age_minutes: 360,
+    limit: 12,
+  });
+  assert.match(crossEndpoint.prependContext, /untrusted conversation data/);
+  assert.match(crossEndpoint.prependContext, /affair-new-123/);
+  assert.match(crossEndpoint.prependContext, /Agent Workspace/);
+});
+
 test("confirms a workspace link from the authenticated command sender after restart", async () => {
   const requests = [];
   const senderId = "7052061588";

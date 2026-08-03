@@ -9,7 +9,7 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.11 为当前代码版本。
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.14 为当前代码版本。
 > 中心端当前定义 66 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
 > AgentBridge 业务工具和 1 个身份状态工具；15 个 commit/continuation 工具只供协调器
 > 内部调用，另有 10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
@@ -514,7 +514,7 @@ openclaw gateway status --deep --require-rpc
 一套共享 Token 工具。完整配置见
 [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)。
 
-链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.11, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.14, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
 `env.vars.NODE_EXTRA_CA_CERTS` 是 OpenClaw 的持久托管环境，不要只在一次性的
 PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，
@@ -1783,6 +1783,26 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `gpt-5.5` 模型 HTTP 请求在 21 秒后 `ETIMEDOUT`，随后重试成功；该延迟不是两个
   Workspace 用户串行执行，也不是 AgentBridge 数据库或 Outbox 锁竞争；
 - 本轮读取了待办摘要，但没有打开详情、改变已读状态或处理任何待办。
+
+### 15.48 2026-08-03 显式跨端指代上下文一期
+
+- 中心 MCP 新增宿主私有只读能力 `agentbridge_host_cross_endpoint_context`。调用时先核验
+  当前 `endpointKey` 属于 Bearer 身份，再仅返回同一 `userSubject` 其他端点最近 6 小时、
+  最多 12 条 `user/assistant` 非敏感时间线文本；当前端点和其他用户均被排除。
+- OpenClaw `before_prompt_build` 仅在提示同时包含端点提示和指代词时读取该上下文，最多
+  注入 6,000 字符，并明确标为不可信会话数据。普通问题不增加 MCP 调用，完整 Transcript、
+  系统提示、工具参数、可信字段、Cookie 和执行权限均不跨 Session 复制。
+- 首轮真实测试暴露 OpenClaw Hook 的 `channelId` 实际为聊天对象 ID，而非渠道名。插件原先
+  把 `7052061588` 当成渠道，身份路由返回 `IDENTITY_NOT_PROVISIONED`。修复后优先使用
+  `messageProvider`，缺失时从可信私聊 `sessionKey` 解析渠道；重启后的会话绑定仍按唯一配置
+  身份恢复，账号歧义时继续失败关闭。
+- 增加 `CrossEndpointContext` MCP 冒烟检查，辛国茂身份返回 11 条网页端文本并命中唯一
+  样本。随后在真实 TG Session 通过 OpenClaw CLI 发起严格指代测试，模型准确返回
+  `ABX2-0803-1144-N8R4：-6621917081958332574`，未调用任何业务工具；本轮提示上下文从
+  39 字增加到 1,916 字，运行约 8.7 秒完成。
+- 完整门禁通过 Python `478 passed, 3 skipped, 197 subtests passed`、Workspace Gateway
+  Node `19/19`、OpenClaw 插件 `103/103`、MCP App 类型检查和构建、`pip check` 与 npm
+  pack dry-run。本轮没有执行 OA、泰华或语雀业务写入。
 
 ## 16. 后续演进顺序
 

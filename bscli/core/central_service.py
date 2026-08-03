@@ -1370,6 +1370,76 @@ class CentralCapabilityService:
             "tasks": [task_response(task) for task in tasks],
         }
 
+    def get_host_cross_endpoint_context(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        max_age_minutes: int = 360,
+        limit: int = 12,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        max_age_minutes = min(max(int(max_age_minutes), 1), 1_440)
+        limit = min(max(int(limit), 1), 20)
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        endpoints = {
+            item["endpoint_id"]: item
+            for item in self.tasks.list_endpoints(
+                user_subject=user_subject,
+                active_only=False,
+                limit=500,
+            )
+        }
+        selected = []
+        for entry in reversed(
+            self.tasks.list_timeline(
+                user_subject=user_subject,
+                limit=min(500, max(limit * 10, 100)),
+            )
+        ):
+            if entry.get("entry_type") != "chat_message":
+                continue
+            if entry.get("source_endpoint_id") == endpoint["endpoint_id"]:
+                continue
+            created_at = _parse_utc(entry.get("created_at"))
+            if created_at is None or created_at < cutoff:
+                continue
+            role = str(entry.get("role") or "").strip()
+            text = str(entry.get("text") or "").strip()
+            if role not in {"user", "assistant"} or not text:
+                continue
+            source = endpoints.get(entry.get("source_endpoint_id"))
+            selected.append(
+                {
+                    **timeline_entry_response(entry),
+                    "source": {
+                        "clientType": (
+                            source.get("client_type") if source else "unknown"
+                        ),
+                        "label": source.get("label") if source else None,
+                    },
+                }
+            )
+            if len(selected) >= limit:
+                break
+        selected.reverse()
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "endpoint": {
+                "clientType": endpoint["client_type"],
+                "label": endpoint.get("label"),
+            },
+            "maxAgeMinutes": max_age_minutes,
+            "count": len(selected),
+            "entries": selected,
+        }
+
     def confirm_workspace_link(
         self,
         *,

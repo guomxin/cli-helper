@@ -1190,6 +1190,88 @@ class TaskHubStoreTests(unittest.TestCase):
             "Agent Workspace",
         )
 
+    def test_central_service_returns_only_same_user_other_endpoint_context(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            label="Telegram",
+            capabilities=["timeline_message"],
+        )
+        service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            message_key="telegram-message-1",
+            role="user",
+            text="Current endpoint text must not be injected",
+            label="Telegram",
+        )
+        service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            message_key="workspace-message-1",
+            role="assistant",
+            text="Cross-end affair_id is affair-new-123",
+            label="Agent Workspace",
+        )
+        service.append_host_timeline_message(
+            user_subject="user-b",
+            token_id="workspace-token-b",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-b",
+            client_type="web",
+            external_subject="account-b",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-b"
+            ),
+            message_key="workspace-message-b",
+            role="assistant",
+            text="Another user's private timeline text",
+            label="Agent Workspace B",
+        )
+
+        context = service.get_host_cross_endpoint_context(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            max_age_minutes=60,
+            limit=5,
+        )
+
+        self.assertEqual(context["status"], "succeeded")
+        self.assertEqual(context["count"], 1)
+        self.assertEqual(
+            context["entries"][0]["text"],
+            "Cross-end affair_id is affair-new-123",
+        )
+        self.assertEqual(
+            context["entries"][0]["source"],
+            {"clientType": "web", "label": "Agent Workspace"},
+        )
+        serialized = str(context)
+        self.assertNotIn("Current endpoint text", serialized)
+        self.assertNotIn("Another user's private", serialized)
+
     def test_workspace_task_does_not_overwrite_registered_endpoint(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),

@@ -36,15 +36,29 @@ export class AgentBridgeIdentityRouter {
         ? context.deliveryContext
         : {};
     const sessionKey = context.sessionKey;
-    const channel = context.messageChannel || deliveryContext.channel;
-    const accountId = context.agentAccountId || deliveryContext.accountId;
-    const senderId =
+    let channel = context.messageChannel || deliveryContext.channel;
+    let accountId = context.agentAccountId || deliveryContext.accountId;
+    let senderId =
       context.requesterSenderId ||
       trustedDirectDeliverySender({
         sessionKey,
         channel,
         deliveryTo: deliveryContext.to,
       });
+
+    if (!senderId) {
+      const sessionIdentity = trustedDirectSessionIdentity({
+        sessionKey,
+        channel,
+        accountId,
+        bindings: this.config.identityBindings,
+      });
+      if (sessionIdentity) {
+        channel = sessionIdentity.channel;
+        senderId = sessionIdentity.senderId;
+        accountId = sessionIdentity.accountId;
+      }
+    }
 
     if (!senderId) {
       const pinned = this.resolvePinnedSession({
@@ -379,6 +393,55 @@ function trustedDirectDeliverySender({ sessionKey, channel, deliveryTo }) {
   const peer = identityPart(match?.[1], true);
   const target = identityPart(deliveryTo, true);
   return peer && target && peer === target ? deliveryTo.trim() : null;
+}
+
+function trustedDirectSessionIdentity({
+  sessionKey,
+  channel,
+  accountId,
+  bindings,
+}) {
+  if (typeof sessionKey !== "string") {
+    return null;
+  }
+  const match = sessionKey
+    .trim()
+    .match(/^agent:[^:]+:([^:]+):direct:(.+)$/i);
+  const sessionChannel = identityPart(match?.[1], true);
+  const senderId = identityPart(match?.[2], false);
+  const requestedChannel = identityPart(channel, true);
+  const requestedAccountId = identityPart(accountId, false);
+  if (
+    !sessionChannel ||
+    !senderId ||
+    sessionChannel === "agentbridge-workspace" ||
+    (requestedChannel && requestedChannel !== sessionChannel)
+  ) {
+    return null;
+  }
+  const candidates = bindings.filter(
+    (binding) =>
+      binding.channel === sessionChannel &&
+      binding.senderId === senderId &&
+      (!requestedAccountId ||
+        binding.accountId === null ||
+        binding.accountId === requestedAccountId),
+  );
+  const binding = requestedAccountId
+    ? candidates.find(
+        (candidate) => candidate.accountId === requestedAccountId,
+      ) || candidates.find((candidate) => candidate.accountId === null)
+    : candidates.length === 1
+      ? candidates[0]
+      : null;
+  if (!binding) {
+    return null;
+  }
+  return {
+    channel: sessionChannel,
+    senderId,
+    accountId: requestedAccountId || binding.accountId,
+  };
 }
 
 function identityPart(value, lowercase) {

@@ -63,6 +63,19 @@ const CHECKS = new Map([
     "YuqueLoginReuse",
     { tool: "yuque_session_login", arguments: {}, kind: "login" },
   ],
+  [
+    "CrossEndpointContext",
+    {
+      tool: "agentbridge_host_cross_endpoint_context",
+      arguments: {
+        agent_host: "openclaw",
+        endpoint_key: "",
+        max_age_minutes: 360,
+        limit: 12,
+      },
+      kind: "crossEndpointContext",
+    },
+  ],
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
@@ -70,6 +83,7 @@ const REQUIRED_RELEASE_TOOLS = [
   "agentbridge_host_task_observe",
   "agentbridge_host_task_recovery_list",
   "agentbridge_host_task_list",
+  "agentbridge_host_cross_endpoint_context",
   "agentbridge_host_interaction_present",
   "agentbridge_host_notification_claim",
   "agentbridge_host_notification_ack",
@@ -216,6 +230,18 @@ try {
       max_chars: maxChars,
     };
   }
+  if (checkName === "CrossEndpointContext") {
+    const endpointKey = argument("--endpoint-key", "").trim();
+    if (!endpointKey) {
+      throw Object.assign(new Error("Endpoint key is required"), {
+        code: "ENDPOINT_KEY_REQUIRED",
+      });
+    }
+    check.arguments = {
+      ...check.arguments,
+      endpoint_key: endpointKey,
+    };
+  }
 
   const server = JSON.parse(await readStdin());
   if (
@@ -300,9 +326,23 @@ try {
     }
 
     const effectiveCheck = check ?? CHECKS.get("SessionStatus");
-    const payload = await client.callTool(effectiveCheck.tool, effectiveCheck.arguments);
+    const payload = await client.callTool(
+      effectiveCheck.tool,
+      effectiveCheck.arguments,
+      effectiveCheck.kind === "crossEndpointContext"
+        ? {
+            meta: {
+              "io.agentbridge/host": {
+                version: "1",
+                agentHost: "openclaw",
+              },
+            },
+          }
+        : undefined,
+    );
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
     const result = payload?.result ?? payload;
+    const expectedText = argument("--expected-text", "");
     const summary =
       effectiveCheck.kind === "login"
         ? {
@@ -342,6 +382,15 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "crossEndpointContext"
+          ? crossEndpointContextSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+              expectedText,
+            })
           : {
               status: "succeeded",
               check: checkName,
@@ -366,6 +415,43 @@ try {
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
   );
   process.exitCode = 1;
+}
+
+function crossEndpointContextSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+  expectedText,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Cross-endpoint context read failed"), {
+      code: errorCode || "CROSS_ENDPOINT_CONTEXT_READ_FAILED",
+    });
+  }
+  const entries = Array.isArray(result?.entries) ? result.entries : [];
+  const combinedText = entries.map((entry) => String(entry?.text ?? "")).join("\n");
+  if (expectedText && !combinedText.includes(expectedText)) {
+    throw Object.assign(new Error("Expected cross-endpoint context was not found"), {
+      code: "CROSS_ENDPOINT_CONTEXT_EXPECTED_TEXT_MISSING",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    entryCount: entries.length,
+    expectedTextMatched: expectedText ? true : null,
+    roles: [...new Set(entries.map((entry) => String(entry?.role ?? "")))].filter(Boolean),
+    sourceClientTypes: [
+      ...new Set(entries.map((entry) => String(entry?.source?.clientType ?? ""))),
+    ].filter(Boolean),
+    newestSequence: entries.length
+      ? Number(entries.at(-1)?.sequence ?? 0) || null
+      : null,
+    errorCode: null,
+  };
 }
 
 function yuqueDocumentSummary({

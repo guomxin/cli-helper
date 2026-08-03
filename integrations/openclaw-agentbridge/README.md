@@ -98,8 +98,6 @@ trusted field and authorization surfaces, the originating coordinator resumes
 the frozen interaction and the central service rechecks the Bearer scopes before
 commit/verify.
 
-Version 0.4.11 loads a scope-aware tool profile for every configured identity
-and keeps the same reduced catalog across that user's web and chat endpoints.
 Version 0.4.10 hardened cross-end coordination under multiple identities. Empty
 notification claims use a read-only fast path, each identity polls independently,
 and idle polling backs off from two to ten seconds before resetting immediately
@@ -107,6 +105,15 @@ when work appears. Timeline publication no longer blocks inbound chat hooks and
 retries transient failures with one stable idempotency key. The central MCP logs
 host-control calls slower than one second without recording message content or
 credentials.
+
+Version 0.4.13 loads a scope-aware tool profile for every configured identity
+and keeps the same reduced catalog across that user's web and chat endpoints.
+Version 0.4.14 adds bounded cross-end reference resolution. Only prompts that
+explicitly mention another endpoint and use a referential phrase trigger a
+host-private read of up to 12 messages from the same user's other endpoints
+within six hours. The current endpoint is excluded, injected text is capped at
+6,000 characters and marked as untrusted conversation data, and no execution
+authority moves between sessions. Ordinary prompts do not perform this read.
 
 ## Local installation
 
@@ -142,7 +149,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.11, ...)
+AgentBridge interaction plugin registered (version=0.4.14, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

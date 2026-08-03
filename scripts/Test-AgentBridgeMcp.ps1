@@ -13,6 +13,7 @@ param(
         "YuqueDocumentRead",
         "LoginReuse",
         "YuqueLoginReuse",
+        "CrossEndpointContext",
         "Release",
         "WorkflowCollections"
     )]
@@ -24,6 +25,8 @@ param(
     [string]$IdentityLabel = "",
     [string]$IdentityChannel = "",
     [string]$IdentitySenderId = "",
+    [string]$EndpointKey = "",
+    [string]$ExpectedText = "",
     [string]$CertificateName = "",
     [string[]]$CertificateNames = @(),
     [ValidateSet("all", "patent_certificate", "software_copyright_certificate")]
@@ -261,6 +264,15 @@ try {
             "--yuque-max-chars",
             [string]$YuqueMaxChars
         )
+    }
+    if ($Check -eq "CrossEndpointContext") {
+        if ([string]::IsNullOrWhiteSpace($EndpointKey)) {
+            throw "EndpointKey is required for CrossEndpointContext"
+        }
+        $nodeArguments += @("--endpoint-key", $EndpointKey)
+        if ($ExpectedText) {
+            $nodeArguments += @("--expected-text", $ExpectedText)
+        }
     }
     $serverJson | & $node.Source @nodeArguments
     if ($LASTEXITCODE -ne 0) {

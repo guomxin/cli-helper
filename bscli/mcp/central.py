@@ -2305,6 +2305,35 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_cross_endpoint_context",
+        title="Read Recent Cross-Endpoint Agent Context",
+        description=(
+            "Host-private read-only access to recent non-sensitive timeline "
+            "messages from the authenticated user's other endpoints."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_host_cross_endpoint_context(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        max_age_minutes: Annotated[int, Field(ge=1, le=1_440)] = 360,
+        limit: Annotated[int, Field(ge=1, le=20)] = 12,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await _run_host_control(
+            "agentbridge_host_cross_endpoint_context",
+            service.get_host_cross_endpoint_context,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            max_age_minutes=max_age_minutes,
+            limit=limit,
+        )
+
+    @mcp.tool(
         name="agentbridge_host_interaction_present",
         title="Present Trusted Interaction for One Endpoint",
         description=(

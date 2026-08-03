@@ -90,6 +90,41 @@ test("routes two Telegram users to different MCP bearer tokens", async () => {
   assert.equal(JSON.stringify(identityB).includes("token-b"), false);
 });
 
+test("recovers a Telegram identity from its private session after restart", () => {
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+  });
+
+  const identity = router.resolveToolContext({
+    sessionKey: "agent:main:telegram:direct:1001",
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.senderId, "1001");
+});
+
+test("fails closed when a private session identity is account-ambiguous", () => {
+  const config = multiUserConfig({
+    identityBindings: [
+      binding("1001", "TOKEN_A", { accountId: "bot-a" }),
+      binding("1001", "TOKEN_B", { accountId: "bot-b" }),
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    config,
+  });
+
+  const identity = router.resolveToolContext({
+    sessionKey: "agent:main:telegram:direct:1001",
+  });
+
+  assert.equal(identity.bound, false);
+  assert.equal(identity.reason, "identity_not_provisioned");
+});
+
 test("routes a trusted WeChat sender and bot account to its own token", async () => {
   const requests = [];
   const senderId = "wechat-user-1002@im.wechat";
@@ -120,6 +155,34 @@ test("routes a trusted WeChat sender and bot account to its own token", async ()
   assert.equal(identity.bound, true);
   await identity.client.callTool("oa_session_status", {});
   assert.equal(requests[0].authorization, "Bearer wechat-token");
+});
+
+test("recovers one account-specific WeChat identity from its private session", () => {
+  const senderId = "wechat-user-1002@im.wechat";
+  const accountId = "wechat-bot-account";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+        label: "WeChat OA User",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+
+  const identity = router.resolveToolContext({
+    sessionKey: `agent:main:openclaw-weixin:direct:${senderId}`,
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.accountId, accountId);
 });
 
 test("reuses the trusted inbound binding when WeChat omits SenderId", () => {
