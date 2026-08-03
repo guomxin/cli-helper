@@ -68,8 +68,8 @@ test("injects bounded same-user context only for explicit cross-end references",
     messageProvider: "openclaw",
     channel: "cli",
     channelId: "user-a",
-    chatId: "user-a",
-    senderId: "user-a",
+    chatId: "control-plane-chat",
+    senderId: "control-plane-sender",
   };
 
   const sameEndpoint = await harness.hooks.before_prompt_build(
