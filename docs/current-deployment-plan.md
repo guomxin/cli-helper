@@ -1869,6 +1869,32 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   其中 OpenClaw agent 执行约 29.0 秒并一次成功。
 - 本轮只增加验收记录，没有修改代码、重启 AgentBridge/OpenClaw 或重新部署服务。
 
+### 15.52 2026-08-03 李世玉 Workspace 到微信真实接续验收
+
+- 以李世玉 Workspace 已成功的“读取 OA 待办”任务
+  `aa04b656-0f85-45ef-b261-8739f20442b4` 为样本。原任务来自独立网页 Endpoint，
+  只关联一个成功的 `oa.workflow.pending.list` Operation，结果包含 9 条待办。
+- 首轮实测发现，模型能够从旧会话文本复述候选，但 Task Hub 没有生成接续记录。
+  根因是 OpenClaw 将微信私聊 session peer 规范为小写，且提示构建 Hook 携带的
+  provider、sender 和 bot account 可能属于控制面而非原微信通道。业务工具阶段身份
+  解析正常，提示 Hook 却返回 `IDENTITY_NOT_PROVISIONED`。
+- OpenClaw 插件 `0.4.17` 到 `0.4.19` 依次补齐微信 session 恢复、大小写无关选择器和
+  私聊通道恢复；`0.4.20` 的显式 sender 方案经真实落库检查证明仍会绕过完整 session
+  身份恢复，最终在 `0.4.21` 固定为：提示 Hook 只信任宿主生成的私聊 session 通道，
+  sender 与 bot account 由身份路由器从私聊 session 和唯一配置绑定共同恢复；存在多
+  bot 歧义时继续拒绝。相关提交 `dc19910`、`286fc40`、`79ea5cb`、`d413f15`、
+  `d6b49a1` 均已推送。
+- `0.4.21` 通过 OpenClaw 插件全量 `110/110`、定向 `88/88` 和 npm pack dry-run。
+  Windows Gateway 完整重启后加载 `0.4.21`，PID `17424`、18789 监听和深度 RPC 均正常。
+- 微信端无投递候选解析没有调用业务工具，Task Hub 为李世玉微信 Endpoint 持久化
+  `selected / observe_only / single_candidate`，准确选择原网页任务。随后按显式
+  `taskId` 请求第 1 条详情，模式切换为 `follow_up`，只调用一次
+  `oa.workflow.detail.get`，并成功把详情投递到李世玉原微信私聊。
+- 服务端终审确认原任务仍为 `succeeded`，活动会话已切换到李世玉微信；完整操作链只有
+  原 `oa.workflow.pending.list` 和新增 `oa.workflow.detail.get`，两者均成功。没有重复
+  待办列表、审批、提交、撤销或其他业务写入；`0.4.21` 启动后的验收日志未再出现身份
+  未开通或接续跳过。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
