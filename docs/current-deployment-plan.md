@@ -1840,9 +1840,10 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   TypeScript 检查与生产构建、`compileall`、`pip check` 和 npm pack dry-run。定向测试覆盖
   选择状态重启持久化、多候选消歧、双用户隔离、终态防重、明确后续复用原 `taskId`、
   Workspace 入口和宿主私有 MCP 调用。
-- 提交 `3a4e3c9` 已推送，Linux Release `3a4e3c9b6246` 已部署。AgentBridge systemd、
-  69 项 MCP 工具、辛国茂 OA 登录复用均通过；Windows Gateway 单次重启约 153 秒完成，
-  深度 RPC、版本一致性、插件 `0.4.16`、41 个模型可见工具、8 个 Hook 和冷/热预热均正常。
+- 提交 `3a4e3c9` 已推送，Linux Release `3a4e3c9b6246` 已部署。整次发布约 153 秒，
+  期间 Windows Gateway 只重启一次；AgentBridge systemd、69 项 MCP 工具、辛国茂 OA
+  登录复用、深度 RPC、版本一致性、插件 `0.4.16`、41 个模型可见工具、8 个 Hook 和
+  冷/热预热均正常。
 - 部署后双用户只读隔离复核确认辛国茂、李世玉 OA Session 均为 `active`，四个 Endpoint
   归属正确，包含 `continuation_binding_mismatch` 在内的十类一致性违规全部为 0；本轮
   `businessWrites=0`、`pendingReads=0`。李世玉既有 2 条失败记录均为无 `taskId` 的微信
