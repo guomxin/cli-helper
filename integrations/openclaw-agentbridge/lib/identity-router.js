@@ -427,10 +427,16 @@ function trustedDirectSessionIdentity({
   ) {
     return null;
   }
+  const comparableSenderId =
+    sessionChannel === "openclaw-weixin"
+      ? identityPart(senderId, true)
+      : senderId;
   const candidates = bindings.filter(
     (binding) =>
       binding.channel === sessionChannel &&
-      binding.senderId === senderId &&
+      (sessionChannel === "openclaw-weixin"
+        ? identityPart(binding.senderId, true) === comparableSenderId
+        : binding.senderId === comparableSenderId) &&
       (!requestedAccountId ||
         binding.accountId === null ||
         binding.accountId === requestedAccountId),
@@ -447,7 +453,7 @@ function trustedDirectSessionIdentity({
   }
   return {
     channel: sessionChannel,
-    senderId,
+    senderId: binding.senderId,
     accountId: requestedAccountId || binding.accountId,
   };
 }

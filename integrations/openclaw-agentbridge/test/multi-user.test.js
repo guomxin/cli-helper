@@ -185,6 +185,69 @@ test("recovers one account-specific WeChat identity from its private session", (
   assert.equal(identity.binding.accountId, accountId);
 });
 
+test("recovers the canonical WeChat identity from a lowercased private session", () => {
+  const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
+  const accountId = "6eaa3d9b1434-im-bot";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+        label: "WeChat OA User",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:o9cq806qdyig1p-49qijq1wlpimo@im.wechat";
+
+  const identity = router.resolveToolContext({
+    sessionKey,
+    messageChannel: "openclaw-weixin",
+    agentAccountId: accountId,
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.senderId, senderId);
+  assert.equal(router.endpointKeyForSession(sessionKey), identity.binding.key);
+});
+
+test("does not recover a different WeChat peer from a private session", () => {
+  const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
+  const accountId = "6eaa3d9b1434-im-bot";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+
+  const identity = router.resolveToolContext({
+    sessionKey:
+      "agent:main:openclaw-weixin:direct:another-user@im.wechat",
+    messageChannel: "openclaw-weixin",
+    agentAccountId: accountId,
+  });
+
+  assert.equal(identity.bound, false);
+  assert.equal(identity.reason, "identity_not_provisioned");
+});
+
 test("reuses the trusted inbound binding when WeChat omits SenderId", () => {
   const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
   const accountId = "6eaa3d9b1434-im-bot";
