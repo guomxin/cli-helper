@@ -1759,6 +1759,19 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 完整门禁通过 Python `477 passed, 3 skipped, 197 subtests passed`、Workspace Gateway
   Node `19/19`、OpenClaw 插件 `99/99`、`pip check` 和 npm pack dry-run。
 
+### 15.47 2026-08-03 双用户双网页真实验收
+
+- 在同一 Windows 终端分别使用普通 Chrome 和无痕 Chrome 打开两个独立 Agent Workspace
+  账户。普通窗口账号为 `xinguomao`，无痕窗口账号为 `lishiyu`。
+- 两个网页端分别发送带 XGM、LSY 唯一标记的“检查 OA 登录状态”只读请求。返回结果分别为
+  辛国茂（`guomao`）和李世玉（`lishiyu`），两条 OA Session 均为 active；XGM 标记在
+  李世玉网页计数为 0，LSY 标记在辛国茂网页计数为 0。
+- 验收后的中央诊断为 2 个用户、4 个活动端点、0 个活动任务、0 条待投递、0 条失败投递、
+  135 条时间线记录；九类身份一致性违规全部为 0。两次网页请求产生的用户/助手时间线消息
+  均已由各自伴随聊天端 Outbox 确认领取，没有跨用户投递。
+- 本轮未读取任一用户 OA 待办，未执行 OA、泰华或语雀业务写入，也未重启 AgentBridge 或
+  OpenClaw。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的

@@ -263,6 +263,17 @@ openclaw devices approve <requestId> --json
    `guomao` 的网页/Telegram 与 `lishiyu` 的网页/微信四个活动端点归属正确，
    Task Hub 九类身份一致性检查均为 0；双用户并发业务任务与跨端文件仍待补充真实验收。
 
+2026-08-03 双用户双网页真实验收：
+
+1. 普通 Chrome 中的 `xinguomao` 网页端执行带 XGM 唯一标记的 OA 登录状态检查，
+   返回主体“辛国茂（guomao）”和 active Session；
+2. Chrome 无痕窗口中的 `lishiyu` 网页端执行带 LSY 唯一标记的同类检查，返回主体
+   “李世玉（lishiyu）”和 active Session；
+3. XGM 标记只存在于辛国茂网页，LSY 标记只存在于李世玉网页，交叉计数均为 0；
+4. 服务端复核为 2 个用户、4 个活动端点、0 个活动任务、0 条待投递、0 条失败投递，
+   九类身份一致性违规全部为 0；两组测试消息均由各自伴随聊天端确认领取；
+5. 本轮只检查 OA 登录状态，未读取待办、未创建或处理业务流程。
+
 ## 多端任务同步一期
 
 自 `agentbridge-interactions` 0.4.5 起，Workspace、Telegram 和微信不再共享
