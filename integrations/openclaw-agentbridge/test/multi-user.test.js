@@ -64,6 +64,27 @@ test("rejects duplicate trusted sender selectors", () => {
   );
 });
 
+test("rejects WeChat sender selectors that differ only by case", () => {
+  assert.throws(
+    () =>
+      multiUserConfig({
+        identityBindings: [
+          {
+            channel: "openclaw-weixin",
+            senderId: "WeChat-User@im.wechat",
+            tokenEnv: "TOKEN_A",
+          },
+          {
+            channel: "openclaw-weixin",
+            senderId: "wechat-user@im.wechat",
+            tokenEnv: "TOKEN_B",
+          },
+        ],
+      }),
+    /duplicate AgentBridge identity binding/,
+  );
+});
+
 test("routes two Telegram users to different MCP bearer tokens", async () => {
   const requests = [];
   const router = createRouter({
@@ -155,6 +176,37 @@ test("routes a trusted WeChat sender and bot account to its own token", async ()
   assert.equal(identity.bound, true);
   await identity.client.callTool("oa_session_status", {});
   assert.equal(requests[0].authorization, "Bearer wechat-token");
+});
+
+test("routes a lowercased explicit WeChat sender to its canonical binding", () => {
+  const senderId = "o9cq806QdYig1P-49QIJq1wlPiMo@im.wechat";
+  const accountId = "6eaa3d9b1434-im-bot";
+  const config = multiUserConfig({
+    identityBindings: [
+      {
+        channel: "openclaw-weixin",
+        senderId,
+        accountId,
+        tokenEnv: "WECHAT_TOKEN",
+      },
+    ],
+  });
+  const router = createRouter({
+    requests: [],
+    env: { WECHAT_TOKEN: "wechat-token" },
+    config,
+  });
+
+  const identity = router.resolveToolContext({
+    sessionKey:
+      "agent:main:openclaw-weixin:direct:o9cq806qdyig1p-49qijq1wlpimo@im.wechat",
+    messageChannel: "openclaw-weixin",
+    requesterSenderId: senderId.toLowerCase(),
+    agentAccountId: accountId,
+  });
+
+  assert.equal(identity.bound, true);
+  assert.equal(identity.binding.senderId, senderId);
 });
 
 test("recovers one account-specific WeChat identity from its private session", () => {

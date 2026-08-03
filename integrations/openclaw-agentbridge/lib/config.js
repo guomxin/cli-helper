@@ -117,7 +117,7 @@ export function matchIdentityBinding(bindings, context) {
   const candidates = bindings.filter(
     (binding) =>
       binding.channel === channel &&
-      binding.senderId === senderId &&
+      identitySenderMatches(channel, binding.senderId, senderId) &&
       (binding.accountId === null || binding.accountId === accountId),
   );
   return (
@@ -151,10 +151,13 @@ function normalizeIdentityBindings(value) {
       continue;
     }
     const key = `${channel}:${accountId || "*"}:${senderId}`;
-    if (seen.has(key)) {
+    const selectorKey = `${channel}:${accountId || "*"}:${
+      channel === "openclaw-weixin" ? senderId.toLowerCase() : senderId
+    }`;
+    if (seen.has(selectorKey)) {
       throw new Error(`duplicate AgentBridge identity binding: ${key}`);
     }
-    seen.add(key);
+    seen.add(selectorKey);
     result.push(
       Object.freeze({
         key,
@@ -167,6 +170,12 @@ function normalizeIdentityBindings(value) {
     );
   }
   return result;
+}
+
+function identitySenderMatches(channel, configuredSenderId, requestedSenderId) {
+  return channel === "openclaw-weixin"
+    ? configuredSenderId.toLowerCase() === requestedSenderId.toLowerCase()
+    : configuredSenderId === requestedSenderId;
 }
 
 function normalizeIdentityPart(value, lowercase) {
