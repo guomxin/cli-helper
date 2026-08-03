@@ -14,6 +14,7 @@ param(
         "LoginReuse",
         "YuqueLoginReuse",
         "CrossEndpointContext",
+        "TaskContinuation",
         "Release",
         "WorkflowCollections"
     )]
@@ -26,6 +27,10 @@ param(
     [string]$IdentityChannel = "",
     [string]$IdentitySenderId = "",
     [string]$EndpointKey = "",
+    [ValidateRange(0, 20)]
+    [int]$TaskOrdinal = 0,
+    [ValidateSet("", "web", "webchat", "telegram", "openclaw-weixin")]
+    [string]$SourceClientType = "web",
     [string]$ExpectedText = "",
     [string]$CertificateName = "",
     [string[]]$CertificateNames = @(),
@@ -265,11 +270,21 @@ try {
             [string]$YuqueMaxChars
         )
     }
-    if ($Check -eq "CrossEndpointContext") {
+    if ($Check -in @("CrossEndpointContext", "TaskContinuation")) {
         if ([string]::IsNullOrWhiteSpace($EndpointKey)) {
-            throw "EndpointKey is required for CrossEndpointContext"
+            throw "EndpointKey is required for the selected host check"
         }
         $nodeArguments += @("--endpoint-key", $EndpointKey)
+    }
+    if ($Check -eq "TaskContinuation") {
+        $nodeArguments += @(
+            "--task-ordinal",
+            [string]$TaskOrdinal,
+            "--source-client-type",
+            $SourceClientType
+        )
+    }
+    if ($Check -eq "CrossEndpointContext") {
         if ($ExpectedText) {
             $nodeArguments += @("--expected-text", $ExpectedText)
         }

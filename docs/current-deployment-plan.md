@@ -10,9 +10,9 @@
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
 > 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.16 为当前代码版本。
-> 中心端当前定义 67 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
-> AgentBridge 业务工具和 1 个身份状态工具；15 个 commit/continuation 工具只供协调器
-> 内部调用，另有 11 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
+> 中心端当前定义 69 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
+> AgentBridge 业务工具和 1 个本地身份状态工具；其余 29 个中央工具是 commit、
+> continuation、Task Hub、Workspace 与多端通知等协调器/可信宿主私有能力，不向模型注册。
 > 静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前两个 OpenClaw 身份各自使用独立 Token。`guomao` 包含 OA 读取、草稿、审批、
@@ -1818,6 +1818,38 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   Session 的真实只读验收先确认主体为辛国茂，再读取到 3 条 OA 待办，2 次工具调用均成功，
   未再出现插件运行时缺失。
 - 该修复只涉及宿主身份路由，没有调用 OA、泰华或语雀业务写入。
+
+### 15.50 2026-08-03 跨端任务接续二期
+
+- Task Hub 新增 Endpoint 级持久接续状态，保存短期候选集合、已选 `taskId`、执行模式、
+  版本和失效时间。候选、已选任务与当前 Endpoint 必须同时匹配
+  `userSubject + agentHost`；运行诊断增加接续计数和候选/已选任务隔离检查，不输出正文、
+  业务参数或可信卡 URL。
+- 中央 MCP 新增宿主私有 `agentbridge_host_task_continuation_resolve`。它支持显式
+  `taskId`、持久编号选择、来源客户端和最近任务，返回服务端生成的任务、Operation、
+  Interaction、来源端与近期事件类型摘要，不执行任何业务能力。
+- OpenClaw `0.4.16` 仅对明确的接续表达启用该解析。多任务时要求用户按编号选择；待处理
+  Interaction 为当前端生成专属 Presentation 并直接重显；运行中和终态任务进入
+  `observe_only`，业务工具调用被本地策略阻断；只有明确的详情、撤销、下载等后续动作才
+  在原 `taskId` 下建立新 Operation。每条新用户消息先清除上一轮本地执行许可，防止权限
+  泄漏到无关任务。
+- Agent Workspace 任务详情新增“继续任务”按钮。BFF 先以当前网页账号拥有的 Endpoint
+  选择任务，再把不含身份覆盖字段的接续消息交给当前网页 OpenClaw Session；浏览器不接触
+  MCP/Gateway Token，也不能指定他人的 `userSubject`。
+- 发布门禁通过 Python `486 passed, 3 skipped`、OpenClaw 插件 `106/106`、MCP App
+  TypeScript 检查与生产构建、`compileall`、`pip check` 和 npm pack dry-run。定向测试覆盖
+  选择状态重启持久化、多候选消歧、双用户隔离、终态防重、明确后续复用原 `taskId`、
+  Workspace 入口和宿主私有 MCP 调用。
+- 提交 `3a4e3c9` 已推送，Linux Release `3a4e3c9b6246` 已部署。AgentBridge systemd、
+  69 项 MCP 工具、辛国茂 OA 登录复用均通过；Windows Gateway 单次重启约 153 秒完成，
+  深度 RPC、版本一致性、插件 `0.4.16`、41 个模型可见工具、8 个 Hook 和冷/热预热均正常。
+- 部署后双用户只读隔离复核确认辛国茂、李世玉 OA Session 均为 `active`，四个 Endpoint
+  归属正确，包含 `continuation_binding_mismatch` 在内的十类一致性违规全部为 0；本轮
+  `businessWrites=0`、`pendingReads=0`。李世玉既有 2 条失败记录均为无 `taskId` 的微信
+  普通时间线消息，发生于本次发布前，未重投且与业务操作无关。
+- `Test-AgentBridgeMcp.ps1` 增加 `TaskContinuation` 运行检查，并把新宿主工具列入 Release
+  必备目录。为避免在真实 Telegram/Workspace Endpoint 留下测试选择，本次发布只验证工具
+  注册、鉴权和自动化行为；真实“网页选择、聊天端接续”由用户下一轮按既有任务验收。
 
 ## 16. 后续演进顺序
 

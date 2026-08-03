@@ -76,6 +76,25 @@ const CHECKS = new Map([
       kind: "crossEndpointContext",
     },
   ],
+  [
+    "TaskContinuation",
+    {
+      tool: "agentbridge_host_task_continuation_resolve",
+      arguments: {
+        agent_host: "openclaw",
+        endpoint_key: "",
+        ordinal: null,
+        source_client_type: "web",
+        cross_endpoint_only: true,
+        prefer_active: true,
+        reuse_selected: false,
+        allow_follow_up: false,
+        max_age_minutes: 1_440,
+        limit: 8,
+      },
+      kind: "taskContinuation",
+    },
+  ],
 ]);
 
 const REQUIRED_RELEASE_TOOLS = [
@@ -83,6 +102,7 @@ const REQUIRED_RELEASE_TOOLS = [
   "agentbridge_host_task_observe",
   "agentbridge_host_task_recovery_list",
   "agentbridge_host_task_list",
+  "agentbridge_host_task_continuation_resolve",
   "agentbridge_host_cross_endpoint_context",
   "agentbridge_host_interaction_present",
   "agentbridge_host_notification_claim",
@@ -230,7 +250,7 @@ try {
       max_chars: maxChars,
     };
   }
-  if (checkName === "CrossEndpointContext") {
+  if (["CrossEndpointContext", "TaskContinuation"].includes(checkName)) {
     const endpointKey = argument("--endpoint-key", "").trim();
     if (!endpointKey) {
       throw Object.assign(new Error("Endpoint key is required"), {
@@ -240,6 +260,24 @@ try {
     check.arguments = {
       ...check.arguments,
       endpoint_key: endpointKey,
+    };
+  }
+  if (checkName === "TaskContinuation") {
+    const ordinal = Number(argument("--task-ordinal", "0"));
+    if (!Number.isInteger(ordinal) || ordinal < 0 || ordinal > 20) {
+      throw Object.assign(new Error("Task ordinal is invalid"), {
+        code: "TASK_ORDINAL_INVALID",
+      });
+    }
+    const sourceClientType = argument(
+      "--source-client-type",
+      check.arguments.source_client_type,
+    ).trim();
+    check.arguments = {
+      ...check.arguments,
+      ordinal: ordinal || null,
+      source_client_type: sourceClientType || null,
+      cross_endpoint_only: Boolean(sourceClientType),
     };
   }
 
@@ -329,7 +367,9 @@ try {
     const payload = await client.callTool(
       effectiveCheck.tool,
       effectiveCheck.arguments,
-      effectiveCheck.kind === "crossEndpointContext"
+      ["crossEndpointContext", "taskContinuation"].includes(
+        effectiveCheck.kind,
+      )
         ? {
             meta: {
               "io.agentbridge/host": {
@@ -391,6 +431,14 @@ try {
               errorCode,
               expectedText,
             })
+          : effectiveCheck.kind === "taskContinuation"
+          ? taskContinuationSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : {
               status: "succeeded",
               check: checkName,
@@ -415,6 +463,41 @@ try {
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
   );
   process.exitCode = 1;
+}
+
+function taskContinuationSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Task continuation resolution failed"), {
+      code: errorCode || "TASK_CONTINUATION_FAILED",
+    });
+  }
+  const status = String(result?.status ?? "unknown").slice(0, 80);
+  if (!["selected", "ambiguous"].includes(status)) {
+    throw Object.assign(new Error("No task continuation candidate was found"), {
+      code: "TASK_CONTINUATION_NOT_FOUND",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    resolutionStatus: status,
+    candidateCount: Number(result?.count ?? result?.candidates?.length ?? 0),
+    taskId: result?.task?.taskId ?? null,
+    taskStatus: result?.task?.status ?? null,
+    continuationState: result?.continuation?.state ?? null,
+    executionMode: result?.continuation?.executionMode ?? null,
+    allowNewOperation: result?.continuation?.allowNewOperation ?? null,
+    operationStatus: result?.snapshot?.summary?.operation?.status ?? null,
+    interactionState: result?.snapshot?.summary?.interaction?.state ?? null,
+    errorCode: null,
+  };
 }
 
 function crossEndpointContextSummary({
