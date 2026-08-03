@@ -1772,6 +1772,18 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 本轮未读取任一用户 OA 待办，未执行 OA、泰华或语雀业务写入，也未重启 AgentBridge 或
   OpenClaw。
 
+随后补充的业务读取同步验收中，两个网页账户近同时发送带唯一标记的 OA 待办只读请求：
+
+- 辛国茂返回 1 条待办，李世玉返回其账号下的 9 条待办，两张应用卡均为成功终态；
+- 两个网页的 XGM/LSY 请求标记互斥，业务结果和 OA 主体没有交叉；
+- `guomao/telegram` 与 `lishiyu/openclaw-weixin` 各自确认 2 条 `timeline_message`
+  和 3 条 `task_event`。验收后仍为 0 个活动任务、0 条待投递、0 条失败投递、0 条
+  身份一致性违规；
+- 辛国茂约 15 秒完成，李世玉约 43 秒完成。OpenClaw 日志显示李世玉首个
+  `gpt-5.5` 模型 HTTP 请求在 21 秒后 `ETIMEDOUT`，随后重试成功；该延迟不是两个
+  Workspace 用户串行执行，也不是 AgentBridge 数据库或 Outbox 锁竞争；
+- 本轮读取了待办摘要，但没有打开详情、改变已读状态或处理任何待办。
+
 ## 16. 后续演进顺序
 
 1. 用一条可撤销的受控流程完成“网页发起、手机确认、原会话提交、各端同步终态”的
