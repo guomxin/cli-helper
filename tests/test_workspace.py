@@ -424,6 +424,44 @@ class WorkspaceStoreTests(unittest.TestCase):
 
 
 class WorkspaceApplicationTests(unittest.TestCase):
+    def test_continue_task_binds_owned_task_to_workspace_endpoint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            task = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="workspace-token",
+                agent_host="openclaw",
+                host_task_key="workspace-task|continue-1",
+                endpoint_key=account["endpoint_key"],
+                client_type="web",
+                external_subject=account["account_id"],
+                conversation_ref=account["openclaw_session_key"],
+                title="Review pending workflow",
+            )
+            app = WorkspaceApplication(service=service)
+
+            result = app.continue_task(account, task["task"]["taskId"])
+            continuation = service.tasks.get_continuation(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_id=account["endpoint_id"],
+            )
+
+            self.assertEqual(result["status"], "selected")
+            self.assertEqual(result["task"]["task_id"], task["task"]["taskId"])
+            self.assertEqual(continuation["state"], "selected")
+            self.assertEqual(continuation["execution_mode"], "resume")
+            self.assertEqual(
+                continuation["selected_task_id"],
+                task["task"]["taskId"],
+            )
+
     def test_task_detail_uses_the_workspace_endpoint_authorization_url(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -1360,6 +1398,9 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertNotIn('"任务状态已更新",', script)
         self.assertIn("childElementCount > 2", script)
         self.assertIn("application-card", stylesheet)
+        self.assertIn('continueButton.textContent = "继续任务"', script)
+        self.assertIn("/continue`,", script)
+        self.assertIn("detail-heading-actions", stylesheet)
 
 
 def _service(tmp: str) -> CentralCapabilityService:

@@ -1370,6 +1370,288 @@ class CentralCapabilityService:
             "tasks": [task_response(task) for task in tasks],
         }
 
+    def resolve_host_task_continuation(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        task_id: str | None = None,
+        ordinal: int | None = None,
+        source_client_type: str | None = None,
+        cross_endpoint_only: bool = False,
+        prefer_active: bool = True,
+        reuse_selected: bool = True,
+        allow_follow_up: bool = False,
+        max_age_minutes: int = 1_440,
+        limit: int = 8,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        selected_task_id = str(task_id or "").strip() or None
+        selection_reason = "explicit_task_id" if selected_task_id else None
+
+        if selected_task_id is None and ordinal is not None:
+            pending = self.tasks.get_continuation(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                endpoint_id=endpoint["endpoint_id"],
+            )
+            candidates = (
+                pending.get("candidate_task_ids", [])
+                if pending and pending.get("state") == "awaiting_selection"
+                else []
+            )
+            index = int(ordinal) - 1
+            if index < 0 or index >= len(candidates):
+                return {
+                    "protocolVersion": "0.2",
+                    "status": "not_found",
+                    "reason": "continuation_choice_not_found",
+                    "count": 0,
+                    "candidates": [],
+                }
+            selected_task_id = candidates[index]
+            selection_reason = "candidate_ordinal"
+
+        if (
+            selected_task_id is None
+            and reuse_selected
+            and source_client_type is None
+        ):
+            current = self.tasks.get_continuation(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                endpoint_id=endpoint["endpoint_id"],
+            )
+            if current and current.get("state") == "selected":
+                selected_task_id = current.get("selected_task_id")
+                selection_reason = "existing_selection"
+
+        if selected_task_id is None:
+            candidate_records = self.tasks.continuation_candidates(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                endpoint_id=endpoint["endpoint_id"],
+                active_only=prefer_active,
+                cross_endpoint_only=cross_endpoint_only,
+                source_client_type=source_client_type,
+                max_age_minutes=max_age_minutes,
+                limit=limit,
+            )
+            if prefer_active and not candidate_records:
+                candidate_records = self.tasks.continuation_candidates(
+                    user_subject=user_subject,
+                    agent_host=agent_host,
+                    endpoint_id=endpoint["endpoint_id"],
+                    active_only=False,
+                    cross_endpoint_only=cross_endpoint_only,
+                    source_client_type=source_client_type,
+                    max_age_minutes=max_age_minutes,
+                    limit=limit,
+                )
+            if not candidate_records:
+                return {
+                    "protocolVersion": "0.2",
+                    "status": "not_found",
+                    "reason": "continuation_task_not_found",
+                    "count": 0,
+                    "candidates": [],
+                }
+            if len(candidate_records) > 1:
+                continuation, reused = self.tasks.set_continuation_candidates(
+                    user_subject=user_subject,
+                    agent_host=agent_host,
+                    endpoint_id=endpoint["endpoint_id"],
+                    candidate_task_ids=[
+                        item["task"]["task_id"] for item in candidate_records
+                    ],
+                    reason="multiple_candidates",
+                )
+                return {
+                    "protocolVersion": "0.2",
+                    "status": "ambiguous",
+                    "reason": "multiple_continuation_tasks",
+                    "count": len(candidate_records),
+                    "continuation": continuation_response(continuation),
+                    "candidates": [
+                        task_continuation_candidate_response(item, index + 1)
+                        for index, item in enumerate(candidate_records)
+                    ],
+                    "reused": reused,
+                }
+            selected_task_id = candidate_records[0]["task"]["task_id"]
+            selection_reason = "single_candidate"
+
+        task = self._refresh_host_task_for_continuation(
+            user_subject=user_subject,
+            task_id=selected_task_id,
+        )
+        execution_mode = task_continuation_execution_mode(
+            task,
+            allow_follow_up=allow_follow_up,
+        )
+        continuation, task, selected_endpoint, reused = (
+            self.tasks.select_continuation(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                endpoint_id=endpoint["endpoint_id"],
+                task_id=selected_task_id,
+                execution_mode=execution_mode,
+                reason=selection_reason,
+            )
+        )
+        snapshot = self._host_task_continuation_snapshot(
+            user_subject=user_subject,
+            task=task,
+            endpoint=selected_endpoint,
+        )
+        presented_interaction = snapshot.pop("interaction", None)
+        return {
+            "protocolVersion": "0.2",
+            "status": "selected",
+            "count": 1,
+            "task": task_response(task),
+            "continuation": continuation_response(continuation),
+            "snapshot": snapshot,
+            "interaction": presented_interaction,
+            "reused": reused,
+        }
+
+    def _refresh_host_task_for_continuation(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+    ) -> dict:
+        task = self.tasks.get_task(task_id, user_subject=user_subject)
+        operation_ids = (
+            [task["current_operation_id"]]
+            if task.get("current_operation_id")
+            else []
+        )
+        interaction_ids = (
+            [task["current_interaction_id"]]
+            if task.get("current_interaction_id")
+            else []
+        )
+        if operation_ids or interaction_ids:
+            refreshed = self.observe_host_task(
+                user_subject=user_subject,
+                task_id=task_id,
+                operation_ids=operation_ids,
+                interaction_ids=interaction_ids,
+            )
+            return self.tasks.get_task(
+                refreshed["task"]["taskId"],
+                user_subject=user_subject,
+            )
+        return task
+
+    def _host_task_continuation_snapshot(
+        self,
+        *,
+        user_subject: str,
+        task: dict,
+        endpoint: dict,
+    ) -> dict:
+        origin = next(
+            (
+                item
+                for item in self.tasks.list_endpoints(
+                    user_subject=user_subject,
+                    active_only=False,
+                    limit=500,
+                )
+                if item["endpoint_id"] == task["origin_endpoint_id"]
+            ),
+            None,
+        )
+        operation = None
+        if task.get("current_operation_id"):
+            try:
+                raw_operation = self.operations.get(
+                    task["current_operation_id"]
+                )
+            except KeyError:
+                raw_operation = None
+            if raw_operation and raw_operation.get("user_subject") == user_subject:
+                operation = {
+                    "operationId": raw_operation["operation_id"],
+                    "capability": raw_operation.get("capability_name"),
+                    "status": raw_operation.get("status"),
+                    "errorCode": raw_operation.get("error_code"),
+                    "createdAt": raw_operation.get("created_at"),
+                    "updatedAt": raw_operation.get("updated_at"),
+                    "finishedAt": raw_operation.get("finished_at"),
+                }
+        interaction_summary = None
+        presented_interaction = None
+        if task.get("current_interaction_id"):
+            try:
+                _record, _resource, interaction = self._load_interaction(
+                    user_subject=user_subject,
+                    interaction_id=task["current_interaction_id"],
+                )
+            except (KeyError, InteractionIntegrityError):
+                interaction = None
+            if interaction:
+                interaction_summary = {
+                    "interactionId": interaction.get("interactionId"),
+                    "type": interaction.get("type"),
+                    "state": interaction.get("state"),
+                    "systemId": interaction.get("systemId"),
+                    "expiresAt": interaction.get("expiresAt"),
+                }
+                if interaction.get("state") in {"pending", "processing"}:
+                    try:
+                        presented = self.present_interaction(
+                            user_subject=user_subject,
+                            agent_host=endpoint["agent_host"],
+                            endpoint_key=endpoint["endpoint_key"],
+                            interaction_id=task["current_interaction_id"],
+                        )
+                    except (KeyError, RuntimeError):
+                        presented = None
+                    if presented:
+                        presented_interaction = presented.get("interaction")
+        events = self.tasks.list_events(
+            task_id=task["task_id"],
+            user_subject=user_subject,
+            limit=12,
+        )
+        return {
+            "summary": {
+                "taskId": task["task_id"],
+                "title": task["title"],
+                "status": task["status"],
+                "phase": task_continuation_phase(task),
+                "origin": (
+                    {
+                        "clientType": origin.get("client_type"),
+                        "label": origin.get("label"),
+                    }
+                    if origin
+                    else None
+                ),
+                "operation": operation,
+                "interaction": interaction_summary,
+                "updatedAt": task["updated_at"],
+                "finishedAt": task.get("finished_at"),
+            },
+            "recentEvents": [
+                {
+                    "eventType": event["event_type"],
+                    "createdAt": event["created_at"],
+                }
+                for event in events[-8:]
+            ],
+            "interaction": presented_interaction,
+        }
+
     def get_host_cross_endpoint_context(
         self,
         *,
@@ -2922,6 +3204,63 @@ def task_response(task: dict) -> dict:
         "updatedAt": task["updated_at"],
         "finishedAt": task.get("finished_at"),
     }
+
+
+def continuation_response(continuation: dict) -> dict:
+    return {
+        "endpointId": continuation["endpoint_id"],
+        "selectedTaskId": continuation.get("selected_task_id"),
+        "candidateTaskIds": continuation.get("candidate_task_ids") or [],
+        "state": continuation["state"],
+        "executionMode": continuation["execution_mode"],
+        "allowNewOperation": continuation.get("allow_new_operation") is True,
+        "reason": continuation.get("reason"),
+        "expiresAt": continuation["expires_at"],
+        "version": continuation["version"],
+        "updatedAt": continuation["updated_at"],
+    }
+
+
+def task_continuation_candidate_response(candidate: dict, ordinal: int) -> dict:
+    task = candidate["task"]
+    origin = candidate["origin_endpoint"]
+    return {
+        "ordinal": ordinal,
+        "taskId": task["task_id"],
+        "title": task["title"],
+        "status": task["status"],
+        "phase": task_continuation_phase(task),
+        "origin": {
+            "clientType": origin.get("client_type"),
+            "label": origin.get("label"),
+        },
+        "updatedAt": task["updated_at"],
+        "finishedAt": task.get("finished_at"),
+    }
+
+
+def task_continuation_phase(task: dict) -> str:
+    status = str(task.get("status") or "")
+    if status == "waiting_user":
+        return "waiting_user"
+    if status == "running":
+        return "running"
+    if status == "active":
+        return "ready"
+    return "terminal"
+
+
+def task_continuation_execution_mode(
+    task: dict,
+    *,
+    allow_follow_up: bool,
+) -> str:
+    status = str(task.get("status") or "")
+    if status == "active":
+        return "resume"
+    if status == "succeeded" and allow_follow_up:
+        return "follow_up"
+    return "observe_only"
 
 
 def endpoint_response(endpoint: dict) -> dict:

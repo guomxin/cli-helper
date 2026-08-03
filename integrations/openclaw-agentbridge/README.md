@@ -120,6 +120,13 @@ channel session from permanently poisoning that channel's pinned identity. The
 inspecting invocation still fails closed, while a real account change on the
 same channel remains a sticky identity conflict.
 
+Version 0.4.16 adds server-backed cross-endpoint task continuation. Explicit
+continuation requests resolve only tasks owned by the current identity, persist
+ambiguous numbered choices, inject an authoritative non-sensitive task snapshot,
+reuse pending trusted interactions, and prevent terminal or running tasks from
+starting a duplicate business operation. Explicit follow-up work reuses the
+original task ID while AgentBridge operation idempotency remains authoritative.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -154,7 +161,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.15, ...)
+AgentBridge interaction plugin registered (version=0.4.16, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

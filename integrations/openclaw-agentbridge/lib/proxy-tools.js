@@ -47,6 +47,7 @@ export function createAgentBridgeProxyTools({
   serverName,
   taskIdResolver = null,
   taskRunRefResolver = null,
+  taskContinuationResolver = null,
   logger = null,
 }) {
   const identity = identityRouter.resolveToolContext(context);
@@ -86,6 +87,7 @@ export function createAgentBridgeProxyTools({
         serverName,
         taskIdResolver,
         taskRunRefResolver,
+        taskContinuationResolver,
         logger,
       }),
     ),
@@ -133,6 +135,7 @@ function createProxyTool({
   serverName,
   taskIdResolver,
   taskRunRefResolver,
+  taskContinuationResolver,
   logger,
 }) {
   return {
@@ -151,6 +154,24 @@ function createProxyTool({
             code: "IDENTITY_NOT_PROVISIONED",
             message:
               "This AgentBridge client identity is not provisioned.",
+          },
+        });
+      }
+      const continuation = taskContinuationResolver?.(context.sessionKey);
+      if (
+        continuation &&
+        continuation.allowNewOperation !== true &&
+        isTaskEligibleTool(descriptor.name)
+      ) {
+        return jsonToolResult({
+          status: "continuation_blocked",
+          taskId: continuation.taskId,
+          taskStatus: continuation.taskStatus,
+          executionMode: continuation.executionMode,
+          error: {
+            code: "TASK_CONTINUATION_OBSERVE_ONLY",
+            message:
+              "The selected task is waiting, running, or terminal. Use the supplied task snapshot and existing trusted interaction; do not start another business operation.",
           },
         });
       }

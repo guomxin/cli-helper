@@ -100,6 +100,250 @@ test("injects bounded same-user context only for explicit cross-end references",
   assert.match(crossEndpoint.prependContext, /Agent Workspace/);
 });
 
+test("persists ambiguous task choices and blocks duplicate work after selection", async () => {
+  const calls = [];
+  let businessCalls = 0;
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name !== "agentbridge_host_task_continuation_resolve") {
+        return { status: "succeeded" };
+      }
+      if (arguments_.ordinal === 2) {
+        return {
+          status: "selected",
+          task: {
+            taskId: "12345678-1234-4123-8123-123456789012",
+            title: "Read OA sent workflows",
+            status: "succeeded",
+          },
+          continuation: {
+            state: "selected",
+            executionMode: "observe_only",
+            allowNewOperation: false,
+            expiresAt: "2099-08-03T12:00:00+00:00",
+          },
+          snapshot: {
+            summary: {
+              phase: "terminal",
+              origin: { clientType: "web", label: "Agent Workspace" },
+              operation: {
+                operationId: "operation-sent-list",
+                capability: "oa.workflow.sent.list",
+                status: "succeeded",
+              },
+            },
+          },
+        };
+      }
+      return {
+        status: "ambiguous",
+        count: 2,
+        candidates: [
+          {
+            ordinal: 1,
+            taskId: "12345678-1234-4123-8123-123456789011",
+            title: "Read OA pending workflows",
+            status: "succeeded",
+            origin: { clientType: "web", label: "Agent Workspace" },
+            updatedAt: "2026-08-03T10:00:00+00:00",
+          },
+          {
+            ordinal: 2,
+            taskId: "12345678-1234-4123-8123-123456789012",
+            title: "Read OA sent workflows",
+            status: "succeeded",
+            origin: { clientType: "web", label: "Agent Workspace" },
+            updatedAt: "2026-08-03T09:00:00+00:00",
+          },
+        ],
+      };
+    },
+    async callToolResult() {
+      businessCalls += 1;
+      return { structuredContent: { status: "succeeded" } };
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    identityRouter,
+  });
+  const context = {
+    sessionKey,
+    messageProvider: "telegram",
+    senderId: "user-a",
+    chatId: "user-a",
+  };
+
+  const choices = await harness.hooks.before_prompt_build(
+    { prompt: "\u7ee7\u7eed\u4e4b\u524d\u7684\u4efb\u52a1", messages: [] },
+    context,
+  );
+  assert.match(choices.prependContext, /choice=1/);
+  assert.match(choices.prependContext, /choice=2/);
+
+  const selected = await harness.hooks.before_prompt_build(
+    { prompt: "\u7b2c\u4e8c\u4e2a\u4efb\u52a1", messages: [] },
+    context,
+  );
+  assert.match(
+    selected.prependContext,
+    /12345678-1234-4123-8123-123456789012/,
+  );
+  assert.equal(
+    coordinator.taskContinuationForSession(sessionKey).allowNewOperation,
+    false,
+  );
+  const tools = harness.toolFactory({
+    sessionKey,
+    messageChannel: "telegram",
+    requesterSenderId: "user-a",
+    runId: "run-observe-only",
+  });
+  const pending = tools.find(
+    (tool) => tool.name === "oa_workflow_pending_list",
+  );
+  const blocked = await pending.execute("tool-observe-only", { limit: 5 });
+  assert.equal(
+    blocked.details.structuredContent.error.code,
+    "TASK_CONTINUATION_OBSERVE_ONLY",
+  );
+  assert.equal(businessCalls, 0);
+  assert.deepEqual(
+    calls
+      .filter((call) => call.name === "agentbridge_host_task_continuation_resolve")
+      .map((call) => call.arguments_.ordinal),
+    [null, 2],
+  );
+});
+
+test("binds an explicit task follow-up to the existing task ID", async () => {
+  const calls = [];
+  const businessCalls = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const taskId = "12345678-1234-4123-8123-123456789099";
+  const client = {
+    async callTool(name, arguments_, options) {
+      calls.push({ name, arguments_, options });
+      if (name === "agentbridge_host_task_continuation_resolve") {
+        return {
+          status: "selected",
+          task: {
+            taskId,
+            title: "Read OA pending workflows",
+            status: "succeeded",
+          },
+          continuation: {
+            state: "selected",
+            executionMode: "follow_up",
+            allowNewOperation: true,
+            expiresAt: "2099-08-03T12:00:00+00:00",
+          },
+          snapshot: {
+            summary: {
+              phase: "terminal",
+              origin: { clientType: "web", label: "Agent Workspace" },
+              operation: {
+                operationId: "operation-pending-list",
+                capability: "oa.workflow.pending.list",
+                status: "succeeded",
+              },
+            },
+          },
+        };
+      }
+      if (name === "agentbridge_host_task_observe") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool: ${name}`);
+    },
+    async callToolResult(name, arguments_, options) {
+      businessCalls.push({ name, arguments_, options });
+      return {
+        structuredContent: {
+          status: "succeeded",
+          operationId: "operation-detail",
+        },
+      };
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+  const context = {
+    sessionKey,
+    messageProvider: "telegram",
+    senderId: "user-a",
+    chatId: "user-a",
+  };
+
+  await harness.hooks.before_prompt_build(
+    {
+      prompt:
+        "\u7ee7\u7eed\u4e4b\u524d\u7684\u4efb\u52a1\uff0c\u67e5\u770b\u7b2c1\u6761\u8be6\u60c5",
+      messages: [],
+    },
+    context,
+  );
+  const tools = harness.toolFactory({
+    sessionKey,
+    messageChannel: "telegram",
+    requesterSenderId: "user-a",
+    runId: "run-follow-up",
+  });
+  const pending = tools.find(
+    (tool) => tool.name === "oa_workflow_pending_list",
+  );
+  const result = await pending.execute("tool-follow-up", { limit: 5 });
+
+  assert.equal(businessCalls.length, 1);
+  assert.equal(businessCalls[0].name, "oa_workflow_pending_list");
+  assert.deepEqual(businessCalls[0].options.meta, {
+    "io.agentbridge/task": { taskId },
+  });
+  assert.equal(result.details.agentbridgeTaskId, taskId);
+  assert.equal(
+    calls.some((call) => call.name === "agentbridge_host_task_ensure"),
+    false,
+  );
+});
+
 test("confirms a workspace link from the authenticated command sender after restart", async () => {
   const requests = [];
   const senderId = "7052061588";

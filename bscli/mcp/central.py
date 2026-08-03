@@ -2305,6 +2305,58 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_task_continuation_resolve",
+        title="Resolve One Cross-Endpoint AgentBridge Task",
+        description=(
+            "Host-private task selection and continuation context. It binds one "
+            "owned task to the authenticated endpoint, returns a non-sensitive "
+            "snapshot, and never executes a business capability."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_task_continuation_resolve(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        task_id: Annotated[str | None, Field(max_length=128)] = None,
+        ordinal: Annotated[int | None, Field(ge=1, le=20)] = None,
+        source_client_type: Annotated[
+            str | None,
+            Field(max_length=80),
+        ] = None,
+        cross_endpoint_only: bool = False,
+        prefer_active: bool = True,
+        reuse_selected: bool = True,
+        allow_follow_up: bool = False,
+        max_age_minutes: Annotated[int, Field(ge=1, le=10_080)] = 1_440,
+        limit: Annotated[int, Field(ge=1, le=20)] = 8,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await _run_host_control(
+            "agentbridge_host_task_continuation_resolve",
+            service.resolve_host_task_continuation,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            task_id=task_id,
+            ordinal=ordinal,
+            source_client_type=source_client_type,
+            cross_endpoint_only=cross_endpoint_only,
+            prefer_active=prefer_active,
+            reuse_selected=reuse_selected,
+            allow_follow_up=allow_follow_up,
+            max_age_minutes=max_age_minutes,
+            limit=limit,
+        )
+
+    @mcp.tool(
         name="agentbridge_host_cross_endpoint_context",
         title="Read Recent Cross-Endpoint Agent Context",
         description=(

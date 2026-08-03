@@ -96,6 +96,7 @@ export function createInteractionSharedState() {
     loginContinuations: new Map(),
     recentUserMessages: new Map(),
     documentDeliveries: new Map(),
+    taskContinuations: new Map(),
     identitySessionBindings: new Map(),
     identitySessionEndpoints: new Map(),
   };
@@ -140,6 +141,8 @@ export class InteractionCoordinator {
       sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
     this.documentDeliveries =
       sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
+    this.taskContinuations =
+      sharedState.taskContinuations || (sharedState.taskContinuations = new Map());
   }
 
   recordUserMessage(event, context) {
@@ -152,6 +155,9 @@ export class InteractionCoordinator {
     if (!text) {
       return;
     }
+    // A continuation applies to one inbound turn. The prompt hook may bind a
+    // fresh server-backed selection before this turn reaches any business tool.
+    this.taskContinuations.delete(sessionKey);
     this.recentUserMessages.set(sessionKey, {
       text,
       capturedAt: this.now(),
@@ -464,6 +470,63 @@ export class InteractionCoordinator {
           ["pending", "processing"].includes(record.interaction.state),
       )
       .sort((left, right) => right.capturedAt - left.capturedAt);
+    return (
+      matches[0]?.taskId ||
+      this.taskContinuationForSession(sessionKey)?.taskId ||
+      null
+    );
+  }
+
+  bindTaskContinuation({
+    sessionKey,
+    taskId,
+    taskStatus,
+    executionMode,
+    allowNewOperation,
+    expiresAt,
+  }) {
+    if (!isPrivateSessionKey(sessionKey)) {
+      return null;
+    }
+    const normalizedTaskId = safeRoutePart(taskId);
+    if (!normalizedTaskId) {
+      return null;
+    }
+    const serverExpiry = Date.parse(String(expiresAt || ""));
+    const localExpiry = this.now() + 6 * 60 * 60 * 1000;
+    const record = {
+      taskId: normalizedTaskId,
+      taskStatus: safeRoutePart(taskStatus) || "unknown",
+      executionMode: safeRoutePart(executionMode) || "observe_only",
+      allowNewOperation: allowNewOperation === true,
+      expiresAt: Number.isFinite(serverExpiry)
+        ? Math.min(serverExpiry, localExpiry)
+        : localExpiry,
+      capturedAt: this.now(),
+    };
+    this.taskContinuations.set(sessionKey, record);
+    return record;
+  }
+
+  taskContinuationForSession(sessionKey) {
+    this.prune();
+    const record = this.taskContinuations.get(sessionKey) || null;
+    return record && record.expiresAt > this.now() ? record : null;
+  }
+
+  taskIdForBusinessCall(sessionKey) {
+    const continuation = this.taskContinuationForSession(sessionKey);
+    if (continuation) {
+      return continuation.allowNewOperation ? continuation.taskId : null;
+    }
+    const matches = [...this.records.values()]
+      .filter(
+        (record) =>
+          record.sessionKey === sessionKey &&
+          record.taskId &&
+          ["pending", "processing"].includes(record.interaction.state),
+      )
+      .sort((left, right) => right.capturedAt - left.capturedAt);
     return matches[0]?.taskId || null;
   }
 
@@ -476,6 +539,12 @@ export class InteractionCoordinator {
     if (!isPrivateSessionKey(sessionKey) || !taskId || !interaction) {
       return false;
     }
+    const existing = this.records.get(interaction.interactionId);
+    const alreadyDelivered = Boolean(
+      existing?.delivered &&
+        existing.sessionKey === sessionKey &&
+        existing.taskId === taskId,
+    );
     const presented =
       (await this.presentInteractions([interaction], sessionKey)) || [
         interaction,
@@ -487,7 +556,9 @@ export class InteractionCoordinator {
       taskId,
     });
     this.startPolling(record);
-    await this.deliverInteractionsDirect(sessionKey, presented);
+    if (!alreadyDelivered) {
+      await this.deliverInteractionsDirect(sessionKey, presented);
+    }
     return true;
   }
   takeForDelivery({ sessionKey }) {
@@ -562,6 +633,7 @@ export class InteractionCoordinator {
     }
     this.loginContinuations.delete(sessionKey);
     this.recentUserMessages.delete(sessionKey);
+    this.taskContinuations.delete(sessionKey);
     this.sessionRoutes.delete(sessionKey);
     this.directDeliveries.delete(sessionKey);
   }
@@ -578,6 +650,7 @@ export class InteractionCoordinator {
     this.toolBindings.clear();
     this.loginContinuations.clear();
     this.recentUserMessages.clear();
+    this.taskContinuations.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
   }
@@ -1449,6 +1522,11 @@ export class InteractionCoordinator {
     for (const [sessionKey, message] of this.recentUserMessages) {
       if (message.capturedAt <= continuationCutoff) {
         this.recentUserMessages.delete(sessionKey);
+      }
+    }
+    for (const [sessionKey, continuation] of this.taskContinuations) {
+      if (continuation.expiresAt <= this.now()) {
+        this.taskContinuations.delete(sessionKey);
       }
     }
     for (const [interactionId, record] of this.records) {

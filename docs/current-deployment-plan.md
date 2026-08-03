@@ -9,10 +9,10 @@
 > 当前部署判断：固定私网 IP HTTPS、专用内部 CA、Linux AES-256-GCM
 > 会话保护器和 Telegram Web App 卡片均已部署；OpenClaw HTTPS MCP 与真实 OA
 > 读写链路已通过分阶段验证。正式根 CA 已导入 Windows 当前用户信任库，认证、业务字段和
-> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.15 为当前代码版本。
-> 中心端当前定义 66 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
+> 执行授权三类卡片均已在 Telegram 和微信私聊链路实测；插件 0.4.16 为当前代码版本。
+> 中心端当前定义 67 个 MCP 工具。OpenClaw 已绑定会话的模型目录包含 40 个
 > AgentBridge 业务工具和 1 个身份状态工具；15 个 commit/continuation 工具只供协调器
-> 内部调用，另有 10 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
+> 内部调用，另有 11 个任务、Workspace 与多端通知治理工具只供可信宿主私下调用。
 > 静态业务字段卡统一支持
 > 对话已知值预填；出差和请假提交撤销已闭环，补签与劳动合同续签已有专用接收处理能力。
 > 当前两个 OpenClaw 身份各自使用独立 Token。`guomao` 包含 OA 读取、草稿、审批、
@@ -514,7 +514,7 @@ openclaw gateway status --deep --require-rpc
 一套共享 Token 工具。完整配置见
 [OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)。
 
-链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.15, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
+链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.16, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
 `env.vars.NODE_EXTRA_CA_CERTS` 是 OpenClaw 的持久托管环境，不要只在一次性的
 PowerShell 进程中设置 `$env:NODE_EXTRA_CA_CERTS`。重建托管任务后，

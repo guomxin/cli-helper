@@ -139,6 +139,29 @@ class WorkspaceApplication:
             "interaction": interaction,
         }
 
+    def continue_task(self, account: dict, task_id: str) -> dict:
+        response = self.service.resolve_host_task_continuation(
+            user_subject=account["user_subject"],
+            agent_host="openclaw",
+            endpoint_key=account["endpoint_key"],
+            task_id=task_id,
+            reuse_selected=False,
+            allow_follow_up=False,
+        )
+        if response.get("status") != "selected":
+            raise KeyError(f"task not found: {task_id}")
+        task = response["task"]
+        return {
+            "status": "selected",
+            "task": {
+                "task_id": task["taskId"],
+                "title": task["title"],
+                "status": task["status"],
+            },
+            "continuation": response["continuation"],
+            "message": f"继续刚才选择的“{task['title']}”任务。",
+        }
+
     def list_events(
         self,
         account: dict,

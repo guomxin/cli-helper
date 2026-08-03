@@ -242,8 +242,8 @@ renderer remains a host-adapter reference. See the
 
 ## Task Continuity
 
-The Task Hub foundation and the phase-two Agent Workspace are active for
-identity-routed OpenClaw calls. A private
+The Task Hub foundation, phase-two Agent Workspace, and server-backed task
+continuation are active for identity-routed OpenClaw calls. A private
 host adapter creates an opaque task on the first AgentBridge business tool call
 and associates subsequent Operation and Interaction IDs without accepting a
 model-supplied user identity or task argument. `ClientEndpoint`, `AgentTask`,
@@ -257,9 +257,12 @@ interaction, original private route, polling, and card delivery after a Gateway
 restart. The host-only MCP coordination tools require private request metadata
 and are deliberately absent from the plugin's model-visible native tool
 catalog. The independent [Agent Workspace](docs/agent-workspace.md) adds
-persistent web login, read-only OpenClaw chat, task timelines, and endpoint
-visibility without placing MCP or Gateway tokens in the browser. Cross-endpoint
-interaction claiming and mobile confirmation remain later phases in the
+persistent web login, OpenClaw chat, task timelines, a Continue action, and
+endpoint visibility without placing MCP or Gateway tokens in the browser.
+Natural-language continuation can select one same-user task, reuse its pending
+trusted interaction, observe running or terminal state without duplicate work,
+or attach an explicit follow-up to the original task ID. Shared model Transcript
+and OBO execution-host transfer remain later phases in the
 [multi-end task design](docs/omnichannel-agent-task-continuity-design.md).
 
 ## Governed OA Writes

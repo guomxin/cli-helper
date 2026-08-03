@@ -195,6 +195,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_host_task_observe", names)
         self.assertIn("agentbridge_host_task_recovery_list", names)
         self.assertIn("agentbridge_host_task_list", names)
+        self.assertIn("agentbridge_host_task_continuation_resolve", names)
         self.assertIn("agentbridge_host_cross_endpoint_context", names)
         self.assertIn("agentbridge_host_interaction_present", names)
         self.assertIn("agentbridge_host_timeline_append", names)
@@ -1081,6 +1082,51 @@ class CentralMcpTests(unittest.TestCase):
             label=None,
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
+        )
+
+    def test_host_task_continuation_uses_token_identity_and_private_metadata(self):
+        with self._server() as (service, _store, token, client):
+            service.resolve_host_task_continuation.return_value = {
+                "protocolVersion": "0.1",
+                "status": "selected",
+                "task": {"taskId": "task-1234567890-abcdef"},
+                "continuation": {"executionMode": "observe_only"},
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=621,
+                token=token,
+                params={
+                    "name": "agentbridge_host_task_continuation_resolve",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "endpoint_key": "telegram:*:1001",
+                        "task_id": "task-1234567890-abcdef",
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.resolve_host_task_continuation.assert_called_once_with(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            task_id="task-1234567890-abcdef",
+            ordinal=None,
+            source_client_type=None,
+            cross_endpoint_only=False,
+            prefer_active=True,
+            reuse_selected=True,
+            allow_follow_up=False,
+            max_age_minutes=1_440,
+            limit=8,
         )
 
     def test_host_interaction_presentation_uses_endpoint_identity(self):

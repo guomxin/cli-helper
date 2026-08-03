@@ -102,6 +102,96 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
+    def test_cross_endpoint_continuation_choices_persist_and_select_owned_task(self):
+        workspace, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="workspace-account:account-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            label="Agent Workspace",
+        )
+        telegram, _ = self._endpoint()
+        first, _ = self.store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="workspace|run-1",
+            origin_endpoint_id=workspace["endpoint_id"],
+            active_conversation_ref=workspace["conversation_ref"],
+            title="Read OA pending items",
+        )
+        second, _ = self.store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="workspace|run-2",
+            origin_endpoint_id=workspace["endpoint_id"],
+            active_conversation_ref=workspace["conversation_ref"],
+            title="Read OA sent items",
+        )
+
+        candidates = self.store.continuation_candidates(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=telegram["endpoint_id"],
+            cross_endpoint_only=True,
+            source_client_type="web",
+        )
+        candidate_ids = [item["task"]["task_id"] for item in candidates]
+        self.assertEqual(set(candidate_ids), {first["task_id"], second["task_id"]})
+        continuation, reused = self.store.set_continuation_candidates(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=telegram["endpoint_id"],
+            candidate_task_ids=candidate_ids,
+            reason="multiple_candidates",
+        )
+        self.assertFalse(reused)
+        self.assertEqual(continuation["state"], "awaiting_selection")
+
+        reopened = TaskHubStore(self.store.db_path)
+        persisted = reopened.get_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=telegram["endpoint_id"],
+        )
+        self.assertEqual(persisted["candidate_task_ids"], candidate_ids)
+        selected, task, endpoint, selected_reused = (
+            reopened.select_continuation_candidate(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_id=telegram["endpoint_id"],
+                ordinal=1,
+                execution_mode="resume",
+                reason="candidate_ordinal",
+            )
+        )
+        self.assertFalse(selected_reused)
+        self.assertEqual(selected["selected_task_id"], candidate_ids[0])
+        self.assertTrue(selected["allow_new_operation"])
+        self.assertEqual(task["active_conversation_ref"], telegram["conversation_ref"])
+        self.assertEqual(endpoint["endpoint_id"], telegram["endpoint_id"])
+        self.assertIn(
+            "task.continuation.selected",
+            [
+                event["event_type"]
+                for event in reopened.list_events(
+                    task_id=task["task_id"],
+                    user_subject="user-a",
+                )
+            ],
+        )
+
+        with self.assertRaises(TaskNotFound):
+            reopened.get_continuation(
+                user_subject="user-b",
+                agent_host="openclaw",
+                endpoint_id=telegram["endpoint_id"],
+            )
+
     def test_latest_user_event_id_tracks_only_the_owned_event_stream(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])
@@ -1272,6 +1362,131 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertNotIn("Current endpoint text", serialized)
         self.assertNotIn("Another user's private", serialized)
 
+    def test_central_service_resolves_terminal_follow_up_and_ambiguous_tasks(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        first = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="workspace-account:account-a",
+            agent_host="openclaw",
+            host_task_key="workspace|pending-list",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="List OA pending workflows",
+            label="Agent Workspace",
+        )
+        second = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="workspace-account:account-a",
+            agent_host="openclaw",
+            host_task_key="workspace|sent-list",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="List OA sent workflows",
+            label="Agent Workspace",
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            label="Telegram",
+            route={"channel": "telegram", "to": "1001"},
+        )
+        operation, _ = service.operations.create(
+            user_subject="user-a",
+            capability_name="oa.workflow.pending.list",
+            capability_version="1",
+            input_summary={"limit": 20},
+        )
+        operation = service.operations.mark_succeeded(
+            operation["operation_id"],
+            {"count": 3},
+        )
+        service.tasks.link_operation(
+            task_id=first["task"]["taskId"],
+            user_subject="user-a",
+            operation=operation,
+        )
+
+        selected = service.resolve_host_task_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            task_id=first["task"]["taskId"],
+        )
+        self.assertEqual(selected["status"], "selected")
+        self.assertEqual(
+            selected["continuation"]["executionMode"],
+            "observe_only",
+        )
+        self.assertFalse(selected["continuation"]["allowNewOperation"])
+        self.assertEqual(
+            selected["snapshot"]["summary"]["operation"]["capability"],
+            "oa.workflow.pending.list",
+        )
+        self.assertEqual(
+            selected["snapshot"]["summary"]["origin"]["clientType"],
+            "web",
+        )
+
+        follow_up = service.resolve_host_task_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            task_id=first["task"]["taskId"],
+            allow_follow_up=True,
+        )
+        self.assertEqual(
+            follow_up["continuation"]["executionMode"],
+            "follow_up",
+        )
+        self.assertTrue(follow_up["continuation"]["allowNewOperation"])
+
+        ambiguous = service.resolve_host_task_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            source_client_type="web",
+            cross_endpoint_only=True,
+            prefer_active=False,
+            reuse_selected=False,
+        )
+        self.assertEqual(ambiguous["status"], "ambiguous")
+        self.assertEqual(ambiguous["count"], 2)
+        self.assertEqual(
+            {item["taskId"] for item in ambiguous["candidates"]},
+            {first["task"]["taskId"], second["task"]["taskId"]},
+        )
+
+        ordinal = service.resolve_host_task_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            ordinal=2,
+            reuse_selected=False,
+        )
+        self.assertEqual(ordinal["status"], "selected")
+        self.assertIn(
+            ordinal["task"]["taskId"],
+            {first["task"]["taskId"], second["task"]["taskId"]},
+        )
+
     def test_workspace_task_does_not_overwrite_registered_endpoint(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),
@@ -1395,6 +1610,13 @@ class TaskHubStoreTests(unittest.TestCase):
             capabilities=["direct_status", "trusted_interaction"],
         )
         task, _ = self._task(first["endpoint_id"])
+        self.store.select_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=first["endpoint_id"],
+            task_id=task["task_id"],
+            execution_mode="resume",
+        )
         self.store.append_timeline_message(
             user_subject="user-a",
             source_endpoint_id=first["endpoint_id"],
@@ -1416,7 +1638,16 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertTrue(report["isolation"]["passed"])
         self.assertEqual(report["summary"]["users"], 2)
         self.assertEqual(report["summary"]["active_endpoints"], 2)
+        self.assertEqual(report["summary"]["active_task_continuations"], 1)
         self.assertGreaterEqual(report["summary"]["timeline_entries"], 1)
+        user_a = next(
+            item for item in report["users"]
+            if item["user_subject"] == "user-a"
+        )
+        self.assertEqual(
+            user_a["task_continuations"],
+            [{"state": "selected", "execution_mode": "resume", "count": 1}],
+        )
         user_b = next(
             item for item in report["users"]
             if item["user_subject"] == "user-b"
@@ -1441,6 +1672,32 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertFalse(report["isolation"]["passed"])
         self.assertGreater(
             report["isolation"]["violations"]["task_origin_user_mismatch"],
+            0,
+        )
+
+    def test_runtime_diagnostics_detect_cross_user_continuation_corruption(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        self.store.select_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=endpoint["endpoint_id"],
+            task_id=task["task_id"],
+            execution_mode="resume",
+        )
+        with closing(sqlite3.connect(self.store.db_path)) as connection:
+            connection.execute(
+                "UPDATE task_continuations SET user_subject = 'user-b' "
+                "WHERE endpoint_id = ?",
+                (endpoint["endpoint_id"],),
+            )
+            connection.commit()
+
+        report = self.store.runtime_diagnostics()
+
+        self.assertFalse(report["isolation"]["passed"])
+        self.assertGreater(
+            report["isolation"]["violations"]["continuation_binding_mismatch"],
             0,
         )
 

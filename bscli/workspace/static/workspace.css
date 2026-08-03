@@ -765,6 +765,17 @@ code {
   border-bottom: 1px solid var(--line);
 }
 
+.detail-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.detail-heading-actions .primary {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
 .mobile-detail-back {
   display: none;
   min-width: 38px;
@@ -972,6 +983,15 @@ td {
   .mobile-detail-back {
     display: inline-grid;
     place-items: center;
+  }
+
+  .detail-heading {
+    flex-wrap: wrap;
+  }
+
+  .detail-heading-actions {
+    width: 100%;
+    margin-left: 48px;
   }
 
   .composer {

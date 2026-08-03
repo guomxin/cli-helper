@@ -310,6 +310,19 @@ def create_workspace_http_server(
                     application.logout(self._cookie(SESSION_COOKIE))
                     self._json(200, {"status": "signed_out"}, clear=True)
                     return
+                continuation_match = re.fullmatch(
+                    r"/api/tasks/([0-9a-f-]{36})/continue",
+                    route.path,
+                )
+                if continuation_match:
+                    self._json(
+                        200,
+                        application.continue_task(
+                            account,
+                            continuation_match.group(1),
+                        ),
+                    )
+                    return
                 if route.path == "/api/chat/send":
                     result = application.send_chat(
                         account,

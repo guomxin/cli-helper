@@ -1028,7 +1028,17 @@ function renderTaskDetail(result) {
   const title = document.createElement("h2");
   title.textContent = displayTaskTitle(task.title);
   headingCopy.append(eyebrow, title);
-  heading.append(back, headingCopy);
+  const actions = document.createElement("div");
+  actions.className = "detail-heading-actions";
+  const continueButton = document.createElement("button");
+  continueButton.type = "button";
+  continueButton.className = "primary";
+  continueButton.textContent = "继续任务";
+  continueButton.addEventListener("click", () =>
+    continueTask(task, continueButton),
+  );
+  actions.append(continueButton);
+  heading.append(back, headingCopy, actions);
   detail.append(heading);
 
   const metadata = document.createElement("dl");
@@ -1079,6 +1089,23 @@ function renderTaskDetail(result) {
     timeline.append(item);
   });
   detail.append(timeline);
+}
+
+async function continueTask(task, button) {
+  if (!task?.task_id || button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await api(
+      `/api/tasks/${encodeURIComponent(task.task_id)}/continue`,
+      { method: "POST", body: {}, csrf: true },
+    );
+    switchView("chat");
+    await executeChatMessage(result.message);
+  } catch (error) {
+    toast(friendlyError(error), true, `task:${task.task_id}:continue`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function addDetail(list, term, value) {

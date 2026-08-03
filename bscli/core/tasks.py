@@ -21,6 +21,11 @@ TASK_STATUSES = {
     "expired",
 }
 
+ACTIVE_TASK_STATUSES = {"active", "waiting_user", "running"}
+TERMINAL_TASK_STATUSES = TASK_STATUSES - ACTIVE_TASK_STATUSES
+CONTINUATION_STATES = {"awaiting_selection", "selected", "expired", "cleared"}
+CONTINUATION_EXECUTION_MODES = {"observe_only", "resume", "follow_up"}
+
 PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
 
 
@@ -187,6 +192,24 @@ class TaskHubStore:
 
                 CREATE INDEX IF NOT EXISTS user_timeline_subject_sequence
                 ON user_timeline (user_subject, sequence);
+
+                CREATE TABLE IF NOT EXISTS task_continuations (
+                    endpoint_id TEXT PRIMARY KEY,
+                    user_subject TEXT NOT NULL,
+                    agent_host TEXT NOT NULL,
+                    selected_task_id TEXT,
+                    candidate_task_ids_json TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL,
+                    reason TEXT,
+                    expires_at TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS task_continuations_subject_state
+                ON task_continuations (user_subject, state, updated_at);
                 """
             )
             self._migrate_task_interaction_observations(connection)
@@ -992,6 +1015,360 @@ class TaskHubStore:
             rows = connection.execute(query, parameters).fetchall()
         return [_task_from_row(row) for row in rows]
 
+    def continuation_candidates(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_id: str,
+        active_only: bool = False,
+        cross_endpoint_only: bool = False,
+        source_client_type: str | None = None,
+        max_age_minutes: int = 1_440,
+        limit: int = 8,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 20)
+        max_age_minutes = min(max(int(max_age_minutes), 1), 10_080)
+        cutoff = _utc_before(minutes=max_age_minutes)
+        normalized_source = _optional_text(
+            source_client_type,
+            "source_client_type",
+            80,
+        )
+        source_types = _client_type_family(normalized_source)
+        query = """
+            SELECT task.*
+            FROM agent_tasks AS task
+            JOIN client_endpoints AS origin
+              ON origin.endpoint_id = task.origin_endpoint_id
+            WHERE task.user_subject = ? AND task.agent_host = ?
+              AND task.updated_at >= ?
+        """
+        parameters: list[Any] = [user_subject, agent_host, cutoff]
+        if active_only:
+            query += " AND task.status IN ('active', 'waiting_user', 'running')"
+        if cross_endpoint_only:
+            query += " AND task.origin_endpoint_id <> ?"
+            parameters.append(endpoint_id)
+        if source_types:
+            placeholders = ", ".join("?" for _ in source_types)
+            query += f" AND LOWER(origin.client_type) IN ({placeholders})"
+            parameters.extend(source_types)
+        query += " ORDER BY task.updated_at DESC, task.created_at DESC LIMIT ?"
+        parameters.append(limit)
+
+        with self._connect() as connection:
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["agent_host"] != agent_host
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            rows = connection.execute(query, parameters).fetchall()
+            candidates = []
+            for row in rows:
+                origin = self._select_endpoint(
+                    connection,
+                    row["origin_endpoint_id"],
+                )
+                candidates.append(
+                    {
+                        "task": _task_from_row(row),
+                        "origin_endpoint": _endpoint_from_row(origin),
+                    }
+                )
+        return candidates
+
+    def set_continuation_candidates(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_id: str,
+        candidate_task_ids: list[str],
+        reason: str | None = None,
+        ttl_seconds: int = 600,
+    ) -> tuple[dict, bool]:
+        normalized_ids = list(
+            dict.fromkeys(
+                _required_text(value, "candidate_task_id", 128)
+                for value in candidate_task_ids
+            )
+        )
+        if not normalized_ids or len(normalized_ids) > 20:
+            raise ValueError("candidate_task_ids are invalid")
+        normalized_reason = _optional_text(reason, "reason", 120)
+        candidate_json = _canonical_json(normalized_ids)
+        now = _utc_now()
+        expires_at = _utc_after(min(max(int(ttl_seconds), 60), 3_600))
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["agent_host"] != agent_host
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            for task_id in normalized_ids:
+                task = self._select_owned_task(connection, task_id, user_subject)
+                if task["agent_host"] != agent_host:
+                    raise TaskNotFound(f"task not found: {task_id}")
+            existing = connection.execute(
+                "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+            reused = bool(
+                existing is not None
+                and existing["state"] == "awaiting_selection"
+                and existing["candidate_task_ids_json"] == candidate_json
+                and existing["reason"] == normalized_reason
+                and existing["expires_at"] > now
+            )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO task_continuations (
+                        endpoint_id, user_subject, agent_host,
+                        selected_task_id, candidate_task_ids_json, state,
+                        execution_mode, reason, expires_at, version,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, NULL, ?, 'awaiting_selection',
+                              'observe_only', ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        endpoint_id,
+                        user_subject,
+                        agent_host,
+                        candidate_json,
+                        normalized_reason,
+                        expires_at,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE task_continuations
+                    SET selected_task_id = NULL,
+                        candidate_task_ids_json = ?,
+                        state = 'awaiting_selection',
+                        execution_mode = 'observe_only', reason = ?,
+                        expires_at = ?, updated_at = ?,
+                        version = version + ?
+                    WHERE endpoint_id = ?
+                    """,
+                    (
+                        candidate_json,
+                        normalized_reason,
+                        expires_at,
+                        now,
+                        0 if reused else 1,
+                        endpoint_id,
+                    ),
+                )
+            row = connection.execute(
+                "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+        return _continuation_from_row(row), reused
+
+    def select_continuation(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_id: str,
+        task_id: str,
+        execution_mode: str,
+        reason: str | None = None,
+        ttl_seconds: int = 21_600,
+    ) -> tuple[dict, dict, dict, bool]:
+        task_id = _required_text(task_id, "task_id", 128)
+        if execution_mode not in CONTINUATION_EXECUTION_MODES:
+            raise ValueError("execution_mode is invalid")
+        normalized_reason = _optional_text(reason, "reason", 120)
+        now = _utc_now()
+        expires_at = _utc_after(min(max(int(ttl_seconds), 300), 86_400))
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["agent_host"] != agent_host
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["agent_host"] != agent_host:
+                raise TaskNotFound(f"task not found: {task_id}")
+            existing = connection.execute(
+                "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+            reused = bool(
+                existing is not None
+                and existing["state"] == "selected"
+                and existing["selected_task_id"] == task_id
+                and existing["execution_mode"] == execution_mode
+                and existing["reason"] == normalized_reason
+                and existing["expires_at"] > now
+            )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO task_continuations (
+                        endpoint_id, user_subject, agent_host,
+                        selected_task_id, candidate_task_ids_json, state,
+                        execution_mode, reason, expires_at, version,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, '[]', 'selected', ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        endpoint_id,
+                        user_subject,
+                        agent_host,
+                        task_id,
+                        execution_mode,
+                        normalized_reason,
+                        expires_at,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE task_continuations
+                    SET selected_task_id = ?, candidate_task_ids_json = '[]',
+                        state = 'selected', execution_mode = ?, reason = ?,
+                        expires_at = ?, updated_at = ?,
+                        version = version + ?
+                    WHERE endpoint_id = ?
+                    """,
+                    (
+                        task_id,
+                        execution_mode,
+                        normalized_reason,
+                        expires_at,
+                        now,
+                        0 if reused else 1,
+                        endpoint_id,
+                    ),
+                )
+            if task["active_conversation_ref"] != endpoint["conversation_ref"]:
+                connection.execute(
+                    """
+                    UPDATE agent_tasks
+                    SET active_conversation_ref = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (endpoint["conversation_ref"], now, task_id),
+                )
+            if not reused:
+                self._append_event(
+                    connection,
+                    task_id=task_id,
+                    user_subject=user_subject,
+                    event_type="task.continuation.selected",
+                    payload={
+                        "endpointId": endpoint_id,
+                        "executionMode": execution_mode,
+                    },
+                    causation_ref=endpoint_id,
+                    created_at=now,
+                )
+            row = connection.execute(
+                "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+            selected_task = self._select_task(connection, task_id)
+        return (
+            _continuation_from_row(row),
+            _task_from_row(selected_task),
+            _endpoint_from_row(endpoint),
+            reused,
+        )
+
+    def select_continuation_candidate(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_id: str,
+        ordinal: int,
+        execution_mode: str,
+        reason: str | None = None,
+        ttl_seconds: int = 21_600,
+    ) -> tuple[dict, dict, dict, bool]:
+        continuation = self.get_continuation(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_id=endpoint_id,
+        )
+        if continuation is None or continuation["state"] != "awaiting_selection":
+            raise TaskNotFound("task continuation choices not found")
+        candidates = continuation["candidate_task_ids"]
+        index = int(ordinal) - 1
+        if index < 0 or index >= len(candidates):
+            raise TaskNotFound("task continuation choice not found")
+        return self.select_continuation(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_id=endpoint_id,
+            task_id=candidates[index],
+            execution_mode=execution_mode,
+            reason=reason,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def get_continuation(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_id: str,
+    ) -> dict | None:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["agent_host"] != agent_host
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            row = connection.execute(
+                "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["state"] in {"awaiting_selection", "selected"} and row[
+                "expires_at"
+            ] <= now:
+                connection.execute(
+                    """
+                    UPDATE task_continuations
+                    SET state = 'expired', selected_task_id = NULL,
+                        candidate_task_ids_json = '[]', updated_at = ?,
+                        version = version + 1
+                    WHERE endpoint_id = ?
+                    """,
+                    (now, endpoint_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM task_continuations WHERE endpoint_id = ?",
+                    (endpoint_id,),
+                ).fetchone()
+        return _continuation_from_row(row)
+
     def list_endpoints(
         self,
         *,
@@ -1032,6 +1409,7 @@ class TaskHubStore:
                     "agent_tasks",
                     "user_timeline",
                     "notification_outbox",
+                    "task_continuations",
                 )
                 for row in connection.execute(
                     f"SELECT DISTINCT user_subject FROM {table}"
@@ -1088,6 +1466,16 @@ class TaskHubStore:
                     """,
                     (user_subject,),
                 ).fetchall()
+                continuation_rows = connection.execute(
+                    """
+                    SELECT state, execution_mode, COUNT(*) AS count
+                    FROM task_continuations
+                    WHERE user_subject = ?
+                    GROUP BY state, execution_mode
+                    ORDER BY state, execution_mode
+                    """,
+                    (user_subject,),
+                ).fetchall()
                 timeline = connection.execute(
                     """
                     SELECT COUNT(*) AS count, MAX(sequence) AS latest_sequence,
@@ -1141,6 +1529,14 @@ class TaskHubStore:
                             str(row["state"]): int(row["count"])
                             for row in outbox_rows
                         },
+                        "task_continuations": [
+                            {
+                                "state": str(row["state"]),
+                                "execution_mode": str(row["execution_mode"]),
+                                "count": int(row["count"]),
+                            }
+                            for row in continuation_rows
+                        ],
                         "oldest_outstanding_delivery_at": oldest_outstanding[
                             "oldest_at"
                         ],
@@ -1225,6 +1621,40 @@ class TaskHubStore:
                         )
                     )
                 """,
+                "continuation_binding_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_continuations AS continuation
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = continuation.endpoint_id
+                    LEFT JOIN agent_tasks AS selected_task
+                      ON selected_task.task_id = continuation.selected_task_id
+                    WHERE endpoint.endpoint_id IS NULL
+                       OR endpoint.user_subject <> continuation.user_subject
+                       OR endpoint.agent_host <> continuation.agent_host
+                       OR (
+                           continuation.selected_task_id IS NOT NULL
+                           AND (
+                               selected_task.task_id IS NULL
+                               OR selected_task.user_subject <>
+                                  continuation.user_subject
+                               OR selected_task.agent_host <>
+                                  continuation.agent_host
+                           )
+                       )
+                       OR EXISTS (
+                           SELECT 1
+                           FROM json_each(
+                               continuation.candidate_task_ids_json
+                           ) AS candidate
+                           LEFT JOIN agent_tasks AS candidate_task
+                             ON candidate_task.task_id = candidate.value
+                           WHERE candidate_task.task_id IS NULL
+                              OR candidate_task.user_subject <>
+                                 continuation.user_subject
+                              OR candidate_task.agent_host <>
+                                 continuation.agent_host
+                       )
+                """,
             }
             if has_identity_tokens:
                 violation_queries["endpoint_token_user_mismatch"] = """
@@ -1265,6 +1695,9 @@ class TaskHubStore:
                         AS outstanding_deliveries,
                     (SELECT COUNT(*) FROM notification_outbox
                      WHERE state = 'failed') AS failed_deliveries,
+                    (SELECT COUNT(*) FROM task_continuations
+                     WHERE state IN ('awaiting_selection', 'selected'))
+                        AS active_task_continuations,
                     (SELECT COUNT(*) FROM user_timeline) AS timeline_entries
                 """
             ).fetchone()
@@ -1280,6 +1713,9 @@ class TaskHubStore:
                 "active_tasks": int(totals["active_tasks"]),
                 "outstanding_deliveries": int(totals["outstanding_deliveries"]),
                 "failed_deliveries": int(totals["failed_deliveries"]),
+                "active_task_continuations": int(
+                    totals["active_task_continuations"]
+                ),
                 "timeline_entries": int(totals["timeline_entries"]),
                 "isolation_violation_count": violation_count,
             },
@@ -1963,6 +2399,18 @@ def _timeline_from_row(row: sqlite3.Row) -> dict:
     return value
 
 
+def _continuation_from_row(row: sqlite3.Row) -> dict:
+    value = dict(row)
+    value["candidate_task_ids"] = json.loads(
+        value.pop("candidate_task_ids_json")
+    )
+    value["allow_new_operation"] = value["execution_mode"] in {
+        "resume",
+        "follow_up",
+    }
+    return value
+
+
 def _safe_object(value: dict[str, Any] | None) -> dict[str, Any]:
     if value is None:
         return {}
@@ -2010,3 +2458,20 @@ def _utc_after(seconds: int) -> str:
     return (
         datetime.now(timezone.utc) + timedelta(seconds=seconds)
     ).isoformat()
+
+
+def _utc_before(*, minutes: int) -> str:
+    return (
+        datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    ).isoformat()
+
+
+def _client_type_family(value: str | None) -> tuple[str, ...]:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"web", "webchat"}:
+        return ("web", "webchat")
+    if normalized in {"wechat", "weixin", "openclaw-weixin"}:
+        return ("wechat", "weixin", "openclaw-weixin")
+    if normalized:
+        return (normalized,)
+    return ()
