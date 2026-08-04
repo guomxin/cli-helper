@@ -20,6 +20,7 @@ from bscli.adapters.seeyon_central import (
 )
 from bscli.core.central_service import (
     CentralCapabilityService,
+    _task_notification_message,
     capability_required_scopes,
 )
 from bscli.core.interactions import InteractionNotFound
@@ -30,6 +31,15 @@ BASE_URL = "http://oa.example.test/seeyon/main.do?method=main"
 
 
 class CentralCapabilityServiceTests(unittest.TestCase):
+    def test_task_notifications_use_business_labels(self):
+        self.assertEqual(
+            _task_notification_message(
+                {"title": "Prepare OA Missed-Punch Approval", "status": "succeeded"},
+                {"eventType": "task.operation.succeeded"},
+            ),
+            "OA 补签申请审批：已完成。",
+        )
+
     def test_unmapped_write_scope_policy_fails_closed(self):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
             capability_required_scopes("oa.future.unmapped_write")

@@ -3314,9 +3314,28 @@ def _timeline_notification_message(entry: dict) -> str:
     return f"【{source_label} · {actor}】\n{text}"
 
 
+_TASK_TITLE_LABELS = {
+    "Prepare OA Efficiency-Data Approval": "OA 效能数据审批",
+    "Prepare OA Travel-Expense Approval": "OA 差旅费审批",
+    "Prepare OA Labor-Contract Renewal Approval": "OA 劳动合同续签审批",
+    "Prepare OA Weekly-Report Acknowledgement": "OA 周报阅办",
+    "Prepare OA Standard-Collaboration Approval": "OA 普通事项审批",
+    "Prepare OA Workflow Revoke": "OA 流程撤销",
+    "Prepare OA Business Trip Draft": "OA 出差申请草稿",
+    "Prepare OA Business Trip Submission": "OA 出差申请提交",
+    "Prepare OA Leave Draft": "OA 请假申请草稿",
+    "Prepare OA Leave Submission": "OA 请假申请提交",
+    "Prepare OA Missed-Punch Draft": "OA 补签申请草稿",
+    "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
+    "Prepare OA Meeting Creation": "OA 会议创建",
+    "Prepare Taihua Work Log": "泰华工作日志提交",
+}
+
+
 def _task_notification_message(task: dict, event: dict) -> str:
     event_type = str(event.get("eventType") or "")
-    title = str(task.get("title") or "AgentBridge 任务")
+    raw_title = str(task.get("title") or "AgentBridge 任务")
+    title = _TASK_TITLE_LABELS.get(raw_title, raw_title)
     if event_type == "task.created":
         return f"{title}：任务已在另一端发起。"
     if event_type in {
@@ -3324,6 +3343,8 @@ def _task_notification_message(task: dict, event: dict) -> str:
         "task.operation.running",
     }:
         return f"{title}：任务正在执行。"
+    if event_type == "task.operation.requires_user_action":
+        return f"{title}：任务正在等待用户填写或确认。"
     if event_type == "task.interaction.waiting":
         return f"{title}：任务正在等待用户填写或确认。"
     if event_type == "task.interaction.completed":

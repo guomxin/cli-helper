@@ -2341,7 +2341,7 @@ def _event_type_for_operation(status: str) -> str:
     return {
         "pending": "task.operation.running",
         "running": "task.operation.running",
-        "requires_user_action": "task.interaction.waiting",
+        "requires_user_action": "task.operation.requires_user_action",
         "succeeded": "task.operation.succeeded",
         "failed": "task.operation.failed",
         "unknown": "task.operation.outcome_unknown",

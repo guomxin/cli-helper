@@ -447,6 +447,10 @@ class CentralMcpTests(unittest.TestCase):
             "prepare -> authorize -> commit -> verify",
             operator_prompt["messages"][0]["content"]["text"],
         )
+        self.assertIn(
+            "do not call agentbridge_interaction_get again in the same turn",
+            operator_prompt["messages"][0]["content"]["text"],
+        )
 
     def test_interaction_card_url_is_private_mcp_result_metadata(self):
         card_url = "https://cards.example.test/input/opaque-resource"

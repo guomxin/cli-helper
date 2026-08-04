@@ -1356,6 +1356,177 @@ test("acknowledges pull-based workspace notifications without direct webchat del
   );
 });
 
+test("keeps workspace card and status updates on the pull stream without a model wake", async () => {
+  const harness = fakeApi({ autoPoll: false, wakeAgentOnComplete: true });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    channel: "webchat",
+    to: "workspace-account-a",
+  });
+  const next = interaction({
+    interactionId: "interaction-workspace-next-1234567890",
+    type: "execution_authorization",
+  });
+  coordinator.upsert({
+    interaction: next,
+    sessionKey,
+    runId: null,
+    taskId: "task-workspace-pull-1234567890",
+  });
+
+  await coordinator.notify(
+    {
+      sessionKey,
+      interaction: { interactionId: "interaction-workspace-fields-1234567890" },
+    },
+    "next_interaction_required",
+    null,
+    [next],
+  );
+  await coordinator.notify(
+    {
+      sessionKey,
+      interaction: { interactionId: next.interactionId },
+    },
+    "succeeded",
+    null,
+  );
+
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+  assert.equal(harness.heartbeats.length, 0);
+  assert.equal(coordinator.takeForDelivery({ sessionKey }).length, 0);
+  assert.equal(
+    harness.logs.warn.some((message) => message.includes("webchat")),
+    false,
+  );
+});
+
+test("preserves the dedicated login continuation wake for a workspace session", async () => {
+  const harness = fakeApi({ autoPoll: false, wakeAgentOnComplete: true });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    channel: "webchat",
+    to: "workspace-account-a",
+  });
+
+  await coordinator.notify(
+    {
+      sessionKey,
+      continuationQueued: false,
+      interaction: { interactionId: "interaction-workspace-login-1234567890" },
+    },
+    "succeeded",
+    null,
+    [],
+    { resumeOriginalRequest: true, response: { status: "succeeded" } },
+  );
+
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(harness.systemEvents.length, 1);
+  assert.equal(
+    harness.systemEvents[0].text.includes("继续处理触发本次登录的原始用户请求"),
+    true,
+  );
+  assert.equal(harness.heartbeatRuns.length, 1);
+  assert.equal(
+    harness.heartbeatRuns[0].reason,
+    "hook:agentbridge-login-completed",
+  );
+});
+
+test("suppresses same-run interaction_get but permits a later-run redisplay", async () => {
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const businessCalls = [];
+  const client = {
+    async callToolResult(name, params) {
+      businessCalls.push({ name, params });
+      return {
+        content: [{ type: "text", text: '{"status":"succeeded"}' }],
+        structuredContent: { status: "succeeded" },
+      };
+    },
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return {
+        bound: true,
+        binding: { key: "telegram:*:user-a", label: "User A" },
+        client,
+      };
+    },
+    clientForSession() {
+      return client;
+    },
+    endpointKeyForSession() {
+      return "telegram:*:user-a";
+    },
+    bindSession() {
+      return true;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    identityRouter,
+  });
+  const pending = interaction({
+    interactionId: "interaction-same-run-1234567890",
+    type: "business_input",
+  });
+  coordinator.upsert({
+    interaction: pending,
+    sessionKey,
+    runId: "run-card-created",
+  });
+
+  const sameRunTools = harness.toolFactory({
+    sessionKey,
+    runId: "run-card-created",
+    messageChannel: "telegram",
+    requesterSenderId: "user-a",
+  });
+  const sameRunGet = sameRunTools.find(
+    (tool) => tool.name === "agentbridge_interaction_get",
+  );
+  const guarded = await sameRunGet.execute(
+    "tool-get-same-run",
+    { interaction_id: pending.interactionId },
+  );
+
+  assert.equal(guarded.details.structuredContent.status, "host_handled");
+  assert.equal(businessCalls.length, 0);
+
+  const laterRunTools = harness.toolFactory({
+    sessionKey,
+    runId: "run-user-reports-missing-card",
+    messageChannel: "telegram",
+    requesterSenderId: "user-a",
+  });
+  const laterRunGet = laterRunTools.find(
+    (tool) => tool.name === "agentbridge_interaction_get",
+  );
+  await laterRunGet.execute(
+    "tool-get-later-run",
+    { interaction_id: pending.interactionId },
+  );
+
+  assert.equal(businessCalls.length, 1);
+  assert.equal(businessCalls[0].name, "agentbridge_interaction_get");
+});
+
 test("suppresses routine companion status chatter but retains acknowledgement", async () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
@@ -3136,7 +3307,7 @@ test("reports the verified meeting outcome after authorization resumes", async (
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA 会议已创建并发送，并已通过回读确认。",
+    "OA 会议已创建并发送。",
   );
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
@@ -3205,7 +3376,7 @@ test("reports a verified weekly-report acknowledgement after authorization resum
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b\u5df2\u9605\u529e\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002",
+    "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b\u5df2\u9605\u529e\u3002",
   );
 });
 
@@ -3272,7 +3443,7 @@ test("reports a verified labor-contract renewal approval after authorization res
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA \u52b3\u52a8\u5408\u540c\u7eed\u7b7e\u8868\u5df2\u5ba1\u6279\u901a\u8fc7\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002",
+    "OA \u52b3\u52a8\u5408\u540c\u7eed\u7b7e\u8868\u5df2\u5ba1\u6279\u901a\u8fc7\u3002",
   );
 });
 
@@ -3342,7 +3513,7 @@ test("reports a verified business-trip submission after authorization resumes", 
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA 出差申请已提交审批，并已通过已发事项回读确认。",
+    "OA 出差申请已提交审批。",
   );
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
@@ -3413,7 +3584,7 @@ test("reports a verified leave submission after authorization resumes", async ()
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA 请假申请已提交审批，并已通过已发事项回读确认。",
+    "OA 请假申请已提交审批。",
   );
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
@@ -3483,7 +3654,7 @@ test("reports a verified workflow revoke after authorization resumes", async () 
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA 已发流程已撤销，并已通过已发消失及待发撤销状态回读确认。",
+    "OA 已发流程已撤销。",
   );
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
@@ -3635,14 +3806,7 @@ test("reports verified Taihua work-log success and business rejection", async ()
     },
   );
 
-  assert.equal(
-    harness.sentPayloads[0].payload.text.includes("泰华工作日志已正式提交"),
-    true,
-  );
-  assert.equal(
-    harness.sentPayloads[0].payload.text.includes("回读确认"),
-    true,
-  );
+  assert.equal(harness.sentPayloads[0].payload.text, "泰华工作日志已提交。");
   assert.equal(
     harness.sentPayloads[1].payload.text.includes("该日期已有工作日志"),
     true,

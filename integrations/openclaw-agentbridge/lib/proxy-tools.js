@@ -49,6 +49,7 @@ export function createAgentBridgeProxyTools({
   taskIdBinder = null,
   taskRunRefResolver = null,
   taskContinuationResolver = null,
+  interactionGetGuard = null,
   logger = null,
 }) {
   const identity = identityRouter.resolveToolContext(context);
@@ -90,6 +91,7 @@ export function createAgentBridgeProxyTools({
         taskIdBinder,
         taskRunRefResolver,
         taskContinuationResolver,
+        interactionGetGuard,
         logger,
       }),
     ),
@@ -139,6 +141,7 @@ function createProxyTool({
   taskIdBinder,
   taskRunRefResolver,
   taskContinuationResolver,
+  interactionGetGuard,
   logger,
 }) {
   return {
@@ -159,6 +162,25 @@ function createProxyTool({
               "This AgentBridge client identity is not provisioned.",
           },
         });
+      }
+      const params = normalizeParams(rawParams);
+      if (descriptor.name === "agentbridge_interaction_get") {
+        const guarded = interactionGetGuard?.({
+          sessionKey: context.sessionKey,
+          runId: context.runId,
+          toolCallId,
+          interactionId: params.interaction_id,
+        });
+        if (guarded) {
+          return {
+            ...jsonToolResult(guarded),
+            details: {
+              mcpServer: serverName,
+              mcpTool: descriptor.name,
+              structuredContent: guarded,
+            },
+          };
+        }
       }
       const continuation = taskContinuationResolver?.(context.sessionKey);
       if (
@@ -191,7 +213,7 @@ function createProxyTool({
       });
       const result = await identity.client.callToolResult(
         descriptor.name,
-        normalizeParams(rawParams),
+        params,
         {
           signal,
           meta: taskId

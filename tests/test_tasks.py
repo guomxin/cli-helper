@@ -95,6 +95,26 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["interaction_id"], "interaction-a")
+        events = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertEqual(
+            [event["event_type"] for event in events],
+            [
+                "task.created",
+                "task.operation.linked",
+                "task.operation.requires_user_action",
+                "task.interaction.waiting",
+            ],
+        )
+        waiting = [
+            event
+            for event in events
+            if event["event_type"] == "task.interaction.waiting"
+        ]
+        self.assertEqual(len(waiting), 1)
+        self.assertEqual(waiting[0]["payload"]["interactionId"], "interaction-a")
         listed = self.store.list_tasks(
             user_subject="user-a",
             endpoint_id=endpoint["endpoint_id"],
@@ -248,6 +268,17 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         task, _ = self._task(origin["endpoint_id"])
 
+        self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-broadcast",
+                "user_subject": "user-a",
+                "capability_name": "oa.leave.prepare",
+                "status": "requires_user_action",
+                "error": {"code": "FIELDS_REQUIRED"},
+            },
+        )
         self.store.link_interaction(
             task_id=task["task_id"],
             user_subject="user-a",
@@ -266,18 +297,24 @@ class TaskHubStoreTests(unittest.TestCase):
             user_subject="user-a",
             endpoint_id=secondary["endpoint_id"],
         )
-        self.assertEqual(len(secondary_outbox), 2)
+        event_types = [
+            item["payload"]["eventType"] for item in secondary_outbox
+        ]
         self.assertEqual(
-            secondary_outbox[0]["payload"]["eventType"],
-            "task.created",
+            event_types,
+            [
+                "task.created",
+                "task.operation.linked",
+                "task.interaction.waiting",
+            ],
         )
         self.assertEqual(
-            secondary_outbox[1]["payload"]["eventType"],
-            "task.interaction.waiting",
-        )
-        self.assertEqual(
-            secondary_outbox[1]["payload"]["payload"]["interactionId"],
+            secondary_outbox[2]["payload"]["payload"]["interactionId"],
             "interaction-broadcast",
+        )
+        self.assertNotIn(
+            "task.operation.requires_user_action",
+            event_types,
         )
 
     def test_business_input_is_broadcast_to_all_trusted_user_endpoints(self):

@@ -121,10 +121,13 @@ def package_interaction_result(response: dict[str, Any]) -> dict[str, Any] | Cal
 
     text = (
         f"AgentBridge requires trusted user interaction: {interaction['title']}. "
-        "The host should render the AgentBridge secure interaction surface. "
+        "The host has already received the AgentBridge secure interaction surface. "
         "Do not ask for credentials, business fields, or authorization decisions "
-        f"in the conversation. Interaction ID: {interaction['interactionId']}. "
-        "If no app is shown, call agentbridge_interaction_get with this ID."
+        "in the conversation. Briefly ask the user to use the displayed card, without "
+        "repeating card fields or internal IDs. Do not call agentbridge_interaction_get "
+        f"again in this turn. Internal interaction ID: {interaction['interactionId']}. "
+        "Only if the user reports in a later turn that the card is missing may you call "
+        "agentbridge_interaction_get with this ID."
     )
     return CallToolResult(
         content=[TextContent(type="text", text=text)],

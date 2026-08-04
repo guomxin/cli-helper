@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.12，双用户跨端任务选择、受控接续与逆向动作任务边界已完成实现
+> 文档状态：Approved v0.13，双用户跨端任务选择、受控接续与拉取式网页交互边界已完成实现
 >
 > 更新日期：2026-08-04
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.23、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.24、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示、展示层文本
@@ -53,9 +53,15 @@
 - 用户明确说出“刚才网页端”“继续另一个端的第 1 条”等跨端指代时，OpenClaw 通过
   宿主私有工具读取同一 `userSubject` 其他端点最近 6 小时、最多 12 条非敏感文本，
   以不可信数据块注入当前推理；普通消息不增加该读取。
-- OpenClaw `0.4.23` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
+- OpenClaw `0.4.24` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
   1 个身份状态工具、读取工具和 17 个受治理入口；15 个底层 commit/续办工具保留在
   宿主内部，不向模型注册。
+- Agent Workspace 通过 SSE 和 Task Hub 拉取卡片、文本与任务状态，不再尝试按聊天通道
+  直推，也不会因拉取端投递失败唤醒无业务内容的模型回合；Telegram 和微信仍按原通道直推。
+- 同一 agent run 对同一待处理 Interaction 的重复 `interaction_get` 会在宿主内直接返回
+  `host_handled`，避免重复卡片和重复工具耗时；用户在后续回合明确要求重显时仍允许重新获取。
+- Operation 的 `requires_user_action` 与真正的 Interaction 等待事件分离。前者只表达内部操作
+  状态，后者才是跨端展示和通知的唯一可信卡片等待事件。
 - 提示构建 Hook 不信任控制面传入的 sender 或 bot account；它从宿主生成的私聊
   `sessionKey` 恢复通道，并由身份路由器匹配唯一配置绑定。微信 sender 大小写不敏感，
   多 bot 歧义继续失败关闭。

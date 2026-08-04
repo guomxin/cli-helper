@@ -73,6 +73,10 @@ class McpPresentationTests(unittest.TestCase):
                 "modelMustNotCollectValues"
             ]
         )
+        model_text = payload["content"][0]["text"]
+        self.assertIn("already received", model_text)
+        self.assertIn("Do not call agentbridge_interaction_get again in this turn", model_text)
+        self.assertIn("in a later turn", model_text)
 
     def test_non_interaction_result_is_unchanged(self):
         response = {"status": "succeeded", "result": {"count": 0}}

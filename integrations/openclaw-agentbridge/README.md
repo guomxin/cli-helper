@@ -141,6 +141,14 @@ only for a human-readable title or date when several items remain plausible.
 Opaque affair, process, and task IDs remain internal, while the final revoke
 still requires a dedicated trusted authorization.
 
+Version 0.4.24 treats Agent Workspace as a pull-based Task Hub client. Trusted
+cards and status updates remain available through its SSE timeline without an
+impossible `webchat` direct-send attempt or a no-op model heartbeat. Telegram
+and WeChat retain direct delivery, while login completion may still resume the
+original request. The host also suppresses a model-requested duplicate
+`agentbridge_interaction_get` in the same run, without affecting background
+polling, later explicit redisplay, or metadata recovery.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -175,7 +183,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.23, ...)
+AgentBridge interaction plugin registered (version=0.4.24, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

@@ -33,6 +33,7 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.created",
   "task.operation.linked",
   "task.operation.running",
+  "task.operation.requires_user_action",
   "task.interaction.waiting",
   "task.interaction.completed",
 ]);
@@ -192,6 +193,46 @@ export class InteractionCoordinator {
 
   deliveryChannelForSession(sessionKey) {
     return this.sessionRoutes.get(sessionKey)?.channel || null;
+  }
+
+  isPullBasedSession(sessionKey) {
+    const channel = String(
+      this.sessionRoutes.get(sessionKey)?.channel || "",
+    ).toLowerCase();
+    return PULL_BASED_CHANNELS.has(channel);
+  }
+
+  redundantInteractionGet({ sessionKey, runId, toolCallId, interactionId }) {
+    this.prune();
+    const normalizedInteractionId = safeRoutePart(interactionId);
+    const normalizedToolCallId = normalizeToolCallId(toolCallId);
+    const binding = normalizedToolCallId
+      ? this.toolBindings.get(normalizedToolCallId)
+      : null;
+    const activeRunId = safeRoutePart(runId || binding?.runId);
+    const record = normalizedInteractionId
+      ? this.records.get(normalizedInteractionId)
+      : null;
+    if (
+      !record ||
+      !isPrivateSessionKey(sessionKey) ||
+      record.sessionKey !== sessionKey ||
+      !activeRunId ||
+      record.runId !== activeRunId ||
+      !["pending", "processing"].includes(record.interaction.state)
+    ) {
+      return null;
+    }
+    this.api.logger.info(
+      "AgentBridge suppressed a redundant same-run interaction_get; the host already has the card",
+    );
+    return {
+      status: "host_handled",
+      interactionId: normalizedInteractionId,
+      interactionState: record.interaction.state,
+      message:
+        "The host already has this trusted interaction. Do not fetch it again in this run; briefly ask the user to use the displayed card.",
+    };
   }
 
   deliverySessionKeyForRoute({ channel, to, accountId }) {
@@ -1367,6 +1408,23 @@ export class InteractionCoordinator {
       );
       return false;
     }
+    if (this.isPullBasedSession(sessionKey)) {
+      const deliveredIds = new Set(
+        interactions.map((interaction) => interaction.interactionId),
+      );
+      for (const item of this.records.values()) {
+        if (
+          item.sessionKey === sessionKey &&
+          deliveredIds.has(item.interaction.interactionId)
+        ) {
+          item.delivered = true;
+        }
+      }
+      this.api.logger.info(
+        `AgentBridge trusted card is available through the pull-based task stream (channel=${route.channel}, count=${interactions.length})`,
+      );
+      return true;
+    }
     try {
       const presentation = buildPresentation(interactions, route.channel);
       if (!presentation) {
@@ -1417,6 +1475,12 @@ export class InteractionCoordinator {
         "AgentBridge direct status delivery unavailable because the private session route is missing",
       );
       return false;
+    }
+    if (this.isPullBasedSession(sessionKey)) {
+      this.api.logger.info(
+        `AgentBridge trusted status is available through the pull-based task stream (channel=${route.channel}, status=${safeCode(status)})`,
+      );
+      return true;
     }
     const text = safeStatusMessage(status, errorCode, response);
     try {
@@ -2050,36 +2114,26 @@ function safeSucceededMessage(response) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "AgentBridge 已完成本次安全操作。";
   }
-  const verified =
-    result.verification?.confirmed === true || result.verification?.matched === true;
   if (result.meeting_created === true && result.meeting_sent === true) {
-    return verified
-      ? "OA 会议已创建并发送，并已通过回读确认。"
-      : "OA 会议已创建并发送。";
+    return "OA 会议已创建并发送。";
   }
   if (
     result.business_intent === "submit_business_trip_request" &&
     result.workflow_submitted === true
   ) {
-    return verified
-      ? "OA 出差申请已提交审批，并已通过已发事项回读确认。"
-      : "OA 出差申请已提交审批。";
+    return "OA 出差申请已提交审批。";
   }
   if (
     result.business_intent === "submit_leave_request" &&
     result.workflow_submitted === true
   ) {
-    return verified
-      ? "OA 请假申请已提交审批，并已通过已发事项回读确认。"
-      : "OA 请假申请已提交审批。";
+    return "OA 请假申请已提交审批。";
   }
   if (
     result.business_intent === "revoke_sent_workflow" &&
     result.workflow_revoked === true
   ) {
-    return verified
-      ? "OA 已发流程已撤销，并已通过已发消失及待发撤销状态回读确认。"
-      : "OA 已发流程已撤销。";
+    return "OA 已发流程已撤销。";
   }
   if (result.pending_action_processed === true) {
     const subjects = {
@@ -2092,27 +2146,20 @@ function safeSucceededMessage(response) {
     const subject = subjects[result.workflow_profile] || "OA \u5f85\u529e\u4e8b\u9879";
     const action =
       result.action_kind === "acknowledgement" ? "\u5df2\u9605\u529e" : "\u5df2\u5ba1\u6279\u901a\u8fc7";
-    return verified
-      ? `${subject}${action}\uff0c\u5e76\u5df2\u901a\u8fc7\u5f85\u529e\u56de\u8bfb\u786e\u8ba4\u3002`
-      : `${subject}${action}\u3002`;
+    return `${subject}${action}\u3002`;
   }
   if (
     result.status === "created" &&
     result.workLog &&
     typeof result.workLog === "object"
   ) {
-    return verified
-      ? "泰华工作日志已正式提交，并已通过日志回读确认。"
-      : "泰华工作日志已正式提交。";
-  }  if (result.draft_saved === true && result.workflow_submitted === false) {
-    return verified
-      ? "OA 待发草稿已保存，未提交审批，并已通过回读确认。"
-      : "OA 待发草稿已保存，未提交审批。";
+    return "泰华工作日志已提交。";
+  }
+  if (result.draft_saved === true && result.workflow_submitted === false) {
+    return "OA 待发草稿已保存，未提交审批。";
   }
   if (result.workflow_approved === true) {
-    return verified
-      ? "OA 补签申请已审批通过，并已通过待办回读确认。"
-      : "OA 补签申请已审批通过。";
+    return "OA 补签申请已审批通过。";
   }
   return "AgentBridge 已完成本次安全操作。";
 }

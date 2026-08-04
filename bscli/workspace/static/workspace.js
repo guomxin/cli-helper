@@ -1338,7 +1338,8 @@ function eventLabel(type) {
     {
       "task.created": "任务已创建",
       "task.operation.linked": "操作已关联",
-      "task.interaction.pending": "等待用户处理",
+      "task.operation.requires_user_action": "操作等待用户处理",
+      "task.interaction.waiting": "等待用户处理",
       "task.interaction.completed": "可信交互已完成",
       "task.interaction.expired": "可信交互已过期",
       "task.interaction.failed": "可信交互失败",
