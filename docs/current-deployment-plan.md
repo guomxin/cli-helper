@@ -1968,6 +1968,24 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   `admin.js` 已包含多端任务与筛选实现；正式 MCP 冒烟仍发现 69 个工具，辛国茂 OA Session
   为 `active / eligible`。本轮没有读取 OA 待办，也没有执行 OA、泰华或语雀业务写入。
 
+### 15.57 2026-08-04 Operation 用户交互状态校正
+
+- 线上只读核查发现 174 条原始 `requires_user_action` Operation 中，138 条关联交互已经
+  `consumed`，15 条已被替换、8 条已过期、2 条已拒绝，另有 11 条早期登录或会话前置节点；
+  当前 Task Hub 没有 `waiting_user` 任务。大量“等待用户”是历史审计节点的显示歧义，不是
+  业务积压。
+- Operation 原始状态继续保留，不回写历史流水；管理 API 新增 `effective_status`、
+  `interaction_state` 和 `awaiting_user_action` 安全投影。只有关联交互仍为 `pending`、
+  `claimed` 或 `processing` 且未过期时显示“当前等待用户”，其余分别显示“用户已处理、
+  已续办、交互已过期、用户已拒绝、已被替换、交互失败或已转交用户”。
+- 操作记录页改用有效状态展示和筛选，并单列关联交互状态。批量状态解析只读取 Operation ID、
+  Interaction 类型、资源状态和有效期，不读取字段值、授权计划、卡片 URL 或业务结果。
+- 本地门禁通过 Python `491 passed, 3 skipped`、`compileall` 和 JavaScript 语法检查；发布
+  脚本复验通过 Python `488 passed, 3 skipped, 199 subtests`、Workspace `20/20` 与
+  `pip check`。提交 `d2db5ef` 对应 Linux Release `d2db5ef74218`，未重启 OpenClaw。
+- 部署后 8782 健康检查返回 `200` 和新 Release，线上 JavaScript 的 UTF-8 原始字节确认已
+  包含“当前等待用户、已续办、用户交互节点”三类新标签。本轮没有执行任何下游业务写入。
+
 ## 16. 后续演进顺序
 
 1. 在可信卡等待期间重启 Gateway，完成 Interaction、原 run 和多端展示的真实恢复验收；
