@@ -16,6 +16,8 @@ from unittest.mock import patch
 from bscli.admin.application import AdminControlPlane
 from bscli.admin.server import create_admin_http_server, validate_admin_server_config
 from bscli.admin.stores import (
+    ADMIN_SESSION_IDLE_SECONDS,
+    ADMIN_SESSION_TTL_SECONDS,
     AdminAccountStore,
     AdminAuditStore,
     AdminSessionStore,
@@ -41,6 +43,33 @@ class MutableClock:
 
 
 class AdminStoreTests(unittest.TestCase):
+    def test_admin_session_defaults_allow_seven_days_with_one_day_idle(self) -> None:
+        clock = MutableClock()
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "agentbridge.db"
+            account = AdminAccountStore(db_path, clock=clock).create(
+                username="admin", password=PASSWORD, must_change_password=False
+            )
+            sessions = AdminSessionStore(db_path, clock=clock)
+            session = sessions.create(
+                account_id=account["account_id"],
+                request_ip="127.0.0.1",
+                user_agent="test",
+            )
+
+            self.assertEqual(sessions.ttl_seconds, 7 * 24 * 60 * 60)
+            self.assertEqual(sessions.idle_seconds, 24 * 60 * 60)
+            self.assertEqual(sessions.ttl_seconds, ADMIN_SESSION_TTL_SECONDS)
+            self.assertEqual(sessions.idle_seconds, ADMIN_SESSION_IDLE_SECONDS)
+            self.assertEqual(
+                datetime.fromisoformat(session["expires_at"]),
+                clock.value + timedelta(days=7),
+            )
+            clock.value += timedelta(hours=23, minutes=59)
+            self.assertIsNotNone(sessions.verify(session["token"]))
+            clock.value += timedelta(days=1, seconds=1)
+            self.assertIsNone(sessions.verify(session["token"]))
+
     def test_password_is_hashed_and_first_change_is_enforced(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "agentbridge.db"
@@ -637,7 +666,9 @@ class AdminHttpServerTests(unittest.TestCase):
                 cookies = _cookies(headers)
                 self.assertIn("agentbridge_admin_session", cookies)
                 self.assertIn("agentbridge_admin_csrf", cookies)
-                self.assertIn("HttpOnly", " ".join(headers.get_all("Set-Cookie") or []))
+                cookie_headers = " ".join(headers.get_all("Set-Cookie") or [])
+                self.assertIn("HttpOnly", cookie_headers)
+                self.assertEqual(cookie_headers.count("Max-Age=604800"), 2)
 
                 status, response_headers, session = _request(
                     port,

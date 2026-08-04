@@ -505,13 +505,22 @@ def create_admin_http_server(
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             if cookies is not None:
+                session_max_age = control_plane.admin_sessions.ttl_seconds
                 self.send_header(
                     "Set-Cookie",
-                    _session_cookie(cookies["token"], secure=config.secure_cookie, max_age=28_800),
+                    _session_cookie(
+                        cookies["token"],
+                        secure=config.secure_cookie,
+                        max_age=session_max_age,
+                    ),
                 )
                 self.send_header(
                     "Set-Cookie",
-                    _csrf_cookie(cookies["csrf_token"], secure=config.secure_cookie, max_age=28_800),
+                    _csrf_cookie(
+                        cookies["csrf_token"],
+                        secure=config.secure_cookie,
+                        max_age=session_max_age,
+                    ),
                 )
             elif clear_cookies:
                 self.send_header("Set-Cookie", _session_cookie("", secure=config.secure_cookie, max_age=0))

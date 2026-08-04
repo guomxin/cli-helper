@@ -69,7 +69,7 @@ sudo -u agentbridge /home/guomao/agentbridge/venv/bin/python -P \
 
 - 非回环地址必须使用 HTTPS；当前部署复用内部 CA 签发的 IP-SAN 证书。
 - 会话 Cookie 为 `HttpOnly + Secure + SameSite=Strict`，CSRF Token 与会话绑定。
-- 管理会话默认最长 8 小时、空闲 30 分钟；退出或失效后必须重新登录。
+- 管理会话默认最长 7 天、空闲 24 小时；控制台保持打开并正常访问时会刷新空闲时间，退出或会话失效后必须重新登录。
 - 登录失败有来源 IP 维度的速率限制。
 - 页面启用 CSP、HSTS、禁止被 iframe 嵌入和 MIME 嗅探。
 - 管理审计表禁止更新和删除；控制动作必须填写原因。

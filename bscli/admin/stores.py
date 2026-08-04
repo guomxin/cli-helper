@@ -213,14 +213,18 @@ class AdminAccountStore(_SqliteStore):
         return [_account_from_row(row) for row in rows]
 
 
+ADMIN_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+ADMIN_SESSION_IDLE_SECONDS = 24 * 60 * 60
+
+
 class AdminSessionStore(_SqliteStore):
     def __init__(
         self,
         db_path: Path | str,
         *,
         clock: Callable[[], datetime] | None = None,
-        ttl_seconds: int = 28_800,
-        idle_seconds: int = 1_800,
+        ttl_seconds: int = ADMIN_SESSION_TTL_SECONDS,
+        idle_seconds: int = ADMIN_SESSION_IDLE_SECONDS,
     ) -> None:
         super().__init__(db_path, clock=clock)
         if ttl_seconds < 300 or idle_seconds < 60 or idle_seconds > ttl_seconds:
