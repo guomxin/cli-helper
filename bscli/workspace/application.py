@@ -82,11 +82,22 @@ class WorkspaceApplication:
         csrf_token: str | None = None,
         touch: bool = True,
     ) -> dict | None:
-        return self.store.verify_session(
+        account = self.store.verify_session(
             session_token,
             csrf_token=csrf_token,
             touch=touch,
         )
+        if account is not None and touch and account.get("endpoint_id"):
+            try:
+                self.service.tasks.touch_endpoint(
+                    endpoint_id=account["endpoint_id"],
+                    user_subject=account["user_subject"],
+                )
+            except (KeyError, RuntimeError, ValueError, sqlite3.Error):
+                # Session verification remains available during optional
+                # Task Hub projection failures.
+                pass
+        return account
 
     @staticmethod
     def public_account(account: dict | None) -> dict | None:

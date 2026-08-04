@@ -489,6 +489,30 @@ class TaskHubStore:
             row = self._select_endpoint(connection, endpoint_id)
         return _endpoint_from_row(row), False
 
+    def touch_endpoint(
+        self,
+        *,
+        endpoint_id: str,
+        user_subject: str,
+    ) -> dict:
+        endpoint_id = _required_text(endpoint_id, "endpoint_id", 256)
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        now = _utc_now()
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE client_endpoints
+                SET updated_at = ?, last_seen_at = ?
+                WHERE endpoint_id = ? AND user_subject = ?
+                  AND state = 'active'
+                """,
+                (now, now, endpoint_id, user_subject),
+            )
+            if updated.rowcount != 1:
+                raise TaskNotFound("client endpoint not found")
+            row = self._select_endpoint(connection, endpoint_id)
+        return _endpoint_from_row(row)
+
     def ensure_task(
         self,
         *,

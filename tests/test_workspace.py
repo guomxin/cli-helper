@@ -424,6 +424,39 @@ class WorkspaceStoreTests(unittest.TestCase):
 
 
 class WorkspaceApplicationTests(unittest.TestCase):
+    def test_authenticated_request_touches_workspace_endpoint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            session = service.workspace.create_session(account["account_id"])
+            stale = "2026-01-01T00:00:00+00:00"
+            with closing(sqlite3.connect(service.db_path)) as connection:
+                connection.execute(
+                    """
+                    UPDATE client_endpoints
+                    SET updated_at = ?, last_seen_at = ?
+                    WHERE endpoint_id = ?
+                    """,
+                    (stale, stale, account["endpoint_id"]),
+                )
+
+            app = WorkspaceApplication(service=service)
+            verified = app.session(session["session_token"])
+            endpoint = service.tasks.endpoint_for_key(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key=account["endpoint_key"],
+            )
+
+            self.assertIsNotNone(verified)
+            self.assertNotEqual(endpoint["last_seen_at"], stale)
+            self.assertEqual(endpoint["user_subject"], "user-a")
+
     def test_continue_task_binds_owned_task_to_workspace_endpoint(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
