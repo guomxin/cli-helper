@@ -308,7 +308,9 @@ openclaw devices approve <requestId> --json
    Workspace -> 微信文本镜像历史记录，不属于本轮链路；
 7. 深入检查发现网页端点 `last_seen_at` 只在绑定时更新。当前版本已改为在已认证
    Workspace 请求时刷新所属活动端点，不重建端点、不扩大权限，也不复活已停用端点；
-8. 完整证据和性能分解见
+8. 修复以发布 `16fea9d082f1` 部署后，两个已打开网页账户自动重连，网页端点
+   `last_seen_at` 分别刷新到 2026-08-04 10:33:46 和 10:33:45（GMT+8）；
+9. 完整证据和性能分解见
    `omnichannel-phase1-phase2-deep-acceptance-2026-08-04.md`。
 
 ## 多端任务同步一期

@@ -102,6 +102,11 @@ Workspace Session，没有同步刷新 `client_endpoints`。
 修复：已认证 Workspace 请求现在只触达当前账号所属且仍为 active 的网页端点，更新
 `updated_at` 和 `last_seen_at`。它不会重建端点、切换身份、扩大权限或复活停用端点。
 
+部署证据：提交 `16fea9d` 已部署为服务器发布 `16fea9d082f1`。服务重启后两个保持
+打开的真实网页账户自动重连，辛国茂和李世玉网页端点的 `last_seen_at` 分别刷新到
+2026-08-04 10:33:46 和 10:33:45（GMT+8），标准 Release MCP 冒烟通过；本机
+OpenClaw Gateway 未重启。
+
 ### 7.2 OpenClaw CLI 运维诊断可能挂起
 
 `openclaw gateway status/health/call health` 在当前 Windows 环境可长时间不返回，外层
