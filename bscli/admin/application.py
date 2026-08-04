@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import os
 import secrets
+import sqlite3
 
 from bscli.admin.stores import (
     AdminAccountStore,
@@ -142,9 +144,7 @@ class AdminControlPlane:
             },
             "operation_statuses_24h": dict(status_counts),
             "systems": systems,
-            "recent_operations": [
-                self._operation_projection(item) for item in recent_operations[:8]
-            ],
+            "recent_operations": self._operation_projections(recent_operations[:8]),
             "paused_policies": policies[:8],
         }
 
@@ -622,7 +622,7 @@ class AdminControlPlane:
         )
         if status:
             records = [item for item in records if item["status"] == status]
-        return [self._operation_projection(item) for item in records]
+        return self._operation_projections(records)
 
     def interactions(
         self,
@@ -638,9 +638,86 @@ class AdminControlPlane:
             records = [item for item in records if item["interaction_type"] == interaction_type]
         return [self._interaction_projection(item) for item in records]
 
+    def _operation_projections(self, records: list[dict]) -> list[dict]:
+        interaction_states = self._operation_interaction_states(
+            [
+                item["operation_id"]
+                for item in records
+                if item["status"] == "requires_user_action"
+            ]
+        )
+        return [
+            self._operation_projection(
+                item,
+                interaction=interaction_states.get(item["operation_id"]),
+            )
+            for item in records
+        ]
+
+    def _operation_interaction_states(
+        self,
+        operation_ids: list[str],
+    ) -> dict[str, dict]:
+        normalized = list(dict.fromkeys(str(item) for item in operation_ids if item))
+        if not normalized:
+            return {}
+        records: list[sqlite3.Row] = []
+        with closing(sqlite3.connect(self.db_path, timeout=30)) as connection:
+            connection.row_factory = sqlite3.Row
+            for offset in range(0, len(normalized), 400):
+                chunk = normalized[offset : offset + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                records.extend(
+                    connection.execute(
+                        f"""
+                        SELECT interaction.operation_id,
+                               interaction.interaction_type,
+                               interaction.created_at,
+                               interaction.expires_at,
+                               CASE interaction.interaction_type
+                                 WHEN 'credential' THEN challenge.state
+                                 WHEN 'business_input' THEN submission.state
+                                 WHEN 'execution_authorization' THEN authorization.state
+                               END AS resource_state
+                        FROM interactions AS interaction
+                        LEFT JOIN auth_challenges AS challenge
+                          ON interaction.interaction_type = 'credential'
+                         AND challenge.challenge_id = interaction.resource_id
+                        LEFT JOIN field_submissions AS submission
+                          ON interaction.interaction_type = 'business_input'
+                         AND submission.submission_id = interaction.resource_id
+                        LEFT JOIN write_authorizations AS authorization
+                          ON interaction.interaction_type = 'execution_authorization'
+                         AND authorization.authorization_id = interaction.resource_id
+                        WHERE interaction.operation_id IN ({placeholders})
+                        ORDER BY interaction.created_at DESC
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
+        result: dict[str, dict] = {}
+        for row in sorted(records, key=lambda item: item["created_at"], reverse=True):
+            result.setdefault(
+                row["operation_id"],
+                {
+                    "interaction_type": row["interaction_type"],
+                    "state": row["resource_state"] or "unavailable",
+                    "expires_at": row["expires_at"],
+                },
+            )
+        return result
+
     @staticmethod
-    def _operation_projection(record: dict) -> dict:
+    def _operation_projection(
+        record: dict,
+        *,
+        interaction: dict | None = None,
+    ) -> dict:
         error = record.get("error") or {}
+        effective_status = _effective_operation_status(
+            record["status"],
+            interaction=interaction,
+        )
         return {
             "operation_id": record["operation_id"],
             "request_id": record["request_id"],
@@ -648,6 +725,12 @@ class AdminControlPlane:
             "capability_name": record["capability_name"],
             "capability_version": record["capability_version"],
             "status": record["status"],
+            "effective_status": effective_status,
+            "awaiting_user_action": effective_status == "awaiting_user",
+            "interaction_type": (
+                interaction.get("interaction_type") if interaction else None
+            ),
+            "interaction_state": interaction.get("state") if interaction else None,
             "error_code": error.get("code"),
             "error_message": error.get("message"),
             "created_at": record["created_at"],
@@ -828,3 +911,33 @@ def _runtime_code(value: object) -> str | None:
     ):
         return None
     return normalized
+
+
+def _effective_operation_status(
+    status: str,
+    *,
+    interaction: dict | None,
+) -> str:
+    if status != "requires_user_action":
+        return status
+    if not interaction:
+        return "user_action_handoff"
+    resource_state = str(interaction.get("state") or "unavailable")
+    if resource_state == "pending":
+        expires_at = interaction.get("expires_at")
+        if expires_at and _parse_time(str(expires_at)) <= datetime.now(timezone.utc):
+            return "user_action_expired"
+        return "awaiting_user"
+    if resource_state in {"claimed", "processing"}:
+        return "awaiting_user"
+    return {
+        "submitted": "user_action_completed",
+        "approved": "user_action_completed",
+        "completed": "user_action_completed",
+        "consumed": "resumed",
+        "expired": "user_action_expired",
+        "rejected": "user_action_rejected",
+        "declined": "user_action_rejected",
+        "superseded": "user_action_superseded",
+        "failed": "user_action_failed",
+    }.get(resource_state, "user_action_handoff")

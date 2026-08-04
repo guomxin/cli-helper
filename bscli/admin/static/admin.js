@@ -15,7 +15,10 @@ const titles = {
 const statusText = {
   active: "有效", inactive: "未活动", revoked: "已撤销", expired: "已过期", quarantined: "已隔离",
   awaiting_login: "待登录", new: "未登录", succeeded: "成功", failed: "失败", completed: "已完成",
-  unknown: "结果未知", outcome_unknown: "结果未知", requires_user_action: "等待用户", waiting_user: "等待用户",
+  unknown: "结果未知", outcome_unknown: "结果未知", requires_user_action: "用户交互节点", waiting_user: "等待用户",
+  awaiting_user: "当前等待用户", user_action_completed: "用户已处理", resumed: "已续办",
+  user_action_expired: "交互已过期", user_action_rejected: "用户已拒绝", user_action_superseded: "已被替换",
+  user_action_failed: "交互失败", user_action_handoff: "已转交用户",
   running: "执行中", canceled: "已取消", pending: "待处理", delivering: "投递中", acknowledged: "已送达",
   submitted: "已填写", approved: "已授权", rejected: "已拒绝", consumed: "已使用", superseded: "已替换",
   paused: "已暂停", available: "可用", selected: "已选择", awaiting_selection: "待选择",
@@ -23,8 +26,8 @@ const statusText = {
   eligible: "保活中", outside_lease: "租约外", activity_unknown: "活动未知", not_configured: "未配置",
 };
 const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available"].includes(value) ? "ok" :
-  ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected"].includes(value) ? "bad" :
-  ["pending", "delivering", "awaiting_login", "requires_user_action", "waiting_user", "paused", "awaiting_selection", "outside_lease"].includes(value) ? "warn" :
+  ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed"].includes(value) ? "bad" :
+  ["pending", "delivering", "awaiting_login", "awaiting_user", "waiting_user", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
@@ -211,8 +214,9 @@ async function renderOperations() {
   content.innerHTML = `<div class="view-head"><div><h2>能力执行记录</h2><p>不展示输入摘要、结果正文和业务字段。</p></div></div>${operationTable(data.items, true)}`;
 }
 function operationTable(items, filterable = true) {
-  const rows = items.map(item => filterRow(`${item.operation_id} ${item.user_subject} ${item.capability_name} ${item.error_code} ${item.error_message}`, item.status, `<td class="code">${shortId(item.operation_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="code">${escapeHtml(item.capability_name)}</td><td>${badge(item.status)}</td><td class="truncate" title="${escapeHtml(item.error_message || "")}">${escapeHtml(item.error_code || "--")}</td><td>${fmtTime(item.created_at)}</td><td>${fmtTime(item.finished_at)}</td>`));
-  return filterable ? filteredTable(["Operation ID", "用户", "能力", "状态", "错误", "开始", "结束"], rows, "搜索操作、用户、能力或错误", ["succeeded", "failed", "running", "requires_user_action", "unknown"]) : table(["Operation ID", "用户", "能力", "状态", "错误", "开始", "结束"], rows);
+  const rows = items.map(item => { const effective = item.effective_status || item.status; return filterRow(`${item.operation_id} ${item.user_subject} ${item.capability_name} ${item.status} ${item.interaction_type} ${item.interaction_state} ${item.error_code} ${item.error_message}`, effective, `<td class="code">${shortId(item.operation_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="code">${escapeHtml(item.capability_name)}</td><td>${badge(effective)}</td><td>${item.interaction_state ? badge(item.interaction_state) : "--"}</td><td class="truncate" title="${escapeHtml(item.error_message || "")}">${escapeHtml(item.error_code || "--")}</td><td>${fmtTime(item.created_at)}</td><td>${fmtTime(item.finished_at)}</td>`); });
+  const headers = ["Operation ID", "用户", "能力", "有效状态", "交互状态", "错误", "开始", "结束"];
+  return filterable ? filteredTable(headers, rows, "搜索操作、用户、能力或错误", ["awaiting_user", "user_action_completed", "resumed", "user_action_expired", "user_action_rejected", "user_action_superseded", "user_action_handoff", "succeeded", "failed", "running", "unknown"]) : table(headers, rows);
 }
 
 async function renderInteractions() {

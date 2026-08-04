@@ -339,6 +339,75 @@ class AdminControlPlaneTests(unittest.TestCase):
         ):
             self.assertNotIn(secret, serialized)
 
+    def test_operation_effective_status_tracks_the_linked_user_interaction(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            control = AdminControlPlane(
+                service=service,
+                identity_store=McpIdentityTokenStore(service.db_path),
+            )
+            operation, _ = service.operations.create(
+                user_subject="user-a",
+                capability_name="oa.leave.submit.prepare",
+                capability_version="1.0.0",
+                input_summary={},
+            )
+            operation = service.operations.mark_requires_user_action(
+                operation["operation_id"],
+                code="FIELD_INPUT_REQUIRED",
+                message="trusted input is required",
+                next_action={},
+            )
+            submission = service.field_submissions.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.leave.submit.prepare",
+                capability_version="1.0.0",
+                create_operation_id=operation["operation_id"],
+                form_schema={
+                    "fields": [
+                        {"name": "reason", "type": "string", "required": True}
+                    ]
+                },
+                card_base_url="https://agentbridge.example.test",
+            )
+            service.interactions.register(
+                interaction_type="business_input",
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                operation_id=operation["operation_id"],
+                resource_id=submission["submission_id"],
+                title="填写信息",
+                message="complete trusted input",
+                display={},
+                resume_spec={"kind": "capability"},
+                created_at=submission["created_at"],
+                expires_at=submission["expires_at"],
+            )
+
+            waiting = control.operations()[0]
+            self.assertEqual(waiting["status"], "requires_user_action")
+            self.assertEqual(waiting["effective_status"], "awaiting_user")
+            self.assertTrue(waiting["awaiting_user_action"])
+            self.assertEqual(waiting["interaction_state"], "pending")
+
+            with closing(sqlite3.connect(service.db_path)) as connection:
+                connection.execute(
+                    "UPDATE field_submissions SET state = 'consumed' WHERE submission_id = ?",
+                    (submission["submission_id"],),
+                )
+                connection.commit()
+            resumed = control.operations()[0]
+            self.assertEqual(resumed["status"], "requires_user_action")
+            self.assertEqual(resumed["effective_status"], "resumed")
+            self.assertFalse(resumed["awaiting_user_action"])
+            self.assertEqual(resumed["interaction_state"], "consumed")
+
     def test_token_issue_adds_base_read_scope_and_identity_sessions(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
