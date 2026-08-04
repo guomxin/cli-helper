@@ -346,6 +346,137 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
   );
 });
 
+test("keeps workflow revoke on a separate task across trusted-card stages", async () => {
+  const calls = [];
+  const businessCalls = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const submittedTaskId = "12345678-1234-4123-8123-123456789091";
+  const revokeTaskId = "12345678-1234-4123-8123-123456789092";
+  const client = {
+    async callTool(name, arguments_, options) {
+      calls.push({ name, arguments_, options });
+      if (name === "agentbridge_host_task_continuation_resolve") {
+        return {
+          status: "selected",
+          task: {
+            taskId: submittedTaskId,
+            title: "Submit OA business-trip request",
+            status: "succeeded",
+          },
+          continuation: {
+            state: "selected",
+            executionMode: "follow_up",
+            allowNewOperation: true,
+            expiresAt: "2099-08-03T12:00:00+00:00",
+          },
+          snapshot: {
+            summary: {
+              phase: "terminal",
+              origin: { clientType: "web", label: "Agent Workspace" },
+              operation: {
+                operationId: "operation-business-trip-submit",
+                capability: "oa.business_trip.submit",
+                status: "succeeded",
+              },
+            },
+          },
+        };
+      }
+      if (name === "agentbridge_host_task_ensure") {
+        return {
+          status: "succeeded",
+          task: { taskId: revokeTaskId },
+        };
+      }
+      if (name === "agentbridge_host_task_observe") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool: ${name}`);
+    },
+    async callToolResult(name, arguments_, options) {
+      businessCalls.push({ name, arguments_, options });
+      return {
+        structuredContent: {
+          status: "requires_user_action",
+          operationId: `operation-revoke-${businessCalls.length}`,
+        },
+      };
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+  const context = {
+    sessionKey,
+    messageProvider: "telegram",
+    senderId: "user-a",
+    chatId: "user-a",
+  };
+
+  await harness.hooks.before_prompt_build(
+    {
+      prompt: "\u7ee7\u7eed\u4e4b\u524d\u7684\u4efb\u52a1\uff0c\u64a4\u9500\u521a\u63d0\u4ea4\u7684\u51fa\u5dee\u7533\u8bf7",
+      messages: [],
+    },
+    context,
+  );
+
+  const runIds = ["run-revoke-fields", "run-revoke-authorize"];
+  for (const [index, runId] of runIds.entries()) {
+    const tools = harness.toolFactory({
+      sessionKey,
+      messageChannel: "telegram",
+      requesterSenderId: "user-a",
+      runId,
+    });
+    const revoke = tools.find(
+      (tool) => tool.name === "oa_workflow_revoke_prepare",
+    );
+    const result = await revoke.execute(`tool-revoke-${index + 1}`, {
+      affair_id: "affair-business-trip-1",
+    });
+    assert.equal(result.details.agentbridgeTaskId, revokeTaskId);
+  }
+
+  assert.equal(businessCalls.length, 2);
+  assert.equal(
+    businessCalls.every(
+      (call) =>
+        call.name === "oa_workflow_revoke_prepare" &&
+        call.options.meta["io.agentbridge/task"].taskId === revokeTaskId,
+    ),
+    true,
+  );
+  assert.equal(
+    businessCalls.some(
+      (call) =>
+        call.options.meta["io.agentbridge/task"].taskId === submittedTaskId,
+    ),
+    false,
+  );
+  assert.equal(
+    calls.filter((call) => call.name === "agentbridge_host_task_ensure").length,
+    1,
+  );
+});
+
 test("resolves a recent cross-endpoint task without asking for an internal task number", async () => {
   const calls = [];
   const sessionKey = "agent:main:telegram:direct:user-a";

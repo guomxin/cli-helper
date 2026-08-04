@@ -46,6 +46,7 @@ export function createAgentBridgeProxyTools({
   identityRouter,
   serverName,
   taskIdResolver = null,
+  taskIdBinder = null,
   taskRunRefResolver = null,
   taskContinuationResolver = null,
   logger = null,
@@ -86,6 +87,7 @@ export function createAgentBridgeProxyTools({
         context,
         serverName,
         taskIdResolver,
+        taskIdBinder,
         taskRunRefResolver,
         taskContinuationResolver,
         logger,
@@ -134,6 +136,7 @@ function createProxyTool({
   context,
   serverName,
   taskIdResolver,
+  taskIdBinder,
   taskRunRefResolver,
   taskContinuationResolver,
   logger,
@@ -182,6 +185,7 @@ function createProxyTool({
         context,
         toolCallId,
         taskIdResolver,
+        taskIdBinder,
         taskRunRefResolver,
         logger,
       });
@@ -228,6 +232,7 @@ async function resolveTaskId({
   context,
   toolCallId,
   taskIdResolver,
+  taskIdBinder,
   taskRunRefResolver,
   logger,
 }) {
@@ -238,7 +243,10 @@ async function resolveTaskId({
   if (!sessionKey) {
     return null;
   }
-  const resumedTaskId = boundedText(taskIdResolver?.(sessionKey), 128);
+  const resumedTaskId = boundedText(
+    taskIdResolver?.(sessionKey, descriptor.name),
+    128,
+  );
   if (resumedTaskId) {
     return resumedTaskId;
   }
@@ -305,6 +313,8 @@ async function resolveTaskId({
       logger?.warn?.(
         "AgentBridge task creation returned no task ID; business call continues",
       );
+    } else {
+      taskIdBinder?.(sessionKey, descriptor.name, taskId);
     }
     return taskId;
   } catch (error) {

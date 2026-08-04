@@ -133,6 +133,14 @@ task from that endpoint without asking the user for an internal task number.
 Ambiguous older references are clarified with a human-readable title and time;
 internal task IDs remain an audit and idempotency key rather than user-facing UX.
 
+Version 0.4.23 treats workflow revocation as a separate user-visible task and
+card. It may reference a workflow created by an earlier submission task, but it
+does not replace that submission card. Users can say "revoke the business-trip
+request I just submitted"; OpenClaw resolves the recent sent workflow and asks
+only for a human-readable title or date when several items remain plausible.
+Opaque affair, process, and task IDs remain internal, while the final revoke
+still requires a dedicated trusted authorization.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -167,7 +175,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.22, ...)
+AgentBridge interaction plugin registered (version=0.4.23, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

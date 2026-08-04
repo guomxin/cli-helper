@@ -81,9 +81,11 @@ OpenClaw 插件升级为 `0.4.22`。当用户明确使用“刚才、刚刚、�
    `c1a94b01-66c3-4cf8-b882-38f05ae22e4f`；
 8. 已发列表中该事项消失，待发记录显示 `撤销`，用户随后确认已撤销。
 
-两个执行授权均为 `consumed`，4 个字段/授权 Interaction 均为 `completed`。整个链路归属同一
-Task `f155fb3c-f8af-42a7-b7aa-6470a222e2a6`，最终状态为 `succeeded`。当日测试范围内正式
-提交和撤销各 1 次，没有重复业务 Operation。
+两个执行授权均为 `consumed`，4 个字段/授权 Interaction 均为 `completed`。当时提交和撤销
+归属同一 Task `f155fb3c-f8af-42a7-b7aa-6470a222e2a6`，最终状态为 `succeeded`。当日测试
+范围内正式提交和撤销各 1 次，没有重复业务 Operation。后续界面复盘确认，同一 Task 会让
+Workspace 以撤销卡覆盖原提交卡；`0.4.23` 已将撤销修正为独立 Task，只在内部关联原流程，
+原提交卡和撤销卡分别保留。
 
 ## 5. 运行治理
 

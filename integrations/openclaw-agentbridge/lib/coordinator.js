@@ -38,6 +38,9 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
 const MAX_NOTIFICATION_IDLE_INTERVAL_MS = 10_000;
+const INDEPENDENT_TASK_ENTRY_TOOLS = new Set([
+  "oa_workflow_revoke_prepare",
+]);
 const LOGIN_READ_TOOLS = new Map([
   [
     "oa_workflow_pending_list",
@@ -97,6 +100,7 @@ export function createInteractionSharedState() {
     recentUserMessages: new Map(),
     documentDeliveries: new Map(),
     taskContinuations: new Map(),
+    independentTaskBindings: new Map(),
     identitySessionBindings: new Map(),
     identitySessionEndpoints: new Map(),
   };
@@ -143,6 +147,9 @@ export class InteractionCoordinator {
       sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
     this.taskContinuations =
       sharedState.taskContinuations || (sharedState.taskContinuations = new Map());
+    this.independentTaskBindings =
+      sharedState.independentTaskBindings ||
+      (sharedState.independentTaskBindings = new Map());
   }
 
   recordUserMessage(event, context) {
@@ -158,6 +165,7 @@ export class InteractionCoordinator {
     // A continuation applies to one inbound turn. The prompt hook may bind a
     // fresh server-backed selection before this turn reaches any business tool.
     this.taskContinuations.delete(sessionKey);
+    this.independentTaskBindings.delete(sessionKey);
     this.recentUserMessages.set(sessionKey, {
       text,
       capturedAt: this.now(),
@@ -514,7 +522,14 @@ export class InteractionCoordinator {
     return record && record.expiresAt > this.now() ? record : null;
   }
 
-  taskIdForBusinessCall(sessionKey) {
+  taskIdForBusinessCall(sessionKey, toolName = null) {
+    if (INDEPENDENT_TASK_ENTRY_TOOLS.has(toolName)) {
+      // Revoke is a new user-visible job even when it references the workflow
+      // produced by a previous submission task.
+      this.taskContinuations.delete(sessionKey);
+      const binding = this.independentTaskBindings.get(sessionKey);
+      return binding?.toolName === toolName ? binding.taskId : null;
+    }
     const continuation = this.taskContinuationForSession(sessionKey);
     if (continuation) {
       return continuation.allowNewOperation ? continuation.taskId : null;
@@ -528,6 +543,24 @@ export class InteractionCoordinator {
       )
       .sort((left, right) => right.capturedAt - left.capturedAt);
     return matches[0]?.taskId || null;
+  }
+
+  bindIndependentTask(sessionKey, toolName, taskId) {
+    if (
+      !isPrivateSessionKey(sessionKey) ||
+      !INDEPENDENT_TASK_ENTRY_TOOLS.has(toolName)
+    ) {
+      return false;
+    }
+    const normalizedTaskId = safeRoutePart(taskId);
+    if (!normalizedTaskId) {
+      return false;
+    }
+    this.independentTaskBindings.set(sessionKey, {
+      toolName,
+      taskId: normalizedTaskId,
+    });
+    return true;
   }
 
   async restoreRecoveredInteraction({
@@ -634,6 +667,7 @@ export class InteractionCoordinator {
     this.loginContinuations.delete(sessionKey);
     this.recentUserMessages.delete(sessionKey);
     this.taskContinuations.delete(sessionKey);
+    this.independentTaskBindings.delete(sessionKey);
     this.sessionRoutes.delete(sessionKey);
     this.directDeliveries.delete(sessionKey);
   }
@@ -651,6 +685,7 @@ export class InteractionCoordinator {
     this.loginContinuations.clear();
     this.recentUserMessages.clear();
     this.taskContinuations.clear();
+    this.independentTaskBindings.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
   }

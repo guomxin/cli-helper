@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.22";
+export const PLUGIN_VERSION = "0.4.23";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -108,8 +108,10 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           context,
           identityRouter,
           serverName: config.mcpServerName,
-          taskIdResolver: (sessionKey) =>
-            coordinator.taskIdForBusinessCall(sessionKey),
+          taskIdResolver: (sessionKey, toolName) =>
+            coordinator.taskIdForBusinessCall(sessionKey, toolName),
+          taskIdBinder: (sessionKey, toolName, taskId) =>
+            coordinator.bindIndependentTask(sessionKey, toolName, taskId),
           taskRunRefResolver: (toolCallId, sessionKey) =>
             coordinator.taskRunRefForToolCall(toolCallId, sessionKey),
           taskContinuationResolver: (sessionKey) =>

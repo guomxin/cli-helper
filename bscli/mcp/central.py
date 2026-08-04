@@ -768,7 +768,10 @@ def create_central_mcp_server(
         title="List Sent OA Workflows",
         description=(
             "List workflows initiated by the authenticated OA user from the Sent page. "
-            "This is distinct from workflows the user has handled (Done) or follows (Tracked)."
+            "This is distinct from workflows the user has handled (Done) or follows (Tracked). "
+            "Use this list to resolve a concise request such as 'revoke the business-trip "
+            "request I just submitted'. Select only one unique recent match; if several remain, "
+            "ask for a human-readable title or date, never an affair ID or task ID."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -880,10 +883,13 @@ def create_central_mcp_server(
         title="Prepare OA Workflow Revoke",
         meta=interaction_tool_meta(),
         description=(
-            "Bind one opaque affair ID from a prior sent-workflow result and pass any "
-            "revoke comment already supplied by the user. AgentBridge opens a prefilled "
-            "trusted card, validates the exact active target, and creates separate revoke "
-            "authorization."
+            "Prepare a separate revoke task for exactly one opaque affair ID resolved from "
+            "the current conversation or a prior sent-workflow result. The user may simply "
+            "say 'revoke the business-trip request I just submitted'; do not ask them for an "
+            "affair ID, process ID, task ID, or exact technical title. If several sent items "
+            "remain plausible, ask only for a human-readable title or date. Pass any revoke "
+            "comment already supplied by the user. AgentBridge opens a prefilled trusted card, "
+            "validates the exact active target, and creates separate revoke authorization."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
