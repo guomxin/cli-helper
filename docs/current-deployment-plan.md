@@ -1926,6 +1926,12 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 新增 OpenClaw 集成回归，覆盖“自然语言选中原提交任务 -> 撤销新建 Task -> 字段/授权阶段
   复用撤销 Task -> 原提交 Task 从未被写入”的完整任务边界。本轮只修改和自动验证代码，未执行
   OA 或其他下游系统业务写入。
+- 完整门禁通过 Python `485 passed, 3 skipped, 199 subtests`、Workspace `20/20`、
+  OpenClaw 插件 `112/112`、npm pack 和 MCP App 检查。提交 `44e5f75` 已推送，Linux Release
+  `44e5f7529f88` 已部署；Gateway 深度 RPC 正常并实际加载插件 `0.4.23`。
+- 部署后双用户只读隔离验收通过：辛国茂、李世玉 OA Session 均为 `active`，四个预期端点
+  全部存在，10 类跨用户一致性违规则均为 0，活动任务和待投递均为 0。本轮验收没有读取待办，
+  也没有执行任何业务写入。
 
 ## 16. 后续演进顺序
 
