@@ -172,6 +172,18 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertFalse(reused)
         self.assertEqual(continuation["state"], "awaiting_selection")
 
+        listed_continuations = self.store.list_continuations(
+            user_subject="user-a",
+        )
+        self.assertEqual(
+            [item["endpoint_id"] for item in listed_continuations],
+            [telegram["endpoint_id"]],
+        )
+        self.assertEqual(
+            self.store.list_continuations(user_subject="user-b"),
+            [],
+        )
+
         reopened = TaskHubStore(self.store.db_path)
         persisted = reopened.get_continuation(
             user_subject="user-a",

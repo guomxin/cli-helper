@@ -10,7 +10,7 @@ from bscli.admin.stores import (
     AdminAuditStore,
     AdminSessionStore,
 )
-from bscli.core.central_service import CentralCapabilityService
+from bscli.core.central_service import CentralCapabilityService, session_response
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
@@ -113,9 +113,16 @@ class AdminControlPlane:
                     "total_sessions": sum(counts.values()),
                 }
             )
+        runtime = self.runtime()
+        task_hub = runtime["coordination"]["task_hub"]
+        task_summary = task_hub["summary"]
+        waiting_tasks = sum(
+            int(user.get("task_statuses", {}).get("waiting_user", 0))
+            for user in task_hub.get("users", [])
+        )
         return {
             "generated_at": _utc_now(),
-            "runtime": self.runtime(),
+            "runtime": runtime,
             "summary": {
                 "users": len(self._users(tokens=tokens, sessions=sessions)),
                 "active_tokens": sum(
@@ -127,6 +134,11 @@ class AdminControlPlane:
                 "paused_policies": len(policies),
                 "operations_24h": len(recent_operations),
                 "failed_operations_24h": status_counts["failed"] + status_counts["unknown"],
+                "active_tasks": task_summary.get("active_tasks", 0),
+                "waiting_tasks": waiting_tasks,
+                "active_endpoints": task_summary.get("active_endpoints", 0),
+                "outstanding_deliveries": task_summary.get("outstanding_deliveries", 0),
+                "isolation_violations": task_summary.get("isolation_violation_count", 0),
             },
             "operation_statuses_24h": dict(status_counts),
             "systems": systems,
@@ -141,7 +153,7 @@ class AdminControlPlane:
             "service": "agentbridge",
             "release_id": self.release_id,
             "started_at": self.started_at,
-            "admin_api": "v1",
+            "admin_api": "v2",
             "database": "available",
             "systems": [
                 {
@@ -159,6 +171,141 @@ class AdminControlPlane:
                 "task_hub": self.service.tasks.runtime_diagnostics(),
                 "host_control": HOST_CONTROL_DIAGNOSTICS.snapshot(),
             },
+        }
+
+    def coordination(
+        self,
+        *,
+        user_subject: str | None = None,
+        task_status: str | None = None,
+        limit: int = 200,
+    ) -> dict:
+        limit = min(max(int(limit), 1), 500)
+        diagnostics = self.service.tasks.runtime_diagnostics()
+        subjects = [
+            item["user_subject"]
+            for item in diagnostics.get("users", [])
+            if not user_subject or item["user_subject"] == user_subject
+        ]
+        endpoints: list[dict] = []
+        tasks: list[dict] = []
+        deliveries: list[dict] = []
+        continuations: list[dict] = []
+        for subject in subjects:
+            subject_endpoints = self.service.tasks.list_endpoints(
+                user_subject=subject,
+                active_only=False,
+                limit=500,
+            )
+            endpoint_index = {
+                item["endpoint_id"]: item for item in subject_endpoints
+            }
+            endpoints.extend(
+                self._endpoint_projection(item) for item in subject_endpoints
+            )
+            subject_tasks = self.service.tasks.list_tasks(
+                user_subject=subject,
+                limit=limit,
+            )
+            if task_status:
+                subject_tasks = [
+                    item for item in subject_tasks
+                    if item["status"] == task_status
+                ]
+            tasks.extend(
+                self._task_projection(
+                    item,
+                    origin_endpoint=endpoint_index.get(item["origin_endpoint_id"]),
+                )
+                for item in subject_tasks
+            )
+            deliveries.extend(
+                self._delivery_projection(item)
+                for item in self.service.tasks.list_outbox(
+                    user_subject=subject,
+                    limit=limit,
+                    newest_first=True,
+                )
+            )
+            continuations.extend(
+                self._continuation_projection(
+                    item,
+                    endpoint=endpoint_index.get(item["endpoint_id"]),
+                )
+                for item in self.service.tasks.list_continuations(
+                    user_subject=subject,
+                    limit=limit,
+                )
+            )
+        tasks.sort(key=lambda item: item["updated_at"], reverse=True)
+        deliveries.sort(key=lambda item: item["updated_at"], reverse=True)
+        continuations.sort(key=lambda item: item["updated_at"], reverse=True)
+        active_endpoint_count = sum(
+            1 for item in endpoints if item["state"] == "active"
+        )
+        pull_endpoint_count = sum(
+            1
+            for item in endpoints
+            if item["state"] == "active" and item["delivery_mode"] == "pull"
+        )
+        scoped_users = [
+            item for item in diagnostics.get("users", [])
+            if item["user_subject"] in subjects
+        ]
+        task_statuses = Counter(
+            {
+                status: sum(
+                    int(item.get("task_statuses", {}).get(status, 0))
+                    for item in scoped_users
+                )
+                for status in {
+                    status
+                    for item in scoped_users
+                    for status in item.get("task_statuses", {})
+                }
+            }
+        )
+        outstanding = sum(
+            sum(
+                int(count)
+                for state, count in item.get("outbox_states", {}).items()
+                if state in {"pending", "delivering"}
+            )
+            for item in scoped_users
+        )
+        failed = sum(
+            int(item.get("outbox_states", {}).get("failed", 0))
+            for item in scoped_users
+        )
+        return {
+            "generated_at": _utc_now(),
+            "summary": {
+                "users": len(subjects),
+                "active_endpoints": active_endpoint_count,
+                "pull_endpoints": pull_endpoint_count,
+                "direct_endpoints": active_endpoint_count - pull_endpoint_count,
+                "active_tasks": sum(
+                    task_statuses.get(status, 0)
+                    for status in {"active", "waiting_user", "running"}
+                ),
+                "waiting_tasks": task_statuses.get("waiting_user", 0),
+                "active_continuations": sum(
+                    1
+                    for item in continuations
+                    if item["state"] in {"selected", "awaiting_selection"}
+                ),
+                "outstanding_deliveries": outstanding,
+                "failed_deliveries": failed,
+                "isolation_violations": diagnostics.get("summary", {}).get(
+                    "isolation_violation_count", 0
+                ),
+            },
+            "task_statuses": dict(task_statuses),
+            "isolation": diagnostics.get("isolation", {}),
+            "tasks": tasks[:limit],
+            "endpoints": endpoints[:limit],
+            "deliveries": deliveries[:limit],
+            "continuations": continuations[:limit],
         }
 
     def users(self) -> list[dict]:
@@ -536,8 +683,11 @@ class AdminControlPlane:
             "expires_at": record["expires_at"],
         }
 
-    @staticmethod
-    def _session_projection(record: dict) -> dict:
+    def _session_projection(self, record: dict) -> dict:
+        status = session_response(
+            record,
+            activity_lease_seconds=self.service.session_keepalive_lease_seconds,
+        )
         return {
             "session_id": record["session_id"],
             "user_subject": record["user_subject"],
@@ -551,7 +701,91 @@ class AdminControlPlane:
             "last_verified_at": record.get("last_verified_at"),
             "last_user_activity_at": record.get("last_user_activity_at"),
             "last_keepalive_at": record.get("last_keepalive_at"),
+            "keepalive_eligible_until": status.get("keepaliveEligibleUntil"),
+            "keepalive_state": status.get("keepaliveState"),
             "expired_at": record.get("expired_at"),
+        }
+
+    @staticmethod
+    def _endpoint_projection(record: dict) -> dict:
+        client_type = str(record["client_type"])
+        return {
+            "endpoint_id": record["endpoint_id"],
+            "user_subject": record["user_subject"],
+            "agent_host": record["agent_host"],
+            "client_type": client_type,
+            "label": record.get("label"),
+            "delivery_mode": (
+                "pull" if client_type.lower() in {"web", "webchat"} else "direct"
+            ),
+            "capabilities": list(record.get("capabilities") or []),
+            "state": record["state"],
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+            "last_seen_at": record["last_seen_at"],
+        }
+
+    @staticmethod
+    def _task_projection(
+        record: dict,
+        *,
+        origin_endpoint: dict | None,
+    ) -> dict:
+        return {
+            "task_id": record["task_id"],
+            "user_subject": record["user_subject"],
+            "agent_host": record["agent_host"],
+            "title": record["title"],
+            "status": record["status"],
+            "origin_endpoint_id": record["origin_endpoint_id"],
+            "origin_client_type": (
+                origin_endpoint.get("client_type") if origin_endpoint else None
+            ),
+            "origin_label": origin_endpoint.get("label") if origin_endpoint else None,
+            "current_operation_id": record.get("current_operation_id"),
+            "current_interaction_id": record.get("current_interaction_id"),
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+            "finished_at": record.get("finished_at"),
+        }
+
+    @staticmethod
+    def _delivery_projection(record: dict) -> dict:
+        payload = record.get("payload") or {}
+        return {
+            "delivery_id": record["delivery_id"],
+            "task_id": record["task_id"],
+            "endpoint_id": record["endpoint_id"],
+            "user_subject": record["user_subject"],
+            "payload_type": record["payload_type"],
+            "event_type": str(payload.get("eventType") or "")[:120] or None,
+            "state": record["state"],
+            "attempt_count": record["attempt_count"],
+            "next_attempt_at": record["next_attempt_at"],
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+            "acknowledged_at": record.get("acknowledged_at"),
+        }
+
+    @staticmethod
+    def _continuation_projection(
+        record: dict,
+        *,
+        endpoint: dict | None,
+    ) -> dict:
+        return {
+            "endpoint_id": record["endpoint_id"],
+            "user_subject": record["user_subject"],
+            "agent_host": record["agent_host"],
+            "client_type": endpoint.get("client_type") if endpoint else None,
+            "selected_task_id": record.get("selected_task_id"),
+            "candidate_count": len(record.get("candidate_task_ids") or []),
+            "state": record["state"],
+            "execution_mode": record["execution_mode"],
+            "reason": _runtime_code(record.get("reason")),
+            "expires_at": record["expires_at"],
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
         }
 
 
@@ -580,3 +814,17 @@ def _parse_time(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _runtime_code(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 120:
+        return None
+    if any(
+        not (character.isascii() and (character.isalnum() or character in "._:-"))
+        for character in normalized
+    ):
+        return None
+    return normalized

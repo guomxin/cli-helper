@@ -164,6 +164,15 @@ def create_admin_http_server(
                     self._json(200, control_plane.overview())
                 elif route.path == "/api/runtime":
                     self._json(200, control_plane.runtime())
+                elif route.path == "/api/coordination":
+                    self._json(
+                        200,
+                        control_plane.coordination(
+                            user_subject=_query_value(query, "user"),
+                            task_status=_query_value(query, "status"),
+                            limit=_query_int(query, "limit", 200),
+                        ),
+                    )
                 elif route.path == "/api/users":
                     self._json(200, {"items": control_plane.users()})
                 elif route.path == "/api/tokens":

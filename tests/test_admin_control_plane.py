@@ -230,6 +230,115 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertNotIn("sensitive-peer-uat-9f4c", json.dumps(task_hub))
         self.assertIn("operations", runtime["coordination"]["host_control"])
 
+    def test_coordination_exposes_only_safe_multichannel_metadata(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            identities = McpIdentityTokenStore(service.db_path)
+            issued = identities.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read"],
+                ttl_seconds=3600,
+            )
+            workspace, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id=issued["token_id"],
+                agent_host="openclaw",
+                endpoint_key="workspace:secret-account",
+                client_type="web",
+                external_subject="secret-account",
+                conversation_ref="agent:main:web:secret-conversation",
+                label="Agent Workspace",
+            )
+            telegram, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id=issued["token_id"],
+                agent_host="openclaw",
+                endpoint_key="telegram:secret-peer",
+                client_type="telegram",
+                external_subject="secret-peer",
+                conversation_ref="agent:main:telegram:secret-route",
+                label="Telegram",
+                capabilities=["direct_status", "trusted_interaction"],
+            )
+            task, _ = service.tasks.ensure_task(
+                user_subject="user-a",
+                agent_host="openclaw",
+                host_task_key="secret-host-task-key",
+                origin_endpoint_id=workspace["endpoint_id"],
+                active_conversation_ref="agent:main:web:secret-conversation",
+                title="读取 OA 待办",
+                summary={"business_secret": "secret-business-field"},
+            )
+            service.tasks.link_operation(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                operation={
+                    "operation_id": "operation-a",
+                    "user_subject": "user-a",
+                    "capability_name": "oa.workflow.pending.list",
+                    "status": "requires_user_action",
+                    "error": {"code": "LOGIN_REQUIRED"},
+                },
+            )
+            service.tasks.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": "interaction-a",
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": "interaction-a",
+                    "type": "credential",
+                    "state": "pending",
+                    "url": "https://secret-card.example/input",
+                },
+            )
+            service.tasks.set_continuation_candidates(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_id=telegram["endpoint_id"],
+                candidate_task_ids=[task["task_id"]],
+                reason="secret continuation reason",
+            )
+
+            result = AdminControlPlane(
+                service=service,
+                identity_store=identities,
+            ).coordination()
+
+        self.assertEqual(result["summary"]["users"], 1)
+        self.assertEqual(result["summary"]["active_endpoints"], 2)
+        self.assertEqual(result["summary"]["pull_endpoints"], 1)
+        self.assertEqual(result["summary"]["direct_endpoints"], 1)
+        self.assertEqual(result["summary"]["waiting_tasks"], 1)
+        self.assertEqual(result["summary"]["active_continuations"], 1)
+        self.assertGreater(result["summary"]["outstanding_deliveries"], 0)
+        self.assertTrue(result["isolation"]["passed"])
+        self.assertEqual(
+            {item["delivery_mode"] for item in result["endpoints"]},
+            {"pull", "direct"},
+        )
+        self.assertEqual(result["tasks"][0]["title"], "读取 OA 待办")
+        self.assertEqual(result["continuations"][0]["candidate_count"], 1)
+        self.assertIsNone(result["continuations"][0]["reason"])
+        serialized = json.dumps(result, ensure_ascii=False)
+        for secret in (
+            "secret-account",
+            "secret-peer",
+            "secret-conversation",
+            "secret-route",
+            "secret-host-task-key",
+            "secret-business-field",
+            "secret-card.example",
+            "secret continuation reason",
+        ):
+            self.assertNotIn(secret, serialized)
+
     def test_token_issue_adds_base_read_scope_and_identity_sessions(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
@@ -498,6 +607,16 @@ class AdminHttpServerTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertNotIn("token_secret", listed["items"][0])
+
+                status, _, coordination = _request(
+                    port,
+                    "GET",
+                    "/api/coordination",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertIn("summary", coordination)
+                self.assertIn("tasks", coordination)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -600,6 +719,10 @@ class AdminStaticAssetTests(unittest.TestCase):
         self.assertIn("const loginForm = event.currentTarget;", script)
         self.assertIn("loginForm.reset();", script)
         self.assertNotIn("event.currentTarget.reset()", script)
+        self.assertIn('data-view="coordination"', page)
+        self.assertIn("async function renderCoordination()", script)
+        self.assertIn('api("/api/coordination?limit=300")', script)
+        self.assertIn("data-filter-search", script)
         self.assertNotIn('style="', page)
         self.assertNotIn("font-size: clamp(", stylesheet)
         self.assertNotIn("style='", page)

@@ -1411,6 +1411,25 @@ class TaskHubStore:
             rows = connection.execute(query, parameters).fetchall()
         return [_endpoint_from_row(row) for row in rows]
 
+    def list_continuations(
+        self,
+        *,
+        user_subject: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM task_continuations
+                WHERE user_subject = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (user_subject, limit),
+            ).fetchall()
+        return [_continuation_from_row(row) for row in rows]
+
     def runtime_diagnostics(self) -> dict[str, Any]:
         return self.inspect_runtime(self.db_path)
 
@@ -1850,6 +1869,7 @@ class TaskHubStore:
         user_subject: str,
         endpoint_id: str | None = None,
         limit: int = 100,
+        newest_first: bool = False,
     ) -> list[dict]:
         limit = min(max(int(limit), 1), 500)
         query = "SELECT * FROM notification_outbox WHERE user_subject = ?"
@@ -1857,7 +1877,8 @@ class TaskHubStore:
         if endpoint_id:
             query += " AND endpoint_id = ?"
             parameters.append(endpoint_id)
-        query += " ORDER BY created_at, rowid LIMIT ?"
+        direction = "DESC" if newest_first else "ASC"
+        query += f" ORDER BY created_at {direction}, rowid {direction} LIMIT ?"
         parameters.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
