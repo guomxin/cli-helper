@@ -1123,6 +1123,7 @@ class CentralMcpTests(unittest.TestCase):
             source_client_type=None,
             cross_endpoint_only=False,
             prefer_active=True,
+            prefer_latest=False,
             reuse_selected=True,
             allow_follow_up=False,
             max_age_minutes=1_440,

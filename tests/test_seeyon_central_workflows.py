@@ -169,9 +169,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             ["tracking-tab", "more-track"],
         )
         self.assertEqual(
-            self.worker.page.frames[0].wait_calls[-1]["managerMethod"],
-            "getMoreList4SectionContion",
+            self.worker.page.frames[0].wait_calls[-1]["gridId"],
+            "gridId",
         )
+
     def test_tracked_detail_preserves_the_row_source_page(self):
         self.adapter.invoke_capability(
             "oa.workflow.detail.get",
@@ -183,6 +184,54 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         )
 
         self.assertIn("openFrom=listDone", self.worker.render_calls[-1])
+
+    def test_tracked_identifier_fallback_reconciles_sent_and_done_rows(self):
+        self.worker.tracked_id_shell = FakeTrackedIdPage(
+            ["sent-fallback", "done-fallback"]
+        )
+        sent = {
+            "items": [
+                {
+                    "affair_id": "sent-fallback",
+                    "title": "Tracked sent fallback",
+                    "status": "In progress",
+                    "date": "2026-07-10",
+                    "category": "",
+                    "raw_text": "",
+                    "href": "internal",
+                }
+            ]
+        }
+        done = {
+            "items": [
+                {
+                    "affair_id": "done-fallback",
+                    "title": "Tracked done fallback",
+                    "status": "Completed",
+                    "date": "2026-07-09",
+                    "category": "",
+                    "raw_text": "",
+                    "href": "internal",
+                }
+            ]
+        }
+        with patch.object(
+            self.adapter,
+            "_read_history_page",
+            side_effect=[sent, done],
+        ):
+            result = self.adapter._read_tracked_page_fallback(self.worker)
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(
+            [item["affair_id"] for item in result["items"]],
+            ["sent-fallback", "done-fallback"],
+        )
+        self.assertEqual(
+            [item["open_from"] for item in result["items"]],
+            ["listSent", "listDone"],
+        )
+
     def test_detail_merges_same_origin_frame_and_exposes_business_data_only(self):
         result = self.adapter.invoke_capability(
             "oa.workflow.detail.get",
@@ -261,6 +310,7 @@ class FakeWorkflowWorker:
         self.render_calls = []
         self.last_section_arguments = {}
         self.section_payload_override = None
+        self.tracked_id_shell = None
         self._resource_urls = [
             _section_url("pendingSection", entity_id="pending-entity", panel_id="pending-panel"),
             _section_url("sentSection", entity_id="sent-entity", panel_id="sent-panel"),
@@ -272,6 +322,9 @@ class FakeWorkflowWorker:
 
     def goto(self, url, **_kwargs):
         self.goto_calls.append(url)
+        if "method=moreTrack" in url and self.tracked_id_shell is not None:
+            self.page = self.tracked_id_shell
+            return self.page
         self.page.url = url
         return self.page
 
@@ -346,7 +399,7 @@ class FakeWorkflowLocator:
     def wait_for(self, **_kwargs):
         return None
 
-    def click(self):
+    def click(self, **_kwargs):
         if "moreTrack" in self.selector:
             self.page.locator_clicks.append("more-track")
         else:
@@ -391,12 +444,35 @@ class FakeTrackedFrame:
         }
 
 
+class FakeTrackedIdPage:
+    def __init__(self, affair_ids):
+        self.url = (
+            "http://oa.example.test/seeyon/portalAffair/"
+            "portalAffairController.do?method=moreTrack"
+        )
+        self.affair_ids = list(affair_ids)
+        self.wait_calls = []
+
+    def wait_for_function(self, _expression, *, arg, timeout):
+        self.wait_calls.append({**arg, "timeout": timeout})
+
+    def evaluate(self, _expression, arg):
+        if arg.get("gridId") != "gridId":
+            raise AssertionError(f"unexpected tracked grid id: {arg.get('gridId')}")
+        return {
+            "total": len(self.affair_ids),
+            "page": 1,
+            "affair_ids": self.affair_ids,
+        }
+
+
 class FakeWorkflowPage:
     def __init__(self):
         self.url = BASE_URL
         self.wait_calls = []
         self.locator_clicks = []
         self.frames = [FakeTrackedFrame()]
+        self.context = FakeWorkflowContext(self)
 
     def locator(self, selector):
         return FakeWorkflowLocator(self, selector)
@@ -466,6 +542,11 @@ class FakeWorkflowPage:
               </ul>
             </div>
         """
+
+
+class FakeWorkflowContext:
+    def __init__(self, page):
+        self.pages = [page]
 
 
 def _section_url(section_bean_id, *, entity_id, panel_id):

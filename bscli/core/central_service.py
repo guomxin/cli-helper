@@ -1381,6 +1381,7 @@ class CentralCapabilityService:
         source_client_type: str | None = None,
         cross_endpoint_only: bool = False,
         prefer_active: bool = True,
+        prefer_latest: bool = False,
         reuse_selected: bool = True,
         allow_follow_up: bool = False,
         max_age_minutes: int = 1_440,
@@ -1461,7 +1462,7 @@ class CentralCapabilityService:
                     "count": 0,
                     "candidates": [],
                 }
-            if len(candidate_records) > 1:
+            if len(candidate_records) > 1 and not prefer_latest:
                 continuation, reused = self.tasks.set_continuation_candidates(
                     user_subject=user_subject,
                     agent_host=agent_host,
@@ -1484,7 +1485,11 @@ class CentralCapabilityService:
                     "reused": reused,
                 }
             selected_task_id = candidate_records[0]["task"]["task_id"]
-            selection_reason = "single_candidate"
+            selection_reason = (
+                "latest_relative_reference"
+                if len(candidate_records) > 1
+                else "single_candidate"
+            )
 
         task = self._refresh_host_task_for_continuation(
             user_subject=user_subject,

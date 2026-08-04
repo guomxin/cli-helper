@@ -37,6 +37,7 @@ function runScenario(scenario, overrides = {}) {
         preflightAbort: true,
         acceptTimeoutMs: 35_000,
         startupProgressTimeoutMs: 5_000,
+        startupActiveGraceMs: 20_000,
         sessionIdleTimeoutMs: 15_000,
         sessionIdlePollMs: 250,
         timeoutMs: 60_000,
@@ -133,6 +134,26 @@ test("recovers a registered current run that emitted no real progress", () => {
   assert.equal(
     trace.filter((item) => item.method === "chat.history").length,
     1,
+  );
+  assert.equal(events.at(-1).state, "final");
+});
+
+test("waits for a registered queued run instead of replaying it", () => {
+  const { events, trace } = runScenario("startup_queued_active", {
+    startupActiveGraceMs: 50_000,
+  });
+  assert.equal(
+    trace.filter((item) => item.method === "chat.send").length,
+    1,
+  );
+  assert.equal(
+    trace.filter((item) => item.method === "chat.abort" && item.runId).length,
+    0,
+  );
+  assert.ok(
+    events.some(
+      (event) => event.type === "progress" && event.phase === "queued",
+    ),
   );
   assert.equal(events.at(-1).state, "final");
 });

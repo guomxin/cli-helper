@@ -4,6 +4,7 @@ import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
+import logging
 import re
 import time
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -90,6 +91,9 @@ from bscli.adapters.seeyon_home import (
     parse_template_center_response,
 )
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
+
+
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 class SeeyonLoginRequired(AdapterLoginRequired):
@@ -288,6 +292,29 @@ _TRACKED_GRID_EXTRACT_SCRIPT = r"""
     total: Number.isFinite(total) ? total : items.length,
     page: Number.isFinite(page) ? page : 1,
     items,
+  };
+}
+"""
+
+_TRACKED_ID_EXTRACT_SCRIPT = r"""
+({gridId}) => {
+  const host = document.getElementById(gridId);
+  const gridObject = window.grid || null;
+  const affairIds = [];
+  for (const checkbox of Array.from(
+    host ? host.querySelectorAll('input[name="workitemId"]') : []
+  )) {
+    const affairId = String(checkbox.value || "").trim();
+    if (/^-?\d+$/.test(affairId) && !affairIds.includes(affairId)) {
+      affairIds.push(affairId);
+    }
+  }
+  const total = Number(gridObject && gridObject.p && gridObject.p.total);
+  const page = Number(gridObject && gridObject.p && gridObject.p.page);
+  return {
+    total: Number.isFinite(total) ? total : affairIds.length,
+    page: Number.isFinite(page) ? page : 1,
+    affair_ids: affairIds,
   };
 }
 """
@@ -1085,6 +1112,76 @@ class SeeyonCentralAdapter:
             "items": items,
         }
 
+    def _read_tracked_page_fallback(self, worker) -> dict:
+        page = worker.goto(
+            urljoin(
+                self.base_url,
+                "portalAffair/portalAffairController.do?"
+                + urlencode({"method": "moreTrack"}),
+            ),
+            timeout_seconds=60,
+        )
+        if _looks_like_login_url(worker.page_url):
+            raise SeeyonLoginRequired(
+                "The central OA session expired while opening the tracked page."
+            )
+        try:
+            page.wait_for_function(
+                "({gridId}) => { const host = document.getElementById(gridId); "
+                "const current = window.grid; return Boolean(host && current && current.p && "
+                "(host.querySelector('input[name=\"workitemId\"]') || "
+                "Number(current.p.total) === 0)); }",
+                arg={"gridId": "gridId"},
+                timeout=12000,
+            )
+            shell = page.evaluate(
+                _TRACKED_ID_EXTRACT_SCRIPT,
+                {"gridId": "gridId"},
+            )
+        except Exception as exc:
+            if _looks_like_login_url(worker.page_url):
+                raise SeeyonLoginRequired(
+                    "The central OA session expired while loading the tracked page."
+                ) from exc
+            raise SeeyonReadContractMismatch(
+                "The OA Tracked page did not expose its workflow identifiers."
+            ) from exc
+        if not isinstance(shell, dict) or not isinstance(shell.get("affair_ids"), list):
+            raise SeeyonReadContractMismatch(
+                "The OA Tracked page returned invalid workflow identifiers."
+            )
+
+        tracked_ids = [str(value).strip() for value in shell["affair_ids"]]
+        if not tracked_ids:
+            return {
+                "total": shell.get("total"),
+                "page": shell.get("page"),
+                "items": [],
+            }
+
+        source_rows = {}
+        for collection, open_from in (("sent", "listSent"), ("done", "listDone")):
+            collection_result = self._read_history_page(worker, collection)
+            for item in collection_result.get("items") or []:
+                affair_id = str(item.get("affair_id") or "").strip()
+                if affair_id in tracked_ids and affair_id not in source_rows:
+                    source_rows[affair_id] = {
+                        **item,
+                        "open_from": open_from,
+                    }
+
+        missing_count = sum(1 for affair_id in tracked_ids if affair_id not in source_rows)
+        if missing_count:
+            raise SeeyonReadContractMismatch(
+                "The OA Tracked identifiers could not be fully reconciled with the "
+                f"authoritative Sent and Done grids ({missing_count} unmatched)."
+            )
+        return {
+            "total": shell.get("total"),
+            "page": shell.get("page"),
+            "items": [source_rows[affair_id] for affair_id in tracked_ids],
+        }
+
     def _read_tracked_page(self, worker) -> dict:
         page = worker.goto(
             urljoin(self.base_url, "main.do?" + urlencode({"method": "main"})),
@@ -1095,64 +1192,104 @@ class SeeyonCentralAdapter:
                 "The central OA session expired while opening the tracked page."
             )
         try:
-            tracked_tab = page.locator(
-                'li[title*="跟踪"], li:has-text("跟踪事项")'
-            ).first
-            tracked_tab.wait_for(state="visible", timeout=12000)
-            tracked_tab.click()
-            more_link = page.locator('[onclick*="method=moreTrack"]').first
-            more_link.wait_for(state="visible", timeout=12000)
-            more_link.click()
+            def click_across_surfaces(selector: str, *, timeout_seconds: float) -> None:
+                deadline = time.monotonic() + timeout_seconds
+                last_error = None
+                while time.monotonic() < deadline:
+                    context = getattr(page, "context", None)
+                    candidate_pages = list(getattr(context, "pages", []) or [])
+                    if page not in candidate_pages:
+                        candidate_pages.insert(0, page)
+                    for candidate_page in candidate_pages:
+                        candidates = [candidate_page]
+                        candidates.extend(list(getattr(candidate_page, "frames", []) or []))
+                        for candidate in candidates:
+                            locator_method = getattr(candidate, "locator", None)
+                            if not callable(locator_method):
+                                continue
+                            try:
+                                locator = locator_method(selector)
+                                count_method = getattr(locator, "count", None)
+                                if callable(count_method) and count_method() < 1:
+                                    continue
+                                target = locator.first
+                                target.wait_for(state="attached", timeout=500)
+                                target.click(force=True)
+                                return
+                            except Exception as exc:
+                                last_error = exc
+                    page.wait_for_timeout(250)
+                if last_error is not None:
+                    raise last_error
+                raise SeeyonReadContractMismatch(
+                    "The OA Tracked page control was not attached."
+                )
 
-            frame = None
+            click_across_surfaces(
+                'li[title*="跟踪"], li:has-text("跟踪事项")',
+                timeout_seconds=12,
+            )
+            click_across_surfaces(
+                '[onclick*="method=moreTrack"]',
+                timeout_seconds=12,
+            )
+
+            tracked_surface = None
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 if _looks_like_login_url(worker.page_url):
                     raise SeeyonLoginRequired(
                         "The central OA session expired while loading the tracked page."
                     )
-                for candidate in page.frames:
-                    parsed = urlparse(str(candidate.url or ""))
-                    if (
-                        parsed.path.endswith("/portalAffair/portalAffairController.do")
-                        and parse_qs(parsed.query).get("method") == ["moreTrack"]
-                    ):
-                        frame = candidate
+                context = getattr(page, "context", None)
+                candidate_pages = list(getattr(context, "pages", []) or [])
+                if page not in candidate_pages:
+                    candidate_pages.insert(0, page)
+                for candidate_page in candidate_pages:
+                    candidates = [candidate_page]
+                    candidates.extend(list(getattr(candidate_page, "frames", []) or []))
+                    for candidate in candidates:
+                        parsed = urlparse(str(getattr(candidate, "url", "") or ""))
+                        if (
+                            parsed.path.endswith(
+                                "/portalAffair/portalAffairController.do"
+                            )
+                            and parse_qs(parsed.query).get("method") == ["moreTrack"]
+                        ):
+                            tracked_surface = candidate
+                            break
+                    if tracked_surface is not None:
                         break
-                if frame is not None:
+                if tracked_surface is not None:
                     break
                 page.wait_for_timeout(250)
-            if frame is None:
+            if tracked_surface is None:
                 raise SeeyonReadContractMismatch(
-                    "The OA Tracked page did not open its moreTrack frame."
+                    "The OA Tracked page did not open its moreTrack surface."
                 )
-            frame.wait_for_function(
-                "({gridId, managerMethod}) => { const host = document.getElementById(gridId); "
+            tracked_surface.wait_for_function(
+                "({gridId}) => { const host = document.getElementById(gridId); "
                 "const current = window.grid; return Boolean(host && current && current.p && "
-                "current.p.managerMethod === managerMethod && "
                 "(host.querySelector('td[abbr=\"subject\"]') || Number(current.p.total) === 0)); }",
-                arg={
-                    "gridId": "gridId",
-                    "managerMethod": "getMoreList4SectionContion",
-                },
+                arg={"gridId": "gridId"},
                 timeout=12000,
             )
-            extracted = frame.evaluate(
+            extracted = tracked_surface.evaluate(
                 _TRACKED_GRID_EXTRACT_SCRIPT,
                 {"gridId": "gridId"},
             )
         except SeeyonLoginRequired:
-            raise
-        except SeeyonReadContractMismatch:
             raise
         except Exception as exc:
             if _looks_like_login_url(worker.page_url):
                 raise SeeyonLoginRequired(
                     "The central OA session expired while loading the tracked page."
                 ) from exc
-            raise SeeyonReadContractMismatch(
-                "The OA Tracked page did not expose its workflow grid."
-            ) from exc
+            _LOGGER.info(
+                "OA tracked page using identifier reconciliation fallback: %s",
+                type(exc).__name__,
+            )
+            extracted = self._read_tracked_page_fallback(worker)
         if not isinstance(extracted, dict) or not isinstance(extracted.get("items"), list):
             raise SeeyonReadContractMismatch(
                 "The OA Tracked page returned an invalid workflow grid."

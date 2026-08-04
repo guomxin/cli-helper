@@ -210,10 +210,12 @@ class AdminControlPlaneTests(unittest.TestCase):
                 user_subject="user-a",
                 token_id=issued["token_id"],
                 agent_host="openclaw",
-                endpoint_key="telegram:*:1001",
+                endpoint_key="telegram:*:sensitive-peer-uat-9f4c",
                 client_type="telegram",
-                external_subject="1001",
-                conversation_ref="agent:main:telegram:direct:1001",
+                external_subject="sensitive-peer-uat-9f4c",
+                conversation_ref=(
+                    "agent:main:telegram:direct:sensitive-peer-uat-9f4c"
+                ),
             )
 
             runtime = AdminControlPlane(
@@ -225,7 +227,7 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertTrue(task_hub["isolation"]["passed"])
         self.assertEqual(task_hub["summary"]["active_endpoints"], 1)
         self.assertEqual(task_hub["users"][0]["user_subject"], "user-a")
-        self.assertNotIn("1001", json.dumps(task_hub))
+        self.assertNotIn("sensitive-peer-uat-9f4c", json.dumps(task_hub))
         self.assertIn("operations", runtime["coordination"]["host_control"])
 
     def test_token_issue_adds_base_read_scope_and_identity_sessions(self) -> None:

@@ -346,6 +346,87 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
   );
 });
 
+test("resolves a recent cross-endpoint task without asking for an internal task number", async () => {
+  const calls = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const taskId = "12345678-1234-4123-8123-123456789088";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_host_cross_endpoint_context") {
+        return { status: "succeeded", entries: [] };
+      }
+      if (name !== "agentbridge_host_task_continuation_resolve") {
+        throw new Error(`unexpected tool: ${name}`);
+      }
+      assert.equal(arguments_.ordinal, null);
+      assert.equal(arguments_.source_client_type, "web");
+      assert.equal(arguments_.prefer_latest, true);
+      return {
+        status: "selected",
+        task: {
+          taskId,
+          title: "Read OA pending workflows",
+          status: "succeeded",
+        },
+        continuation: {
+          state: "selected",
+          executionMode: "follow_up",
+          allowNewOperation: true,
+          expiresAt: "2099-08-03T12:00:00+00:00",
+        },
+        snapshot: {
+          summary: {
+            phase: "terminal",
+            origin: { clientType: "web", label: "Agent Workspace" },
+            operation: {
+              operationId: "operation-pending-list",
+              capability: "oa.workflow.pending.list",
+              status: "succeeded",
+            },
+          },
+        },
+      };
+    },
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return { bound: true, client };
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+
+  const result = await harness.hooks.before_prompt_build(
+    {
+      prompt: "\u7ee7\u7eed\u521a\u624d\u7f51\u9875\u91cc\u7684\u5f85\u529e\u4efb\u52a1\uff0c\u67e5\u770b\u7b2c1\u6761\u8be6\u60c5",
+      messages: [],
+    },
+    {
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+  );
+
+  assert.match(result.prependContext, new RegExp(taskId));
+  assert.equal(
+    calls.filter(
+      (call) => call.name === "agentbridge_host_task_continuation_resolve",
+    ).length,
+    1,
+  );
+});
+
 test("confirms a workspace link from the authenticated command sender after restart", async () => {
   const requests = [];
   const senderId = "7052061588";

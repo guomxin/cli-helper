@@ -120,6 +120,15 @@ class FakeWebSocket {
             () => this.emitRunFinal(request.params.sessionKey, runId),
             750,
           );
+        } else if (scenario === "startup_queued_active") {
+          realSetTimeout(
+            () => this.emitRunStart(request.params.sessionKey, runId),
+            400,
+          );
+          realSetTimeout(
+            () => this.emitRunFinal(request.params.sessionKey, runId),
+            500,
+          );
         }
       });
       return;
@@ -151,6 +160,7 @@ class FakeWebSocket {
       [
         "startup_recovery",
         "startup_active",
+        "startup_queued_active",
         "startup_tool_activity",
         "startup_recovery_stalls_twice",
       ].includes(scenario) &&

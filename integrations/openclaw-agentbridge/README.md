@@ -127,6 +127,12 @@ reuse pending trusted interactions, and prevent terminal or running tasks from
 starting a duplicate business operation. Explicit follow-up work reuses the
 original task ID while AgentBridge operation idempotency remains authoritative.
 
+Version 0.4.22 makes everyday continuation references natural. Requests such as
+"continue the task I just started on the web" select the most recent same-user
+task from that endpoint without asking the user for an internal task number.
+Ambiguous older references are clarified with a human-readable title and time;
+internal task IDs remain an audit and idempotency key rather than user-facing UX.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -161,7 +167,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.21, ...)
+AgentBridge interaction plugin registered (version=0.4.22, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

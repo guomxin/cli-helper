@@ -1487,6 +1487,26 @@ class TaskHubStoreTests(unittest.TestCase):
             {first["task"]["taskId"], second["task"]["taskId"]},
         )
 
+        latest = service.resolve_host_task_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            source_client_type="web",
+            cross_endpoint_only=True,
+            prefer_active=False,
+            prefer_latest=True,
+            reuse_selected=False,
+        )
+        self.assertEqual(latest["status"], "selected")
+        self.assertEqual(
+            latest["task"]["taskId"],
+            ordinal["task"]["taskId"],
+        )
+        self.assertEqual(
+            latest["continuation"]["reason"],
+            "latest_relative_reference",
+        )
+
     def test_workspace_task_does_not_overwrite_registered_endpoint(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),
@@ -1654,8 +1674,8 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual(user_b["endpoints"][0]["client_type"], "openclaw-weixin")
         self.assertNotIn("sensitive business text", str(report))
-        self.assertNotIn(first["external_subject"], str(report))
-        self.assertNotIn(second["external_subject"], str(report))
+        self.assertNotIn(repr(first["external_subject"]), str(report))
+        self.assertNotIn(repr(second["external_subject"]), str(report))
 
     def test_runtime_diagnostics_detect_cross_user_task_corruption(self):
         endpoint, _ = self._endpoint()

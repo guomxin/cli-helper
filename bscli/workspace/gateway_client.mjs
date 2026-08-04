@@ -63,6 +63,10 @@ const startupProgressTimeoutMs =
   mode === "send-stream"
     ? clampInteger(input.startupProgressTimeoutMs, 5_000, 60_000, 15_000)
     : timeoutMs;
+const startupActiveGraceMs =
+  mode === "send-stream"
+    ? clampInteger(input.startupActiveGraceMs, 15_000, 240_000, 90_000)
+    : timeoutMs;
 const sessionIdleTimeoutMs =
   mode === "send-stream"
     ? clampInteger(input.sessionIdleTimeoutMs, 1_000, 30_000, 15_000)
@@ -493,14 +497,14 @@ function handleSessionStateTimeout() {
   );
 }
 
-function armStartupTimer() {
+function armStartupTimer(delayMs = startupProgressTimeoutMs) {
   clearStartupTimer();
   startupTimer = setTimeout(() => {
     startupTimer = null;
     if (settled || streamHadProgress || streamHadToolActivity) return;
     sessionStatePurpose = "startup_probe";
     requestSessionState();
-  }, startupProgressTimeoutMs);
+  }, delayMs);
 }
 
 function clearStartupTimer() {
@@ -526,6 +530,27 @@ function clearRecoveryEvidenceTimer() {
 
 function handleStartupProbe(runState) {
   if (streamHadProgress || streamHadToolActivity) return;
+  const acceptedElapsedMs = elapsedSince(streamAcceptedAtMs) ?? 0;
+  if (
+    runState.currentRunActive &&
+    acceptedElapsedMs < startupActiveGraceMs
+  ) {
+    requestStage = recoveryUsed ? "run_recovered_queued" : "run_queued";
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "progress",
+        runId: streamRunId,
+        kind: "system",
+        phase: "queued",
+        label: "\u667a\u80fd\u4f53\u7e41\u5fd9\uff0c\u5df2\u6392\u961f",
+        acceptedElapsedMs,
+      })}\n`,
+    );
+    armStartupTimer(
+      Math.max(1_000, startupActiveGraceMs - acceptedElapsedMs),
+    );
+    return;
+  }
   if (!runState.active) {
     requestRecoveryEvidence();
     return;
