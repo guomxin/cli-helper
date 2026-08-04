@@ -1933,6 +1933,24 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   全部存在，10 类跨用户一致性违规则均为 0，活动任务和待投递均为 0。本轮验收没有读取待办，
   也没有执行任何业务写入。
 
+### 15.55 2026-08-04 拉取式网页交互与跨端通知去重
+
+- OpenClaw 插件升级为 `0.4.24`。Agent Workspace 被明确识别为通过 SSE 和 Task Hub
+  拉取卡片、文本与任务状态的客户端，不再尝试不存在的 `webchat` 直推，也不再因该直推
+  失败唤醒无业务内容的模型回合；Telegram 和微信的直接投递保持不变。
+- 模型可见提示不再要求在卡片生成的同一回合调用 `agentbridge_interaction_get`。宿主对同一
+  session、同一 run、同一待处理 Interaction 的重复获取直接返回 `host_handled`；用户在后续
+  回合明确反馈卡片缺失时仍可重新获取，不影响后台轮询、元数据恢复和登录后自动续办。
+- Operation 的 `requires_user_action` 改为独立内部事件，只有真正挂接 Interaction 时才产生
+  `task.interaction.waiting`。伴随端仍保留静默任务关联事件，但只收到一次可见等待提醒。
+  同时将 `Prepare ...` 技术标题映射为中文业务名称，并压缩提交、审批、撤销和日志成功文案。
+- 发布门禁通过 Python `486 passed, 3 skipped, 199 subtests`、Workspace `20/20`、OpenClaw
+  插件 `115/115`、npm pack 和依赖检查。提交 `cbb6156` 对应 Linux Release
+  `cbb61564450c`，AgentBridge 冒烟成功；Gateway 深度 RPC 正常并实际加载插件 `0.4.24`。
+- 部署后双用户只读隔离验收通过：辛国茂、李世玉 OA Session 均为 `active`，四个预期端点
+  全部存在，10 类跨用户一致性违规则均为 0，活动任务和当前待投递均为 0。历史失败投递
+  记录 11 条继续保留用于审计，但没有形成当前积压。本轮没有读取待办，也没有执行业务写入。
+
 ## 16. 后续演进顺序
 
 1. 在可信卡等待期间重启 Gateway，完成 Interaction、原 run 和多端展示的真实恢复验收；
