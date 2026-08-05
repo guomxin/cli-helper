@@ -1986,6 +1986,25 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 部署后 8782 健康检查返回 `200` 和新 Release，线上 JavaScript 的 UTF-8 原始字节确认已
   包含“当前等待用户、已续办、用户交互节点”三类新标签。本轮没有执行任何下游业务写入。
 
+### 15.58 2026-08-05 微信活动感知投递
+
+- 根因确认：腾讯微信通道的 `contextToken` 由每条用户入站消息签发。旧实现把令牌过期
+  当作普通网络故障，在约 40 秒内连续尝试 5 次并把跨端通知永久标记为 `failed`；任务、
+  用户身份和 OA 业务结果本身均未串用或失败。
+- Task Hub Outbox 新增 `deferred` 状态。微信直投失败后只尝试一次并等待端点活动；同一
+  `userSubject + endpointId` 的下一条微信用户入站会把延后项恢复为 `pending`、清零旧
+  尝试次数并延迟 5 秒补发。中心协议拒绝非微信端点误用该状态，Telegram 有界重试和
+  Workspace SSE 均保持不变。
+- 管理控制台在端点页显示“同步就绪/等待微信活动”，在投递页显示 `deferred`，总览单列
+  等待活动数量；治理 API 仍不返回聊天正文、通道路由、外部主体或业务字段。
+- 本地和发布门禁通过 Python `492 passed, 3 skipped, 199 subtests`、Workspace `20/20`、
+  OpenClaw 插件 `116/116`、`pip check` 与 npm 打包检查。提交 `8883104` 对应 Linux
+  Release `8883104d717a`，OpenClaw 插件升级为 `0.4.25` 并完成一次 Gateway 重启。
+- 发布后管理端健康检查返回 `200` 与 Release `8883104d717a`；Gateway RPC 正常、CLI 与
+  Gateway 均为 `2026.7.1`、无插件版本漂移，运行时插件为 `loaded / 0.4.25 / 2 identities`。
+  新 Gateway 日志未出现发布后的 `prepare failed`。本轮没有读取下游业务数据，也没有
+  执行 OA、泰华或语雀业务写入。
+
 ## 16. 后续演进顺序
 
 1. 在可信卡等待期间重启 Gateway，完成 Interaction、原 run 和多端展示的真实恢复验收；
