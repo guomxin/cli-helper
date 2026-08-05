@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.13，双用户跨端任务选择、受控接续与拉取式网页交互边界已完成实现
+> 文档状态：Approved v0.14，双用户跨端任务选择、受控接续、拉取式网页交互与微信活动感知投递已完成实现
 >
-> 更新日期：2026-08-04
+> 更新日期：2026-08-05
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.24、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.25、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示、展示层文本
@@ -44,7 +44,7 @@
 - 桌面和移动端布局、双用户隔离、CSRF、凭证重放和错误身份兑换已纳入测试。
 - 同一执行授权可为 Workspace、Telegram 和微信生成端点专属展示入口；
 - 任一可信端都可确认或取消，中心数据库事务只接受第一个有效决定；
-- OpenClaw Outbox 通知泵按端点主动投递卡片和状态，失败最多重试 5 次；
+- OpenClaw Outbox 通知泵按端点主动投递卡片和状态；普通通道失败最多重试 5 次，微信旧入站令牌失败一次后转为等待端点活动；
 - 原任务宿主仍是唯一续办者，旁端确认不会获得原宿主的写权限或重复执行；
 - 用户和助手的非敏感文本写入按 `userSubject` 隔离的追加式时间线，并按中心序号
   同步到 Workspace、Telegram 和微信；
@@ -53,7 +53,7 @@
 - 用户明确说出“刚才网页端”“继续另一个端的第 1 条”等跨端指代时，OpenClaw 通过
   宿主私有工具读取同一 `userSubject` 其他端点最近 6 小时、最多 12 条非敏感文本，
   以不可信数据块注入当前推理；普通消息不增加该读取。
-- OpenClaw `0.4.24` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
+- OpenClaw `0.4.25` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
   1 个身份状态工具、读取工具和 17 个受治理入口；15 个底层 commit/续办工具保留在
   宿主内部，不向模型注册。
 - Agent Workspace 通过 SSE 和 Task Hub 拉取卡片、文本与任务状态，不再尝试按聊天通道
@@ -563,7 +563,7 @@ file_ready
 | `eventId` | 来源任务事件 |
 | `endpointId` | 目标客户端 |
 | `payloadType` | 文本、可信卡、文件、状态 |
-| `state` | `pending`、`delivering`、`acknowledged`、`failed` |
+| `state` | `pending`、`delivering`、`deferred`、`acknowledged`、`failed` |
 | `attemptCount` | 尝试次数 |
 | `nextAttemptAt` | 下次投递时间 |
 
@@ -573,9 +573,13 @@ file_ready
 eventId + endpointId + payloadType
 ```
 
-Outbox 重试只重复通知，不重复 AgentBridge 业务操作。投递使用 30 秒 Lease，失败
-5 次后转为 `failed`。可信卡投递记录保存 Interaction 引用和展示意图；端点专属
-Presentation 在领取投递项时生成，URL 只进入宿主私有响应。
+Outbox 重试只重复通知，不重复 AgentBridge 业务操作。投递使用 30 秒 Lease，普通
+可重试故障 5 次后转为 `failed`。微信直推依赖当前入站消息签发的短期通道令牌；一次
+投递发现该令牌不可用后转为 `deferred`，不继续快速重试。下一条同一微信端点的用户
+入站消息会把延后项恢复为 `pending`、清零旧尝试次数，并在短暂让出正常回复窗口后
+重新投递。恢复键是 `userSubject + endpointId`，其他用户和端点不受影响。可信卡投递
+记录保存 Interaction 引用和展示意图；端点专属 Presentation 在领取投递项时生成，
+URL 只进入宿主私有响应。
 
 ### 9.3 在另一客户端继续
 
@@ -791,8 +795,8 @@ eventId + endpointId + payloadType
 
 | 故障 | 行为 |
 | --- | --- |
-| 手机离线 | 网页仍可确认；Outbox 最多重试 5 次 |
-| Telegram 成功、微信失败 | 记录每端投递结果，不重复业务操作 |
+| 手机离线 | 网页仍可确认；普通通道有界重试，微信等待下一次端点活动 |
+| Telegram 成功、微信令牌已旧 | Telegram 正常确认；微信项进入 `deferred`，下一次微信入站后补发，不重复业务操作 |
 | Gateway 重启 | 从 Task Hub 恢复任务、交互和待投递事件 |
 | 网页刷新 | 通过任务列表和事件游标恢复 |
 | 两端同时点授权 | 一个原子决定成功，另一个显示已在其他可信端处理 |

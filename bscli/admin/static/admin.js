@@ -19,15 +19,16 @@ const statusText = {
   awaiting_user: "当前等待用户", user_action_completed: "用户已处理", resumed: "已续办",
   user_action_expired: "交互已过期", user_action_rejected: "用户已拒绝", user_action_superseded: "已被替换",
   user_action_failed: "交互失败", user_action_handoff: "已转交用户",
-  running: "执行中", canceled: "已取消", pending: "待处理", delivering: "投递中", acknowledged: "已送达",
+  running: "执行中", canceled: "已取消", pending: "待处理", delivering: "投递中", deferred: "等待端点活动", acknowledged: "已送达",
   submitted: "已填写", approved: "已授权", rejected: "已拒绝", consumed: "已使用", superseded: "已替换",
   paused: "已暂停", available: "可用", selected: "已选择", awaiting_selection: "待选择",
   observe_only: "只读接续", resume: "恢复执行", follow_up: "后续操作", pull: "网页拉取", direct: "聊天直推",
   eligible: "保活中", outside_lease: "租约外", activity_unknown: "活动未知", not_configured: "未配置",
+  ready: "同步就绪", waiting_activity: "等待微信活动",
 };
 const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available"].includes(value) ? "ok" :
   ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed"].includes(value) ? "bad" :
-  ["pending", "delivering", "awaiting_login", "awaiting_user", "waiting_user", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected"].includes(value) ? "warn" :
+  ["pending", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
@@ -229,7 +230,7 @@ async function renderCoordination() {
   const data = await api("/api/coordination?limit=300");
   const summary = data.summary;
   const taskRows = data.tasks.map(item => filterRow(`${item.task_id} ${item.user_subject} ${item.title} ${item.origin_client_type} ${item.origin_label} ${item.current_operation_id} ${item.current_interaction_id}`, item.status, `<td class="code">${shortId(item.task_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.origin_label || item.origin_client_type || "--")}</td><td class="code">${shortId(item.current_operation_id)}</td><td class="code">${shortId(item.current_interaction_id)}</td><td>${fmtTime(item.updated_at)}</td><td>${fmtTime(item.finished_at)}</td>`));
-  const endpointRows = data.endpoints.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.label} ${item.capabilities.join(" ")}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type)}</td><td>${badge(item.delivery_mode)}</td><td>${escapeHtml(item.label || "--")}</td><td>${scopeBadges(item.capabilities)}</td><td>${badge(item.state)}</td><td>${fmtTime(item.last_seen_at)}</td>`));
+  const endpointRows = data.endpoints.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.label} ${item.capabilities.join(" ")} ${item.delivery_state}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type)}</td><td>${badge(item.delivery_mode)}</td><td>${escapeHtml(item.label || "--")}</td><td>${scopeBadges(item.capabilities)}</td><td>${badge(item.state)}</td><td>${badge(item.delivery_state)}${item.deferred_delivery_count ? ` <span class="muted">${item.deferred_delivery_count}</span>` : ""}</td><td>${fmtTime(item.last_seen_at)}</td>`));
   const continuationRows = data.continuations.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.selected_task_id} ${item.reason}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type || "--")}</td><td>${badge(item.state)}</td><td>${badge(item.execution_mode)}</td><td class="code">${shortId(item.selected_task_id)}</td><td>${item.candidate_count}</td><td>${escapeHtml(item.reason || "--")}</td><td>${fmtTime(item.expires_at)}</td>`));
   const deliveryRows = data.deliveries.map(item => filterRow(`${item.delivery_id} ${item.task_id} ${item.endpoint_id} ${item.user_subject} ${item.event_type}`, item.state, `<td class="code">${shortId(item.delivery_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.event_type || item.payload_type)}</td><td class="code">${shortId(item.endpoint_id)}</td><td>${badge(item.state)}</td><td>${item.attempt_count}</td><td>${fmtTime(item.next_attempt_at)}</td><td>${fmtTime(item.acknowledged_at)}</td><td>${fmtTime(item.updated_at)}</td>`));
   const violationRows = Object.entries(data.isolation?.violations || {}).map(([name, count]) => `<tr><td class="code">${escapeHtml(name)}</td><td>${count}</td><td>${badge(count === 0 ? "succeeded" : "failed")}</td></tr>`);
@@ -240,7 +241,7 @@ async function renderCoordination() {
     ${metric("活动端点", summary.active_endpoints, "网页与聊天通道")}
     ${metric("投递模式", `${summary.pull_endpoints} / ${summary.direct_endpoints}`, "拉取 / 直推")}
     ${metric("活动接续", summary.active_continuations, "跨端任务上下文")}
-    ${metric("待投递", summary.outstanding_deliveries, `历史失败 ${summary.failed_deliveries}`, summary.outstanding_deliveries ? "alert" : "")}
+    ${metric("待投递", summary.outstanding_deliveries, `等待活动 ${summary.deferred_deliveries} / 历史失败 ${summary.failed_deliveries}`, summary.outstanding_deliveries ? "alert" : "")}
     ${metric("隔离完整性", summary.isolation_violations ? "异常" : "通过", `${summary.isolation_violations} 项异常`, summary.isolation_violations ? "alert" : "")}
   </div>
   <div class="view-head section-spaced"><div><h2>任务协调明细</h2><p>只显示治理元数据；聊天正文、卡片链接、通道路由和业务字段不会进入此页面。</p></div></div>
@@ -252,9 +253,9 @@ async function renderCoordination() {
     <button role="tab" data-coordination-tab="isolation">隔离 <span>${summary.isolation_violations}</span></button>
   </div>
   <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "failed", "outcome_unknown", "canceled"])}</section>
-  <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
+  <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "同步状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
   <section data-coordination-panel="continuations">${filteredTable(["Endpoint ID", "用户", "客户端", "状态", "执行模式", "选中任务", "候选", "原因", "到期"], continuationRows, "搜索用户、端点、任务或原因", ["selected", "awaiting_selection", "expired", "canceled"])}</section>
-  <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新"], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "acknowledged", "failed"])}</section>
+  <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新"], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed"])}</section>
   <section data-coordination-panel="isolation">${table(["检查项", "异常数", "结果"], violationRows)}</section>`;
   selectCoordinationTab(state.coordinationTab);
 }

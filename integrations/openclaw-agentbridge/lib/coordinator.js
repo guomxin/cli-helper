@@ -879,6 +879,8 @@ export class InteractionCoordinator {
         }
       }
       try {
+        const deferUntilActivity =
+          !delivered && isActivityGatedDirectEndpoint(endpoint, route, binding);
         await client.callTool(
           "agentbridge_host_notification_ack",
           {
@@ -887,6 +889,7 @@ export class InteractionCoordinator {
             delivery_id: notification.deliveryId,
             succeeded: delivered,
             retry_after_seconds: 5,
+            defer_until_activity: deferUntilActivity,
           },
           { signal, meta: hostContextMeta() },
         );
@@ -2216,6 +2219,16 @@ function isPullBasedEndpoint(endpoint, route, binding) {
     route?.channel || binding?.channel || "",
   ).trim().toLowerCase();
   return clientType === "web" || PULL_BASED_CHANNELS.has(channel);
+}
+
+function isActivityGatedDirectEndpoint(endpoint, route, binding) {
+  const clientType = String(endpoint?.clientType || "").trim().toLowerCase();
+  const channel = String(
+    route?.channel || binding?.channel || "",
+  ).trim().toLowerCase();
+  return [clientType, channel].some((value) =>
+    ["openclaw-weixin", "wechat", "weixin"].includes(value),
+  );
 }
 
 function normalizeToolCallId(value) {

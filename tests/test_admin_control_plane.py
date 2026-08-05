@@ -286,11 +286,11 @@ class AdminControlPlaneTests(unittest.TestCase):
                 user_subject="user-a",
                 token_id=issued["token_id"],
                 agent_host="openclaw",
-                endpoint_key="telegram:secret-peer",
-                client_type="telegram",
+                endpoint_key="openclaw-weixin:*:secret-peer",
+                client_type="openclaw-weixin",
                 external_subject="secret-peer",
-                conversation_ref="agent:main:telegram:secret-route",
-                label="Telegram",
+                conversation_ref="agent:main:openclaw-weixin:secret-route",
+                label="WeChat",
                 capabilities=["direct_status", "trusted_interaction"],
             )
             task, _ = service.tasks.ensure_task(
@@ -334,6 +334,20 @@ class AdminControlPlaneTests(unittest.TestCase):
                 candidate_task_ids=[task["task_id"]],
                 reason="secret continuation reason",
             )
+            claimed = service.claim_host_notifications(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="openclaw-weixin:*:secret-peer",
+                limit=1,
+            )
+            service.acknowledge_host_notification(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="openclaw-weixin:*:secret-peer",
+                delivery_id=claimed["notifications"][0]["deliveryId"],
+                succeeded=False,
+                defer_until_activity=True,
+            )
 
             result = AdminControlPlane(
                 service=service,
@@ -347,11 +361,19 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["summary"]["waiting_tasks"], 1)
         self.assertEqual(result["summary"]["active_continuations"], 1)
         self.assertGreater(result["summary"]["outstanding_deliveries"], 0)
+        self.assertEqual(result["summary"]["deferred_deliveries"], 1)
         self.assertTrue(result["isolation"]["passed"])
         self.assertEqual(
             {item["delivery_mode"] for item in result["endpoints"]},
             {"pull", "direct"},
         )
+        telegram_projection = next(
+            item
+            for item in result["endpoints"]
+            if item["delivery_mode"] == "direct"
+        )
+        self.assertEqual(telegram_projection["delivery_state"], "waiting_activity")
+        self.assertEqual(telegram_projection["deferred_delivery_count"], 1)
         self.assertEqual(result["tasks"][0]["title"], "读取 OA 待办")
         self.assertEqual(result["continuations"][0]["candidate_count"], 1)
         self.assertIsNone(result["continuations"][0]["reason"])

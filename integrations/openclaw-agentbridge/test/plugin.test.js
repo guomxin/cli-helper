@@ -1629,6 +1629,60 @@ test("delivers an ordered timeline message once and acknowledges it", async () =
   assert.equal(acknowledgements[0].params.succeeded, true);
 });
 
+test("defers an undeliverable WeChat notification until the next inbound activity", async () => {
+  const sessionKey =
+    "agent:main:openclaw-weixin:direct:wechat-user-a@im.wechat";
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  coordinator.deliverTextDirect = async () => false;
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "openclaw-weixin",
+            conversationRef: sessionKey,
+            route: {
+              channel: "openclaw-weixin",
+              to: "wechat-user-a@im.wechat",
+            },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-wechat-deferred-1234567890",
+              deliveryMode: "timeline_message",
+              message: "[Web - Assistant]\nOA query completed.",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "openclaw-weixin:*:wechat-user-a@im.wechat",
+      channel: "openclaw-weixin",
+      senderId: "wechat-user-a@im.wechat",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  const acknowledgement = calls.find(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgement.params.succeeded, false);
+  assert.equal(acknowledgement.params.defer_until_activity, true);
+});
+
 test("backs off idle notification polling and resets after activity", () => {
   assert.deepEqual(
     [1, 2, 3, 4, 5].map((idleRounds) =>

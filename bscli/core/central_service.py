@@ -186,6 +186,7 @@ from bscli.workspace.stores import WorkspaceStore
 
 WorkerFactory = Callable[[dict, object], object]
 TRUSTED_WRITE_INTERACTION_TTL_SECONDS = 1800
+ACTIVITY_GATED_CLIENT_TYPES = {"openclaw-weixin", "wechat", "weixin"}
 
 _TRUSTED_WRITE_DEFINITIONS = {
     BUSINESS_TRIP_PREPARE_CAPABILITY: {
@@ -1095,18 +1096,28 @@ class CentralCapabilityService:
         delivery_id: str,
         succeeded: bool,
         retry_after_seconds: int = 5,
+        defer_until_activity: bool = False,
     ) -> dict:
         endpoint = self.tasks.endpoint_for_key(
             user_subject=user_subject,
             agent_host=agent_host,
             endpoint_key=endpoint_key,
         )
+        if (
+            defer_until_activity
+            and str(endpoint.get("client_type") or "").lower()
+            not in ACTIVITY_GATED_CLIENT_TYPES
+        ):
+            raise ValueError(
+                "endpoint does not support activity-gated notification delivery"
+            )
         delivery = self.tasks.acknowledge_outbox(
             user_subject=user_subject,
             endpoint_id=endpoint["endpoint_id"],
             delivery_id=delivery_id,
             succeeded=succeeded,
             retry_after_seconds=retry_after_seconds,
+            defer_until_activity=defer_until_activity,
         )
         return {
             "protocolVersion": "0.1",
@@ -1243,6 +1254,17 @@ class CentralCapabilityService:
             text=text,
             task_id=task_id,
         )
+        reactivated_deliveries = 0
+        if (
+            role == "user"
+            and str(endpoint.get("client_type") or "").lower()
+            in ACTIVITY_GATED_CLIENT_TYPES
+        ):
+            reactivated_deliveries = self.tasks.reactivate_deferred_outbox(
+                user_subject=user_subject,
+                endpoint_id=endpoint["endpoint_id"],
+                delay_seconds=5,
+            )
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -1252,6 +1274,7 @@ class CentralCapabilityService:
                 "entry": entry_reused,
                 "endpoint": endpoint_reused,
             },
+            "reactivatedDeliveries": reactivated_deliveries,
         }
 
     def observe_host_task(

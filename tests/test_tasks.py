@@ -435,6 +435,67 @@ class TaskHubStoreTests(unittest.TestCase):
             )
         self.assertEqual(task["status"], "active")
 
+    def test_deferred_outbox_waits_for_endpoint_activity_then_reactivates(self):
+        endpoint, _ = self._endpoint()
+        self._task(endpoint["endpoint_id"])
+        claimed = self.store.claim_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            limit=1,
+        )
+
+        deferred = self.store.acknowledge_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            delivery_id=claimed[0]["delivery_id"],
+            succeeded=False,
+            defer_until_activity=True,
+        )
+
+        self.assertEqual(deferred["state"], "deferred")
+        self.assertEqual(deferred["attempt_count"], 1)
+        self.assertEqual(
+            self.store.claim_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.store.reactivate_deferred_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                delay_seconds=0,
+            ),
+            1,
+        )
+        reclaimed = self.store.claim_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            limit=1,
+        )
+        self.assertEqual(len(reclaimed), 1)
+        self.assertEqual(reclaimed[0]["state"], "delivering")
+        self.assertEqual(reclaimed[0]["attempt_count"], 1)
+
+    def test_outbox_ack_rejects_successful_activity_deferral(self):
+        endpoint, _ = self._endpoint()
+        self._task(endpoint["endpoint_id"])
+        claimed = self.store.claim_outbox(
+            user_subject="user-a",
+            endpoint_id=endpoint["endpoint_id"],
+            limit=1,
+        )
+
+        with self.assertRaises(ValueError):
+            self.store.acknowledge_outbox(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+                delivery_id=claimed[0]["delivery_id"],
+                succeeded=True,
+                defer_until_activity=True,
+            )
+
     def test_empty_outbox_claim_does_not_wait_for_writer_lock(self):
         endpoint, _ = self._endpoint()
         blocker = sqlite3.connect(self.store.db_path, timeout=1)
@@ -1328,6 +1389,100 @@ class TaskHubStoreTests(unittest.TestCase):
             notification["timeline"]["source"]["label"],
             "Agent Workspace",
         )
+
+    def test_wechat_user_activity_reactivates_only_its_deferred_deliveries(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        wechat, _ = service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="wechat-token",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:wechat-user-a",
+            client_type="openclaw-weixin",
+            external_subject="wechat-user-a",
+            conversation_ref=(
+                "agent:main:openclaw-weixin:direct:wechat-user-a"
+            ),
+            label="WeChat",
+            route={"channel": "openclaw-weixin", "to": "wechat-user-a"},
+            capabilities=["direct_status", "timeline_message"],
+        )
+        service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            message_key="workspace-message-for-wechat",
+            role="user",
+            text="Read OA pending workflows",
+            label="Agent Workspace",
+        )
+        claimed = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:wechat-user-a",
+        )
+        service.acknowledge_host_notification(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:wechat-user-a",
+            delivery_id=claimed["notifications"][0]["deliveryId"],
+            succeeded=False,
+            defer_until_activity=True,
+        )
+
+        assistant = service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="wechat-token",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:wechat-user-a",
+            client_type="openclaw-weixin",
+            external_subject="wechat-user-a",
+            conversation_ref=(
+                "agent:main:openclaw-weixin:direct:wechat-user-a"
+            ),
+            message_key="wechat-assistant-message",
+            role="assistant",
+            text="Previous assistant response",
+            label="WeChat",
+        )
+        self.assertEqual(assistant["reactivatedDeliveries"], 0)
+        user = service.append_host_timeline_message(
+            user_subject="user-a",
+            token_id="wechat-token",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:wechat-user-a",
+            client_type="openclaw-weixin",
+            external_subject="wechat-user-a",
+            conversation_ref=(
+                "agent:main:openclaw-weixin:direct:wechat-user-a"
+            ),
+            message_key="wechat-user-message",
+            role="user",
+            text="Continue",
+            label="WeChat",
+        )
+
+        self.assertEqual(user["reactivatedDeliveries"], 1)
+        deliveries = service.tasks.list_outbox(
+            user_subject="user-a",
+            endpoint_id=wechat["endpoint_id"],
+            limit=20,
+        )
+        reactivated = next(
+            item
+            for item in deliveries
+            if item["delivery_id"] == claimed["notifications"][0]["deliveryId"]
+        )
+        self.assertEqual(reactivated["state"], "pending")
+        self.assertEqual(reactivated["attempt_count"], 0)
 
     def test_central_service_returns_only_same_user_other_endpoint_context(self):
         service = CentralCapabilityService(

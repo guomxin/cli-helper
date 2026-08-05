@@ -1531,7 +1531,8 @@ class TaskHubStore:
                     """
                     SELECT MIN(created_at) AS oldest_at
                     FROM notification_outbox
-                    WHERE user_subject = ? AND state IN ('pending', 'delivering')
+                    WHERE user_subject = ?
+                      AND state IN ('pending', 'delivering', 'deferred')
                     """,
                     (user_subject,),
                 ).fetchone()
@@ -1734,8 +1735,10 @@ class TaskHubStore:
                      WHERE status IN ('active', 'waiting_user', 'running'))
                         AS active_tasks,
                     (SELECT COUNT(*) FROM notification_outbox
-                     WHERE state IN ('pending', 'delivering'))
+                     WHERE state IN ('pending', 'delivering', 'deferred'))
                         AS outstanding_deliveries,
+                    (SELECT COUNT(*) FROM notification_outbox
+                     WHERE state = 'deferred') AS deferred_deliveries,
                     (SELECT COUNT(*) FROM notification_outbox
                      WHERE state = 'failed') AS failed_deliveries,
                     (SELECT COUNT(*) FROM task_continuations
@@ -1755,6 +1758,7 @@ class TaskHubStore:
                 "active_endpoints": int(totals["active_endpoints"]),
                 "active_tasks": int(totals["active_tasks"]),
                 "outstanding_deliveries": int(totals["outstanding_deliveries"]),
+                "deferred_deliveries": int(totals["deferred_deliveries"]),
                 "failed_deliveries": int(totals["failed_deliveries"]),
                 "active_task_continuations": int(
                     totals["active_task_continuations"]
@@ -1997,7 +2001,12 @@ class TaskHubStore:
         delivery_id: str,
         succeeded: bool,
         retry_after_seconds: int = 5,
+        defer_until_activity: bool = False,
     ) -> dict:
+        if succeeded and defer_until_activity:
+            raise ValueError(
+                "successful delivery cannot be deferred until endpoint activity"
+            )
         retry_after_seconds = min(max(int(retry_after_seconds), 1), 300)
         now = _utc_now()
         with self._connect() as connection:
@@ -2017,6 +2026,16 @@ class TaskHubStore:
                     UPDATE notification_outbox
                     SET state = 'acknowledged', updated_at = ?,
                         acknowledged_at = ?
+                    WHERE delivery_id = ?
+                    """,
+                    (now, now, delivery_id),
+                )
+            elif defer_until_activity:
+                connection.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET state = 'deferred', next_attempt_at = ?, updated_at = ?,
+                        acknowledged_at = NULL
                     WHERE delivery_id = ?
                     """,
                     (now, now, delivery_id),
@@ -2048,6 +2067,41 @@ class TaskHubStore:
                 (delivery_id,),
             ).fetchone()
         return _outbox_from_row(updated)
+
+    def reactivate_deferred_outbox(
+        self,
+        *,
+        user_subject: str,
+        endpoint_id: str,
+        delay_seconds: int = 5,
+    ) -> int:
+        delay_seconds = min(max(int(delay_seconds), 0), 300)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            endpoint = self._select_endpoint(connection, endpoint_id)
+            if (
+                endpoint["user_subject"] != user_subject
+                or endpoint["state"] != "active"
+            ):
+                raise TaskNotFound("client endpoint not found")
+            cursor = connection.execute(
+                """
+                UPDATE notification_outbox
+                SET state = 'pending', attempt_count = 0,
+                    next_attempt_at = ?, updated_at = ?,
+                    acknowledged_at = NULL
+                WHERE user_subject = ? AND endpoint_id = ?
+                  AND state = 'deferred'
+                """,
+                (
+                    _utc_after(delay_seconds),
+                    now,
+                    user_subject,
+                    endpoint_id,
+                ),
+            )
+        return int(cursor.rowcount)
 
     @staticmethod
     def _subscribe_companion_endpoints(

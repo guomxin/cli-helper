@@ -149,6 +149,13 @@ original request. The host also suppresses a model-requested duplicate
 `agentbridge_interaction_get` in the same run, without affecting background
 polling, later explicit redisplay, or metadata recovery.
 
+Version 0.4.25 makes WeChat direct delivery activity-aware. A stale per-message
+WeChat context token now causes one delivery attempt followed by a durable
+`deferred` acknowledgement instead of five rapid retries and a permanent
+failure. The next inbound message from the same trusted WeChat endpoint
+reactivates only that endpoint's deferred notifications with a fresh attempt
+budget. Telegram retry behavior and Workspace SSE delivery are unchanged.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -183,7 +190,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.24, ...)
+AgentBridge interaction plugin registered (version=0.4.25, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

@@ -2464,7 +2464,8 @@ def create_central_mcp_server(
         name="agentbridge_host_notification_ack",
         title="Acknowledge Endpoint Notification",
         description=(
-            "Host-private delivery acknowledgement or bounded retry request."
+            "Host-private delivery acknowledgement, bounded retry request, "
+            "or activity-gated WeChat deferral."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -2481,6 +2482,7 @@ def create_central_mcp_server(
         delivery_id: Annotated[str, Field(min_length=16, max_length=128)],
         succeeded: bool,
         retry_after_seconds: Annotated[int, Field(ge=1, le=300)] = 5,
+        defer_until_activity: bool = False,
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
@@ -2493,6 +2495,7 @@ def create_central_mcp_server(
             delivery_id=delivery_id,
             succeeded=succeeded,
             retry_after_seconds=retry_after_seconds,
+            defer_until_activity=defer_until_activity,
         )
 
     @mcp.tool(

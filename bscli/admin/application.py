@@ -240,6 +240,21 @@ class AdminControlPlane:
         tasks.sort(key=lambda item: item["updated_at"], reverse=True)
         deliveries.sort(key=lambda item: item["updated_at"], reverse=True)
         continuations.sort(key=lambda item: item["updated_at"], reverse=True)
+        deferred_by_endpoint = Counter(
+            item["endpoint_id"]
+            for item in deliveries
+            if item["state"] == "deferred"
+        )
+        for endpoint in endpoints:
+            deferred_count = deferred_by_endpoint.get(endpoint["endpoint_id"], 0)
+            endpoint["deferred_delivery_count"] = deferred_count
+            endpoint["delivery_state"] = (
+                "waiting_activity"
+                if deferred_count
+                else "ready"
+                if endpoint["state"] == "active"
+                else "inactive"
+            )
         active_endpoint_count = sum(
             1 for item in endpoints if item["state"] == "active"
         )
@@ -269,12 +284,16 @@ class AdminControlPlane:
             sum(
                 int(count)
                 for state, count in item.get("outbox_states", {}).items()
-                if state in {"pending", "delivering"}
+                if state in {"pending", "delivering", "deferred"}
             )
             for item in scoped_users
         )
         failed = sum(
             int(item.get("outbox_states", {}).get("failed", 0))
+            for item in scoped_users
+        )
+        deferred = sum(
+            int(item.get("outbox_states", {}).get("deferred", 0))
             for item in scoped_users
         )
         return {
@@ -295,6 +314,7 @@ class AdminControlPlane:
                     if item["state"] in {"selected", "awaiting_selection"}
                 ),
                 "outstanding_deliveries": outstanding,
+                "deferred_deliveries": deferred,
                 "failed_deliveries": failed,
                 "isolation_violations": diagnostics.get("summary", {}).get(
                     "isolation_violation_count", 0
@@ -844,7 +864,10 @@ class AdminControlPlane:
             "event_type": str(payload.get("eventType") or "")[:120] or None,
             "state": record["state"],
             "attempt_count": record["attempt_count"],
-            "next_attempt_at": record["next_attempt_at"],
+            "next_attempt_at": (
+                None if record["state"] == "deferred"
+                else record["next_attempt_at"]
+            ),
             "created_at": record["created_at"],
             "updated_at": record["updated_at"],
             "acknowledged_at": record.get("acknowledged_at"),
