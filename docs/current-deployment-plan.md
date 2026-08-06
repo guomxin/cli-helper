@@ -2005,6 +2005,28 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   新 Gateway 日志未出现发布后的 `prepare failed`。本轮没有读取下游业务数据，也没有
   执行 OA、泰华或语雀业务写入。
 
+### 15.59 2026-08-06 月度考勤确认与待办卡片前置预检
+
+- 真实失败链路确认：月度考勤确认单被模型误选为普通协同审批，旧流程先创建意见填写卡，
+  用户提交字段后才执行专业流程排除检查，最终以 `CAPABILITY_EXECUTION_FAILED` 结束；写边界
+  未跨越，OA 没有收到提交。
+- 新增 `oa.attendance_confirmation.prepare` / `confirm` 和 OpenClaw 工具
+  `oa_attendance_confirmation_prepare`。能力固定匹配模板 `-7231800401165464345`、表单
+  `5072944770639779741`、`sendoredit / 发起人填写` 节点，冻结员工月份、出勤统计和 OA
+  已选的“有异议/无异议”结论；业务字段为只读时智能体不得改写。它属于接收处理权限
+  `oa:write:approval`，但业务动作明确标记为 `confirmation`，不伪装成审批。
+- 所有已注册待办处理能力增加填写卡前置预检。目标标题、字段、模板、表单、节点、态度或
+  CAP4 业务快照不匹配时，直接返回 `WORKFLOW_NOT_SUPPORTED`，不会先生成无效填写卡；
+  用户提交卡片后和最终提交前仍各自重新校验，保留延迟期间的防漂移保护。
+- OpenClaw 插件升级到 `0.4.26`，Telegram、微信和 Agent Workspace 共用的新工具目录已
+  同步；考勤成功终态使用“月度考勤确认单已确认并提交”，不再显示普通审批文案。
+- 发布门禁通过 Python `503 passed, 3 skipped, 199 subtests`、Workspace `20/20`、
+  OpenClaw 插件 `117/117`、依赖检查与 npm 打包。提交 `431eaa2` 对应 Linux Release
+  `431eaa2b50de`；AgentBridge MCP 冒烟发现 71 个工具，辛国茂 OA 会话保持 `active`，
+  Gateway 完成一次托管重启。
+- 线上对当前考勤待办执行零写预检，成功匹配 `attendance_confirmation`；写控件点击、
+  协同写请求和授权创建均为 0。本轮没有提交该考勤单，最终写入仍需用户通过可信卡授权。
+
 ## 16. 后续演进顺序
 
 1. 在可信卡等待期间重启 Gateway，完成 Interaction、原 run 和多端展示的真实恢复验收；
