@@ -704,6 +704,64 @@ class TaskHubStoreTests(unittest.TestCase):
             [],
         )
 
+    def test_superseded_interaction_finishes_task_and_new_operation_reopens_it(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        task = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-original",
+                "user_subject": "user-a",
+                "capability_name": "oa.missed_punch.approval.prepare",
+                "status": "requires_user_action",
+                "error": {"code": "FIELD_INPUT_REQUIRED"},
+            },
+        )
+        for state in ("pending", "superseded"):
+            task = self.store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": "interaction-original",
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": "interaction-original",
+                    "type": "business_input",
+                    "state": state,
+                },
+            )
+
+        self.assertEqual(task["status"], "superseded")
+        self.assertIsNotNone(task["finished_at"])
+        self.assertEqual(
+            self.store.list_tasks(user_subject="user-a", active_only=True),
+            [],
+        )
+        self.assertEqual(
+            self.store.recovery_candidates(
+                user_subject="user-a",
+                endpoint_id=endpoint["endpoint_id"],
+            ),
+            [],
+        )
+
+        reopened = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-replacement",
+                "user_subject": "user-a",
+                "capability_name": "oa.missed_punch.approval.prepare",
+                "status": "requires_user_action",
+                "error": {"code": "FIELD_INPUT_REQUIRED"},
+            },
+        )
+
+        self.assertEqual(reopened["status"], "waiting_user")
+        self.assertIsNone(reopened["finished_at"])
+
     def test_stale_interaction_observation_cannot_reopen_successful_task(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])
@@ -1078,6 +1136,60 @@ class TaskHubStoreTests(unittest.TestCase):
             repaired["current_interaction_id"],
             "authorization-repair",
         )
+        self.assertIsNotNone(repaired["finished_at"])
+
+    def test_initialization_repairs_legacy_active_superseded_tasks(self):
+        db_path = Path(self.temp.name) / "repair-superseded-agentbridge.db"
+        OperationStore(db_path)
+        task_store = TaskHubStore(db_path)
+        endpoint, _ = task_store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+        )
+        task, _ = task_store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="session|superseded-run",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref="agent:main:telegram:direct:1001",
+            title="Superseded task",
+        )
+        for state in ("pending", "superseded"):
+            task_store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": "fields-superseded",
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": "fields-superseded",
+                    "type": "business_input",
+                    "state": state,
+                },
+            )
+        with task_store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = 'active', finished_at = NULL
+                WHERE task_id = ?
+                """,
+                (task["task_id"],),
+            )
+
+        repaired_store = TaskHubStore(db_path)
+        repaired = repaired_store.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+
+        self.assertEqual(repaired["status"], "superseded")
         self.assertIsNotNone(repaired["finished_at"])
 
     def test_central_service_recovers_only_the_bound_users_pending_interaction(self):

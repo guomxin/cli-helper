@@ -19,6 +19,7 @@ TASK_STATUSES = {
     "outcome_unknown",
     "canceled",
     "expired",
+    "superseded",
 }
 
 ACTIVE_TASK_STATUSES = {"active", "waiting_user", "running"}
@@ -325,6 +326,39 @@ class TaskHubStore:
                   WHERE operations.operation_id =
                         agent_tasks.current_operation_id
                     AND operations.status = 'succeeded'
+              )
+            """
+        )
+        connection.execute(
+            """
+            UPDATE agent_tasks
+            SET status = 'superseded',
+                version = version + 1,
+                updated_at = COALESCE(
+                    (
+                        SELECT task_interactions.last_observed_at
+                        FROM task_interactions
+                        WHERE task_interactions.interaction_id =
+                            agent_tasks.current_interaction_id
+                    ),
+                    updated_at
+                ),
+                finished_at = COALESCE(
+                    (
+                        SELECT task_interactions.last_observed_at
+                        FROM task_interactions
+                        WHERE task_interactions.interaction_id =
+                            agent_tasks.current_interaction_id
+                    ),
+                    updated_at
+                )
+            WHERE status IN ('active', 'waiting_user', 'running')
+              AND current_interaction_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM task_interactions
+                  WHERE task_interactions.interaction_id =
+                        agent_tasks.current_interaction_id
+                    AND task_interactions.last_state = 'superseded'
               )
             """
         )
@@ -2344,6 +2378,7 @@ class TaskHubStore:
             "outcome_unknown",
             "canceled",
             "expired",
+            "superseded",
         } else None
         connection.execute(
             """
@@ -2431,7 +2466,7 @@ def _task_status_for_interaction(state: str) -> str:
         "declined": "canceled",
         "expired": "expired",
         "failed": "failed",
-        "superseded": "active",
+        "superseded": "superseded",
     }.get(state, "active")
 
 
@@ -2453,14 +2488,7 @@ def _interaction_may_update_task(
     interaction_id: str,
     newly_linked: bool,
 ) -> bool:
-    terminal_statuses = {
-        "succeeded",
-        "failed",
-        "outcome_unknown",
-        "canceled",
-        "expired",
-    }
-    if task["status"] in terminal_statuses:
+    if task["status"] in TERMINAL_TASK_STATUSES:
         return False
     if newly_linked:
         return True

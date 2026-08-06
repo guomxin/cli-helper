@@ -919,6 +919,7 @@ function taskCardStatusMessage(status) {
       outcome_unknown: "最终结果未能确认，请先到业务系统核对。",
       canceled: "任务已取消。",
       expired: "任务交互已过期，请重新发起。",
+      superseded: "任务已被更新的可信交互替换。",
     }[status] || "任务状态已更新。"
   );
 }
@@ -1329,6 +1330,7 @@ function statusLabel(status) {
       outcome_unknown: "结果待核对",
       canceled: "已取消",
       expired: "已过期",
+      superseded: "已被替换",
     }[status] || status
   );
 }
