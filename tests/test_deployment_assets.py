@@ -153,6 +153,8 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_travel_expense_approve",
             "oa_labor_contract_renewal_approval_prepare",
             "oa_labor_contract_renewal_approve",
+            "oa_attendance_confirmation_prepare",
+            "oa_attendance_confirm",
             "oa_weekly_report_acknowledgement_prepare",
             "oa_weekly_report_acknowledge",
             "oa_standard_collaboration_approval_prepare",
@@ -213,6 +215,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "prepare_efficiency_data_approval",
             "prepare_travel_expense_approval",
             "prepare_labor_contract_renewal_approval",
+            "prepare_attendance_confirmation",
             "prepare_weekly_report_acknowledgement",
             "prepare_standard_collaboration_approval",
         ):
@@ -222,6 +225,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "approve_efficiency_data",
             "approve_travel_expense",
             "approve_labor_contract_renewal",
+            "confirm_attendance",
             "acknowledge_weekly_report",
             "approve_standard_collaboration",
         ):

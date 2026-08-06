@@ -77,6 +77,8 @@ Published OA capabilities:
 - oa.travel_expense.approve
 - oa.labor_contract_renewal.approval.prepare
 - oa.labor_contract_renewal.approve
+- oa.attendance_confirmation.prepare
+- oa.attendance_confirmation.confirm
 - oa.weekly_report.acknowledgement.prepare
 - oa.weekly_report.acknowledge
 - oa.standard_collaboration.approval.prepare

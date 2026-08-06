@@ -5,7 +5,10 @@ from bscli.adapters.seeyon_pending_actions import (
     acknowledge_weekly_report,
     approve_efficiency_data,
     approve_labor_contract_renewal,
+    confirm_attendance,
     pending_action_contract_fingerprint,
+    preflight_pending_action,
+    prepare_attendance_confirmation,
     prepare_efficiency_data_approval,
     prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
@@ -104,6 +107,42 @@ class PendingActionTests(unittest.TestCase):
         self.assertEqual(contract["action_kind"], "acknowledgement")
         self.assertEqual(prepared["summary"]["authorize_label"], "授权阅办周报")
 
+    def test_attendance_confirmation_freezes_oa_decision_and_confirms(self):
+        fixture = _fixture("attendance_confirmation")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_attendance_confirmation(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertEqual(fields["OA 当前确认结论"], "无异议")
+        self.assertEqual(
+            prepared["plan"]["action_contract"]["action_kind"],
+            "confirmation",
+        )
+
+        result = confirm_attendance(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+
+        self.assertTrue(result["workflow_confirmed"])
+        self.assertEqual(result["workflow_profile"], "attendance_confirmation")
+        self.assertEqual(worker.page.commit_payload["attitude_code"], "agree")
+
+    def test_pending_preflight_rejects_wrong_profile_before_field_input(self):
+        worker = FakeWorker(_fixture("attendance_confirmation"))
+        with self.assertRaisesRegex(PendingActionContractMismatch, "not a registered"):
+            preflight_pending_action(
+                FakeAdapter(worker),
+                worker,
+                {"affair_id": "affair-1"},
+                "standard_collaboration",
+            )
+
     def test_standard_collaboration_rejects_specialist_titles_and_fields(self):
         specialist = _fixture("standard_collaboration")
         specialist["source"]["title"] = "【报销】其他报销单-Alice"
@@ -182,11 +221,12 @@ class PendingActionTests(unittest.TestCase):
                 "efficiency_data",
                 "travel_expense",
                 "labor_contract_renewal",
+                "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 5)
+        self.assertEqual(len(fingerprints), 6)
 
 
 class FakeAdapter:
@@ -243,7 +283,12 @@ class FakeBusinessFrame:
         self.fixture = fixture
 
     def locator(self, selector):
-        if selector != "#field0008_id":
+        expected = (
+            "#field0097_id"
+            if self.fixture.get("profile") == "attendance_confirmation"
+            else "#field0008_id"
+        )
+        if selector != expected:
             raise AssertionError("unexpected labor-contract selector")
         return FakeCountLocator()
 
@@ -330,6 +375,33 @@ def _fixture(profile):
             "node_policy_name": "知会",
             "attitudes": [],
         },
+        "attendance_confirmation": {
+            "title": "(自动发起)【HR】月度考勤确认单-Alice-2026年7月",
+            "fields": [
+                {
+                    "name": "姓名",
+                    "value": "Alice 部门 研发中心 年度 2026 月度 7",
+                },
+                {
+                    "name": "应出勤天数",
+                    "value": "23.00 实际出勤天数 23.00 缺勤天数 0.00",
+                },
+                {
+                    "name": "本月考勤是否有异议",
+                    "value": "是否有异议 有异议 无异议 异议说明",
+                },
+            ],
+            "template_id": "-7231800401165464345",
+            "form_app_id": "5072944770639779741",
+            "node_policy": "sendoredit",
+            "node_policy_name": "发起人填写",
+            "attitudes": ["haveRead", "agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "selection_count": 1,
+                "decision": "无异议",
+            },
+        },
         "standard_collaboration": {
             "title": "关于征集专家入库工作的通知",
             "fields": [{"name": "接收人", "value": "Alice"}],
@@ -342,6 +414,7 @@ def _fixture(profile):
     }
     selected = fixtures[profile]
     return {
+        "profile": profile,
         "business_snapshot": selected.get("business_snapshot"),
         "source": {
             "affair_id": "affair-1",

@@ -129,6 +129,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_travel_expense_approve",
   "oa_labor_contract_renewal_approval_prepare",
   "oa_labor_contract_renewal_approve",
+  "oa_attendance_confirmation_prepare",
+  "oa_attendance_confirm",
   "oa_weekly_report_acknowledgement_prepare",
   "oa_weekly_report_acknowledge",
   "oa_standard_collaboration_approval_prepare",

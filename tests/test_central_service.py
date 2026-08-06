@@ -14,6 +14,7 @@ from bscli.adapters.seeyon_business_trip_submit import (
 )
 from bscli.adapters.seeyon_leave_submit import LeaveBusinessValidationRequired
 from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
+from bscli.adapters.seeyon_pending_actions import PendingActionContractMismatch
 from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
     SeeyonSessionCheckUnavailable,
@@ -80,6 +81,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             "oa.travel_expense.approve",
             "oa.labor_contract_renewal.approval.prepare",
             "oa.labor_contract_renewal.approve",
+            "oa.attendance_confirmation.prepare",
+            "oa.attendance_confirmation.confirm",
             "oa.weekly_report.acknowledgement.prepare",
             "oa.weekly_report.acknowledge",
             "oa.standard_collaboration.approval.prepare",
@@ -89,6 +92,59 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 capability_required_scopes(capability_name),
                 frozenset({"oa:write:approval"}),
             )
+
+    def test_pending_action_preflight_runs_before_field_card_creation(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            with patch(
+                "bscli.core.central_service.preflight_pending_action",
+                side_effect=PendingActionContractMismatch(
+                    "The selected pending workflow is not a registered standard_collaboration item."
+                ),
+            ) as preflight:
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.standard_collaboration.approval.prepare",
+                    arguments={"affair_id": "attendance-affair"},
+                )
+
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["error"]["code"], "WORKFLOW_NOT_SUPPORTED")
+            self.assertIsNone(response["nextAction"])
+            preflight.assert_called_once()
+
+    def test_attendance_preflight_opens_the_dedicated_prefilled_card(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            with patch(
+                "bscli.core.central_service.preflight_pending_action",
+                return_value={"matched": True},
+            ) as preflight:
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.attendance_confirmation.prepare",
+                    arguments={
+                        "affair_id": "attendance-affair",
+                        "opinion": "确认无异议",
+                    },
+                )
+
+            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["error"]["code"], "FIELD_INPUT_REQUIRED")
+            submission = service.field_submissions.get(
+                response["nextAction"]["inputSubmissionId"]
+            )
+            self.assertEqual(
+                submission["form_schema"]["title"],
+                "填写月度考勤确认意见",
+            )
+            self.assertEqual(
+                submission["form_schema"]["fields"][0]["value"],
+                "确认无异议",
+            )
+            preflight.assert_called_once()
 
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:

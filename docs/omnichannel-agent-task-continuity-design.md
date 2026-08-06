@@ -4,7 +4,7 @@
 >
 > 更新日期：2026-08-05
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.25、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.26、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示、展示层文本
@@ -53,7 +53,7 @@
 - 用户明确说出“刚才网页端”“继续另一个端的第 1 条”等跨端指代时，OpenClaw 通过
   宿主私有工具读取同一 `userSubject` 其他端点最近 6 小时、最多 12 条非敏感文本，
   以不可信数据块注入当前推理；普通消息不增加该读取。
-- OpenClaw `0.4.25` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
+- OpenClaw `0.4.26` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
   1 个身份状态工具、读取工具和 17 个受治理入口；15 个底层 commit/续办工具保留在
   宿主内部，不向模型注册。
 - Agent Workspace 通过 SSE 和 Task Hub 拉取卡片、文本与任务状态，不再尝试按聊天通道

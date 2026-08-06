@@ -48,6 +48,8 @@ from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_SAVE_CAPABILITY,
 )
 from bscli.adapters.seeyon_pending_actions import (
+    ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
+    ATTENDANCE_CONFIRM_CAPABILITY,
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
@@ -138,6 +140,9 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_efficiency_data_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_travel_expense_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_labor_contract_renewal_approval_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
+    "oa_attendance_confirmation_prepare": frozenset(
         {"oa:write:approval"}
     ),
     "oa_weekly_report_acknowledgement_prepare": frozenset(
@@ -614,6 +619,23 @@ def create_central_mcp_server(
                 "labor-contract renewal item leaves the pending collection."
             ),
             "commit_capability": LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_attendance_confirmation_prepare",
+            "prepare_title": "Prepare OA Attendance Confirmation",
+            "prepare_description": (
+                "Bind one exact pending monthly attendance confirmation. AgentBridge "
+                "validates the HR template before opening a card and freezes employee, "
+                "attendance totals, and the OA-selected objection decision."
+            ),
+            "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_attendance_confirm",
+            "commit_title": "Confirm Authorized OA Monthly Attendance",
+            "commit_description": (
+                "Consume one approved authorization, submit the frozen monthly "
+                "attendance confirmation, and verify pending disappearance."
+            ),
+            "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_weekly_report_acknowledgement_prepare",

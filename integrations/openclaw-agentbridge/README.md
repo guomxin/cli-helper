@@ -149,7 +149,8 @@ original request. The host also suppresses a model-requested duplicate
 `agentbridge_interaction_get` in the same run, without affecting background
 polling, later explicit redisplay, or metadata recovery.
 
-Version 0.4.25 makes WeChat direct delivery activity-aware. A stale per-message
+Version 0.4.26 adds the governed OA monthly-attendance confirmation entry tool
+and keeps the 0.4.25 WeChat direct-delivery activity guard. A stale per-message
 WeChat context token now causes one delivery attempt followed by a durable
 `deferred` acknowledgement instead of five rapid retries and a permanent
 failure. The next inbound message from the same trusted WeChat endpoint
@@ -190,7 +191,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.25, ...)
+AgentBridge interaction plugin registered (version=0.4.26, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

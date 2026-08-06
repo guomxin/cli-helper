@@ -19,6 +19,10 @@ LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY = (
     "oa.labor_contract_renewal.approval.prepare"
 )
 LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY = "oa.labor_contract_renewal.approve"
+ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
+    "oa.attendance_confirmation.prepare"
+)
+ATTENDANCE_CONFIRM_CAPABILITY = "oa.attendance_confirmation.confirm"
 WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY = (
     "oa.weekly_report.acknowledgement.prepare"
 )
@@ -97,6 +101,12 @@ LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     effect="审批通过一条劳动合同续签表",
     submit_label="提交审批意见",
 )
+ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_attendance_confirmation_fields.v1",
+    title="填写月度考勤确认意见",
+    effect="确认并提交一张月度考勤确认单",
+    submit_label="提交确认意见",
+)
 WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_weekly_report_acknowledgement_fields.v1",
     title="填写周报阅办意见",
@@ -127,6 +137,7 @@ _PROFILES = {
         "node_policies": {"approve", "审批"},
         "node_policy_names": {"审批"},
         "action_kind": "approval",
+        "attitude_code": "agree",
         "action_display": "审批通过",
         "summary_title": "审批效能数据流程",
         "summary_effect": "审批通过后该效能数据事项将离开待办列表",
@@ -156,6 +167,7 @@ _PROFILES = {
         "node_policies": {"报销审批"},
         "node_policy_names": {"报销审批"},
         "action_kind": "approval",
+        "attitude_code": "agree",
         "action_display": "审批通过",
         "summary_title": "审批差旅费报销单",
         "summary_effect": "审批通过后该报销事项将离开待办列表",
@@ -186,11 +198,41 @@ _PROFILES = {
         "node_policies": {"approve", "审批"},
         "node_policy_names": {"审批"},
         "action_kind": "approval",
+        "attitude_code": "agree",
         "action_display": "审批通过",
         "summary_title": "审批劳动合同续签表",
         "summary_effect": "审批通过后该劳动合同续签事项将离开待办列表",
         "authorize_label": "授权审批通过",
         "business_snapshot_policy": "labor_contract_renewal_v1",
+    },
+    "attendance_confirmation": {
+        "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
+        "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
+        "contract_version": "seeyon-attendance-confirmation-v1",
+        "plan_schema": "agentbridge.oa_attendance_confirmation_plan.v1",
+        "result_schema": "agentbridge.oa_attendance_confirmation_result.v1",
+        "business_intent": "confirm_monthly_attendance",
+        "title_rule": {
+            "kind": "contains",
+            "value": "【HR】月度考勤确认单-",
+        },
+        "required_fields": {
+            "姓名",
+            "应出勤天数",
+            "本月考勤是否有异议",
+        },
+        "allowed_fields": None,
+        "template_id": "-7231800401165464345",
+        "form_app_id": "5072944770639779741",
+        "node_policies": {"sendoredit"},
+        "node_policy_names": {"发起人填写"},
+        "action_kind": "confirmation",
+        "attitude_code": "agree",
+        "action_display": "确认并提交",
+        "summary_title": "确认月度考勤",
+        "summary_effect": "确认后该月度考勤事项将离开待办列表",
+        "authorize_label": "授权确认月度考勤",
+        "business_snapshot_policy": "attendance_confirmation_v1",
     },
     "weekly_report": {
         "prepare_capability": WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
@@ -212,6 +254,7 @@ _PROFILES = {
         "node_policies": {"inform", "知会"},
         "node_policy_names": {"知会"},
         "action_kind": "acknowledgement",
+        "attitude_code": "",
         "action_display": "阅办知会",
         "summary_title": "阅办周报发送流程",
         "summary_effect": "阅办后该周报事项将离开待办列表",
@@ -232,6 +275,7 @@ _PROFILES = {
         "node_policies": {"approve", "审批"},
         "node_policy_names": {"审批"},
         "action_kind": "approval",
+        "attitude_code": "agree",
         "action_display": "审批通过",
         "summary_title": "审批普通协同事项",
         "summary_effect": "审批通过后该普通协同事项将离开待办列表",
@@ -350,6 +394,28 @@ def acknowledge_weekly_report(
     )
 
 
+def prepare_attendance_confirmation(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(
+        adapter, worker, arguments, "attendance_confirmation"
+    )
+
+
+def confirm_attendance(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="attendance_confirmation",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
 def prepare_standard_collaboration_approval(adapter, worker, arguments: dict) -> dict:
     return _prepare_pending_action(adapter, worker, arguments, "standard_collaboration")
 
@@ -386,6 +452,7 @@ def pending_action_contract_fingerprint(profile_key: str) -> str:
         "node_policies": sorted(profile["node_policies"]),
         "node_policy_names": sorted(profile["node_policy_names"]),
         "action_kind": profile["action_kind"],
+        "attitude_code": profile.get("attitude_code", ""),
         "business_snapshot_policy": profile.get("business_snapshot_policy"),
         "selection_policy": "exactly_one_pending_affair_id",
         "internal_binding": "ContinueSubmit",
@@ -400,20 +467,9 @@ def _prepare_pending_action(
     arguments: dict,
     profile_key: str,
 ) -> dict:
-    profile = _profile(profile_key)
     inputs = _normalize_inputs(arguments)
-    source, detail = adapter.resolve_workflow_detail(
-        worker,
-        collection="pending",
-        affair_id=inputs["affair_id"],
-    )
-    signals = _validate_target(
-        profile_key,
-        profile,
-        source,
-        detail,
-        worker.page,
-        inputs["affair_id"],
+    profile, source, detail, signals = _resolve_validated_target(
+        adapter, worker, inputs["affair_id"], profile_key
     )
     target = _frozen_target(source, detail, signals, profile_key)
     return {
@@ -445,6 +501,46 @@ def _prepare_pending_action(
         },
         "summary": _summary(profile_key, profile, target, detail, inputs["opinion"]),
     }
+
+
+def preflight_pending_action(
+    adapter,
+    worker,
+    arguments: dict,
+    profile_key: str,
+) -> dict:
+    affair_id = _bounded_identifier(arguments.get("affair_id"), "affair_id")
+    _profile_value, source, _detail, _signals = _resolve_validated_target(
+        adapter, worker, affair_id, profile_key
+    )
+    return {
+        "matched": True,
+        "profile": profile_key,
+        "affair_id": str(source.get("affair_id") or affair_id),
+    }
+
+
+def _resolve_validated_target(
+    adapter,
+    worker,
+    affair_id: str,
+    profile_key: str,
+) -> tuple[dict, dict, dict, dict]:
+    profile = _profile(profile_key)
+    source, detail = adapter.resolve_workflow_detail(
+        worker,
+        collection="pending",
+        affair_id=affair_id,
+    )
+    signals = _validate_target(
+        profile_key,
+        profile,
+        source,
+        detail,
+        worker.page,
+        affair_id,
+    )
+    return profile, source, detail, signals
 
 
 def _commit_pending_action(
@@ -489,6 +585,7 @@ def _commit_pending_action(
                 "affair_id": affair_id,
                 "opinion": opinion,
                 "action_kind": profile["action_kind"],
+                "attitude_code": profile.get("attitude_code", ""),
             },
         )
         if not isinstance(scheduled, dict) or scheduled.get("scheduled") is not True:
@@ -526,6 +623,8 @@ def _commit_pending_action(
                 }
                 if profile["action_kind"] == "acknowledgement":
                     result["workflow_acknowledged"] = True
+                elif profile["action_kind"] == "confirmation":
+                    result["workflow_confirmed"] = True
                 else:
                     result["workflow_approved"] = True
                 return result
@@ -608,9 +707,10 @@ def _validate_target(
     attitudes = {
         str(item or "").lower() for item in signals.get("attitude_codes") or []
     }
-    if profile["action_kind"] == "approval" and "agree" not in attitudes:
+    attitude_code = str(profile.get("attitude_code") or "").lower()
+    if attitude_code and attitude_code not in attitudes:
         raise PendingActionContractMismatch(
-            "The OA approval page does not expose the registered agree attitude."
+            "The OA page does not expose the registered attitude."
         )
     identity = signals.get("identity")
     if not isinstance(identity, dict):
@@ -632,6 +732,11 @@ def _validate_target(
     if profile.get("business_snapshot_policy") == "labor_contract_renewal_v1":
         signals = dict(signals)
         signals["business_snapshot"] = _labor_contract_business_snapshot(
+            page, detail
+        )
+    elif profile.get("business_snapshot_policy") == "attendance_confirmation_v1":
+        signals = dict(signals)
+        signals["business_snapshot"] = _attendance_confirmation_business_snapshot(
             page, detail
         )
     return signals
@@ -709,6 +814,67 @@ def _labor_contract_business_snapshot(page, detail: dict) -> dict:
             "The OA labor-contract employee or contract term is unavailable."
         )
     return result
+
+
+def _attendance_confirmation_business_snapshot(page, detail: dict) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0097_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA attendance-confirmation CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = document.querySelector('#field0097_id');
+          const section = field?.querySelector('section');
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const items = Array.from(field?.querySelectorAll('.cap4-radio__item') || []);
+          const selected = items.filter((item) => Boolean(
+            item.querySelector('.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong')
+          ));
+          return {
+            browse_only: Boolean(section?.classList.contains('is-none')),
+            selection_count: selected.length,
+            decision: selected.length === 1
+              ? clean(selected[0].querySelector('.cap4-radio__text')?.textContent)
+              : '',
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA attendance decision is editable; a separate field-entry contract is required."
+        )
+    if snapshot.get("selection_count") != 1 or snapshot.get("decision") not in {
+        "有异议",
+        "无异议",
+    }:
+        raise PendingActionContractMismatch(
+            "The OA attendance decision is unavailable or ambiguous."
+        )
+    values = _field_values(detail)
+    employee = values.get("姓名", "")
+    attendance = values.get("应出勤天数", "")
+    if not employee or not attendance:
+        raise PendingActionContractMismatch(
+            "The OA attendance employee or attendance totals are unavailable."
+        )
+    return {
+        "employee": employee,
+        "attendance_totals": attendance,
+        "decision": str(snapshot["decision"]),
+        "business_fields_browse_only": True,
+    }
 
 
 def _frozen_target(
@@ -797,6 +963,15 @@ def _summary(
             ("evaluation", "综合评价"),
             ("renewal_recommendation", "续签建议"),
             ("renewal_feedback", "续签情况反馈"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
+    elif profile_key == "attendance_confirmation":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("employee", "员工与月份"),
+            ("attendance_totals", "出勤统计"),
+            ("decision", "OA 当前确认结论"),
         ):
             if snapshot.get(name):
                 fields.append({"label": label, "value": snapshot[name]})
@@ -983,7 +1158,7 @@ _PAGE_CONTRACT_SCRIPT = r"""
 
 
 _PENDING_ACTION_SCRIPT = r"""
-({ affair_id, opinion, action_kind }) => {
+({ affair_id, opinion, attitude_code }) => {
   const read = (names) => {
     for (const name of names) {
       const element = document.querySelector(`#${name}`)
@@ -1012,19 +1187,19 @@ _PENDING_ACTION_SCRIPT = r"""
     element.dispatchEvent(new Event('blur', { bubbles: true }));
   };
   setValue(comment, String(opinion));
-  if (action_kind === 'approval') {
+  if (attitude_code) {
     const radios = Array.from(document.querySelectorAll("input[type='radio'][name='attitude']"));
-    const agree = radios.find((radio) => {
+    const selected = radios.find((radio) => {
       const code = String(radio.getAttribute('code') || '').toLowerCase();
       const value = String(radio.value || '').toLowerCase();
-      return code === 'agree' || value === 'agree'
-        || value.endsWith('.agree');
+      return code === attitude_code || value === attitude_code
+        || value.endsWith(`.${attitude_code}`);
     });
-    if (!agree) throw new Error('registered agree attitude is missing');
-    agree.checked = true;
-    agree.dispatchEvent(new Event('input', { bubbles: true }));
-    agree.dispatchEvent(new Event('change', { bubbles: true }));
-    const attitudeCode = agree.getAttribute('code') || agree.value || 'agree';
+    if (!selected) throw new Error('registered attitude is missing');
+    selected.checked = true;
+    selected.dispatchEvent(new Event('input', { bubbles: true }));
+    selected.dispatchEvent(new Event('change', { bubbles: true }));
+    const attitudeCode = selected.getAttribute('code') || selected.value || attitude_code;
     for (const selector of ['#hidAttitudeCode', '#hidAttitude', '#nodeattitude']) {
       const element = document.querySelector(selector);
       if (element) setValue(element, attitudeCode);

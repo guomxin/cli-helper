@@ -95,6 +95,9 @@ from bscli.adapters.seeyon_missed_punch import (
     save_missed_punch_draft,
 )
 from bscli.adapters.seeyon_pending_actions import (
+    ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
+    ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
+    ATTENDANCE_CONFIRM_CAPABILITY,
     EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
@@ -113,15 +116,18 @@ from bscli.adapters.seeyon_pending_actions import (
     PendingActionContractMismatch,
     PendingActionOutcomeUnknown,
     acknowledge_weekly_report,
+    confirm_attendance,
     approve_efficiency_data,
     approve_labor_contract_renewal,
     approve_standard_collaboration,
     approve_travel_expense,
     prepare_efficiency_data_approval,
+    prepare_attendance_confirmation,
     prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
+    preflight_pending_action,
 )
 from bscli.adapters.seeyon_submit_phases import (
     SeeyonBusinessValidationRequired,
@@ -317,6 +323,17 @@ _TRUSTED_WRITE_DEFINITIONS.update(
             "field_message": "The labor-contract renewal opinion must be entered in the trusted field card.",
             "authorization_message": "The labor-contract renewal approval requires trusted confirmation.",
         },
+        ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: {
+            "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
+            "field_schema": ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_attendance_confirmation",
+            "commit_function": "confirm_attendance",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": "The attendance-confirmation opinion must be entered in the trusted field card.",
+            "authorization_message": "The attendance confirmation requires trusted confirmation.",
+        },
         WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: {
             "commit_capability": WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
             "field_schema": WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA,
@@ -341,6 +358,21 @@ _TRUSTED_WRITE_DEFINITIONS.update(
         },
     }
 )
+
+for _pending_profile, _pending_prepare_capability in (
+    ("efficiency_data", EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY),
+    ("travel_expense", TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY),
+    ("labor_contract_renewal", LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY),
+    ("attendance_confirmation", ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY),
+    ("weekly_report", WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY),
+    ("standard_collaboration", STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY),
+):
+    _TRUSTED_WRITE_DEFINITIONS[_pending_prepare_capability].update(
+        {
+            "preflight_function": "preflight_pending_action",
+            "preflight_profile": _pending_profile,
+        }
+    )
 
 _TRUSTED_WRITE_DEFINITIONS.update(
     {
@@ -385,6 +417,8 @@ _CAPABILITY_SCOPES = {
     TRAVEL_EXPENSE_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    ATTENDANCE_CONFIRM_CAPABILITY: frozenset({"oa:write:approval"}),
     WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY: frozenset({"oa:write:approval"}),
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
@@ -2252,23 +2286,56 @@ class CentralCapabilityService:
                 if (
                     prepare_definition is not None
                     and not str(arguments.get("input_submission_id") or "").strip()
-                    and prepare_definition.get("field_schema_function")
-                ):
-                    schema_function = globals().get(
-                        str(prepare_definition["field_schema_function"])
+                    and (
+                        prepare_definition.get("field_schema_function")
+                        or prepare_definition.get("preflight_function")
                     )
-                    if not callable(schema_function):
-                        raise RuntimeError("trusted field schema function is unavailable")
+                ):
                     with worker_factory(session, adapter) as worker:
                         worker.restore_session_state(state)
-                        dynamic_field_schema = schema_function(
-                            adapter,
-                            worker,
-                            arguments,
+                        preflight_function_name = prepare_definition.get(
+                            "preflight_function"
                         )
+                        if preflight_function_name:
+                            preflight_function = globals().get(
+                                str(preflight_function_name)
+                            )
+                            if not callable(preflight_function):
+                                raise RuntimeError(
+                                    "trusted write preflight function is unavailable"
+                                )
+                            try:
+                                preflight_function(
+                                    adapter,
+                                    worker,
+                                    arguments,
+                                    str(prepare_definition["preflight_profile"]),
+                                )
+                            except prepare_definition["contract_error"] as exc:
+                                raise CapabilityRejected(
+                                    "WORKFLOW_NOT_SUPPORTED",
+                                    str(exc),
+                                ) from exc
+                        schema_function_name = prepare_definition.get(
+                            "field_schema_function"
+                        )
+                        if schema_function_name:
+                            schema_function = globals().get(
+                                str(schema_function_name)
+                            )
+                            if not callable(schema_function):
+                                raise RuntimeError(
+                                    "trusted field schema function is unavailable"
+                                )
+                            dynamic_field_schema = schema_function(
+                                adapter,
+                                worker,
+                                arguments,
+                            )
+                        state = worker.capture_session_state()
                         self.session_states.save(
                             session["session_id"],
-                            worker.capture_session_state(),
+                            state,
                         )
                 if prepare_definition is not None:
                     field_submission, effective_arguments = self._resolve_trusted_field_input(
@@ -3358,6 +3425,7 @@ _TASK_TITLE_LABELS = {
     "Prepare OA Efficiency-Data Approval": "OA 效能数据审批",
     "Prepare OA Travel-Expense Approval": "OA 差旅费审批",
     "Prepare OA Labor-Contract Renewal Approval": "OA 劳动合同续签审批",
+    "Prepare OA Attendance Confirmation": "OA 月度考勤确认",
     "Prepare OA Weekly-Report Acknowledgement": "OA 周报阅办",
     "Prepare OA Standard-Collaboration Approval": "OA 普通事项审批",
     "Prepare OA Workflow Revoke": "OA 流程撤销",
