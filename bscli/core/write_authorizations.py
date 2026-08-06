@@ -65,6 +65,7 @@ class WriteAuthorizationStore:
                     capability_name TEXT NOT NULL,
                     capability_version TEXT NOT NULL,
                     prepare_operation_id TEXT NOT NULL,
+                    supersession_key TEXT NOT NULL DEFAULT '',
                     plan_json TEXT NOT NULL,
                     plan_hash TEXT NOT NULL,
                     summary_json TEXT NOT NULL,
@@ -137,6 +138,28 @@ class WriteAuthorizationStore:
                 "decided_endpoint_id",
                 "TEXT",
             )
+            _ensure_column(
+                connection,
+                "write_authorizations",
+                "supersession_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            connection.execute(
+                "DROP TRIGGER IF EXISTS immutable_write_authorization_plan"
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER immutable_write_authorization_plan
+                BEFORE UPDATE OF user_subject, system_id, session_id,
+                    capability_name, capability_version, prepare_operation_id,
+                    supersession_key, plan_json, plan_hash, summary_json,
+                    card_url, created_at, expires_at
+                ON write_authorizations
+                BEGIN
+                    SELECT RAISE(ABORT, 'write authorization plan is immutable');
+                END
+                """
+            )
 
     def create(
         self,
@@ -147,6 +170,7 @@ class WriteAuthorizationStore:
         capability_name: str,
         capability_version: str,
         prepare_operation_id: str,
+        supersession_key: str = "",
         plan: dict[str, Any],
         summary: dict[str, Any],
         card_base_url: str,
@@ -167,6 +191,9 @@ class WriteAuthorizationStore:
             raise TypeError("write authorization plan and summary must be objects")
         if ttl_seconds < 30 or ttl_seconds > 1800:
             raise ValueError("write authorization TTL must be between 30 and 1800 seconds")
+        normalized_supersession_key = str(supersession_key or "").strip()
+        if len(normalized_supersession_key) > 128:
+            raise ValueError("write authorization supersession key is too long")
         base_url = _validate_card_base_url(card_base_url)
         plan_json = _canonical_json(plan)
         plan_hash = _json_hash(plan_json)
@@ -184,9 +211,16 @@ class WriteAuthorizationStore:
                 SET state = 'superseded', csrf_hash = NULL,
                     updated_at = ?, decided_at = ?
                 WHERE user_subject = ? AND capability_name = ?
+                  AND supersession_key = ?
                   AND state IN ('pending', 'approved')
                 """,
-                (_format_time(now), _format_time(now), user_subject, capability_name),
+                (
+                    _format_time(now),
+                    _format_time(now),
+                    user_subject,
+                    capability_name,
+                    normalized_supersession_key,
+                ),
             )
             connection.execute(
                 """
@@ -219,9 +253,10 @@ class WriteAuthorizationStore:
                 INSERT INTO write_authorizations (
                     authorization_id, user_subject, system_id, session_id,
                     capability_name, capability_version, prepare_operation_id,
-                    plan_json, plan_hash, summary_json, card_url, state,
+                    supersession_key, plan_json, plan_hash, summary_json,
+                    card_url, state,
                     created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """,
                 (
                     authorization_id,
@@ -231,6 +266,7 @@ class WriteAuthorizationStore:
                     capability_name,
                     capability_version,
                     prepare_operation_id,
+                    normalized_supersession_key,
                     plan_json,
                     plan_hash,
                     summary_json,

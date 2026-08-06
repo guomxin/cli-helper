@@ -13,6 +13,37 @@ from bscli.core.field_submissions import (
 
 
 class FieldSubmissionStoreTests(unittest.TestCase):
+    def test_existing_database_adds_supersession_key(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "agentbridge.db"
+            FieldSubmissionStore(db_path)
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.execute(
+                    "DROP TRIGGER immutable_field_submission_contract"
+                )
+                connection.execute(
+                    "ALTER TABLE field_submissions DROP COLUMN supersession_key"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = FieldSubmissionStore(db_path)
+            created = _submission(store, supersession_key="target-a")
+
+            self.assertEqual(created["supersession_key"], "target-a")
+            connection = sqlite3.connect(db_path)
+            try:
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "UPDATE field_submissions SET supersession_key = ? "
+                        "WHERE submission_id = ?",
+                        ("target-b", created["submission_id"]),
+                    )
+            finally:
+                connection.close()
+
     def test_values_are_csrf_bound_consumed_once_and_immutable(self):
         with TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "agentbridge.db"
@@ -111,6 +142,29 @@ class FieldSubmissionStoreTests(unittest.TestCase):
             clock.value += timedelta(seconds=31)
             self.assertEqual(store.get(second["submission_id"])["state"], "expired")
 
+    def test_cards_for_different_targets_do_not_supersede_each_other(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            first = _submission(
+                store,
+                operation_id="prepare-1",
+                supersession_key="target-a",
+            )
+            second = _submission(
+                store,
+                operation_id="prepare-2",
+                supersession_key="target-b",
+            )
+            replacement = _submission(
+                store,
+                operation_id="prepare-3",
+                supersession_key="target-a",
+            )
+
+            self.assertEqual(store.get(first["submission_id"])["state"], "superseded")
+            self.assertEqual(store.get(second["submission_id"])["state"], "pending")
+            self.assertEqual(store.get(replacement["submission_id"])["state"], "pending")
+
     def test_card_url_and_identifier_are_opaque(self):
         with TemporaryDirectory() as tmp:
             store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
@@ -181,7 +235,13 @@ class FieldSubmissionStoreTests(unittest.TestCase):
                 )
 
 
-def _submission(store, *, operation_id="prepare-1", ttl_seconds=900):
+def _submission(
+    store,
+    *,
+    operation_id="prepare-1",
+    ttl_seconds=900,
+    supersession_key="",
+):
     return store.create(
         user_subject="user-a",
         system_id="oa",
@@ -189,6 +249,7 @@ def _submission(store, *, operation_id="prepare-1", ttl_seconds=900):
         capability_name="oa.business_trip.prepare",
         capability_version="0.2.0",
         create_operation_id=operation_id,
+        supersession_key=supersession_key,
         form_schema={
             "schema_version": "test.fields.v1",
             "title": "填写字段",

@@ -15,6 +15,37 @@ from bscli.core.write_authorizations import (
 
 
 class WriteAuthorizationStoreTests(unittest.TestCase):
+    def test_existing_database_adds_supersession_key(self):
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "agentbridge.db"
+            WriteAuthorizationStore(db_path)
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.execute(
+                    "DROP TRIGGER immutable_write_authorization_plan"
+                )
+                connection.execute(
+                    "ALTER TABLE write_authorizations DROP COLUMN supersession_key"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = WriteAuthorizationStore(db_path)
+            created = _authorization(store, supersession_key="target-a")
+
+            self.assertEqual(created["supersession_key"], "target-a")
+            connection = sqlite3.connect(db_path)
+            try:
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "UPDATE write_authorizations SET supersession_key = ? "
+                        "WHERE authorization_id = ?",
+                        ("target-b", created["authorization_id"]),
+                    )
+            finally:
+                connection.close()
+
     def test_approved_plan_is_bound_consumed_once_and_immutable(self):
         with TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "agentbridge.db"
@@ -114,6 +145,29 @@ class WriteAuthorizationStoreTests(unittest.TestCase):
             clock.value += timedelta(seconds=31)
             self.assertEqual(store.get(second["authorization_id"])["state"], "expired")
 
+    def test_plans_for_different_targets_do_not_supersede_each_other(self):
+        with TemporaryDirectory() as tmp:
+            store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
+            first = _authorization(
+                store,
+                prepare_operation_id="prepare-1",
+                supersession_key="target-a",
+            )
+            second = _authorization(
+                store,
+                prepare_operation_id="prepare-2",
+                supersession_key="target-b",
+            )
+            replacement = _authorization(
+                store,
+                prepare_operation_id="prepare-3",
+                supersession_key="target-a",
+            )
+
+            self.assertEqual(store.get(first["authorization_id"])["state"], "superseded")
+            self.assertEqual(store.get(second["authorization_id"])["state"], "pending")
+            self.assertEqual(store.get(replacement["authorization_id"])["state"], "pending")
+
     def test_card_url_and_identifiers_are_opaque(self):
         with TemporaryDirectory() as tmp:
             store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
@@ -206,6 +260,7 @@ def _authorization(
     *,
     prepare_operation_id="prepare-1",
     ttl_seconds=600,
+    supersession_key="",
 ):
     return store.create(
         user_subject="user-a",
@@ -214,6 +269,7 @@ def _authorization(
         capability_name="oa.business_trip.save_draft",
         capability_version="0.1.0",
         prepare_operation_id=prepare_operation_id,
+        supersession_key=supersession_key,
         plan={"exact_input": {"reason": "Test"}},
         summary={"title": "Save draft", "fields": []},
         card_base_url="http://127.0.0.1:8780",

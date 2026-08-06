@@ -823,6 +823,50 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 for value in arguments.values():
                     if isinstance(value, str) and value not in resume_arguments.values():
                         self.assertNotIn(value, str(started["nextAction"]))
+
+    def test_same_write_capability_keeps_distinct_target_cards_active(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            first = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.missed_punch.approval.prepare",
+                arguments={"affair_id": "affair-1"},
+                idempotency_key="missed-punch-target-1",
+            )
+            second = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.missed_punch.approval.prepare",
+                arguments={"affair_id": "affair-2"},
+                idempotency_key="missed-punch-target-2",
+            )
+
+            first_id = first["nextAction"]["inputSubmissionId"]
+            second_id = second["nextAction"]["inputSubmissionId"]
+            self.assertEqual(service.field_submissions.get(first_id)["state"], "pending")
+            self.assertEqual(service.field_submissions.get(second_id)["state"], "pending")
+            self.assertNotEqual(
+                service.field_submissions.get(first_id)["supersession_key"],
+                service.field_submissions.get(second_id)["supersession_key"],
+            )
+
+            replacement = service.invoke(
+                user_subject="user-a",
+                capability_name="oa.missed_punch.approval.prepare",
+                arguments={"affair_id": "affair-1"},
+                idempotency_key="missed-punch-target-1-replacement",
+            )
+            replacement_id = replacement["nextAction"]["inputSubmissionId"]
+            self.assertEqual(
+                service.field_submissions.get(first_id)["state"],
+                "superseded",
+            )
+            self.assertEqual(service.field_submissions.get(second_id)["state"], "pending")
+            self.assertEqual(
+                service.field_submissions.get(replacement_id)["state"],
+                "pending",
+            )
+
     def test_business_trip_prepare_requires_trusted_card_then_consumes_it_once(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

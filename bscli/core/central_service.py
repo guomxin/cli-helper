@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
 import threading
 from typing import Callable, Iterator
@@ -2507,6 +2509,7 @@ class CentralCapabilityService:
             capability_name=commit_spec.name,
             capability_version=commit_spec.version,
             prepare_operation_id=context.operation_id,
+            supersession_key=_trusted_write_supersession_key(resume_arguments),
             plan=plan,
             summary=summary,
             card_base_url=self.trusted_card_base_url,
@@ -2584,6 +2587,7 @@ class CentralCapabilityService:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 create_operation_id=context.operation_id,
+                supersession_key=_trusted_write_supersession_key(context_arguments),
                 form_schema=submission_schema,
                 card_base_url=self.trusted_card_base_url,
                 ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
@@ -2794,6 +2798,9 @@ class CentralCapabilityService:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 prepare_operation_id=context.operation_id,
+                supersession_key=_trusted_write_supersession_key(
+                    dict(continued_plan.get("resume_arguments") or {})
+                ),
                 plan=continued_plan,
                 summary=continued_summary,
                 card_base_url=self.trusted_card_base_url,
@@ -3188,6 +3195,16 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _trusted_write_supersession_key(arguments: dict) -> str:
+    canonical = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def operation_response(operation: dict) -> dict:

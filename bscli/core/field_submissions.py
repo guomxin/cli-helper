@@ -65,6 +65,7 @@ class FieldSubmissionStore:
                     capability_name TEXT NOT NULL,
                     capability_version TEXT NOT NULL,
                     create_operation_id TEXT NOT NULL,
+                    supersession_key TEXT NOT NULL DEFAULT '',
                     schema_json TEXT NOT NULL,
                     schema_hash TEXT NOT NULL,
                     values_json TEXT,
@@ -81,6 +82,12 @@ class FieldSubmissionStore:
                 )
                 """
             )
+            _ensure_column(
+                connection,
+                "field_submissions",
+                "supersession_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS field_submissions_subject_state
@@ -88,11 +95,15 @@ class FieldSubmissionStore:
                 """
             )
             connection.execute(
+                "DROP TRIGGER IF EXISTS immutable_field_submission_contract"
+            )
+            connection.execute(
                 """
-                CREATE TRIGGER IF NOT EXISTS immutable_field_submission_contract
+                CREATE TRIGGER immutable_field_submission_contract
                 BEFORE UPDATE OF user_subject, system_id, session_id,
                     capability_name, capability_version, create_operation_id,
-                    schema_json, schema_hash, card_url, created_at, expires_at
+                    supersession_key, schema_json, schema_hash, card_url,
+                    created_at, expires_at
                 ON field_submissions
                 BEGIN
                     SELECT RAISE(ABORT, 'field submission contract is immutable');
@@ -167,6 +178,7 @@ class FieldSubmissionStore:
         capability_name: str,
         capability_version: str,
         create_operation_id: str,
+        supersession_key: str = "",
         form_schema: dict[str, Any],
         card_base_url: str,
         ttl_seconds: int = 900,
@@ -189,6 +201,9 @@ class FieldSubmissionStore:
             raise ValueError("field submission schema must define fields")
         if ttl_seconds < 30 or ttl_seconds > 1800:
             raise ValueError("field submission TTL must be between 30 and 1800 seconds")
+        normalized_supersession_key = str(supersession_key or "").strip()
+        if len(normalized_supersession_key) > 128:
+            raise ValueError("field submission supersession key is too long")
         base_url = _validate_card_base_url(card_base_url)
         schema_json = _canonical_json(form_schema)
         schema_hash = _json_hash(schema_json)
@@ -204,9 +219,15 @@ class FieldSubmissionStore:
                 UPDATE field_submissions
                 SET state = 'superseded', csrf_hash = NULL, updated_at = ?
                 WHERE user_subject = ? AND capability_name = ?
+                  AND supersession_key = ?
                   AND state IN ('pending', 'submitted')
                 """,
-                (_format_time(now), user_subject, capability_name),
+                (
+                    _format_time(now),
+                    user_subject,
+                    capability_name,
+                    normalized_supersession_key,
+                ),
             )
             connection.execute(
                 """
@@ -239,9 +260,9 @@ class FieldSubmissionStore:
                 INSERT INTO field_submissions (
                     submission_id, user_subject, system_id, session_id,
                     capability_name, capability_version, create_operation_id,
-                    schema_json, schema_hash, card_url, state,
+                    supersession_key, schema_json, schema_hash, card_url, state,
                     created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """,
                 (
                     submission_id,
@@ -251,6 +272,7 @@ class FieldSubmissionStore:
                     capability_name,
                     capability_version,
                     create_operation_id,
+                    normalized_supersession_key,
                     schema_json,
                     schema_hash,
                     card_url,
@@ -669,6 +691,22 @@ def _canonical_json(value: Any) -> str:
 def _json_hash(canonical_json: str) -> str:
     digest = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table: str,
+    column: str,
+    declaration: str,
+) -> None:
+    columns = {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+    if column not in columns:
+        connection.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+        )
 
 
 def _token_hash(value: str) -> str:
