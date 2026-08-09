@@ -2026,12 +2026,45 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   Gateway 完成一次托管重启。
 - 线上对当前考勤待办执行零写预检，成功匹配 `attendance_confirmation`；写控件点击、
   协同写请求和授权创建均为 0。本轮没有提交该考勤单，最终写入仍需用户通过可信卡授权。
+- 用户随后已在线下完成月度考勤确认单的真实提交验证，并确认流程可用；后续发布把该能力视为
+  已完成真实验收，本轮不再重复提交考勤业务。
+
+### 15.60 2026-08-09 跨端任务文件与发布治理收口
+
+- Task Hub 新增用户隔离的 `TaskArtifact`。OA 证书文件由
+  `oa_certificate_prepare_download` 完成准备后绑定当前私有 `taskId`；同一下载 ID 幂等复用，
+  不重复读取 OA 或创建文件事件。检索入口仍为 10 分钟，文件准备完成后重新获得 30 分钟
+  交付窗口，避免慢下载耗尽原授权。
+- Agent Workspace 在原任务应用卡和任务详情中展示文件名、大小、状态、到期时间与短时下载
+  入口；Telegram、微信伴随端消费同一 `task.artifact.ready` 事件并发送单附件，通道上传失败
+  时回退到短时链接。二进制不进入模型文本上下文或 MCP JSON。
+- 管理控制台“多端任务”从五个视图扩为六个，新增任务文件视图和就绪/过期统计。治理 API
+  不返回下载 URL、OA 文档引用或文件内容；隔离诊断新增 Artifact 与 Task 的用户一致性检查。
+  “系统运行”新增 Workspace Gateway 脱敏目标、最近尝试、最近成功和最近错误，恢复成功后仍
+  保留历史错误时间，但不继续显示活动告警。
+- 新增 `Test-AgentBridgeReleaseAcceptance.ps1`，统一执行 MCP Release、8782/8783 健康、
+  systemd/Release、最近错误、OpenClaw RPC/版本/插件检查；可选双身份隔离检查。脚本明确记录
+  `businessWrites=0` 和 `businessListReads=0`。首次实跑发现 Windows OpenSSH 会吞掉 `printf`
+  格式中的反斜线换行，已改为逐行 `echo`；`journalctl` 增加 quiet，空日志不再误计为 1 条。
+- 完整门禁通过 Python `507 passed, 3 skipped, 199 subtests`、Workspace Gateway `20/20`、
+  OpenClaw 插件 `118/118`、`compileall`、`pip check`、npm pack 和 MCP App 检查/构建。功能提交
+  `2c56ebb` 对应 Linux Release `2c56ebb6fae7`，OpenClaw 插件升级为 `0.4.27`。
+- 部署包装脚本在等待 OpenClaw 后置检查时触及 15 分钟外层超时，但发布本身已完成。独立只读
+  核验确认 systemd 为 `active`、8782/8783 健康端点返回新 Release、MCP Release 有 71 个工具、
+  辛国茂 OA Session 为 `active / eligible`；Gateway RPC 正常，CLI/Gateway 均为 `2026.7.1`，
+  无插件版本漂移，日志确认 `0.4.27 / 42 agent tools / 2 identities` 已加载。
+- 线上 Task Hub 迁移成功：2 个用户、4 个活动端点、0 个活动任务、0 个当前待投递、
+  11 类隔离违规则全为 0，并已出现 `ready_artifacts / expired_artifacts / artifact_states`。
+  本轮未读取待办、日志、知识库或证书业务内容，也未执行任何下游业务写入。
 
 ## 16. 后续演进顺序
 
-1. 在可信卡等待期间重启 Gateway，完成 Interaction、原 run 和多端展示的真实恢复验收；
-2. 用同一用户两个可操作消息端完成同一授权决定的原子竞争验收；
-3. 在独立 OS/容器 Worker 中补做 Cookie、下载、截图和日志的跨安全主体不可读验证；
-4. 继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈和权威回读；
-5. 生产前增加正式 OAuth/OIDC、限流、审计和 Vault/KMS，并评估把专用内部 CA
-   迁移到企业 PKI。
+1. 暂缓动态适配 OpenClaw 所在电脑的内网 IP；当前固定地址恢复后服务正常，后续只有再次因
+   换网导致 Workspace 连接失败时才做服务发现或受控地址更新。
+2. 选择一个已知 OA 证书做一次 Workspace 发起、聊天端接收附件、网页重新领取的真实任务文件
+   验收；第二用户有合适文件时再补真实串号检查，当前自动化隔离已经通过。
+3. 等出现合适真实待办后完成 OA 接收处理闭环，不为制造测试数据而扩大业务副作用。
+4. 根据常用事项继续扩充工作流写能力，并逐流程完成真实提交、业务失败反馈、权威回读和必要
+   撤销。
+5. 正式进入多人试点前再实施企业级加固：OIDC/OBO、每用户 Worker、Vault/KMS、限流、备份
+   灾备、SLO、企业 PKI 和安全事件响应；当前 PoC 不提前承担这批运维复杂度。

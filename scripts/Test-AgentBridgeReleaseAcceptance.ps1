@@ -75,8 +75,11 @@ $remoteCommand = @(
     "state=`$(systemctl is-active '$ServiceName' || true)",
     "main_pid=`$(systemctl show '$ServiceName' -p MainPID --value)",
     "release_id=`$(sed -n 's/^AGENTBRIDGE_RELEASE_ID=//p' '$RemoteRoot/config/release.env' | head -n 1)",
-    "error_count=`$(journalctl -u '$ServiceName' --since '-30 minutes' --priority=err --no-pager | wc -l)",
-    'printf "serviceState=%s\nmainPid=%s\nreleaseId=%s\nrecentErrorCount=%s\n" "$state" "$main_pid" "$release_id" "$error_count"'
+    "error_count=`$(journalctl -q -u '$ServiceName' --since '-30 minutes' --priority=err --no-pager | wc -l)",
+    'echo "serviceState=$state"',
+    'echo "mainPid=$main_pid"',
+    'echo "releaseId=$release_id"',
+    'echo "recentErrorCount=$error_count"'
 ) -join "; "
 $remoteRaw = (
     & $ssh.Source @connectionArguments "$SshUser@$HostName" $remoteCommand |
@@ -86,16 +89,28 @@ if ($LASTEXITCODE -ne 0 -or -not $remoteRaw) {
     throw "AgentBridge remote runtime check failed"
 }
 $remoteValues = @{}
-foreach ($line in $remoteRaw -split "`r?`n") {
+foreach ($line in $remoteRaw -split '\r?\n') {
     if ($line -match '^([A-Za-z][A-Za-z0-9]*)=(.*)$') {
         $remoteValues[$Matches[1]] = $Matches[2]
     }
 }
+$requiredRemoteKeys = @(
+    "serviceState",
+    "mainPid",
+    "releaseId",
+    "recentErrorCount"
+)
+foreach ($key in $requiredRemoteKeys) {
+    if (-not $remoteValues.ContainsKey($key)) {
+        $receivedKeys = @($remoteValues.Keys) -join ","
+        throw "AgentBridge remote runtime output is missing $key (received: $receivedKeys)"
+    }
+}
 $remote = [ordered]@{
-    serviceState = $remoteValues.serviceState
-    mainPid = [int64]$remoteValues.mainPid
-    releaseId = $remoteValues.releaseId
-    recentErrorCount = [int]$remoteValues.recentErrorCount
+    serviceState = $remoteValues["serviceState"]
+    mainPid = [int64]$remoteValues["mainPid"]
+    releaseId = $remoteValues["releaseId"]
+    recentErrorCount = [int]$remoteValues["recentErrorCount"]
 }
 if ($remote.serviceState -ne "active" -or [int64]$remote.mainPid -le 0) {
     throw "AgentBridge service is not active"
