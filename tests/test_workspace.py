@@ -691,6 +691,15 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 all(entry["source"]["is_origin"] for entry in messages)
             )
             self.assertEqual(
+                [entry["message_key"] for entry in messages],
+                [
+                    "workspace:user:web-message-stream-1",
+                    "workspace:assistant:web-message-stream-1",
+                    "workspace:user:web-message-1",
+                    "workspace:assistant:web-message-1",
+                ],
+            )
+            self.assertEqual(
                 [entry["sequence"] for entry in messages],
                 sorted(entry["sequence"] for entry in messages),
             )
@@ -1484,6 +1493,10 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertNotIn("setBusy(event.currentTarget", script)
         self.assertIn('fetch("/api/chat/send-stream"', script)
         self.assertIn("response.body.getReader()", script)
+        self.assertIn("activeStreams: new Map()", script)
+        self.assertIn("reconcileOriginChatMessage", script)
+        self.assertIn("activeStream.controller.abort()", script)
+        self.assertIn("await reader.cancel().catch(() => {})", script)
         self.assertIn("parseSseBlock", script)
         self.assertIn("handleChatProgress", script)
         self.assertIn("handleChatDelta", script)

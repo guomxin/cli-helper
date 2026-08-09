@@ -14,6 +14,7 @@ const state = {
   clientVersionCheckActive: false,
   timelineCursor: 0,
   liveMessages: new Map(),
+  activeStreams: new Map(),
   historyMessages: new Map(),
   localMessages: new Map(),
   syncedMessages: new Map(),
@@ -349,7 +350,11 @@ function ingestTimelineEntry(entry, render = true) {
   const sequence = Number(entry?.sequence) || 0;
   state.timelineCursor = Math.max(state.timelineCursor, sequence);
   if (entry?.entry_type === "chat_message") {
-    if (entry.source?.is_origin || !entry.entry_id || !entry.text) return;
+    if (entry.source?.is_origin) {
+      reconcileOriginChatMessage(entry);
+      return;
+    }
+    if (!entry.entry_id || !entry.text) return;
     let item = state.syncedMessages.get(entry.entry_id);
     if (!item) {
       item = messageElement({
@@ -474,96 +479,172 @@ function scheduleChatRefresh(delay, attempts) {
 }
 
 async function consumeChatStream({ message, idempotencyKey }) {
-  const response = await fetch("/api/chat/send-stream", {
-    method: "POST",
-    headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-      "X-AgentBridge-CSRF": cookieValue(
-        "agentbridge_workspace_csrf",
-      ),
-    },
-    credentials: "same-origin",
-    body: JSON.stringify({ message, idempotencyKey }),
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const error = new Error(
-      payload?.error?.message || payload?.error?.code || "请求失败",
-    );
-    error.code = payload?.error?.code;
-    throw error;
-  }
-  if (!response.body) {
-    const error = new Error("浏览器不支持流式响应");
-    error.code = "STREAM_UNAVAILABLE";
-    throw error;
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let streamFailure = null;
+  const activeStream = {
+    controller: new AbortController(),
+    requestMessage: message,
+    runIds: new Set(),
+    terminal: false,
+    timelineCompleted: false,
+  };
+  registerActiveStream(activeStream, idempotencyKey);
   let runId = idempotencyKey;
   let hadToolActivity = false;
   let terminalFailure = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const blocks = buffer.split("\n\n");
-    buffer = done ? "" : blocks.pop() || "";
-    for (const block of blocks) {
-      const event = parseSseBlock(block);
-      if (!event) continue;
-      if (event.name === "accepted" && event.data.runId) {
-        const previousRunId = runId;
-        runId = event.data.runId;
-        adoptLiveMessage(previousRunId, runId, message);
-        addLiveProgress(runId, "请求已交给智能体", "active");
-      } else if (event.name === "progress") {
-        if (event.data.kind === "tool") hadToolActivity = true;
-        handleChatProgress(event.data);
-      } else if (event.name === "chat") {
-        if (["error", "aborted"].includes(event.data.state)) {
-          terminalFailure = event.data;
-        } else {
-          handleChatDelta(event.data);
-        }
-      } else if (event.name === "stream-error") {
-        streamFailure = event.data;
-      }
+  let streamFailure = null;
+  let reader = null;
+  try {
+    const response = await fetch("/api/chat/send-stream", {
+      method: "POST",
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+        "X-AgentBridge-CSRF": cookieValue(
+          "agentbridge_workspace_csrf",
+        ),
+      },
+      credentials: "same-origin",
+      signal: activeStream.controller.signal,
+      body: JSON.stringify({ message, idempotencyKey }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const error = new Error(
+        payload?.error?.message || payload?.error?.code || "请求失败",
+      );
+      error.code = payload?.error?.code;
+      throw error;
     }
-    if (done) break;
-  }
-  if (streamFailure) {
-    const code = streamFailure.code || "GATEWAY_STREAM_FAILED";
-    const error = new Error(code);
-    error.code = code;
-    error.runId = runId;
-    error.details = streamFailure.details || {};
-    error.safeToRetry = streamFailure.safeToRetry === true;
+    if (!response.body) {
+      const error = new Error("浏览器不支持流式响应");
+      error.code = "STREAM_UNAVAILABLE";
+      throw error;
+    }
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let stopReading = false;
+    readLoop:
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const blocks = buffer.split("\n\n");
+      buffer = done ? "" : blocks.pop() || "";
+      for (const block of blocks) {
+        const event = parseSseBlock(block);
+        if (!event) continue;
+        if (event.name === "accepted" && event.data.runId) {
+          const previousRunId = runId;
+          runId = event.data.runId;
+          registerActiveStream(activeStream, runId);
+          adoptLiveMessage(previousRunId, runId, message);
+          addLiveProgress(runId, "请求已交给智能体", "active");
+        } else if (event.name === "progress") {
+          if (event.data.kind === "tool") hadToolActivity = true;
+          handleChatProgress(event.data);
+        } else if (event.name === "chat") {
+          if (["final", "error", "aborted"].includes(event.data.state)) {
+            activeStream.terminal = true;
+            stopReading = true;
+          }
+          if (["error", "aborted"].includes(event.data.state)) {
+            terminalFailure = event.data;
+          } else {
+            handleChatDelta(event.data);
+          }
+        } else if (event.name === "stream-error") {
+          streamFailure = event.data;
+          stopReading = true;
+        }
+        if (stopReading) break readLoop;
+      }
+      if (done) break;
+    }
+    if (stopReading && reader) {
+      await reader.cancel().catch(() => {});
+    }
+    if (streamFailure) {
+      const code = streamFailure.code || "GATEWAY_STREAM_FAILED";
+      const error = new Error(code);
+      error.code = code;
+      error.runId = runId;
+      error.details = streamFailure.details || {};
+      error.safeToRetry = streamFailure.safeToRetry === true;
+      throw error;
+    }
+    if (terminalFailure) {
+      const effectiveToolActivity =
+        hadToolActivity || terminalFailure.hadToolActivity === true;
+      const safeToRetry =
+        terminalFailure.safeToRetry === true ||
+        (terminalFailure.state === "error" && !effectiveToolActivity);
+      const text = agentFailureMessage(
+        terminalFailure.text,
+        safeToRetry,
+        terminalFailure.state,
+      );
+      renderRunFailure(runId, text, safeToRetry, message);
+      const error = new Error(text);
+      error.code =
+        terminalFailure.state === "aborted"
+          ? "AGENT_RUN_ABORTED"
+          : "AGENT_RUN_FAILED";
+      error.runId = runId;
+      error.rendered = true;
+      throw error;
+    }
+  } catch (error) {
+    if (
+      activeStream.timelineCompleted &&
+      activeStream.controller.signal.aborted
+    ) {
+      return;
+    }
     throw error;
+  } finally {
+    unregisterActiveStream(activeStream);
   }
-  if (terminalFailure) {
-    const effectiveToolActivity =
-      hadToolActivity || terminalFailure.hadToolActivity === true;
-    const safeToRetry =
-      terminalFailure.safeToRetry === true ||
-      (terminalFailure.state === "error" && !effectiveToolActivity);
-    const text = agentFailureMessage(
-      terminalFailure.text,
-      safeToRetry,
-      terminalFailure.state,
+}
+
+function registerActiveStream(activeStream, runId) {
+  if (!runId) return;
+  activeStream.runIds.add(runId);
+  state.activeStreams.set(runId, activeStream);
+}
+
+function unregisterActiveStream(activeStream) {
+  activeStream.runIds.forEach((runId) => {
+    if (state.activeStreams.get(runId) === activeStream) {
+      state.activeStreams.delete(runId);
+    }
+  });
+}
+
+function reconcileOriginChatMessage(entry) {
+  if (entry?.role !== "assistant" || !entry.text) return;
+  const messageKey = String(entry.message_key || "");
+  const failurePrefix = "workspace:assistant:error:";
+  const finalPrefix = "workspace:assistant:";
+  const failed = messageKey.startsWith(failurePrefix);
+  const runId = failed
+    ? messageKey.slice(failurePrefix.length)
+    : messageKey.startsWith(finalPrefix)
+      ? messageKey.slice(finalPrefix.length)
+      : "";
+  const activeStream = state.activeStreams.get(runId);
+  if (!activeStream || activeStream.terminal) return;
+  activeStream.terminal = true;
+  activeStream.timelineCompleted = true;
+  if (failed) {
+    renderRunFailure(
+      runId,
+      entry.text,
+      false,
+      activeStream.requestMessage,
     );
-    renderRunFailure(runId, text, safeToRetry, message);
-    const error = new Error(text);
-    error.code =
-      terminalFailure.state === "aborted"
-        ? "AGENT_RUN_ABORTED"
-        : "AGENT_RUN_FAILED";
-    error.runId = runId;
-    error.rendered = true;
-    throw error;
+  } else {
+    handleChatDelta({ runId, state: "final", text: entry.text });
   }
+  activeStream.controller.abort();
 }
 
 function parseSseBlock(block) {
@@ -1220,9 +1301,7 @@ async function checkClientVersion() {
   state.clientVersionCheckActive = true;
   try {
     const result = await api("/api/client-version");
-    const runActive = [...state.liveMessages.values()].some(
-      (live) => live?.item?.isConnected,
-    );
+    const runActive = state.activeStreams.size > 0;
     if (result.version && result.version !== CLIENT_VERSION && !runActive) {
       location.reload();
     }

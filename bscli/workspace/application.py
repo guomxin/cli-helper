@@ -625,10 +625,18 @@ def _public_timeline_entry(
         "openclaw-weixin": "微信",
         "system": "AgentBridge",
     }.get(client_type, "已关联客户端")
+    dedupe_key = str(entry.get("dedupe_key") or "")
+    message_key = (
+        dedupe_key.removeprefix("message:")
+        if entry.get("entry_type") == "chat_message"
+        and dedupe_key.startswith("message:")
+        else None
+    )
     return {
         "entry_id": entry["entry_id"],
         "sequence": entry["sequence"],
         "entry_type": entry["entry_type"],
+        "message_key": message_key,
         "task_id": entry.get("task_id"),
         "role": entry.get("role"),
         "text": entry.get("text"),
