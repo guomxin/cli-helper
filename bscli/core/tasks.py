@@ -302,6 +302,38 @@ class TaskHubStore:
     def _repair_terminal_task_statuses(
         connection: sqlite3.Connection,
     ) -> None:
+        connection.execute(
+            """
+            UPDATE agent_tasks
+            SET status = 'succeeded',
+                version = version + 1,
+                updated_at = COALESCE(
+                    (
+                        SELECT MAX(task_artifacts.created_at)
+                        FROM task_artifacts
+                        WHERE task_artifacts.task_id = agent_tasks.task_id
+                          AND task_artifacts.artifact_type = 'certificate_scan'
+                    ),
+                    updated_at
+                ),
+                finished_at = COALESCE(
+                    (
+                        SELECT MAX(task_artifacts.created_at)
+                        FROM task_artifacts
+                        WHERE task_artifacts.task_id = agent_tasks.task_id
+                          AND task_artifacts.artifact_type = 'certificate_scan'
+                    ),
+                    updated_at
+                )
+            WHERE status IN ('active', 'waiting_user', 'running')
+              AND title = 'Prepare and Deliver One OA Certificate Scan'
+              AND EXISTS (
+                  SELECT 1 FROM task_artifacts
+                  WHERE task_artifacts.task_id = agent_tasks.task_id
+                    AND task_artifacts.artifact_type = 'certificate_scan'
+              )
+            """
+        )
         operations_table = connection.execute(
             """
             SELECT 1 FROM sqlite_master
@@ -989,6 +1021,51 @@ class TaskHubStore:
                 (artifact_id,),
             ).fetchone()
         return _artifact_from_row(row), False
+
+    def complete_task(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        reason: str,
+        causation_ref: str | None = None,
+    ) -> dict:
+        completion_reason = _required_text(reason, "reason", 120)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["status"] == "succeeded":
+                return _task_from_row(task)
+            if task["status"] not in ACTIVE_TASK_STATUSES:
+                raise TaskIntegrityError(
+                    f"terminal task cannot be completed: {task['status']}"
+                )
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
+            self._update_task_state(
+                connection,
+                task_id=task_id,
+                status="succeeded",
+                current_operation_id=task["current_operation_id"],
+                current_interaction_id=task["current_interaction_id"],
+                now=now,
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.completed",
+                payload={"status": "succeeded", "reason": completion_reason},
+                causation_ref=causation_ref,
+                created_at=now,
+            )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
 
     def list_artifacts(
         self,
@@ -2411,6 +2488,7 @@ class TaskHubStore:
                             "task.interaction.superseded",
                             "task.canceled",
                             "task.artifact.ready",
+                            "task.completed",
                             "task.operation.succeeded",
                             "task.operation.failed",
                             "task.operation.outcome_unknown",

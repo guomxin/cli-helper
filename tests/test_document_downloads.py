@@ -392,6 +392,22 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
                 )[0]["filename"],
                 "certificate.pdf",
             )
+            completed_task = service.tasks.get_task(
+                task["task_id"],
+                user_subject="user-a",
+            )
+            self.assertEqual(completed_task["status"], "succeeded")
+            self.assertEqual(
+                [
+                    event["event_type"]
+                    for event in service.tasks.list_events(
+                        task_id=task["task_id"],
+                        user_subject="user-a",
+                    )
+                    if event["event_type"] == "task.completed"
+                ],
+                ["task.completed"],
+            )
             self.assertEqual(denied["error"]["code"], "DOWNLOAD_ACCESS_DENIED")
 
 def _reference() -> dict:

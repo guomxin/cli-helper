@@ -1112,6 +1112,7 @@ class CentralCapabilityService:
                 "task.interaction.failed",
                 "task.interaction.superseded",
                 "task.canceled",
+                "task.completed",
                 "task.operation.succeeded",
                 "task.operation.failed",
                 "task.operation.outcome_unknown",
@@ -2510,6 +2511,12 @@ class CentralCapabilityService:
                         "expires_at": ready["expires_at"],
                     },
                 )
+                self.tasks.complete_task(
+                    task_id=task_id,
+                    user_subject=user_subject,
+                    reason="artifact_ready",
+                    causation_ref=ready["download_id"],
+                )
             except (KeyError, RuntimeError, ValueError):
                 return _document_delivery_failure(
                     "TASK_ARTIFACT_LINK_FAILED",
@@ -3480,6 +3487,7 @@ _TASK_TITLE_LABELS = {
     "Prepare OA Missed-Punch Draft": "OA 补签申请草稿",
     "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
     "Prepare OA Meeting Creation": "OA 会议创建",
+    "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
     "Prepare Taihua Work Log": "泰华工作日志提交",
 }
 
@@ -3502,6 +3510,8 @@ def _task_notification_message(task: dict, event: dict) -> str:
     if event_type == "task.interaction.completed":
         return f"{title}：可信确认已完成。"
     if event_type == "task.operation.succeeded":
+        return f"{title}：已完成。"
+    if event_type == "task.completed":
         return f"{title}：已完成。"
     if event_type == "task.canceled":
         return f"{title}：用户已取消本次操作。"

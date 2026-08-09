@@ -1303,6 +1303,27 @@ class WorkspaceHttpServerTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
+                status, version_headers, version = _request(
+                    port,
+                    "GET",
+                    "/api/client-version",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(version["version"]), 16)
+                self.assertEqual(version_headers.get("Cache-Control"), "no-store")
+                status, page_headers, page = _raw_request(
+                    port,
+                    "GET",
+                    "/",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(page_headers.get("Cache-Control"), "no-store")
+                self.assertNotIn("__WORKSPACE_ASSET_VERSION__", page)
+                self.assertIn(
+                    f'/assets/workspace.js?v={version["version"]}',
+                    page,
+                )
+
                 status, headers, link = _request(
                     port,
                     "POST",
@@ -1482,6 +1503,12 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("displayTaskTitle", script)
         self.assertIn("OA 出差申请提交", script)
         self.assertIn('source.addEventListener("cursor"', script)
+        self.assertIn("reconcileTimeline", script)
+        self.assertIn('api("/api/client-version")', script)
+        self.assertIn("location.reload();", script)
+        self.assertIn("timelineReconnectTimer", script)
+        self.assertIn("__WORKSPACE_ASSET_VERSION__", page)
+        self.assertIn("task.completed", script)
         self.assertNotIn('"任务状态已更新",', script)
         self.assertIn("childElementCount > 2", script)
         self.assertIn("application-card", stylesheet)

@@ -7,6 +7,11 @@ const state = {
   chatTimer: null,
   taskListTimer: null,
   eventSource: null,
+  timelineReconnectTimer: null,
+  timelineReconcileTimer: null,
+  timelineReconcileActive: false,
+  clientVersionTimer: null,
+  clientVersionCheckActive: false,
   timelineCursor: 0,
   liveMessages: new Map(),
   historyMessages: new Map(),
@@ -17,6 +22,10 @@ const state = {
   taskSyncTimers: new Map(),
   toasts: new Map(),
 };
+
+const CLIENT_VERSION =
+  document.querySelector('meta[name="agentbridge-workspace-version"]')
+    ?.content || "";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -54,6 +63,8 @@ function bindActions() {
   $$(".nav-item").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
+  document.addEventListener("visibilitychange", refreshWorkspaceState);
+  window.addEventListener("focus", refreshWorkspaceState);
 }
 
 function showAuth() {
@@ -186,6 +197,7 @@ async function completeEnrollment(event) {
 
 function enterWorkspace(account) {
   clearInterval(state.enrollmentTimer);
+  stopWorkspaceObservers();
   state.account = account;
   $("#auth-view").hidden = true;
   $("#app-view").hidden = false;
@@ -194,6 +206,7 @@ function enterWorkspace(account) {
   loadTasks();
   loadChat().finally(() => {
     openTimelineStream();
+    startWorkspaceObservers();
     loadGatewayStatus();
   });
 }
@@ -202,7 +215,7 @@ async function logout() {
   try {
     await api("/api/logout", { method: "POST", body: {}, csrf: true });
   } catch {}
-  state.eventSource?.close();
+  stopWorkspaceObservers();
   clearTimeout(state.chatTimer);
   clearTimeout(state.taskListTimer);
   state.taskSyncTimers.forEach((timer) => clearTimeout(timer));
@@ -942,6 +955,7 @@ function displayTaskTitle(value) {
       "Prepare OA Missed-Punch Draft": "OA 补签申请草稿",
       "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
       "Prepare OA Meeting Creation": "OA 会议创建",
+      "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
       "Prepare Taihua Work Log": "泰华工作日志提交",
     }[title] ||
     title ||
@@ -1149,7 +1163,79 @@ async function loadEndpoints() {
   }
 }
 
+function startWorkspaceObservers() {
+  clearInterval(state.timelineReconcileTimer);
+  clearInterval(state.clientVersionTimer);
+  state.timelineReconcileTimer = setInterval(reconcileTimeline, 10000);
+  state.clientVersionTimer = setInterval(checkClientVersion, 30000);
+}
+
+function stopWorkspaceObservers() {
+  state.eventSource?.close();
+  state.eventSource = null;
+  clearTimeout(state.timelineReconnectTimer);
+  clearInterval(state.timelineReconcileTimer);
+  clearInterval(state.clientVersionTimer);
+  state.timelineReconnectTimer = null;
+  state.timelineReconcileTimer = null;
+  state.clientVersionTimer = null;
+  state.timelineReconcileActive = false;
+  state.clientVersionCheckActive = false;
+}
+
+function refreshWorkspaceState() {
+  if (!state.account || document.visibilityState === "hidden") return;
+  reconcileTimeline();
+  checkClientVersion();
+  if (!state.eventSource) openTimelineStream();
+}
+
+async function reconcileTimeline() {
+  if (!state.account || state.timelineReconcileActive) return;
+  state.timelineReconcileActive = true;
+  try {
+    for (let page = 0; page < 3; page += 1) {
+      const after = Math.max(Number(state.timelineCursor) || 0, 0);
+      const result = await api(
+        `/api/timeline?after=${encodeURIComponent(after)}&limit=200`,
+      );
+      const items = Array.isArray(result.items) ? result.items : [];
+      items.forEach((entry) => ingestTimelineEntry(entry));
+      if (items.length < 200) {
+        state.timelineCursor = Math.max(
+          state.timelineCursor,
+          Number(result.cursor) || 0,
+        );
+        break;
+      }
+    }
+  } catch {
+  } finally {
+    state.timelineReconcileActive = false;
+  }
+}
+
+async function checkClientVersion() {
+  if (!CLIENT_VERSION || state.clientVersionCheckActive) return;
+  state.clientVersionCheckActive = true;
+  try {
+    const result = await api("/api/client-version");
+    const runActive = [...state.liveMessages.values()].some(
+      (live) => live?.item?.isConnected,
+    );
+    if (result.version && result.version !== CLIENT_VERSION && !runActive) {
+      location.reload();
+    }
+  } catch {
+  } finally {
+    state.clientVersionCheckActive = false;
+  }
+}
+
 function openTimelineStream() {
+  if (!state.account) return;
+  clearTimeout(state.timelineReconnectTimer);
+  state.timelineReconnectTimer = null;
   state.eventSource?.close();
   const query = state.timelineCursor
     ? `?after=${encodeURIComponent(state.timelineCursor)}`
@@ -1175,8 +1261,11 @@ function openTimelineStream() {
     ingestTimelineEntry(payload);
   });
   source.onerror = () => {
+    if (state.eventSource !== source) return;
     source.close();
-    setTimeout(openTimelineStream, 5000);
+    state.eventSource = null;
+    clearTimeout(state.timelineReconnectTimer);
+    state.timelineReconnectTimer = setTimeout(openTimelineStream, 5000);
   };
   state.eventSource = source;
 }
@@ -1355,6 +1444,7 @@ function eventLabel(type) {
       "task.operation.outcome_unknown": "操作结果待核对",
       "task.canceled": "任务已取消",
       "task.artifact.ready": "任务文件已就绪",
+      "task.completed": "任务已完成",
     }[type] || type.replaceAll(".", " / ")
   );
 }

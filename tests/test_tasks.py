@@ -187,6 +187,58 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertTrue(diagnostics["isolation"]["passed"])
         self.assertNotIn(artifact_input["download_url"], str(diagnostics))
 
+    def test_completes_artifact_task_once_and_notifies_companion(self):
+        origin, _ = self._endpoint()
+        companion, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:2002",
+            client_type="openclaw-weixin",
+            external_subject="2002",
+            conversation_ref="agent:main:openclaw-weixin:direct:2002",
+            capabilities=["direct_status"],
+        )
+        task, _ = self._task(origin["endpoint_id"])
+
+        completed = self.store.complete_task(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            reason="artifact_ready",
+            causation_ref="download-a",
+        )
+        completed_again = self.store.complete_task(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            reason="artifact_ready",
+            causation_ref="download-a",
+        )
+
+        self.assertEqual(completed["status"], "succeeded")
+        self.assertEqual(completed_again["version"], completed["version"])
+        self.assertIsNotNone(completed["finished_at"])
+        events = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )
+        completion_events = [
+            event for event in events
+            if event["event_type"] == "task.completed"
+        ]
+        self.assertEqual(len(completion_events), 1)
+        self.assertEqual(completion_events[0]["payload"]["reason"], "artifact_ready")
+        companion_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=companion["endpoint_id"],
+        )
+        self.assertEqual(
+            len([
+                item for item in companion_outbox
+                if item["payload"].get("eventType") == "task.completed"
+            ]),
+            1,
+        )
+
     def test_cross_endpoint_continuation_choices_persist_and_select_owned_task(self):
         workspace, _ = self.store.ensure_endpoint(
             user_subject="user-a",
@@ -1201,6 +1253,51 @@ class TaskHubStoreTests(unittest.TestCase):
             repaired["current_interaction_id"],
             "authorization-repair",
         )
+        self.assertIsNotNone(repaired["finished_at"])
+
+    def test_initialization_repairs_legacy_completed_certificate_tasks(self):
+        db_path = Path(self.temp.name) / "repair-certificate-task.db"
+        task_store = TaskHubStore(db_path)
+        endpoint, _ = task_store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref="agent:main:workspace:direct:account-a",
+        )
+        task, _ = task_store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="workspace|certificate-download",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref=endpoint["conversation_ref"],
+            title="Prepare and Deliver One OA Certificate Scan",
+        )
+        task_store.link_artifact(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            artifact={
+                "artifact_type": "certificate_scan",
+                "source_ref": "legacy-download-a",
+                "filename": "certificate.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 4096,
+                "download_url": (
+                    "https://10.10.50.213:8780/download/legacy-download-a/file"
+                ),
+                "expires_at": "2099-07-30T00:30:00+00:00",
+            },
+        )
+
+        repaired_store = TaskHubStore(db_path)
+        repaired = repaired_store.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+
+        self.assertEqual(repaired["status"], "succeeded")
         self.assertIsNotNone(repaired["finished_at"])
 
     def test_initialization_repairs_legacy_active_superseded_tasks(self):

@@ -1607,6 +1607,12 @@ test("suppresses routine companion status chatter but retains acknowledgement", 
               event: { eventType: "task.operation.running" },
               message: "Task is running.",
             },
+            {
+              deliveryId: "delivery-completed-status-1234567890",
+              deliveryMode: "status",
+              event: { eventType: "task.completed" },
+              message: "Task completed.",
+            },
           ],
         };
       }
@@ -1627,8 +1633,14 @@ test("suppresses routine companion status chatter but retains acknowledgement", 
   );
 
   assert.equal(harness.sentPayloads.length, 0);
-  assert.equal(calls.at(-1).name, "agentbridge_host_notification_ack");
-  assert.equal(calls.at(-1).params.succeeded, true);
+  const acknowledgements = calls.filter(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgements.length, 2);
+  assert.equal(
+    acknowledgements.every((item) => item.params.succeeded === true),
+    true,
+  );
 });
 
 test("delivers an ordered timeline message once and acknowledges it", async () => {

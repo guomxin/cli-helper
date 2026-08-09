@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -28,6 +29,15 @@ SESSION_COOKIE = "agentbridge_workspace_session"
 CSRF_COOKIE = "agentbridge_workspace_csrf"
 ENROLLMENT_COOKIE = "agentbridge_workspace_enrollment"
 STATIC_ROOT = Path(__file__).with_name("static")
+ASSET_VERSION_PLACEHOLDER = "__WORKSPACE_ASSET_VERSION__"
+
+
+def _workspace_asset_version() -> str:
+    digest = hashlib.sha256()
+    for name in ("index.html", "workspace.css", "workspace.js"):
+        digest.update(name.encode("ascii"))
+        digest.update((STATIC_ROOT / name).read_bytes())
+    return digest.hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -109,6 +119,7 @@ def create_workspace_http_server(
     expected_origin = f"{expected.scheme.lower()}://{expected.netloc.lower()}"
     allowed_host = (expected.hostname or "").lower()
     limiter = _RateLimiter()
+    asset_version = _workspace_asset_version()
 
     class WorkspaceRequestHandler(BaseHTTPRequestHandler):
         server_version = "AgentBridgeWorkspace/0.1"
@@ -130,6 +141,9 @@ def create_workspace_http_server(
                         "service": "agentbridge_workspace",
                     },
                 )
+                return
+            if route.path == "/api/client-version":
+                self._json(200, {"version": asset_version})
                 return
             if route.path in {"/", "/index.html"}:
                 self._static("index.html")
@@ -649,6 +663,11 @@ def create_workspace_http_server(
             except (ValueError, OSError):
                 self._json(404, {"error": {"code": "NOT_FOUND"}})
                 return
+            if path.name == "index.html":
+                body = body.replace(
+                    ASSET_VERSION_PLACEHOLDER.encode("ascii"),
+                    asset_version.encode("ascii"),
+                )
             self.send_response(200)
             self.send_header(
                 "Content-Type",
@@ -658,7 +677,11 @@ def create_workspace_http_server(
             self.send_header("Content-Length", str(len(body)))
             self.send_header(
                 "Cache-Control",
-                "no-store" if path.name == "index.html" else "public, max-age=300",
+                (
+                    "no-store"
+                    if path.name == "index.html"
+                    else "public, max-age=31536000, immutable"
+                ),
             )
             self._security_headers()
             self.end_headers()

@@ -36,6 +36,7 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.operation.requires_user_action",
   "task.interaction.waiting",
   "task.interaction.completed",
+  "task.completed",
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
 const MAX_NOTIFICATION_IDLE_INTERVAL_MS = 10_000;
