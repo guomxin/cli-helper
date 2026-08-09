@@ -867,6 +867,14 @@ export class InteractionCoordinator {
             [notification.interaction],
           );
         } else if (
+          notification.deliveryMode === "artifact" &&
+          notification.artifact
+        ) {
+          delivered = await this.deliverPreparedDocumentDirect(
+            sessionKey,
+            notification.artifact,
+          );
+        } else if (
           ["status", "timeline_message"].includes(
             notification.deliveryMode,
           ) &&

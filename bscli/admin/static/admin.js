@@ -50,6 +50,13 @@ function fmtTime(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toLocaleString("zh-CN", { hour12: false });
 }
+function fmtBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "--";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
 function shortId(value) { return value ? `${escapeHtml(value.slice(0, 8))}…` : "--"; }
 function badge(value) { return `<span class="status ${statusClass(value)}">${escapeHtml(statusText[value] || value || "未知")}</span>`; }
 function empty(message) { return `<div class="empty">${escapeHtml(message)}</div>`; }
@@ -228,11 +235,13 @@ async function renderInteractions() {
 
 async function renderCoordination() {
   const data = await api("/api/coordination?limit=300");
+  data.artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
   const summary = data.summary;
   const taskRows = data.tasks.map(item => filterRow(`${item.task_id} ${item.user_subject} ${item.title} ${item.origin_client_type} ${item.origin_label} ${item.current_operation_id} ${item.current_interaction_id}`, item.status, `<td class="code">${shortId(item.task_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.origin_label || item.origin_client_type || "--")}</td><td class="code">${shortId(item.current_operation_id)}</td><td class="code">${shortId(item.current_interaction_id)}</td><td>${fmtTime(item.updated_at)}</td><td>${fmtTime(item.finished_at)}</td>`));
   const endpointRows = data.endpoints.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.label} ${item.capabilities.join(" ")} ${item.delivery_state}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type)}</td><td>${badge(item.delivery_mode)}</td><td>${escapeHtml(item.label || "--")}</td><td>${scopeBadges(item.capabilities)}</td><td>${badge(item.state)}</td><td>${badge(item.delivery_state)}${item.deferred_delivery_count ? ` <span class="muted">${item.deferred_delivery_count}</span>` : ""}</td><td>${fmtTime(item.last_seen_at)}</td>`));
   const continuationRows = data.continuations.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.selected_task_id} ${item.reason}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type || "--")}</td><td>${badge(item.state)}</td><td>${badge(item.execution_mode)}</td><td class="code">${shortId(item.selected_task_id)}</td><td>${item.candidate_count}</td><td>${escapeHtml(item.reason || "--")}</td><td>${fmtTime(item.expires_at)}</td>`));
   const deliveryRows = data.deliveries.map(item => filterRow(`${item.delivery_id} ${item.task_id} ${item.endpoint_id} ${item.user_subject} ${item.event_type}`, item.state, `<td class="code">${shortId(item.delivery_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.event_type || item.payload_type)}</td><td class="code">${shortId(item.endpoint_id)}</td><td>${badge(item.state)}</td><td>${item.attempt_count}</td><td>${fmtTime(item.next_attempt_at)}</td><td>${fmtTime(item.acknowledged_at)}</td><td>${fmtTime(item.updated_at)}</td>`));
+  const artifactRows = data.artifacts.map(item => filterRow(`${item.artifact_id} ${item.task_id} ${item.user_subject} ${item.filename} ${item.artifact_type} ${item.content_type}`, item.state, `<td class="code">${shortId(item.artifact_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</td><td>${escapeHtml(item.artifact_type)}</td><td>${escapeHtml(item.content_type)}</td><td>${fmtBytes(item.byte_size)}</td><td>${badge(item.state)}</td><td class="code">${shortId(item.task_id)}</td><td>${fmtTime(item.created_at)}</td><td>${fmtTime(item.expires_at)}</td>`));
   const violationRows = Object.entries(data.isolation?.violations || {}).map(([name, count]) => `<tr><td class="code">${escapeHtml(name)}</td><td>${count}</td><td>${badge(count === 0 ? "succeeded" : "failed")}</td></tr>`);
   content.innerHTML = `<div class="metric-grid">
     ${metric("涉及用户", summary.users, "Task Hub 用户")}
@@ -241,6 +250,7 @@ async function renderCoordination() {
     ${metric("活动端点", summary.active_endpoints, "网页与聊天通道")}
     ${metric("投递模式", `${summary.pull_endpoints} / ${summary.direct_endpoints}`, "拉取 / 直推")}
     ${metric("活动接续", summary.active_continuations, "跨端任务上下文")}
+    ${metric("可取用文件", summary.ready_artifacts, `${summary.expired_artifacts} 个链接已过期`)}
     ${metric("待投递", summary.outstanding_deliveries, `等待活动 ${summary.deferred_deliveries} / 历史失败 ${summary.failed_deliveries}`, summary.outstanding_deliveries ? "alert" : "")}
     ${metric("隔离完整性", summary.isolation_violations ? "异常" : "通过", `${summary.isolation_violations} 项异常`, summary.isolation_violations ? "alert" : "")}
   </div>
@@ -250,12 +260,14 @@ async function renderCoordination() {
     <button role="tab" data-coordination-tab="endpoints">端点 <span>${data.endpoints.length}</span></button>
     <button role="tab" data-coordination-tab="continuations">接续 <span>${data.continuations.length}</span></button>
     <button role="tab" data-coordination-tab="deliveries">投递 <span>${data.deliveries.length}</span></button>
+    <button role="tab" data-coordination-tab="artifacts">文件 <span>${data.artifacts.length}</span></button>
     <button role="tab" data-coordination-tab="isolation">隔离 <span>${summary.isolation_violations}</span></button>
   </div>
   <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "failed", "outcome_unknown", "canceled", "superseded"])}</section>
   <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "同步状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
   <section data-coordination-panel="continuations">${filteredTable(["Endpoint ID", "用户", "客户端", "状态", "执行模式", "选中任务", "候选", "原因", "到期"], continuationRows, "搜索用户、端点、任务或原因", ["selected", "awaiting_selection", "expired", "canceled"])}</section>
   <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新"], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed"])}</section>
+  <section data-coordination-panel="artifacts">${filteredTable(["Artifact ID", "用户", "文件", "类型", "内容类型", "大小", "状态", "Task ID", "创建", "到期"], artifactRows, "搜索文件、用户、任务或类型", ["ready", "expired"])}</section>
   <section data-coordination-panel="isolation">${table(["检查项", "异常数", "结果"], violationRows)}</section>`;
   selectCoordinationTab(state.coordinationTab);
 }
@@ -274,12 +286,20 @@ async function renderRuntime() {
   const accountRows = accounts.items.map(account => filterRow(`${account.username} ${account.role}`, account.state, `<td>${escapeHtml(account.username)}</td><td>${escapeHtml(account.role)}</td><td>${badge(account.state)}</td><td>${account.must_change_password ? badge("pending") : badge("active")}</td><td>${fmtTime(account.last_login_at)}</td><td>${fmtTime(account.created_at)}</td>`));
   const taskHub = data.coordination?.task_hub || { summary: {}, isolation: { passed: false, violations: {} } };
   const hostControl = data.coordination?.host_control || { operations: [], recent_slow_calls: [], slow_after_ms: 1000 };
+  const workspaceGateway = data.workspace_gateway || { configured: false };
+  const gatewayHasCurrentError = Boolean(
+    workspaceGateway.last_error_code &&
+    (!workspaceGateway.last_success_at ||
+      new Date(workspaceGateway.last_error_at).getTime() >
+        new Date(workspaceGateway.last_success_at).getTime()),
+  );
   const operationRows = hostControl.operations.map(operation => filterRow(`${operation.operation_name}`, operation.error_count ? "failed" : operation.slow_count ? "running" : "succeeded", `<td class="code">${escapeHtml(operation.operation_name)}</td><td>${operation.call_count}</td><td>${operation.slow_count}</td><td>${operation.error_count}</td><td>${operation.average_elapsed_ms} ms</td><td>${operation.max_elapsed_ms} ms</td><td>${fmtTime(operation.last_called_at)}</td>`));
   const slowRows = hostControl.recent_slow_calls.map(call => filterRow(`${call.user_subject} ${call.operation_name} ${call.error_code}`, call.error_code ? "failed" : "running", `<td>${fmtTime(call.called_at)}</td><td>${escapeHtml(call.user_subject)}</td><td class="code">${escapeHtml(call.operation_name)}</td><td>${call.elapsed_ms} ms</td><td>${escapeHtml(call.error_code || "--")}</td>`));
   const violationRows = Object.entries(taskHub.isolation?.violations || {}).map(([name, count]) => `<tr><td class="code">${escapeHtml(name)}</td><td>${count}</td><td>${badge(count === 0 ? "succeeded" : "failed")}</td></tr>`);
   content.innerHTML = `<div class="metric-grid">
     ${metric("发布版本", data.release_id, "当前服务构建")}${metric("启动时间", fmtTime(data.started_at), "中心进程")}${metric("管理 API", data.admin_api, "独立认证域")}${metric("数据库", data.database, "SQLite WAL")}
     ${metric("保活租约", data.session_keepalive.activity_lease_seconds ? `${Math.round(data.session_keepalive.activity_lease_seconds / 86400)} 天` : "关闭", "仅真实活动续租")}${metric("活动端点", taskHub.summary.active_endpoints ?? "--", `${taskHub.summary.users ?? 0} 个用户`)}${metric("待投递", taskHub.summary.outstanding_deliveries ?? "--", `失败 ${taskHub.summary.failed_deliveries ?? 0}`)}${metric("隔离完整性", taskHub.isolation?.passed ? "通过" : "异常", `${taskHub.summary.isolation_violation_count ?? "--"} 项异常`, taskHub.isolation?.passed ? "" : "alert")}
+    ${metric("Workspace Gateway", workspaceGateway.configured ? workspaceGateway.target : "未配置", workspaceGateway.last_success_at ? `最近连通 ${fmtTime(workspaceGateway.last_success_at)}` : "尚无成功连接")}${metric("Gateway 最近错误", workspaceGateway.last_error_code || "无", workspaceGateway.last_error_at ? `${fmtTime(workspaceGateway.last_error_at)}${gatewayHasCurrentError ? "" : " · 已恢复"}` : "未记录错误", gatewayHasCurrentError ? "alert" : "")}
   </div>
   <div class="view-head section-spaced"><div><h2>已配置系统</h2><p>控制台只报告状态，不提供 systemd 重启或业务代操作。</p></div></div>${table(["系统 ID", "名称", "状态"], data.systems.map(system => `<tr><td class="code">${escapeHtml(system.system_id)}</td><td>${escapeHtml(system.label)}</td><td>${badge(system.configured ? "active" : "failed")}</td></tr>`))}
   <div class="view-head section-spaced"><div><h2>隔离完整性</h2><p>所有任务、时间线和通知都必须与所属用户和端点一致。</p></div><button class="button secondary small" data-open-view="coordination">打开多端任务</button></div>${table(["检查项", "异常数", "结果"], violationRows)}

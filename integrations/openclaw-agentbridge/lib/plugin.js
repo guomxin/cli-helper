@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.26";
+export const PLUGIN_VERSION = "0.4.27";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;

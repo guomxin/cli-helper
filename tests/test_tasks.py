@@ -122,6 +122,71 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
+    def test_task_artifact_is_user_bound_idempotent_and_queued_for_companion(self):
+        origin, _ = self._endpoint()
+        companion, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="openclaw-weixin:*:2002",
+            client_type="openclaw-weixin",
+            external_subject="2002",
+            conversation_ref="agent:main:openclaw-weixin:direct:2002",
+            capabilities=["direct_status", "trusted_interaction"],
+            route={"channel": "openclaw-weixin", "to": "2002"},
+        )
+        task, _ = self._task(origin["endpoint_id"])
+        artifact_input = {
+            "artifact_type": "certificate_scan",
+            "source_ref": "download-a",
+            "filename": "certificate.pdf",
+            "content_type": "application/pdf",
+            "byte_size": 4096,
+            "download_url": "https://10.10.50.213:8780/download/download-a/file",
+            "expires_at": "2099-07-30T00:30:00+00:00",
+        }
+
+        artifact, reused = self.store.link_artifact(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            artifact=artifact_input,
+        )
+        artifact_again, reused_again = self.store.link_artifact(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            artifact=artifact_input,
+        )
+
+        self.assertFalse(reused)
+        self.assertTrue(reused_again)
+        self.assertEqual(artifact_again["artifact_id"], artifact["artifact_id"])
+        self.assertEqual(
+            self.store.list_artifacts(
+                task_id=task["task_id"],
+                user_subject="user-a",
+            )[0]["filename"],
+            "certificate.pdf",
+        )
+        self.assertEqual(self.store.list_user_artifacts(user_subject="user-b"), [])
+        with self.assertRaises(TaskNotFound):
+            self.store.list_artifacts(
+                task_id=task["task_id"],
+                user_subject="user-b",
+            )
+        companion_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=companion["endpoint_id"],
+        )
+        artifact_events = [
+            item for item in companion_outbox
+            if item["payload"].get("eventType") == "task.artifact.ready"
+        ]
+        self.assertEqual(len(artifact_events), 1)
+        diagnostics = self.store.runtime_diagnostics()
+        self.assertEqual(diagnostics["summary"]["ready_artifacts"], 1)
+        self.assertTrue(diagnostics["isolation"]["passed"])
+        self.assertNotIn(artifact_input["download_url"], str(diagnostics))
+
     def test_cross_endpoint_continuation_choices_persist_and_select_owned_task(self):
         workspace, _ = self.store.ensure_endpoint(
             user_subject="user-a",
@@ -1369,6 +1434,65 @@ class TaskHubStoreTests(unittest.TestCase):
             "可信确认已完成",
             terminal["notifications"][0]["message"],
         )
+
+    def test_central_service_presents_task_artifact_to_companion_endpoint(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        origin = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="workspace-certificate-task",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="Download OA certificate",
+            capabilities=["workspace.task.read"],
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=["trusted_interaction", "direct_status"],
+        )
+        service.tasks.link_artifact(
+            task_id=origin["task"]["taskId"],
+            user_subject="user-a",
+            artifact={
+                "artifact_type": "certificate_scan",
+                "source_ref": "download-a",
+                "filename": "certificate.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 4096,
+                "download_url": (
+                    "https://10.10.50.213:8780/download/download-a/file"
+                ),
+                "expires_at": "2099-07-30T00:30:00+00:00",
+            },
+        )
+
+        claimed = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+
+        self.assertEqual(claimed["count"], 1)
+        notification = claimed["notifications"][0]
+        self.assertEqual(notification["deliveryMode"], "artifact")
+        self.assertEqual(notification["artifact"]["filename"], "certificate.pdf")
+        self.assertTrue(notification["artifact"]["mediaUrl"].endswith("/file"))
 
     def test_central_service_presents_business_input_on_multiple_endpoints(self):
         service = CentralCapabilityService(

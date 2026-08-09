@@ -877,6 +877,7 @@ function upsertTaskCard(result, { render = true } = {}) {
     );
   }
   if (facts.childElementCount) card.append(facts);
+  appendArtifactList(card, result.artifacts, { compact: true });
 
   const actions = document.createElement("div");
   actions.className = "application-card-actions";
@@ -1071,6 +1072,8 @@ function renderTaskDetail(result) {
     band.append(label, link);
     detail.append(band);
   }
+
+  appendArtifactList(detail, result.artifacts);
 
   const timeline = document.createElement("div");
   timeline.className = "timeline";
@@ -1351,8 +1354,64 @@ function eventLabel(type) {
       "task.operation.failed": "操作失败",
       "task.operation.outcome_unknown": "操作结果待核对",
       "task.canceled": "任务已取消",
+      "task.artifact.ready": "任务文件已就绪",
     }[type] || type.replaceAll(".", " / ")
   );
+}
+
+function appendArtifactList(container, artifacts, { compact = false } = {}) {
+  const items = Array.isArray(artifacts) ? artifacts : [];
+  if (!items.length) return;
+  const section = document.createElement("section");
+  section.className = `task-artifacts${compact ? " compact" : ""}`;
+  const heading = document.createElement("strong");
+  heading.className = "task-artifacts-heading";
+  heading.textContent = "任务文件";
+  section.append(heading);
+  items.forEach((artifact) => {
+    const row = document.createElement("div");
+    row.className = "task-artifact";
+    const copy = document.createElement("div");
+    copy.className = "task-artifact-copy";
+    const name = document.createElement("span");
+    name.className = "task-artifact-name";
+    name.textContent = artifact.filename || "未命名文件";
+    const meta = document.createElement("span");
+    meta.className = "task-artifact-meta";
+    meta.textContent = artifact.state === "ready"
+      ? `${formatBytes(artifact.byte_size)} · ${formatTime(artifact.expires_at)} 前可取用`
+      : "下载链接已过期";
+    copy.append(name, meta);
+    row.append(copy);
+    if (
+      artifact.state === "ready" &&
+      typeof artifact.download_url === "string" &&
+      /^https:\/\//.test(artifact.download_url)
+    ) {
+      const download = document.createElement("a");
+      download.className = "secondary task-artifact-download";
+      download.href = artifact.download_url;
+      download.target = "_blank";
+      download.rel = "noopener";
+      download.textContent = "下载";
+      row.append(download);
+    } else {
+      const state = document.createElement("span");
+      state.className = "task-artifact-expired";
+      state.textContent = "已过期";
+      row.append(state);
+    }
+    section.append(row);
+  });
+  container.append(section);
+}
+
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "未知大小";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function interactionLabel(type) {

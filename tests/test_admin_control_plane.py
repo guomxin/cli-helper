@@ -34,6 +34,18 @@ PASSWORD = "AgentBridge!Admin9"
 NEW_PASSWORD = "AgentBridge!Admin10"
 
 
+class _GatewayDiagnosticsStub:
+    def diagnostics(self) -> dict:
+        return {
+            "configured": True,
+            "target": "ws://10.90.20.210:18789",
+            "last_attempt_at": "2026-08-09T01:00:00+00:00",
+            "last_success_at": "2026-08-09T01:00:01+00:00",
+            "last_error_at": None,
+            "last_error_code": None,
+        }
+
+
 class MutableClock:
     def __init__(self) -> None:
         self.value = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
@@ -250,6 +262,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             runtime = AdminControlPlane(
                 service=service,
                 identity_store=identities,
+                workspace_gateway=_GatewayDiagnosticsStub(),
             ).runtime()
 
         task_hub = runtime["coordination"]["task_hub"]
@@ -258,6 +271,11 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(task_hub["users"][0]["user_subject"], "user-a")
         self.assertNotIn("sensitive-peer-uat-9f4c", json.dumps(task_hub))
         self.assertIn("operations", runtime["coordination"]["host_control"])
+        self.assertEqual(
+            runtime["workspace_gateway"]["target"],
+            "ws://10.90.20.210:18789",
+        )
+        self.assertNotIn("gateway-secret", json.dumps(runtime))
 
     def test_coordination_exposes_only_safe_multichannel_metadata(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -327,6 +345,19 @@ class AdminControlPlaneTests(unittest.TestCase):
                     "url": "https://secret-card.example/input",
                 },
             )
+            service.tasks.link_artifact(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                artifact={
+                    "artifact_type": "certificate_scan",
+                    "source_ref": "secret-download-id",
+                    "filename": "certificate.pdf",
+                    "content_type": "application/pdf",
+                    "byte_size": 4096,
+                    "download_url": "https://secret-card.example/download/file",
+                    "expires_at": "2099-07-30T00:30:00+00:00",
+                },
+            )
             service.tasks.set_continuation_candidates(
                 user_subject="user-a",
                 agent_host="openclaw",
@@ -360,6 +391,7 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["summary"]["direct_endpoints"], 1)
         self.assertEqual(result["summary"]["waiting_tasks"], 1)
         self.assertEqual(result["summary"]["active_continuations"], 1)
+        self.assertEqual(result["summary"]["ready_artifacts"], 1)
         self.assertGreater(result["summary"]["outstanding_deliveries"], 0)
         self.assertEqual(result["summary"]["deferred_deliveries"], 1)
         self.assertTrue(result["isolation"]["passed"])
@@ -377,6 +409,9 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["tasks"][0]["title"], "读取 OA 待办")
         self.assertEqual(result["continuations"][0]["candidate_count"], 1)
         self.assertIsNone(result["continuations"][0]["reason"])
+        self.assertEqual(result["artifacts"][0]["filename"], "certificate.pdf")
+        self.assertNotIn("download_url", result["artifacts"][0])
+        self.assertNotIn("source_ref", result["artifacts"][0])
         serialized = json.dumps(result, ensure_ascii=False)
         for secret in (
             "secret-account",
@@ -387,6 +422,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             "secret-business-field",
             "secret-card.example",
             "secret continuation reason",
+            "secret-download-id",
         ):
             self.assertNotIn(secret, serialized)
 

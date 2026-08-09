@@ -757,16 +757,27 @@ def create_central_mcp_server(
         structured_output=True,
     )
     async def oa_certificate_prepare_download(
+        ctx: Context,
         download_id: Annotated[str, Field(min_length=32, max_length=128)],
     ) -> dict[str, Any]:
         identity = _request_identity(
             identity_store,
             required_scopes={"oa:read"},
         )
+        task_id = _request_task_id(ctx)
+        if task_id:
+            await asyncio.to_thread(
+                service.observe_host_task,
+                user_subject=identity["user_subject"],
+                task_id=task_id,
+                operation_ids=[],
+                interaction_ids=[],
+            )
         return await asyncio.to_thread(
             service.prepare_document_download,
             user_subject=identity["user_subject"],
             download_id=download_id,
+            task_id=task_id,
         )
 
     @mcp.tool(
@@ -2707,6 +2718,7 @@ def serve_central_mcp(
         control_plane = AdminControlPlane(
             service=service,
             identity_store=identity_store,
+            workspace_gateway=workspace_gateway,
         )
         admin_server = create_admin_http_server(
             config=admin_config,

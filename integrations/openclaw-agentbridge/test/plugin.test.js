@@ -1356,6 +1356,63 @@ test("acknowledges pull-based workspace notifications without direct webchat del
   );
 });
 
+test("delivers a task artifact to a companion chat as one attachment", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: sessionKey,
+            route: { channel: "telegram", to: "7052061588" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-artifact-1234567890",
+              deliveryMode: "artifact",
+              artifact: {
+                artifactId: "artifact-1234567890",
+                artifactType: "certificate_scan",
+                filename: "certificate.pdf",
+                contentType: "application/pdf",
+                size: 128,
+                mediaUrl: `${CARD_ORIGIN}/download/${"a".repeat(43)}/file`,
+                expiresAt: "2099-07-14T12:00:00+00:00",
+              },
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:7052061588",
+      channel: "telegram",
+      senderId: "7052061588",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/certificate.bin");
+  assert.equal(calls.at(-1).name, "agentbridge_host_notification_ack");
+  assert.equal(calls.at(-1).params.succeeded, true);
+});
+
 test("keeps workspace card and status updates on the pull stream without a model wake", async () => {
   const harness = fakeApi({ autoPoll: false, wakeAgentOnComplete: true });
   const coordinator = registerAgentBridgeInteractions(harness.api, {

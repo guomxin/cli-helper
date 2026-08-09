@@ -647,6 +647,56 @@ code {
   min-height: 36px;
 }
 
+.task-artifacts {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 22px;
+}
+
+.task-artifacts.compact {
+  margin: 13px 16px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.task-artifacts-heading {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-artifact {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #e3e8e5;
+}
+
+.task-artifact-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.task-artifact-name {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.task-artifact-meta,
+.task-artifact-expired {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.task-artifact-download {
+  min-height: 32px;
+  padding: 0 11px;
+}
+
 @keyframes live-pulse {
   50% {
     opacity: 0.35;

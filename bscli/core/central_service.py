@@ -1059,10 +1059,14 @@ class CentralCapabilityService:
                 "event": event,
                 "deliveryMode": "no_op",
                 "interaction": None,
+                "artifact": None,
                 "message": None,
             }
             if task["origin_endpoint_id"] == endpoint["endpoint_id"]:
                 item["deliveryMode"] = "origin_handled"
+            elif event.get("eventType") == "task.artifact.ready":
+                item["deliveryMode"] = "artifact"
+                item["artifact"] = _artifact_notification(event)
             elif event.get("eventType") == "task.interaction.waiting":
                 interaction_id = (event.get("payload") or {}).get(
                     "interactionId"
@@ -2441,6 +2445,7 @@ class CentralCapabilityService:
         *,
         user_subject: str,
         download_id: str,
+        task_id: str | None = None,
     ) -> dict:
         try:
             existing = self.document_downloads.get(
@@ -2488,6 +2493,28 @@ class CentralCapabilityService:
                 _document_download_error_code(exc),
                 retryable=True,
             )
+        artifact = None
+        artifact_reused = False
+        if task_id:
+            try:
+                artifact, artifact_reused = self.tasks.link_artifact(
+                    task_id=task_id,
+                    user_subject=user_subject,
+                    artifact={
+                        "artifact_type": "certificate_scan",
+                        "source_ref": ready["download_id"],
+                        "filename": ready["filename"],
+                        "content_type": ready["content_type"],
+                        "byte_size": ready["prepared_size"],
+                        "download_url": f"{ready['card_url']}/file",
+                        "expires_at": ready["expires_at"],
+                    },
+                )
+            except (KeyError, RuntimeError, ValueError):
+                return _document_delivery_failure(
+                    "TASK_ARTIFACT_LINK_FAILED",
+                    retryable=True,
+                )
         return {
             "protocolVersion": "0.1",
             "schemaVersion": "agentbridge.document_delivery.v1",
@@ -2499,6 +2526,10 @@ class CentralCapabilityService:
                 "size": ready["prepared_size"],
                 "mediaUrl": f"{ready['card_url']}/file",
                 "expiresAt": ready["expires_at"],
+                "artifactId": (
+                    artifact["artifact_id"] if artifact is not None else None
+                ),
+                "artifactReused": artifact_reused,
             },
             "hostDelivery": {
                 "mode": "direct_attachment",
@@ -3404,6 +3435,19 @@ def timeline_entry_response(entry: dict) -> dict:
         "text": entry.get("text"),
         "payload": entry.get("payload") or {},
         "createdAt": entry["created_at"],
+    }
+
+
+def _artifact_notification(event: dict) -> dict:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return {
+        "artifactId": payload.get("artifactId"),
+        "artifactType": payload.get("artifactType"),
+        "filename": payload.get("filename"),
+        "contentType": payload.get("contentType"),
+        "size": payload.get("size"),
+        "mediaUrl": payload.get("downloadUrl"),
+        "expiresAt": payload.get("expiresAt"),
     }
 
 

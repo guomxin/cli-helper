@@ -16,6 +16,7 @@ from bscli.core.central_service import CentralCapabilityService, session_respons
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
+from bscli.workspace.gateway import OpenClawGatewayClient
 
 
 MCP_SCOPES = (
@@ -42,6 +43,7 @@ class AdminControlPlane:
         *,
         service: CentralCapabilityService,
         identity_store: McpIdentityTokenStore,
+        workspace_gateway: OpenClawGatewayClient | None = None,
         started_at: str | None = None,
     ) -> None:
         self.service = service
@@ -51,6 +53,7 @@ class AdminControlPlane:
         self.admin_sessions = AdminSessionStore(self.db_path)
         self.audit = AdminAuditStore(self.db_path)
         self.policies = service.governance_policies
+        self.workspace_gateway = workspace_gateway
         self.started_at = started_at or _utc_now()
         self.release_id = os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development"
 
@@ -167,6 +170,18 @@ class AdminControlPlane:
                 "enabled": self.service.session_keepalive_lease_seconds is not None,
                 "activity_lease_seconds": self.service.session_keepalive_lease_seconds,
             },
+            "workspace_gateway": (
+                self.workspace_gateway.diagnostics()
+                if self.workspace_gateway is not None
+                else {
+                    "configured": False,
+                    "target": None,
+                    "last_attempt_at": None,
+                    "last_success_at": None,
+                    "last_error_at": None,
+                    "last_error_code": None,
+                }
+            ),
             "coordination": {
                 "task_hub": self.service.tasks.runtime_diagnostics(),
                 "host_control": HOST_CONTROL_DIAGNOSTICS.snapshot(),
@@ -191,6 +206,7 @@ class AdminControlPlane:
         tasks: list[dict] = []
         deliveries: list[dict] = []
         continuations: list[dict] = []
+        artifacts: list[dict] = []
         for subject in subjects:
             subject_endpoints = self.service.tasks.list_endpoints(
                 user_subject=subject,
@@ -237,9 +253,17 @@ class AdminControlPlane:
                     limit=limit,
                 )
             )
+            artifacts.extend(
+                self._artifact_projection(item)
+                for item in self.service.tasks.list_user_artifacts(
+                    user_subject=subject,
+                    limit=limit,
+                )
+            )
         tasks.sort(key=lambda item: item["updated_at"], reverse=True)
         deliveries.sort(key=lambda item: item["updated_at"], reverse=True)
         continuations.sort(key=lambda item: item["updated_at"], reverse=True)
+        artifacts.sort(key=lambda item: item["created_at"], reverse=True)
         deferred_by_endpoint = Counter(
             item["endpoint_id"]
             for item in deliveries
@@ -316,6 +340,12 @@ class AdminControlPlane:
                 "outstanding_deliveries": outstanding,
                 "deferred_deliveries": deferred,
                 "failed_deliveries": failed,
+                "ready_artifacts": sum(
+                    1 for item in artifacts if item["state"] == "ready"
+                ),
+                "expired_artifacts": sum(
+                    1 for item in artifacts if item["state"] == "expired"
+                ),
                 "isolation_violations": diagnostics.get("summary", {}).get(
                     "isolation_violation_count", 0
                 ),
@@ -326,6 +356,7 @@ class AdminControlPlane:
             "endpoints": endpoints[:limit],
             "deliveries": deliveries[:limit],
             "continuations": continuations[:limit],
+            "artifacts": artifacts[:limit],
         }
 
     def users(self) -> list[dict]:
@@ -871,6 +902,22 @@ class AdminControlPlane:
             "created_at": record["created_at"],
             "updated_at": record["updated_at"],
             "acknowledged_at": record.get("acknowledged_at"),
+        }
+
+    @staticmethod
+    def _artifact_projection(record: dict) -> dict:
+        return {
+            "artifact_id": record["artifact_id"],
+            "task_id": record["task_id"],
+            "user_subject": record["user_subject"],
+            "artifact_type": record["artifact_type"],
+            "filename": record["filename"],
+            "content_type": record["content_type"],
+            "byte_size": record["byte_size"],
+            "state": record["state"],
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+            "expires_at": record["expires_at"],
         }
 
     @staticmethod

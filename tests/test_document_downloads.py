@@ -97,6 +97,34 @@ class DocumentDownloadStoreTests(unittest.TestCase):
             self.assertEqual(first["body"], second["body"])
             self.assertEqual(first["prepared_size"], len(first["body"]))
 
+    def test_prepared_file_gets_a_fresh_thirty_minute_delivery_window(self):
+        now = [datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)]
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(
+                Path(tmp) / "agentbridge.db",
+                clock=lambda: now[0],
+            )
+            created = _create(store, ttl_seconds=60)
+            now[0] += timedelta(seconds=30)
+            store.claim_for_prepare(
+                created["download_id"],
+                user_subject="user-a",
+            )
+            ready = store.mark_ready(
+                created["download_id"],
+                body=b"%PDF-1.7\nprepared",
+                content_type="application/pdf",
+            )
+
+            self.assertEqual(
+                datetime.fromisoformat(ready["expires_at"]),
+                now[0] + timedelta(minutes=30),
+            )
+            now[0] += timedelta(minutes=29)
+            self.assertEqual(store.get(created["download_id"])["state"], "ready")
+            now[0] += timedelta(minutes=2)
+            self.assertEqual(store.get(created["download_id"])["state"], "expired")
+
     def test_expired_download_cannot_be_claimed(self):
         now = [datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)]
         with TemporaryDirectory() as tmp:
@@ -315,13 +343,32 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
                 }
 
             service.fetch_document_download = fetch
+            endpoint, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                client_type="telegram",
+                external_subject="1001",
+                conversation_ref="agent:main:telegram:direct:1001",
+            )
+            task, _ = service.tasks.ensure_task(
+                user_subject="user-a",
+                agent_host="openclaw",
+                host_task_key="session|certificate-download",
+                origin_endpoint_id=endpoint["endpoint_id"],
+                active_conversation_ref=endpoint["conversation_ref"],
+                title="Download OA certificate",
+            )
             first = service.prepare_document_download(
                 user_subject="user-a",
                 download_id=grant["download_id"],
+                task_id=task["task_id"],
             )
             second = service.prepare_document_download(
                 user_subject="user-a",
                 download_id=grant["download_id"],
+                task_id=task["task_id"],
             )
             denied = service.prepare_document_download(
                 user_subject="user-b",
@@ -329,9 +376,22 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
             )
 
             self.assertEqual(first["status"], "succeeded")
-            self.assertEqual(second["file"], first["file"])
+            self.assertEqual(second["file"]["mediaUrl"], first["file"]["mediaUrl"])
+            self.assertEqual(
+                second["file"]["artifactId"],
+                first["file"]["artifactId"],
+            )
+            self.assertFalse(first["file"]["artifactReused"])
+            self.assertTrue(second["file"]["artifactReused"])
             self.assertEqual(calls, [grant["download_id"]])
             self.assertTrue(first["file"]["mediaUrl"].endswith("/file"))
+            self.assertEqual(
+                service.tasks.list_artifacts(
+                    task_id=task["task_id"],
+                    user_subject="user-a",
+                )[0]["filename"],
+                "certificate.pdf",
+            )
             self.assertEqual(denied["error"]["code"], "DOWNLOAD_ACCESS_DENIED")
 
 def _reference() -> dict:

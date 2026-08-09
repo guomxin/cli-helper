@@ -132,6 +132,11 @@ class WorkspaceApplication:
             user_subject=account["user_subject"],
             limit=200,
         )
+        artifacts = self.service.tasks.list_artifacts(
+            task_id=task_id,
+            user_subject=account["user_subject"],
+            limit=100,
+        )
         interaction = None
         if task.get("current_interaction_id"):
             try:
@@ -147,6 +152,7 @@ class WorkspaceApplication:
         return {
             "task": _public_task(task),
             "events": [_public_event(event) for event in events],
+            "artifacts": [_public_artifact(item) for item in artifacts],
             "interaction": interaction,
         }
 
@@ -585,6 +591,24 @@ def _public_event(event: dict) -> dict:
         "created_at",
     )
     return {name: event.get(name) for name in names}
+
+
+def _public_artifact(artifact: dict) -> dict:
+    state = artifact.get("state")
+    return {
+        "artifact_id": artifact.get("artifact_id"),
+        "task_id": artifact.get("task_id"),
+        "artifact_type": artifact.get("artifact_type"),
+        "filename": artifact.get("filename"),
+        "content_type": artifact.get("content_type"),
+        "byte_size": artifact.get("byte_size"),
+        "download_url": (
+            artifact.get("download_url") if state == "ready" else None
+        ),
+        "state": state,
+        "created_at": artifact.get("created_at"),
+        "expires_at": artifact.get("expires_at"),
+    }
 
 
 def _public_timeline_entry(

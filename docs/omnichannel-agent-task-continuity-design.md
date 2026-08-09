@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.14，双用户跨端任务选择、受控接续、拉取式网页交互与微信活动感知投递已完成实现
+> 文档状态：Approved v0.15，双用户跨端任务选择、受控接续、拉取式网页交互、微信活动感知投递与任务文件一期已完成实现
 >
-> 更新日期：2026-08-05
+> 更新日期：2026-08-09
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.26、中心
+> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.27、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示、展示层文本
@@ -70,6 +70,11 @@
 - 用户只需表达“撤销刚提交的出差申请”等自然业务意图。智能体从当前上下文和已发集合定位唯一
   事项；存在歧义时只询问标题或日期，`affairId`、`processId` 和 `taskId` 不进入用户操作界面。
   撤销的独立执行授权仍然保留。
+- OA 证书准备完成后建立用户隔离的 `TaskArtifact`。Workspace 在原任务卡和详情内展示文件，
+  Telegram/微信伴随端收到单附件；通道上传失败时明确回退到短时链接。准备窗口从文件完成时
+  重新计算 30 分钟，同一下载 ID 幂等复用，不重复读取 OA 或创建文件记录。
+- 管理端只投影任务文件的名称、类型、大小、状态、所属任务和到期时间，不返回下载地址、
+  OA 文档引用或文件内容；Task Hub 隔离诊断同时检查 Artifact 与 Task 的用户一致性。
 
 尚未实现：
 
@@ -453,12 +458,33 @@ task.interaction.completed
 task.operation.succeeded
 task.operation.failed
 task.operation.outcome_unknown
+task.artifact.ready
 task.completed
 task.canceled
 ```
 
 每个事件包含 `eventId`、`taskId`、`userSubject`、事件类型、非敏感 payload、
 发生时间和因果引用。客户端按 `eventId` 去重。
+
+### 7.5 TaskArtifact
+
+任务产生的短时文件使用独立记录，不把二进制内容写入 Task Hub：
+
+| 字段 | 含义 |
+| --- | --- |
+| `artifactId` | 不透明文件记录 ID |
+| `taskId` / `userSubject` | 所属任务与用户，读取时同时校验 |
+| `artifactType` | 例如 `certificate_scan` |
+| `filename` / `contentType` / `byteSize` | 可展示文件元数据 |
+| `sourceRef` | 服务端幂等引用，不向用户端或管理端返回 |
+| `downloadUrl` | 短时媒体地址，只向所属用户端的宿主或 Workspace 返回 |
+| `state` | `ready` 或 `expired` |
+| `expiresAt` | 领取窗口到期时间 |
+
+`task.artifact.ready` 与 TaskEvent、Outbox 使用同一用户隔离和端点订阅机制。Workspace 通过
+SSE 得知任务变化后从任务详情拉取文件；消息端由宿主下载到本地媒体存储后发送附件。通知重试
+只重试文件交付，不重新调用 OA。文件过期后不延长原 URL，用户需要重新执行证书检索；一键
+重新签发过期文件仍属于后续体验优化。
 
 ## 8. 执行授权的多端展示与单次决定
 
@@ -904,10 +930,11 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
 
 尚未完成：
 
-- 跨端文件领取、断点和失败恢复；
+- 过期任务文件的一键重新签发，以及大文件分片/断点续传；
 - 共享 OpenClaw Transcript；
 - OBO 执行宿主切换；
-- 两个真实用户同时执行有副作用的业务任务，以及跨端文件的完整串号验收。
+- 两个真实用户同时执行有副作用的业务任务，以及跨端文件的真实完整串号验收；文件自动化
+  隔离、幂等、Workspace 拉取、聊天附件和失败链接回退已覆盖。
 
 ### 15.5 五期：生产化
 

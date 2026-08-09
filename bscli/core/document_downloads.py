@@ -11,6 +11,9 @@ import sqlite3
 from typing import Any, Callable, Iterator
 
 
+PREPARED_DOCUMENT_TTL_SECONDS = 1_800
+
+
 class DocumentDownloadNotFound(KeyError):
     pass
 
@@ -79,7 +82,8 @@ class DocumentDownloadStore:
                     completed_at TEXT,
                     content_type TEXT,
                     prepared_size INTEGER,
-                    prepared_at TEXT
+                    prepared_at TEXT,
+                    prepared_expires_at TEXT
                 )
                 """
             )
@@ -93,6 +97,7 @@ class DocumentDownloadStore:
                 ("content_type", "TEXT"),
                 ("prepared_size", "INTEGER"),
                 ("prepared_at", "TEXT"),
+                ("prepared_expires_at", "TEXT"),
             ):
                 if name not in columns:
                     connection.execute(
@@ -322,6 +327,9 @@ class DocumentDownloadStore:
         temporary_path.write_bytes(body)
         temporary_path.replace(cache_path)
         now = _as_utc(self.clock())
+        prepared_expires_at = now + timedelta(
+            seconds=PREPARED_DOCUMENT_TTL_SECONDS
+        )
         try:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -329,13 +337,14 @@ class DocumentDownloadStore:
                     """
                     UPDATE document_downloads
                     SET state = 'ready', content_type = ?, prepared_size = ?,
-                        prepared_at = ?, updated_at = ?
+                        prepared_at = ?, prepared_expires_at = ?, updated_at = ?
                     WHERE download_id = ? AND state = 'processing'
                     """,
                     (
                         content_type,
                         len(body),
                         _format_time(now),
+                        _format_time(prepared_expires_at),
                         _format_time(now),
                         download_id,
                     ),
@@ -410,8 +419,13 @@ class DocumentDownloadStore:
         connection: sqlite3.Connection,
         row: sqlite3.Row,
     ) -> sqlite3.Row:
+        expiry = (
+            row["prepared_expires_at"]
+            if row["state"] == "ready" and row["prepared_expires_at"]
+            else row["expires_at"]
+        )
         if row["state"] in {"pending", "processing", "ready"} and _parse_time(
-            row["expires_at"]
+            expiry
         ) <= _as_utc(self.clock()):
             connection.execute(
                 """
@@ -437,6 +451,11 @@ class DocumentDownloadStore:
 
 
 def _record(row: sqlite3.Row, *, include_document: bool) -> dict:
+    effective_expiry = (
+        row["prepared_expires_at"]
+        if row["state"] == "ready" and row["prepared_expires_at"]
+        else row["expires_at"]
+    )
     result = {
         "download_id": row["download_id"],
         "user_subject": row["user_subject"],
@@ -449,7 +468,7 @@ def _record(row: sqlite3.Row, *, include_document: bool) -> dict:
         "state": row["state"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
-        "expires_at": row["expires_at"],
+        "expires_at": effective_expiry,
         "completed_at": row["completed_at"],
         "content_type": row["content_type"],
         "prepared_size": row["prepared_size"],

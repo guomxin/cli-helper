@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
 import subprocess
+import threading
 from typing import Any, Iterator
+from urllib.parse import urlparse
 
 
 _LOG = logging.getLogger(__name__)
@@ -48,6 +51,11 @@ class OpenClawGatewayClient:
         ))
         if not self.url.startswith(("ws://", "wss://")):
             raise ValueError("OpenClaw Gateway URL must use ws:// or wss://")
+        self._diagnostics_lock = threading.Lock()
+        self._last_attempt_at: str | None = None
+        self._last_success_at: str | None = None
+        self._last_error_at: str | None = None
+        self._last_error_code: str | None = None
 
     def call(
         self,
@@ -56,7 +64,12 @@ class OpenClawGatewayClient:
         *,
         timeout_seconds: float = 30,
     ) -> Any:
-        environment = self._environment()
+        self._record_attempt()
+        try:
+            environment = self._environment()
+        except GatewayRequestError as exc:
+            self._record_error(exc.code)
+            raise
         payload = {
             "method": str(method),
             "params": params or {},
@@ -80,6 +93,7 @@ class OpenClawGatewayClient:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
+            self._record_error("GATEWAY_PROCESS_FAILED")
             raise GatewayRequestError(
                 "GATEWAY_PROCESS_FAILED",
                 "OpenClaw Gateway client process failed.",
@@ -87,6 +101,7 @@ class OpenClawGatewayClient:
         try:
             result = json.loads(completed.stdout.strip())
         except (json.JSONDecodeError, AttributeError) as exc:
+            self._record_error("GATEWAY_RESPONSE_INVALID")
             raise GatewayRequestError(
                 "GATEWAY_RESPONSE_INVALID",
                 "OpenClaw Gateway returned an invalid response.",
@@ -95,13 +110,16 @@ class OpenClawGatewayClient:
             error = result.get("error") if isinstance(
                 result.get("error"), dict
             ) else {}
+            error_code = str(error.get("code") or "GATEWAY_REQUEST_FAILED")
+            self._record_error(error_code)
             raise GatewayRequestError(
-                str(error.get("code") or "GATEWAY_REQUEST_FAILED"),
+                error_code,
                 str(error.get("message") or "OpenClaw Gateway request failed."),
                 error.get("details") if isinstance(
                     error.get("details"), dict
                 ) else None,
             )
+        self._record_success()
         return result.get("payload")
 
     def stream(
@@ -275,6 +293,12 @@ class OpenClawGatewayClient:
         self,
         payload: dict[str, Any],
     ) -> Iterator[dict[str, Any]]:
+        self._record_attempt()
+        try:
+            environment = self._environment()
+        except GatewayRequestError as exc:
+            self._record_error(exc.code)
+            raise
         try:
             process = subprocess.Popen(
                 [
@@ -288,9 +312,10 @@ class OpenClawGatewayClient:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
-                env=self._environment(),
+                env=environment,
             )
         except OSError as exc:
+            self._record_error("GATEWAY_PROCESS_FAILED")
             raise GatewayRequestError(
                 "GATEWAY_PROCESS_FAILED",
                 "OpenClaw Gateway stream process failed.",
@@ -315,6 +340,7 @@ class OpenClawGatewayClient:
                     saw_eof = True
                     break
                 if item.get("type") == "ready":
+                    self._record_success()
                     continue
                 if item.get("type") == "error":
                     error = (
@@ -322,8 +348,12 @@ class OpenClawGatewayClient:
                         if isinstance(item.get("error"), dict)
                         else {}
                     )
+                    error_code = str(
+                        error.get("code") or "GATEWAY_STREAM_FAILED"
+                    )
+                    self._record_error(error_code)
                     raise GatewayRequestError(
-                        str(error.get("code") or "GATEWAY_STREAM_FAILED"),
+                        error_code,
                         str(
                             error.get("message")
                             or "OpenClaw Gateway stream failed."
@@ -335,6 +365,7 @@ class OpenClawGatewayClient:
                 if item.get("type") in {"accepted", "progress", "chat"}:
                     yield item
             if not saw_eof:
+                self._record_error("GATEWAY_RESPONSE_INVALID")
                 raise GatewayRequestError(
                     "GATEWAY_RESPONSE_INVALID",
                     "OpenClaw Gateway stream ended without a terminal frame.",
@@ -347,6 +378,36 @@ class OpenClawGatewayClient:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+
+    def diagnostics(self) -> dict[str, Any]:
+        parsed = urlparse(self.url)
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        target = f"{parsed.scheme}://{parsed.hostname}:{port}"
+        with self._diagnostics_lock:
+            return {
+                "configured": True,
+                "target": target,
+                "last_attempt_at": self._last_attempt_at,
+                "last_success_at": self._last_success_at,
+                "last_error_at": self._last_error_at,
+                "last_error_code": self._last_error_code,
+            }
+
+    def _record_attempt(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._diagnostics_lock:
+            self._last_attempt_at = now
+
+    def _record_success(self) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._diagnostics_lock:
+            self._last_success_at = now
+
+    def _record_error(self, code: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._diagnostics_lock:
+            self._last_error_at = now
+            self._last_error_code = str(code or "GATEWAY_UNKNOWN")
 
     def _environment(self) -> dict[str, str]:
         token = self._read_token()

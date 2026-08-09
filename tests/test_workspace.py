@@ -543,6 +543,52 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertEqual(presentation["endpointId"], account["endpoint_id"])
             self.assertIn("/present/", presentation["url"])
 
+    def test_task_detail_exposes_only_owned_short_lived_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            task = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="workspace-token",
+                agent_host="openclaw",
+                host_task_key="workspace-task|artifact-1",
+                endpoint_key=account["endpoint_key"],
+                client_type="web",
+                external_subject=account["account_id"],
+                conversation_ref=account["openclaw_session_key"],
+                title="Download OA certificate",
+            )
+            service.tasks.link_artifact(
+                task_id=task["task"]["taskId"],
+                user_subject="user-a",
+                artifact={
+                    "artifact_type": "certificate_scan",
+                    "source_ref": "download-a",
+                    "filename": "certificate.pdf",
+                    "content_type": "application/pdf",
+                    "byte_size": 2048,
+                    "download_url": (
+                        "https://10.10.50.213:8780/download/download-a/file"
+                    ),
+                    "expires_at": "2099-07-30T00:30:00+00:00",
+                },
+            )
+            app = WorkspaceApplication(service=service)
+
+            detail = app.task_detail(account, task["task"]["taskId"])
+
+            self.assertEqual(len(detail["artifacts"]), 1)
+            artifact = detail["artifacts"][0]
+            self.assertEqual(artifact["filename"], "certificate.pdf")
+            self.assertTrue(artifact["download_url"].endswith("/file"))
+            self.assertNotIn("user_subject", artifact)
+            self.assertNotIn("source_ref", artifact)
+
     def test_chat_binds_identity_before_send_and_hides_tool_messages(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -933,6 +979,11 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 run.call_args.kwargs["env"]["AB_GATEWAY_TOKEN"],
                 "gateway-secret-token-value",
             )
+            diagnostics = client.diagnostics()
+            self.assertEqual(diagnostics["target"], "ws://127.0.0.1:18789")
+            self.assertIsNotNone(diagnostics["last_success_at"])
+            self.assertIsNone(diagnostics["last_error_code"])
+            self.assertNotIn("gateway-secret-token-value", str(diagnostics))
 
     def test_gateway_error_code_is_preserved_without_stderr_leakage(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -968,6 +1019,9 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 "gateway-secret-token-value",
                 str(caught.exception),
             )
+            diagnostics = client.diagnostics()
+            self.assertEqual(diagnostics["last_error_code"], "PAIRING_REQUIRED")
+            self.assertIsNotNone(diagnostics["last_error_at"])
 
     def test_gateway_send_stream_keeps_secrets_out_of_child_arguments(self) -> None:
         with TemporaryDirectory() as tmp:

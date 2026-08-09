@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 
@@ -143,6 +143,28 @@ class TaskHubStore:
                     last_observed_at TEXT,
                     PRIMARY KEY (task_id, interaction_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS task_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    user_subject TEXT NOT NULL,
+                    artifact_type TEXT NOT NULL,
+                    source_ref TEXT NOT NULL UNIQUE,
+                    filename TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    byte_size INTEGER NOT NULL,
+                    download_url TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS task_artifacts_task_created
+                ON task_artifacts (task_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS task_artifacts_subject_state
+                ON task_artifacts (user_subject, state, expires_at);
 
                 CREATE TABLE IF NOT EXISTS task_subscriptions (
                     subscription_id TEXT PRIMARY KEY,
@@ -865,6 +887,170 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def link_artifact(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        artifact: dict[str, Any],
+    ) -> tuple[dict, bool]:
+        artifact_type = _required_text(
+            artifact.get("artifact_type") or "file",
+            "artifact_type",
+            80,
+        )
+        source_ref = _required_text(
+            artifact.get("source_ref"),
+            "source_ref",
+            256,
+        )
+        filename = _required_text(artifact.get("filename"), "filename", 240)
+        content_type = _required_text(
+            artifact.get("content_type"),
+            "content_type",
+            120,
+        )
+        byte_size = int(artifact.get("byte_size") or 0)
+        if byte_size <= 0 or byte_size > 32 * 1024 * 1024:
+            raise ValueError("artifact byte_size is invalid")
+        download_url = _artifact_download_url(artifact.get("download_url"))
+        expires_at = _required_future_time(
+            artifact.get("expires_at"),
+            "expires_at",
+        )
+        now = _utc_now()
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_owned_task(connection, task_id, user_subject)
+            existing = connection.execute(
+                "SELECT * FROM task_artifacts WHERE source_ref = ?",
+                (source_ref,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["task_id"] != task_id
+                    or existing["user_subject"] != user_subject
+                ):
+                    raise TaskIntegrityError(
+                        "artifact is already linked to another task or user"
+                    )
+                return _artifact_from_row(existing), True
+
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
+            artifact_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO task_artifacts (
+                    artifact_id, task_id, user_subject, artifact_type,
+                    source_ref, filename, content_type, byte_size,
+                    download_url, state, created_at, updated_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    task_id,
+                    user_subject,
+                    artifact_type,
+                    source_ref,
+                    filename,
+                    content_type,
+                    byte_size,
+                    download_url,
+                    now,
+                    now,
+                    expires_at,
+                ),
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.artifact.ready",
+                payload={
+                    "artifactId": artifact_id,
+                    "artifactType": artifact_type,
+                    "filename": filename,
+                    "contentType": content_type,
+                    "size": byte_size,
+                    "downloadUrl": download_url,
+                    "expiresAt": expires_at,
+                },
+                causation_ref=source_ref,
+                created_at=now,
+            )
+            row = connection.execute(
+                "SELECT * FROM task_artifacts WHERE artifact_id = ?",
+                (artifact_id,),
+            ).fetchone()
+        return _artifact_from_row(row), False
+
+    def list_artifacts(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_owned_task(connection, task_id, user_subject)
+            connection.execute(
+                """
+                UPDATE task_artifacts
+                SET state = 'expired', updated_at = ?
+                WHERE task_id = ? AND user_subject = ?
+                  AND state = 'ready' AND expires_at <= ?
+                """,
+                (now, task_id, user_subject, now),
+            )
+            rows = connection.execute(
+                """
+                SELECT * FROM task_artifacts
+                WHERE task_id = ? AND user_subject = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (task_id, user_subject, limit),
+            ).fetchall()
+        return [_artifact_from_row(row) for row in rows]
+
+    def list_user_artifacts(
+        self,
+        *,
+        user_subject: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE task_artifacts
+                SET state = 'expired', updated_at = ?
+                WHERE user_subject = ? AND state = 'ready' AND expires_at <= ?
+                """,
+                (now, user_subject, now),
+            )
+            rows = connection.execute(
+                """
+                SELECT * FROM task_artifacts
+                WHERE user_subject = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_subject, limit),
+            ).fetchall()
+        return [_artifact_from_row(row) for row in rows]
+
     def append_timeline_message(
         self,
         *,
@@ -1484,6 +1670,7 @@ class TaskHubStore:
                 for table in (
                     "client_endpoints",
                     "agent_tasks",
+                    "task_artifacts",
                     "user_timeline",
                     "notification_outbox",
                     "task_continuations",
@@ -1553,6 +1740,15 @@ class TaskHubStore:
                     """,
                     (user_subject,),
                 ).fetchall()
+                artifact_rows = connection.execute(
+                    """
+                    SELECT state, COUNT(*) AS count
+                    FROM task_artifacts
+                    WHERE user_subject = ?
+                    GROUP BY state ORDER BY state
+                    """,
+                    (user_subject,),
+                ).fetchall()
                 timeline = connection.execute(
                     """
                     SELECT COUNT(*) AS count, MAX(sequence) AS latest_sequence,
@@ -1615,6 +1811,10 @@ class TaskHubStore:
                             }
                             for row in continuation_rows
                         ],
+                        "artifact_states": {
+                            str(row["state"]): int(row["count"])
+                            for row in artifact_rows
+                        },
                         "oldest_outstanding_delivery_at": oldest_outstanding[
                             "oldest_at"
                         ],
@@ -1650,6 +1850,14 @@ class TaskHubStore:
                     LEFT JOIN agent_tasks AS task ON task.task_id = link.task_id
                     WHERE task.task_id IS NULL
                        OR task.user_subject <> link.user_subject
+                """,
+                "task_artifact_user_mismatch": """
+                    SELECT COUNT(*) AS count
+                    FROM task_artifacts AS artifact
+                    LEFT JOIN agent_tasks AS task
+                      ON task.task_id = artifact.task_id
+                    WHERE task.task_id IS NULL
+                       OR task.user_subject <> artifact.user_subject
                 """,
                 "subscription_user_mismatch": """
                     SELECT COUNT(*) AS count
@@ -1778,6 +1986,14 @@ class TaskHubStore:
                     (SELECT COUNT(*) FROM task_continuations
                      WHERE state IN ('awaiting_selection', 'selected'))
                         AS active_task_continuations,
+                    (SELECT COUNT(*) FROM task_artifacts
+                     WHERE state = 'ready'
+                       AND datetime(expires_at) > datetime('now'))
+                        AS ready_artifacts,
+                    (SELECT COUNT(*) FROM task_artifacts
+                     WHERE state = 'expired'
+                        OR datetime(expires_at) <= datetime('now'))
+                        AS expired_artifacts,
                     (SELECT COUNT(*) FROM user_timeline) AS timeline_entries
                 """
             ).fetchone()
@@ -1797,6 +2013,8 @@ class TaskHubStore:
                 "active_task_continuations": int(
                     totals["active_task_continuations"]
                 ),
+                "ready_artifacts": int(totals["ready_artifacts"]),
+                "expired_artifacts": int(totals["expired_artifacts"]),
                 "timeline_entries": int(totals["timeline_entries"]),
                 "isolation_violation_count": violation_count,
             },
@@ -2171,7 +2389,10 @@ class TaskHubStore:
                     subscription_id, task_id, endpoint_id, user_subject,
                     event_filters_json, state, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-                ON CONFLICT(task_id, endpoint_id) DO NOTHING
+                ON CONFLICT(task_id, endpoint_id) DO UPDATE SET
+                    event_filters_json = excluded.event_filters_json,
+                    state = 'active',
+                    updated_at = excluded.updated_at
                 """,
                 (
                     str(uuid4()),
@@ -2189,6 +2410,7 @@ class TaskHubStore:
                             "task.interaction.failed",
                             "task.interaction.superseded",
                             "task.canceled",
+                            "task.artifact.ready",
                             "task.operation.succeeded",
                             "task.operation.failed",
                             "task.operation.outcome_unknown",
@@ -2508,6 +2730,23 @@ def _task_from_row(row: sqlite3.Row) -> dict:
     return value
 
 
+def _artifact_from_row(row: sqlite3.Row) -> dict:
+    return {
+        "artifact_id": row["artifact_id"],
+        "task_id": row["task_id"],
+        "user_subject": row["user_subject"],
+        "artifact_type": row["artifact_type"],
+        "filename": row["filename"],
+        "content_type": row["content_type"],
+        "byte_size": int(row["byte_size"]),
+        "download_url": row["download_url"],
+        "state": row["state"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "expires_at": row["expires_at"],
+    }
+
+
 def _event_from_row(row: sqlite3.Row) -> dict:
     value = dict(row)
     value["payload"] = json.loads(value.pop("payload_json"))
@@ -2564,6 +2803,34 @@ def _optional_text(value: Any, name: str, maximum: int) -> str | None:
     if not normalized:
         return None
     return _required_text(normalized, name, maximum)
+
+
+def _required_future_time(value: Any, name: str) -> str:
+    normalized = _required_text(value, name, 80)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{name} is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} is invalid")
+    parsed = parsed.astimezone(timezone.utc)
+    if parsed <= datetime.now(timezone.utc):
+        raise ValueError(f"{name} is expired")
+    return parsed.isoformat()
+
+
+def _artifact_download_url(value: Any) -> str:
+    normalized = _required_text(value, "download_url", 2_048)
+    parsed = urlparse(normalized)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("download_url is invalid")
+    return normalized
 
 
 def _timeline_text(value: Any) -> str:
