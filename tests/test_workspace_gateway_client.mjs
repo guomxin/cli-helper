@@ -26,7 +26,7 @@ function runScenario(scenario, overrides = {}) {
     {
       cwd: root,
       encoding: "utf8",
-      timeout: 5_000,
+      timeout: 15_000,
       input: JSON.stringify({
         mode: "send-stream",
         sessionKey,

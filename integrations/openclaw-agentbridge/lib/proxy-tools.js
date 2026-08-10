@@ -29,6 +29,9 @@ export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
 const AGENTBRIDGE_GOVERNED_ENTRY_TOOLS = new Set(
   AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
 );
+const INDEPENDENT_WORKSPACE_TASK_TOOLS = new Set([
+  "oa_workflow_revoke_prepare",
+]);
 const AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG = Object.freeze(
   AGENTBRIDGE_TOOL_CATALOG.filter(
     (descriptor) =>
@@ -273,11 +276,14 @@ async function resolveTaskId({
   if (resumedTaskId) {
     return resumedTaskId;
   }
+  const sharedTurnRef = INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name)
+    ? null
+    : boundedText(
+        taskRunRefResolver?.(toolCallId, sessionKey, descriptor.name),
+        256,
+      );
   const runRef =
-    boundedText(
-      taskRunRefResolver?.(toolCallId, sessionKey, descriptor.name),
-      256,
-    ) ||
+    sharedTurnRef ||
     boundedText(context.runId, 256) ||
     boundedText(toolCallId, 256);
   if (!runRef) {
@@ -331,6 +337,11 @@ async function resolveTaskId({
               "workspace.interaction.open",
             ]
           : ["direct_status", "trusted_interaction"],
+        task_scope: workspaceSession
+          ? INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name)
+            ? "independent"
+            : "user_turn"
+          : "host_run",
       },
       { meta: hostContextMeta() },
     );

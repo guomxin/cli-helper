@@ -164,6 +164,12 @@ reports each file's actual attachment, fallback-link, or failed outcome to the
 central task, so both the model result and Agent Workspace show exact delivery
 counts instead of equating file preparation with endpoint receipt.
 
+Version 0.4.32 persists each Agent Workspace user-turn reference in the central
+store before OpenClaw starts tool execution. Task creation therefore converges
+on one central task even when Gateway binding and business tools run in separate
+plugin instances. Reverse actions such as workflow revocation retain their own
+task scope and cannot be folded into the original request.
+
 ## Local installation
 
 The commands below retain the legacy single-user MCP configuration for existing
@@ -198,7 +204,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.31, ...)
+AgentBridge interaction plugin registered (version=0.4.32, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

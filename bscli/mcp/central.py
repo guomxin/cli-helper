@@ -2241,6 +2241,10 @@ def create_central_mcp_server(
         label: Annotated[str | None, Field(max_length=120)] = None,
         route: dict[str, Any] | None = None,
         capabilities: list[str] | None = None,
+        task_scope: Annotated[
+            str,
+            Field(pattern="^(host_run|user_turn|independent)$"),
+        ] = "host_run",
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
@@ -2260,6 +2264,7 @@ def create_central_mcp_server(
             label=label,
             route=route,
             capabilities=capabilities,
+            task_scope=task_scope,
         )
 
     @mcp.tool(
@@ -2685,6 +2690,7 @@ def create_central_mcp_server(
         endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
         session_key: Annotated[str, Field(min_length=16, max_length=1024)],
         grant: Annotated[str, Field(min_length=32, max_length=256)],
+        turn_ref: Annotated[str | None, Field(max_length=128)] = None,
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
@@ -2695,6 +2701,7 @@ def create_central_mcp_server(
             endpoint_key=endpoint_key,
             session_key=session_key,
             grant=grant,
+            turn_ref=turn_ref,
         )
 
     @mcp.tool(

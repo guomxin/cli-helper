@@ -131,6 +131,18 @@ class WorkspaceStore:
                     expires_at TEXT NOT NULL,
                     consumed_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS workspace_gateway_turns (
+                    user_subject TEXT NOT NULL,
+                    endpoint_key TEXT NOT NULL,
+                    openclaw_session_key TEXT NOT NULL,
+                    turn_ref TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_subject, endpoint_key)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS workspace_gateway_turns_session
+                ON workspace_gateway_turns (user_subject, openclaw_session_key);
                 """
             )
 
@@ -630,7 +642,13 @@ class WorkspaceStore:
         user_subject: str,
         endpoint_key: str,
         session_key: str,
+        turn_ref: str | None = None,
     ) -> dict:
+        normalized_turn_ref = (
+            _required_text(turn_ref, "turn_ref", 128)
+            if turn_ref is not None
+            else None
+        )
         now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -670,11 +688,66 @@ class WorkspaceStore:
                 """,
                 (consumed_at, row["grant_id"]),
             )
+            if normalized_turn_ref is not None:
+                connection.execute(
+                    """
+                    INSERT INTO workspace_gateway_turns (
+                        user_subject, endpoint_key, openclaw_session_key,
+                        turn_ref, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(user_subject, endpoint_key) DO UPDATE SET
+                        openclaw_session_key = excluded.openclaw_session_key,
+                        turn_ref = excluded.turn_ref,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        row["user_subject"],
+                        row["endpoint_key"],
+                        row["openclaw_session_key"],
+                        normalized_turn_ref,
+                        consumed_at,
+                    ),
+                )
         return {
             "status": "succeeded",
             "account_id": row["account_id"],
             "endpoint_key": row["endpoint_key"],
             "session_key": row["openclaw_session_key"],
+            "turn_ref": normalized_turn_ref,
+        }
+
+    def resolve_gateway_turn(
+        self,
+        *,
+        user_subject: str,
+        endpoint_key: str,
+        session_key: str,
+    ) -> dict | None:
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        endpoint_key = _required_text(endpoint_key, "endpoint_key", 768)
+        session_key = _required_text(session_key, "session_key", 1024)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT t.*
+                FROM workspace_gateway_turns AS t
+                JOIN workspace_accounts AS a
+                  ON a.user_subject = t.user_subject
+                 AND a.endpoint_key = t.endpoint_key
+                 AND a.openclaw_session_key = t.openclaw_session_key
+                WHERE t.user_subject = ? AND t.endpoint_key = ?
+                  AND t.openclaw_session_key = ? AND a.state = 'active'
+                """,
+                (user_subject, endpoint_key, session_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_subject": row["user_subject"],
+            "endpoint_key": row["endpoint_key"],
+            "session_key": row["openclaw_session_key"],
+            "turn_ref": row["turn_ref"],
+            "updated_at": row["updated_at"],
         }
 
     def _now(self) -> datetime:

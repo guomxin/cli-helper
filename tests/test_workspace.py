@@ -240,8 +240,19 @@ class WorkspaceStoreTests(unittest.TestCase):
                 endpoint_key=grant["endpoint_key"],
                 session_key=grant["session_key"],
                 grant=grant["grant"],
+                turn_ref="request-123456",
             )
             self.assertEqual(redeemed["status"], "succeeded")
+            self.assertEqual(
+                redeemed["binding"]["turnRef"],
+                "request-123456",
+            )
+            turn = service.workspace.resolve_gateway_turn(
+                user_subject="user-a",
+                endpoint_key=grant["endpoint_key"],
+                session_key=grant["session_key"],
+            )
+            self.assertEqual(turn["turn_ref"], "request-123456")
             resolved = service.resolve_workspace_gateway_session(
                 user_subject="user-a",
                 agent_host="openclaw",
@@ -265,6 +276,90 @@ class WorkspaceStoreTests(unittest.TestCase):
                     endpoint_key=grant["endpoint_key"],
                     session_key=grant["session_key"],
                 )
+
+    def test_workspace_user_turn_tasks_share_persisted_turn(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            grant = service.workspace.issue_gateway_grant(account["account_id"])
+            service.redeem_workspace_gateway_grant(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key=account["endpoint_key"],
+                session_key=account["openclaw_session_key"],
+                grant=grant["grant"],
+                turn_ref="request-one",
+            )
+            common = {
+                "user_subject": "user-a",
+                "token_id": "token-a",
+                "agent_host": "openclaw",
+                "endpoint_key": account["endpoint_key"],
+                "client_type": "web",
+                "external_subject": account["account_id"],
+                "conversation_ref": account["openclaw_session_key"],
+                "account_id": account["account_id"],
+            }
+
+            first = service.ensure_host_task(
+                **common,
+                host_task_key="session|tool-search",
+                title="Search certificate scans",
+                task_scope="user_turn",
+            )
+            second = service.ensure_host_task(
+                **common,
+                host_task_key="session|tool-deliver",
+                title="Deliver certificate scans",
+                task_scope="user_turn",
+            )
+            independent = service.ensure_host_task(
+                **common,
+                host_task_key="session|tool-revoke",
+                title="Revoke workflow",
+                task_scope="independent",
+            )
+
+            self.assertEqual(first["task"]["taskId"], second["task"]["taskId"])
+            self.assertNotEqual(
+                first["task"]["taskId"],
+                independent["task"]["taskId"],
+            )
+            stored = service.tasks.get_task(
+                first["task"]["taskId"],
+                user_subject="user-a",
+            )
+            self.assertEqual(
+                stored["host_task_key"],
+                f"{account['openclaw_session_key']}|workspace:request-one",
+            )
+
+            next_grant = service.workspace.issue_gateway_grant(
+                account["account_id"]
+            )
+            service.redeem_workspace_gateway_grant(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key=account["endpoint_key"],
+                session_key=account["openclaw_session_key"],
+                grant=next_grant["grant"],
+                turn_ref="request-two",
+            )
+            next_turn = service.ensure_host_task(
+                **common,
+                host_task_key="session|tool-next",
+                title="Next request",
+                task_scope="user_turn",
+            )
+            self.assertNotEqual(
+                first["task"]["taskId"],
+                next_turn["task"]["taskId"],
+            )
 
     def test_session_idle_timeout_and_logout_do_not_unlink_identity(self) -> None:
         clock = MutableClock()

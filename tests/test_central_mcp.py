@@ -1097,6 +1097,7 @@ class CentralMcpTests(unittest.TestCase):
                         "external_subject": "1001",
                         "conversation_ref": "agent:main:telegram:direct:1001",
                         "title": "OA task",
+                        "task_scope": "user_turn",
                         "route": {"channel": "telegram", "to": "1001"},
                     },
                     "_meta": {
@@ -1123,6 +1124,53 @@ class CentralMcpTests(unittest.TestCase):
             label=None,
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
+            task_scope="user_turn",
+        )
+
+    def test_workspace_session_bind_persists_turn_reference(self):
+        with self._server() as (service, _store, token, client):
+            service.redeem_workspace_gateway_grant.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "binding": {
+                    "endpointKey": "workspace:account-123",
+                    "sessionKey": "agent:main:agentbridge-workspace:direct:account-123",
+                    "turnRef": "request-123",
+                },
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=621,
+                token=token,
+                params={
+                    "name": "agentbridge_host_workspace_session_bind",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "endpoint_key": "workspace:account-123",
+                        "session_key": (
+                            "agent:main:agentbridge-workspace:direct:account-123"
+                        ),
+                        "grant": "abwg_1234567890123456789012345678901234567890",
+                        "turn_ref": "request-123",
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.redeem_workspace_gateway_grant.assert_called_once_with(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-123",
+            session_key="agent:main:agentbridge-workspace:direct:account-123",
+            grant="abwg_1234567890123456789012345678901234567890",
+            turn_ref="request-123",
         )
 
     def test_host_artifact_delivery_report_uses_token_identity(self):

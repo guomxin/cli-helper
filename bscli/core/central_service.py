@@ -1222,7 +1222,11 @@ class CentralCapabilityService:
         label: str | None = None,
         route: dict | None = None,
         capabilities: list[str] | None = None,
+        task_scope: str = "host_run",
     ) -> dict:
+        task_scope = str(task_scope or "host_run").strip()
+        if task_scope not in {"host_run", "user_turn", "independent"}:
+            raise ValueError("task_scope is invalid")
         try:
             endpoint = self.tasks.endpoint_for_key(
                 user_subject=user_subject,
@@ -1267,6 +1271,22 @@ class CentralCapabilityService:
                     route=route,
                     capabilities=capabilities,
                 )
+        if endpoint["client_type"] == "web" and task_scope == "user_turn":
+            turn = self.workspace.resolve_gateway_turn(
+                user_subject=user_subject,
+                endpoint_key=endpoint_key,
+                session_key=conversation_ref,
+            )
+            if turn is not None:
+                canonical_key = (
+                    f"{conversation_ref}|workspace:{turn['turn_ref']}"
+                )
+                if len(canonical_key) > 1024:
+                    canonical_key = (
+                        "workspace:"
+                        + hashlib.sha256(canonical_key.encode("utf-8")).hexdigest()
+                    )
+                host_task_key = canonical_key
         task, task_reused = self.tasks.ensure_task(
             user_subject=user_subject,
             agent_host=agent_host,
@@ -1905,6 +1925,7 @@ class CentralCapabilityService:
         endpoint_key: str,
         session_key: str,
         grant: str,
+        turn_ref: str | None = None,
     ) -> dict:
         endpoint = self.tasks.endpoint_for_key(
             user_subject=user_subject,
@@ -1920,14 +1941,18 @@ class CentralCapabilityService:
             user_subject=user_subject,
             endpoint_key=endpoint_key,
             session_key=session_key,
+            turn_ref=turn_ref,
         )
+        binding = {
+            "endpointKey": redeemed["endpoint_key"],
+            "sessionKey": redeemed["session_key"],
+        }
+        if redeemed["turn_ref"] is not None:
+            binding["turnRef"] = redeemed["turn_ref"]
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
-            "binding": {
-                "endpointKey": redeemed["endpoint_key"],
-                "sessionKey": redeemed["session_key"],
-            },
+            "binding": binding,
         }
 
     def resolve_workspace_gateway_session(

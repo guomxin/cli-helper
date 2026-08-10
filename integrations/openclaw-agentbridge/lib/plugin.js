@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.31";
+export const PLUGIN_VERSION = "0.4.32";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -966,6 +966,7 @@ async function bindWorkspaceGatewaySession({
           endpoint_key: endpointKey,
           session_key: sessionKey,
           grant,
+          ...(turnRef ? { turn_ref: turnRef } : {}),
         },
         { meta: hostContextMeta() },
       );

@@ -714,6 +714,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         "agent:main:agentbridge-workspace:direct:account-123",
       endpointKey: "workspace:account-123",
       grant: "abwg_1234567890123456789012345678901234567890",
+      turnRef: "request-bind-123",
     },
     respond(ok, payload, error) {
       responses.push({ ok, payload, error });
@@ -726,6 +727,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
     attempts[1].name,
     "agentbridge_host_workspace_session_bind",
   );
+  assert.equal(attempts[1].params.turn_ref, "request-bind-123");
   assert.deepEqual(attempts[1].options, {
     meta: {
       "io.agentbridge/host": {
@@ -853,6 +855,11 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
     "workspace:account-123",
   );
   assert.equal(taskEnsure.body.params.arguments.client_type, "web");
+  assert.equal(taskEnsure.body.params.arguments.task_scope, "user_turn");
+  assert.equal(
+    requests[0].body.params.arguments.turn_ref,
+    "workspace-turn-123",
+  );
   assert.equal(
     requests.every(
       (request) => request.authorization === "Bearer token-a",
@@ -861,7 +868,7 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
   );
 });
 
-test("shares one task reference across per-tool Workspace run IDs", async () => {
+test("uses the shared Workspace turn as a local task-key fast path", async () => {
   const sharedState = createInteractionSharedState();
   const requests = [];
   const pluginConfig = {
@@ -952,11 +959,27 @@ test("shares one task reference across per-tool Workspace run IDs", async () => 
   await secondTools
     .find((tool) => tool.name === "oa_workflow_sent_list")
     .execute("tool-prepare", { limit: 5 });
+  const revokeTools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+    runId: "call-revoke|fc-revoke",
+  });
+  runtime.hooks.before_tool_call(
+    {
+      toolCallId: "tool-revoke",
+      runId: "call-revoke|fc-revoke",
+      toolName: "oa_workflow_revoke_prepare",
+    },
+    { sessionKey },
+  );
+  await revokeTools
+    .find((tool) => tool.name === "oa_workflow_revoke_prepare")
+    .execute("tool-revoke", { affair_id: "affair-123" });
 
   const taskEnsures = requests.filter(
     (request) => request.params?.name === "agentbridge_host_task_ensure",
   );
-  assert.equal(taskEnsures.length, 2);
+  assert.equal(taskEnsures.length, 3);
   assert.deepEqual(
     taskEnsures.map(
       (request) => request.params.arguments.host_task_key,
@@ -964,7 +987,12 @@ test("shares one task reference across per-tool Workspace run IDs", async () => 
     [
       `${sessionKey}|workspace:request-123456`,
       `${sessionKey}|workspace:request-123456`,
+      `${sessionKey}|call-revoke|fc-revoke`,
     ],
+  );
+  assert.deepEqual(
+    taskEnsures.map((request) => request.params.arguments.task_scope),
+    ["user_turn", "user_turn", "independent"],
   );
 });
 
