@@ -37,9 +37,14 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.interaction.waiting",
   "task.interaction.completed",
   "task.completed",
+  "task.artifact.delivery",
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
 const MAX_NOTIFICATION_IDLE_INTERVAL_MS = 10_000;
+const PREPARED_DOCUMENT_NATIVE_ATTEMPTS = 2;
+const PREPARED_DOCUMENT_RETRY_DELAY_MS = 1_000;
+const PREPARED_DOCUMENT_RECEIPT_TTL_MS = 10 * 60 * 1000;
+const MAX_PREPARED_DOCUMENT_RECEIPTS = 1_000;
 const INDEPENDENT_TASK_ENTRY_TOOLS = new Set([
   "oa_workflow_revoke_prepare",
 ]);
@@ -101,6 +106,7 @@ export function createInteractionSharedState() {
     loginContinuations: new Map(),
     recentUserMessages: new Map(),
     documentDeliveries: new Map(),
+    documentDeliveryReceipts: new Map(),
     taskContinuations: new Map(),
     independentTaskBindings: new Map(),
     identitySessionBindings: new Map(),
@@ -147,6 +153,9 @@ export class InteractionCoordinator {
       sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
     this.documentDeliveries =
       sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
+    this.documentDeliveryReceipts =
+      sharedState.documentDeliveryReceipts ||
+      (sharedState.documentDeliveryReceipts = new Map());
     this.taskContinuations =
       sharedState.taskContinuations || (sharedState.taskContinuations = new Map());
     this.independentTaskBindings =
@@ -156,8 +165,8 @@ export class InteractionCoordinator {
 
   recordUserMessage(event, context) {
     const sessionKey = event.sessionKey || context.sessionKey;
-    const rawText = event.content ?? event.text;
-    if (!isPrivateSessionKey(sessionKey) || typeof rawText !== "string") {
+    const rawText = extractUserMessageText(event);
+    if (!isPrivateSessionKey(sessionKey) || !rawText) {
       return;
     }
     const text = rawText.trim().slice(0, 1000);
@@ -304,22 +313,39 @@ export class InteractionCoordinator {
     const toolCallId = normalizeToolCallId(event.toolCallId);
     const binding = toolCallId ? this.toolBindings.get(toolCallId) : null;
     const sessionKey = binding?.sessionKey || context.sessionKey;
+    const taskId = taskIdFromToolResult(event.result);
+    const deliveryRef = `tool-result:${toolCallId || randomUUID()}`;
     if (!isPrivateSessionKey(sessionKey)) {
       this.api.logger.warn(
         "AgentBridge prepared document withheld because no private session binding was available",
       );
-      return Promise.resolve(false);
+      return Promise.resolve(
+        preparedDocumentDeliveryReport(files, [], {
+          state: "failed",
+          errorCode: "PRIVATE_SESSION_REQUIRED",
+        }),
+      );
     }
     const previous = this.documentDeliveries.get(sessionKey) || Promise.resolve();
     const delivery = previous
       .catch(() => undefined)
       .then(async () => {
-        let delivered = true;
+        const receipts = [];
         for (const file of files) {
-          delivered =
-            (await this.deliverPreparedDocumentDirect(sessionKey, file)) && delivered;
+          receipts.push(
+            await this.deliverPreparedDocumentDirect(sessionKey, file, {
+              deliveryRef,
+            }),
+          );
         }
-        return delivered;
+        const report = preparedDocumentDeliveryReport(files, receipts);
+        await this.reportPreparedDocumentDelivery({
+          sessionKey,
+          taskId,
+          deliveryRef,
+          report,
+        });
+        return report;
       });
     this.documentDeliveries.set(sessionKey, delivery);
     return delivery.finally(() => {
@@ -730,6 +756,12 @@ export class InteractionCoordinator {
     this.independentTaskBindings.delete(sessionKey);
     this.sessionRoutes.delete(sessionKey);
     this.directDeliveries.delete(sessionKey);
+    this.documentDeliveries.delete(sessionKey);
+    for (const key of this.documentDeliveryReceipts.keys()) {
+      if (key.startsWith(`${sessionKey}\u0000`)) {
+        this.documentDeliveryReceipts.delete(key);
+      }
+    }
   }
 
   stopAll() {
@@ -748,6 +780,8 @@ export class InteractionCoordinator {
     this.independentTaskBindings.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
+    this.documentDeliveries.clear();
+    this.documentDeliveryReceipts.clear();
   }
 
   startNotificationPump(identityRouter, { intervalMs = 2000 } = {}) {
@@ -889,10 +923,22 @@ export class InteractionCoordinator {
           notification.deliveryMode === "artifact" &&
           notification.artifact
         ) {
-          delivered = await this.deliverPreparedDocumentDirect(
+          const receipt = await this.deliverPreparedDocumentDirect(
             sessionKey,
             notification.artifact,
+            { deliveryRef: notification.deliveryId },
           );
+          delivered = receipt.delivered;
+          await this.reportPreparedDocumentDelivery({
+            sessionKey,
+            taskId: notification.task?.taskId,
+            deliveryRef: notification.deliveryId,
+            mcpClient: client,
+            report: preparedDocumentDeliveryReport(
+              [notification.artifact],
+              [receipt],
+            ),
+          });
         } else if (
           notification.deliveryMode === "timeline_message" &&
           typeof notification.message === "string" &&
@@ -1382,33 +1428,92 @@ export class InteractionCoordinator {
     return saved.path;
   }
 
-  async deliverPreparedDocumentDirect(sessionKey, file) {
+  async deliverPreparedDocumentDirect(
+    sessionKey,
+    file,
+    { deliveryRef = null } = {},
+  ) {
+    this.prunePreparedDocumentReceipts();
+    const receiptKey = preparedDocumentReceiptKey(
+      sessionKey,
+      deliveryRef,
+      file,
+    );
+    const existing = receiptKey
+      ? this.documentDeliveryReceipts.get(receiptKey)
+      : null;
+    if (existing) {
+      return existing.promise;
+    }
+    const promise = this.performPreparedDocumentDelivery(sessionKey, file);
+    if (receiptKey) {
+      this.documentDeliveryReceipts.set(receiptKey, {
+        promise,
+        capturedAt: this.now(),
+      });
+    }
+    const receipt = await promise;
+    if (receiptKey && !receipt.delivered) {
+      this.documentDeliveryReceipts.delete(receiptKey);
+    }
+    return receipt;
+  }
+
+  async performPreparedDocumentDelivery(sessionKey, file) {
     const route = this.sessionRoutes.get(sessionKey);
     if (!route) {
       this.api.logger.warn(
         "AgentBridge prepared document delivery unavailable because the private session route is missing",
       );
-      return false;
+      return preparedDocumentReceipt(file, "failed", 0, "ROUTE_MISSING");
     }
     const text = `OA 证书已准备完成：${file.filename}`;
+    let localMediaPath = null;
+    let errorCode = "ATTACHMENT_DELIVERY_FAILED";
     try {
-      const localMediaPath = await this.materializePreparedDocument(file);
-      if (
-        await this.sendRoutePayload(sessionKey, route, {
+      localMediaPath = await this.materializePreparedDocument(file);
+    } catch (error) {
+      errorCode = safeErrorCode(error);
+      this.api.logger.warn(
+        `AgentBridge prepared document materialization failed: ${errorCode}`,
+      );
+    }
+    let attemptCount = 0;
+    while (localMediaPath && attemptCount < PREPARED_DOCUMENT_NATIVE_ATTEMPTS) {
+      attemptCount += 1;
+      try {
+        const delivered = await this.sendRoutePayload(sessionKey, route, {
           text,
           mediaUrl: localMediaPath,
           forceDocument: true,
-        })
-      ) {
-        this.api.logger.info(
-          `AgentBridge prepared document delivered directly (channel=${route.channel}, filename=${safeCode(file.filename)})`,
+        });
+        if (delivered) {
+          this.api.logger.info(
+            `AgentBridge prepared document delivered directly (channel=${route.channel}, filename=${safeCode(file.filename)}, attempts=${attemptCount})`,
+          );
+          return preparedDocumentReceipt(
+            file,
+            "attachment_sent",
+            attemptCount,
+            null,
+          );
+        }
+        errorCode = "ATTACHMENT_DELIVERY_UNAVAILABLE";
+        break;
+      } catch (error) {
+        errorCode = safeErrorCode(error);
+        const retryable = isRetryablePreparedDocumentDeliveryError(error);
+        this.api.logger.warn(
+          `AgentBridge prepared document attachment delivery failed (attempt=${attemptCount}/${PREPARED_DOCUMENT_NATIVE_ATTEMPTS}, code=${errorCode})`,
         );
-        return true;
+        if (
+          !retryable ||
+          attemptCount >= PREPARED_DOCUMENT_NATIVE_ATTEMPTS
+        ) {
+          break;
+        }
+        await this.sleep(PREPARED_DOCUMENT_RETRY_DELAY_MS);
       }
-    } catch (error) {
-      this.api.logger.warn(
-        `AgentBridge prepared document attachment delivery failed: ${safeErrorCode(error)}`,
-      );
     }
     const fallback = [
       `OA 证书“${file.filename}”已准备好，但附件上传失败。`,
@@ -1416,10 +1521,64 @@ export class InteractionCoordinator {
       file.mediaUrl,
     ].join("\n");
     try {
-      return await this.sendRoutePayload(sessionKey, route, { text: fallback });
+      if (await this.sendRoutePayload(sessionKey, route, { text: fallback })) {
+        this.api.logger.info(
+          `AgentBridge prepared document delivered as a fallback link (channel=${route.channel}, filename=${safeCode(file.filename)})`,
+        );
+        return preparedDocumentReceipt(
+          file,
+          "fallback_link_sent",
+          attemptCount,
+          errorCode,
+        );
+      }
+    } catch (error) {
+      errorCode = safeErrorCode(error);
+      this.api.logger.warn(
+        `AgentBridge prepared document fallback delivery failed: ${errorCode}`,
+      );
+    }
+    return preparedDocumentReceipt(file, "failed", attemptCount, errorCode);
+  }
+
+  async reportPreparedDocumentDelivery({
+    sessionKey,
+    taskId,
+    deliveryRef,
+    report,
+    mcpClient = null,
+  }) {
+    if (!taskId || !report?.files?.some((file) => file.artifactId)) {
+      return false;
+    }
+    const deliveryClient = mcpClient || this.clientForSession(sessionKey);
+    if (!deliveryClient) {
+      return false;
+    }
+    const channel = this.sessionRoutes.get(sessionKey)?.channel || "unknown";
+    try {
+      await deliveryClient.callTool(
+        "agentbridge_host_artifact_delivery_report",
+        {
+          agent_host: "openclaw",
+          task_id: taskId,
+          delivery_ref: deliveryRef,
+          channel,
+          files: report.files
+            .filter((file) => file.artifactId)
+            .map((file) => ({
+              artifact_id: file.artifactId,
+              state: file.state,
+              attempt_count: file.attemptCount,
+              error_code: file.errorCode,
+            })),
+        },
+        { meta: hostContextMeta() },
+      );
+      return true;
     } catch (error) {
       this.api.logger.warn(
-        `AgentBridge prepared document fallback delivery failed: ${safeErrorCode(error)}`,
+        `AgentBridge prepared document delivery report failed: ${safeErrorCode(error)}`,
       );
       return false;
     }
@@ -1747,6 +1906,7 @@ export class InteractionCoordinator {
 
   prune() {
     this.pruneToolBindings();
+    this.prunePreparedDocumentReceipts();
     const continuationCutoff = this.now() - LOGIN_CONTINUATION_TTL_MS;
     for (const [sessionKey, continuation] of this.loginContinuations) {
       if (continuation.capturedAt <= continuationCutoff) {
@@ -1776,6 +1936,24 @@ export class InteractionCoordinator {
       }
       this.abortControllers.get(oldest)?.abort();
       this.records.delete(oldest);
+    }
+  }
+
+  prunePreparedDocumentReceipts() {
+    const cutoff = this.now() - PREPARED_DOCUMENT_RECEIPT_TTL_MS;
+    for (const [key, receipt] of this.documentDeliveryReceipts) {
+      if (receipt.capturedAt <= cutoff) {
+        this.documentDeliveryReceipts.delete(key);
+      }
+    }
+    while (
+      this.documentDeliveryReceipts.size > MAX_PREPARED_DOCUMENT_RECEIPTS
+    ) {
+      const oldest = this.documentDeliveryReceipts.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      this.documentDeliveryReceipts.delete(oldest);
     }
   }
 
@@ -2001,7 +2179,146 @@ function normalizePreparedDocumentFile(file, allowedOrigins) {
   if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
     return null;
   }
-  return { filename: filename.slice(0, 240), mediaUrl, contentType };
+  return {
+    filename: filename.slice(0, 240),
+    mediaUrl,
+    contentType,
+    artifactId: normalizeOpaqueId(file.artifactId),
+    downloadId: normalizeOpaqueId(file.downloadId),
+  };
+}
+
+function extractUserMessageText(event) {
+  if (typeof event?.text === "string" && event.text.trim()) {
+    return event.text;
+  }
+  if (typeof event?.content === "string") {
+    return event.content;
+  }
+  if (!Array.isArray(event?.content)) {
+    return null;
+  }
+  const text = event.content
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      if (!item || typeof item !== "object") {
+        return "";
+      }
+      if (typeof item.text === "string") {
+        return item.text;
+      }
+      return typeof item.content === "string" ? item.content : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+function normalizeOpaqueId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return /^[A-Za-z0-9_-]{16,128}$/.test(normalized) ? normalized : null;
+}
+
+function preparedDocumentReceipt(
+  file,
+  state,
+  attemptCount,
+  errorCode,
+) {
+  return {
+    artifactId: normalizeOpaqueId(file?.artifactId),
+    downloadId: normalizeOpaqueId(file?.downloadId),
+    filename: String(file?.filename || "").slice(0, 240),
+    state,
+    delivered: ["attachment_sent", "fallback_link_sent"].includes(state),
+    attemptCount: Math.max(0, Number(attemptCount) || 0),
+    errorCode: errorCode ? safeCode(errorCode) : null,
+  };
+}
+
+function preparedDocumentDeliveryReport(files, receipts, override = {}) {
+  const outcomes = files.map(
+    (file, index) =>
+      receipts[index] ||
+      preparedDocumentReceipt(
+        file,
+        override.state || "failed",
+        0,
+        override.errorCode || "DELIVERY_RESULT_MISSING",
+      ),
+  );
+  const attachmentSentCount = outcomes.filter(
+    (file) => file.state === "attachment_sent",
+  ).length;
+  const fallbackLinkSentCount = outcomes.filter(
+    (file) => file.state === "fallback_link_sent",
+  ).length;
+  const failedCount = outcomes.filter((file) => file.state === "failed").length;
+  const deliveredCount = attachmentSentCount + fallbackLinkSentCount;
+  const state =
+    failedCount === 0
+      ? "delivered"
+      : deliveredCount > 0
+        ? "partial"
+        : "failed";
+  const parts = [
+    `${outcomes.length} 份文件已准备`,
+    `${attachmentSentCount} 份已作为附件发送`,
+  ];
+  if (fallbackLinkSentCount > 0) {
+    parts.push(`${fallbackLinkSentCount} 份已改发下载链接`);
+  }
+  if (failedCount > 0) {
+    parts.push(`${failedCount} 份未能送达`);
+  }
+  return {
+    mode: outcomes.length === 1 ? "direct_attachment" : "direct_attachment_batch",
+    oneFilePerMessage: true,
+    handledByHost: true,
+    state,
+    completionMeaning: "endpoint_delivery_reported",
+    preparedCount: outcomes.length,
+    attachmentSentCount,
+    fallbackLinkSentCount,
+    failedCount,
+    files: outcomes,
+    userMessage: `${parts.join("，")}。`,
+  };
+}
+
+function preparedDocumentReceiptKey(sessionKey, deliveryRef, file) {
+  const normalizedRef = safeRoutePart(deliveryRef);
+  const fileRef =
+    normalizeOpaqueId(file?.artifactId) ||
+    normalizeOpaqueId(file?.downloadId);
+  if (!normalizedRef || !fileRef) {
+    return null;
+  }
+  return `${sessionKey}\u0000${normalizedRef}\u0000${fileRef}`;
+}
+
+function isRetryablePreparedDocumentDeliveryError(error) {
+  const evidence = [error?.code, error?.name, error?.message]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+  return [
+    "HTTPERROR",
+    "FETCH FAILED",
+    "NETWORK",
+    "TIMEOUT",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "SOCKET",
+    "429",
+    "HTTP 5",
+  ].some((token) => evidence.includes(token));
 }
 
 function normalizeReadContinuation(toolName, params, capturedAt) {

@@ -1178,6 +1178,34 @@ class CentralCapabilityService:
             },
         }
 
+    def report_host_artifact_delivery(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        task_id: str,
+        delivery_ref: str,
+        channel: str,
+        files: list[dict],
+    ) -> dict:
+        task, event, reused = self.tasks.record_artifact_delivery(
+            task_id=task_id,
+            user_subject=user_subject,
+            agent_host=agent_host,
+            delivery_ref=delivery_ref,
+            channel=channel,
+            files=files,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.host-artifact-delivery.v1",
+            "status": "succeeded",
+            "task": task_response(task),
+            "delivery": event.get("payload") or {},
+            "eventId": event["event_id"],
+            "reused": reused,
+        }
+
     def ensure_host_task(
         self,
         *,

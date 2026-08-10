@@ -103,7 +103,7 @@ sequenceDiagram
     A-->>U: 聊天附件或 Workspace 任务文件
 ```
 
-准备完成后的文件拥有从完成时重新计算的 30 分钟交付窗口，避免 OA 下载较慢时把检索阶段的 10 分钟耗尽。Agent Workspace 从 Task Hub 拉取同一个任务中的全部文件；Telegram 和微信由 OpenClaw 每个文件发送一条附件。通道附件上传失败时，宿主发送短时下载链接作为明确回退。重新调用同一个 `download_id` 不会再次读取 OA，也不会创建重复 Task Artifact。
+准备完成后的文件拥有从完成时重新计算的 30 分钟交付窗口，避免 OA 下载较慢时把检索阶段的 10 分钟耗尽。Agent Workspace 从 Task Hub 拉取同一个任务中的全部文件；Telegram 和微信由 OpenClaw 每个文件发送一条附件。通道附件上传遇到瞬时网络错误时只重试一次，仍失败才发送短时下载链接；同一工具结果在 10 分钟去重窗口内不会重复投递。宿主把每份文件的原生附件、链接回退或失败结果幂等回报给 Task Hub，Workspace 卡片和模型最终回复据此显示精确计数。重新调用同一个 `download_id` 不会再次读取 OA，也不会创建重复 Task Artifact。
 
 ## 安全边界
 
@@ -134,6 +134,6 @@ sequenceDiagram
 3. 搜索结果只有当前 OA 用户具备读取和下载权限的文件。
 4. 浏览器下载页面先展示文件名，确认后按实际格式返回 `application/pdf`、`image/jpeg` 或 `image/png`。
 5. 宿主准备同一下载 ID 两次只读取 OA 一次，并复用同一个 Task Artifact。
-6. 批量准备只创建一个 OA Worker；Workspace 能在所属任务中看到全部文件，伴随聊天端按序收到原始文件，上传失败时收到短时链接。
+6. 批量准备只创建一个 OA Worker；图片与文字的一次请求只生成一张任务卡；Workspace 能在所属任务中看到全部文件和精确投递计数，伴随聊天端按序收到原始文件，瞬时失败重试一次后才收到短时链接。
 7. 另一个 `userSubject` 不能读取该 Task Artifact，管理 API 不返回下载 URL 和 OA 引用。
 8. 登录过期、权限变化、密级不足、文件绑定变化和不受支持或魔数不匹配的响应均明确失败。

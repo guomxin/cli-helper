@@ -756,8 +756,10 @@ def create_central_mcp_server(
             "short-lived cache. Call this once per download_id. The OpenClaw host adapter "
             "delivers the resulting file as one attachment message, so do not create local "
             "download scripts and do not repeat the returned media URL in a MEDIA line. "
-            "The tool confirms that the file is prepared, not that every endpoint has "
-            "acknowledged delivery; describe it as prepared or being sent."
+            "Read hostDelivery in the returned result. When completionMeaning is "
+            "endpoint_delivery_reported, report its exact attachment, fallback-link, "
+            "and failure counts to the user. Otherwise only say the file is prepared "
+            "or being sent; never assume endpoint delivery from preparation alone."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -794,9 +796,11 @@ def create_central_mcp_server(
             "central OA session. Pass every selected download ID in one call. AgentBridge "
             "reuses one browser worker where possible and the OpenClaw host delivers each "
             "original file in its own attachment message. Do not call the singular prepare "
-            "tool for the same IDs and do not repeat media URLs in model output. The tool "
-            "confirms that files are prepared, not that every endpoint has acknowledged "
-            "delivery; describe them as prepared or being sent."
+            "tool for the same IDs and do not repeat media URLs in model output. Read "
+            "hostDelivery in the returned result. When completionMeaning is "
+            "endpoint_delivery_reported, report its exact attachment, fallback-link, "
+            "and failure counts to the user. Otherwise only say the files are prepared "
+            "or being sent; never assume endpoint delivery from preparation alone."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2577,6 +2581,43 @@ def create_central_mcp_server(
             succeeded=succeeded,
             retry_after_seconds=retry_after_seconds,
             defer_until_activity=defer_until_activity,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_artifact_delivery_report",
+        title="Report Host Artifact Delivery",
+        description=(
+            "Host-private idempotent delivery receipt for governed task artifacts. "
+            "It records endpoint attachment, fallback-link, or failed outcomes and is "
+            "not a model business capability."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_artifact_delivery_report(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        delivery_ref: Annotated[str, Field(min_length=1, max_length=512)],
+        channel: Annotated[str, Field(min_length=1, max_length=80)],
+        files: Annotated[list[dict[str, Any]], Field(min_length=1, max_length=20)],
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await _run_host_control(
+            "agentbridge_host_artifact_delivery_report",
+            service.report_host_artifact_delivery,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            task_id=task_id,
+            delivery_ref=delivery_ref,
+            channel=channel,
+            files=files,
         )
 
     @mcp.tool(

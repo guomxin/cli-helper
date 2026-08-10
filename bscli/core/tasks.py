@@ -26,6 +26,11 @@ ACTIVE_TASK_STATUSES = {"active", "waiting_user", "running"}
 TERMINAL_TASK_STATUSES = TASK_STATUSES - ACTIVE_TASK_STATUSES
 CONTINUATION_STATES = {"awaiting_selection", "selected", "expired", "cleared"}
 CONTINUATION_EXECUTION_MODES = {"observe_only", "resume", "follow_up"}
+ARTIFACT_DELIVERY_STATES = {
+    "attachment_sent",
+    "fallback_link_sent",
+    "failed",
+}
 
 PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
 
@@ -1022,6 +1027,179 @@ class TaskHubStore:
                 (artifact_id,),
             ).fetchone()
         return _artifact_from_row(row), False
+
+    def record_artifact_delivery(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        agent_host: str,
+        delivery_ref: str,
+        channel: str,
+        files: list[dict[str, Any]],
+    ) -> tuple[dict, dict, bool]:
+        agent_host = _required_text(agent_host, "agent_host", 80)
+        delivery_ref = _required_text(delivery_ref, "delivery_ref", 512)
+        channel = _required_text(channel, "channel", 80)
+        if not isinstance(files, list) or not 1 <= len(files) <= 20:
+            raise ValueError("files must contain between 1 and 20 items")
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in files:
+            if not isinstance(item, dict):
+                raise TypeError("artifact delivery item must be an object")
+            artifact_id = _required_text(
+                item.get("artifact_id"),
+                "artifact_id",
+                128,
+            )
+            if artifact_id in seen:
+                raise ValueError("artifact delivery contains duplicate IDs")
+            seen.add(artifact_id)
+            state = _required_text(item.get("state"), "state", 40)
+            if state not in ARTIFACT_DELIVERY_STATES:
+                raise ValueError("artifact delivery state is invalid")
+            attempt_count = int(item.get("attempt_count") or 0)
+            if attempt_count < 0 or attempt_count > 3:
+                raise ValueError("artifact delivery attempt_count is invalid")
+            error_code = item.get("error_code")
+            normalized.append(
+                {
+                    "artifactId": artifact_id,
+                    "state": state,
+                    "attemptCount": attempt_count,
+                    "errorCode": (
+                        _required_text(error_code, "error_code", 80)
+                        if error_code
+                        else None
+                    ),
+                }
+            )
+        now = _utc_now()
+        event_type = "task.artifact.delivery"
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["agent_host"] != agent_host:
+                raise TaskIntegrityError(
+                    "artifact delivery belongs to another agent host"
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM task_events
+                WHERE task_id = ? AND user_subject = ?
+                  AND event_type = ? AND causation_ref = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (task_id, user_subject, event_type, delivery_ref),
+            ).fetchone()
+            if existing is not None:
+                return (
+                    _task_from_row(task),
+                    _event_from_row(existing),
+                    True,
+                )
+
+            placeholders = ",".join("?" for _ in normalized)
+            artifacts = connection.execute(
+                f"""
+                SELECT * FROM task_artifacts
+                WHERE artifact_id IN ({placeholders})
+                """,
+                [item["artifactId"] for item in normalized],
+            ).fetchall()
+            artifacts_by_id = {row["artifact_id"]: row for row in artifacts}
+            if len(artifacts_by_id) != len(normalized):
+                raise TaskNotFound("artifact delivery contains an unknown artifact")
+            for item in normalized:
+                artifact = artifacts_by_id[item["artifactId"]]
+                if (
+                    artifact["task_id"] != task_id
+                    or artifact["user_subject"] != user_subject
+                ):
+                    raise TaskNotFound("artifact delivery contains an unknown artifact")
+                item["filename"] = artifact["filename"]
+
+            summary = json.loads(task["summary_json"])
+            by_channel = summary.get("artifactDeliveryByChannel")
+            if not isinstance(by_channel, dict):
+                by_channel = {}
+            previous = by_channel.get(channel)
+            previous_files = (
+                previous.get("files") if isinstance(previous, dict) else []
+            )
+            merged_files = {
+                item.get("artifactId"): item
+                for item in previous_files
+                if isinstance(item, dict) and item.get("artifactId")
+            }
+            for item in normalized:
+                merged_files[item["artifactId"]] = item
+            outcomes = list(merged_files.values())
+            attachment_count = sum(
+                item["state"] == "attachment_sent" for item in outcomes
+            )
+            fallback_count = sum(
+                item["state"] == "fallback_link_sent" for item in outcomes
+            )
+            failed_count = sum(item["state"] == "failed" for item in outcomes)
+            delivered_count = attachment_count + fallback_count
+            delivery_state = (
+                "delivered"
+                if failed_count == 0
+                else "partial"
+                if delivered_count
+                else "failed"
+            )
+            message_parts = [
+                f"{len(outcomes)} 份文件已准备",
+                f"{attachment_count} 份已作为附件发送",
+            ]
+            if fallback_count:
+                message_parts.append(f"{fallback_count} 份已改发下载链接")
+            if failed_count:
+                message_parts.append(f"{failed_count} 份未能送达")
+            report = {
+                "deliveryRef": delivery_ref,
+                "channel": channel,
+                "state": delivery_state,
+                "completionMeaning": "endpoint_delivery_reported",
+                "preparedCount": len(outcomes),
+                "attachmentSentCount": attachment_count,
+                "fallbackLinkSentCount": fallback_count,
+                "failedCount": failed_count,
+                "files": outcomes,
+                "userMessage": "，".join(message_parts) + "。",
+                "reportedAt": now,
+            }
+            by_channel[channel] = report
+            summary["artifactDeliveryByChannel"] = by_channel
+            summary["artifactDelivery"] = report
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET summary_json = ?, version = version + 1, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (_canonical_json(summary), now, task_id),
+            )
+            event_id = self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type=event_type,
+                payload=report,
+                causation_ref=delivery_ref,
+                created_at=now,
+            )
+            row = self._select_task(connection, task_id)
+            event = connection.execute(
+                "SELECT * FROM task_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        return _task_from_row(row), _event_from_row(event), False
 
     def get_artifact(
         self,

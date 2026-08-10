@@ -202,6 +202,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_host_timeline_append", names)
         self.assertIn("agentbridge_host_notification_claim", names)
         self.assertIn("agentbridge_host_notification_ack", names)
+        self.assertIn("agentbridge_host_artifact_delivery_report", names)
         self.assertIn("agentbridge_host_workspace_link_confirm", names)
         self.assertIn("agentbridge_host_workspace_session_bind", names)
         self.assertIn("agentbridge_host_workspace_session_resolve", names)
@@ -1122,6 +1123,58 @@ class CentralMcpTests(unittest.TestCase):
             label=None,
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
+        )
+
+    def test_host_artifact_delivery_report_uses_token_identity(self):
+        with self._server() as (service, _store, token, client):
+            service.report_host_artifact_delivery.return_value = {
+                "protocolVersion": "0.1",
+                "schemaVersion": "agentbridge.host-artifact-delivery.v1",
+                "status": "succeeded",
+                "task": {"taskId": "task-1234567890-abcdef"},
+                "delivery": {"attachmentSentCount": 1},
+                "eventId": "event-1234567890-abcdef",
+                "reused": False,
+            }
+            files = [
+                {
+                    "artifact_id": "artifact-1234567890-abcdef",
+                    "state": "attachment_sent",
+                    "attempt_count": 1,
+                    "error_code": None,
+                }
+            ]
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=621,
+                token=token,
+                params={
+                    "name": "agentbridge_host_artifact_delivery_report",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "task_id": "task-1234567890-abcdef",
+                        "delivery_ref": "tool-result:certificate-batch",
+                        "channel": "telegram",
+                        "files": files,
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.report_host_artifact_delivery.assert_called_once_with(
+            user_subject="user-a",
+            agent_host="openclaw",
+            task_id="task-1234567890-abcdef",
+            delivery_ref="tool-result:certificate-batch",
+            channel="telegram",
+            files=files,
         )
 
     def test_host_task_continuation_uses_token_identity_and_private_metadata(self):

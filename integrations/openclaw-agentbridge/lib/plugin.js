@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.29";
+export const PLUGIN_VERSION = "0.4.30";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -147,7 +147,13 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       );
       const replacement = coordinator.captureToolResult(event, context);
       return documentDelivery
-        ? documentDelivery.then(() => replacement)
+        ? documentDelivery.then(async (report) => {
+            const captured = await replacement;
+            const result = captured?.result || event.result;
+            return {
+              result: withPreparedDocumentDeliveryReport(result, report),
+            };
+          })
         : replacement;
     },
     { runtimes: ["openclaw"] },
@@ -396,6 +402,56 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, agentTools=${AGENTBRIDGE_AGENT_FACING_TOOL_NAMES.length}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+function withPreparedDocumentDeliveryReport(result, report) {
+  const structuredContent = result?.details?.structuredContent;
+  if (
+    !result ||
+    !structuredContent ||
+    typeof structuredContent !== "object" ||
+    Array.isArray(structuredContent) ||
+    !String(structuredContent.schemaVersion || "").startsWith(
+      "agentbridge.document_delivery",
+    )
+  ) {
+    return result;
+  }
+  const updatedStructuredContent = {
+    ...structuredContent,
+    hostDelivery: report,
+  };
+  const content = Array.isArray(result.content)
+    ? result.content.map((item) => {
+        if (item?.type !== "text" || typeof item.text !== "string") {
+          return item;
+        }
+        try {
+          const parsed = JSON.parse(item.text);
+          if (
+            String(parsed?.schemaVersion || "").startsWith(
+              "agentbridge.document_delivery",
+            )
+          ) {
+            return { ...item, text: JSON.stringify(updatedStructuredContent) };
+          }
+        } catch {
+          // Preserve unrelated text blocks exactly as returned by the tool.
+        }
+        return item;
+      })
+    : result.content;
+  return {
+    ...result,
+    ...(Object.hasOwn(result, "structuredContent")
+      ? { structuredContent: updatedStructuredContent }
+      : {}),
+    content,
+    details: {
+      ...result.details,
+      structuredContent: updatedStructuredContent,
+    },
+  };
 }
 
 async function taskContinuityPromptContext({

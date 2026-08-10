@@ -187,6 +187,108 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertTrue(diagnostics["isolation"]["passed"])
         self.assertNotIn(artifact_input["download_url"], str(diagnostics))
 
+    def test_artifact_delivery_report_is_aggregated_idempotent_and_user_bound(self):
+        origin, _ = self._endpoint()
+        task, _ = self._task(origin["endpoint_id"])
+        artifacts = []
+        for suffix in ("a", "b"):
+            artifact, _ = self.store.link_artifact(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                artifact={
+                    "artifact_type": "certificate_scan",
+                    "source_ref": f"download-{suffix}",
+                    "filename": f"certificate-{suffix}.pdf",
+                    "content_type": "application/pdf",
+                    "byte_size": 4096,
+                    "download_url": (
+                        "https://10.10.50.213:8780/download/"
+                        f"download-{suffix}/file"
+                    ),
+                    "expires_at": "2099-07-30T00:30:00+00:00",
+                },
+            )
+            artifacts.append(artifact)
+
+        reported_task, event, reused = self.store.record_artifact_delivery(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            agent_host="openclaw",
+            delivery_ref="tool-result:certificate-batch",
+            channel="telegram",
+            files=[
+                {
+                    "artifact_id": artifacts[0]["artifact_id"],
+                    "state": "attachment_sent",
+                    "attempt_count": 1,
+                },
+                {
+                    "artifact_id": artifacts[1]["artifact_id"],
+                    "state": "fallback_link_sent",
+                    "attempt_count": 2,
+                    "error_code": "ETIMEDOUT",
+                },
+            ],
+        )
+        report = reported_task["summary"]["artifactDelivery"]
+        self.assertFalse(reused)
+        self.assertEqual(event["event_type"], "task.artifact.delivery")
+        self.assertEqual(report["preparedCount"], 2)
+        self.assertEqual(report["attachmentSentCount"], 1)
+        self.assertEqual(report["fallbackLinkSentCount"], 1)
+        self.assertEqual(report["failedCount"], 0)
+        self.assertEqual(
+            report["userMessage"],
+            "2 份文件已准备，1 份已作为附件发送，1 份已改发下载链接。",
+        )
+
+        repeated_task, repeated_event, repeated = (
+            self.store.record_artifact_delivery(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                agent_host="openclaw",
+                delivery_ref="tool-result:certificate-batch",
+                channel="telegram",
+                files=[
+                    {
+                        "artifact_id": artifacts[0]["artifact_id"],
+                        "state": "attachment_sent",
+                        "attempt_count": 1,
+                    }
+                ],
+            )
+        )
+        self.assertTrue(repeated)
+        self.assertEqual(repeated_event["event_id"], event["event_id"])
+        self.assertEqual(
+            repeated_task["summary"]["artifactDelivery"],
+            report,
+        )
+        delivery_events = [
+            item
+            for item in self.store.list_events(
+                task_id=task["task_id"],
+                user_subject="user-a",
+            )
+            if item["event_type"] == "task.artifact.delivery"
+        ]
+        self.assertEqual(len(delivery_events), 1)
+        with self.assertRaises(TaskNotFound):
+            self.store.record_artifact_delivery(
+                task_id=task["task_id"],
+                user_subject="user-b",
+                agent_host="openclaw",
+                delivery_ref="tool-result:cross-user",
+                channel="telegram",
+                files=[
+                    {
+                        "artifact_id": artifacts[0]["artifact_id"],
+                        "state": "attachment_sent",
+                        "attempt_count": 1,
+                    }
+                ],
+            )
+
     def test_expired_artifact_is_refreshed_in_place_and_remains_user_bound(self):
         origin, _ = self._endpoint()
         task, _ = self._task(origin["endpoint_id"])

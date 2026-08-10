@@ -1292,8 +1292,8 @@ function upsertTaskCard(result, { render = true } = {}) {
     interaction &&
     ["pending", "processing"].includes(interaction.state);
   description.textContent = interactionActive
-    ? interaction.message || taskCardStatusMessage(task.status)
-    : taskCardStatusMessage(task.status);
+    ? interaction.message || taskCardStatusMessage(task.status, task.summary)
+    : taskCardStatusMessage(task.status, task.summary);
   card.append(description);
 
   const facts = document.createElement("dl");
@@ -1346,7 +1346,9 @@ function upsertTaskCard(result, { render = true } = {}) {
   if (nearBottom) scrollChat();
 }
 
-function taskCardStatusMessage(status) {
+function taskCardStatusMessage(status, summary = null) {
+  const deliveryMessage = taskCardArtifactDeliveryMessage(summary);
+  if (deliveryMessage) return deliveryMessage;
   return (
     {
       active: "任务已创建，等待智能体继续处理。",
@@ -1360,6 +1362,30 @@ function taskCardStatusMessage(status) {
       superseded: "任务已被更新的可信交互替换。",
     }[status] || "任务状态已更新。"
   );
+}
+
+function taskCardArtifactDeliveryMessage(summary) {
+  const delivery = summary?.artifactDelivery;
+  if (!delivery || typeof delivery !== "object") return null;
+  if (
+    delivery.completionMeaning !== "endpoint_delivery_reported" ||
+    !Number.isInteger(delivery.preparedCount)
+  ) {
+    return null;
+  }
+  const message = String(delivery.userMessage || "").trim();
+  if (message) return message;
+  const prepared = Math.max(0, delivery.preparedCount || 0);
+  const attached = Math.max(0, delivery.attachmentSentCount || 0);
+  const fallback = Math.max(0, delivery.fallbackLinkSentCount || 0);
+  const failed = Math.max(0, delivery.failedCount || 0);
+  const parts = [
+    `${prepared} 份文件已准备`,
+    `${attached} 份已作为附件发送`,
+  ];
+  if (fallback) parts.push(`${fallback} 份已改发下载链接`);
+  if (failed) parts.push(`${failed} 份未能送达`);
+  return `${parts.join("，")}。`;
 }
 
 function displayTaskTitle(value) {
@@ -1381,6 +1407,7 @@ function displayTaskTitle(value) {
       "Prepare OA Meeting Creation": "OA 会议创建",
       "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
       "Prepare and Deliver OA Certificate Scans": "OA 证书文件批量交付",
+      "Search OA Certificate Scans": "OA 证书查询与下载",
       "Prepare Taihua Work Log": "泰华工作日志提交",
     }[title] ||
     title ||
@@ -1867,6 +1894,7 @@ function eventLabel(type) {
       "task.operation.outcome_unknown": "操作结果待核对",
       "task.canceled": "任务已取消",
       "task.artifact.ready": "任务文件已就绪",
+      "task.artifact.delivery": "文件投递结果已回报",
       "task.artifact.refreshed": "文件下载已重新生成",
       "task.completed": "任务已完成",
     }[type] || type.replaceAll(".", " / ")

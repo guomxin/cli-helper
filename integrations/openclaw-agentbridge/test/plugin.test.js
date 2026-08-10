@@ -1070,7 +1070,7 @@ test("replaces a final authorization with its endpoint-specific URL", async () =
     sessionKey,
   });
 
-  await harness.middleware(
+  const replacement = await harness.middleware(
     {
       toolCallId: "tool-endpoint-presentation",
       toolName: "oa_leave_submit_prepare",
@@ -1153,6 +1153,48 @@ test("uses one user-turn task reference when OpenClaw assigns per-tool run IDs",
   );
   const prepareRef = coordinator.taskRunRefForToolCall(
     "tool-prepare-a",
+    sessionKey,
+    "oa_certificate_prepare_downloads",
+  );
+  assert.match(searchRef, /^turn:/);
+  assert.equal(prepareRef, searchRef);
+});
+
+test("uses one task reference for a multimodal user turn", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  coordinator.recordUserMessage(
+    {
+      sessionKey,
+      text: "下载图片中的软著",
+      content: [
+        { type: "text", text: "下载图片中的软著" },
+        { type: "image", source: { type: "url", url: "media://image-a" } },
+      ],
+    },
+    { sessionKey },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-search-multimodal",
+    runId: "call-search|fc-multimodal",
+    sessionKey,
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-prepare-multimodal",
+    runId: "call-prepare|fc-multimodal",
+    sessionKey,
+  });
+
+  const searchRef = coordinator.taskRunRefForToolCall(
+    "tool-search-multimodal",
+    sessionKey,
+    "oa_certificate_search",
+  );
+  const prepareRef = coordinator.taskRunRefForToolCall(
+    "tool-prepare-multimodal",
     sessionKey,
     "oa_certificate_prepare_downloads",
   );
@@ -1413,6 +1455,7 @@ test("delivers a task artifact to a companion chat as one attachment", async () 
             {
               deliveryId: "delivery-artifact-1234567890",
               deliveryMode: "artifact",
+              task: { taskId: "task-artifact-1234567890" },
               artifact: {
                 artifactId: "artifact-1234567890",
                 artifactType: "certificate_scan",
@@ -1444,6 +1487,11 @@ test("delivers a task artifact to a companion chat as one attachment", async () 
 
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/certificate.bin");
+  const report = calls.find(
+    (item) => item.name === "agentbridge_host_artifact_delivery_report",
+  );
+  assert.equal(report.params.task_id, "task-artifact-1234567890");
+  assert.equal(report.params.files[0].state, "attachment_sent");
   assert.equal(calls.at(-1).name, "agentbridge_host_notification_ack");
   assert.equal(calls.at(-1).params.succeeded, true);
 });
@@ -4319,6 +4367,7 @@ test("delivers a prepared OA certificate as one direct attachment message", asyn
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, {
     mcpClient: null,
+    sleep: async () => undefined,
     ...preparedDocumentDependencies(),
   });
   const sessionKey = "agent:main:telegram:direct:7052061588";
@@ -4339,7 +4388,14 @@ test("delivers a prepared OA certificate as one direct attachment message", asyn
     { runtime: "openclaw", sessionKey },
   );
 
-  assert.equal(replacement, undefined);
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.state,
+    "delivered",
+  );
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.attachmentSentCount,
+    1,
+  );
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/certificate.bin");
   assert.equal(harness.sentPayloads[0].payload.forceDocument, true);
@@ -4361,7 +4417,7 @@ test("delivers a prepared OA certificate batch as ordered original files", async
     toolName: "oa_certificate_prepare_downloads",
   });
 
-  await harness.middleware(
+  const replacement = await harness.middleware(
     {
       toolCallId: "tool-certificate-batch",
       toolName: "oa_certificate_prepare_downloads",
@@ -4380,12 +4436,73 @@ test("delivers a prepared OA certificate batch as ordered original files", async
   );
   assert.match(harness.sentPayloads[0].payload.text, /certificate-a\.jpg/);
   assert.match(harness.sentPayloads[1].payload.text, /certificate-b\.pdf/);
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.preparedCount,
+    2,
+  );
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.attachmentSentCount,
+    2,
+  );
+});
+
+test("retries one transient attachment failure before succeeding", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    sleep: async () => undefined,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  let mediaAttempts = 0;
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    async sendPayload(context) {
+      if (context.payload.mediaUrl) {
+        mediaAttempts += 1;
+        if (mediaAttempts === 1) {
+          const error = new Error("telegram upload timed out");
+          error.code = "ETIMEDOUT";
+          throw error;
+        }
+      }
+      harness.sentPayloads.push(context);
+      return { channel: "telegram", messageId: "attachment-message" };
+    },
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-retry",
+    runId: "run-certificate-retry",
+    sessionKey,
+    toolName: "oa_certificate_prepare_download",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-certificate-retry",
+      toolName: "oa_certificate_prepare_download",
+      result: preparedDocumentResult("certificate-retry.pdf", "r".repeat(43)),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  assert.equal(mediaAttempts, 2);
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.files[0].attemptCount,
+    2,
+  );
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.fallbackLinkSentCount,
+    0,
+  );
 });
 
 test("falls back to a short-lived download link when attachment upload fails", async () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, {
     mcpClient: null,
+    sleep: async () => undefined,
     ...preparedDocumentDependencies(),
   });
   const sessionKey = "agent:main:telegram:direct:7052061588";
@@ -4395,7 +4512,9 @@ test("falls back to a short-lived download link when attachment upload fails", a
     async sendPayload(context) {
       attempts += 1;
       if (context.payload.mediaUrl) {
-        throw new Error("telegram upload failed");
+        const error = new Error("telegram upload timed out");
+        error.code = "ETIMEDOUT";
+        throw error;
       }
       harness.sentPayloads.push(context);
       return { channel: "telegram", messageId: "fallback-message" };
@@ -4417,10 +4536,88 @@ test("falls back to a short-lived download link when attachment upload fails", a
     { runtime: "openclaw", sessionKey },
   );
 
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 3);
   assert.equal(harness.sentPayloads.length, 1);
   assert.match(harness.sentPayloads[0].payload.text, /附件上传失败/);
   assert.match(harness.sentPayloads[0].payload.text, /\/file/);
+});
+
+test("deduplicates a repeated prepared-document tool result", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-deduplicated",
+    runId: "run-certificate-deduplicated",
+    sessionKey,
+    toolName: "oa_certificate_prepare_download",
+  });
+  const event = {
+    toolCallId: "tool-certificate-deduplicated",
+    toolName: "oa_certificate_prepare_download",
+    result: preparedDocumentResult("certificate-dedupe.pdf", "d".repeat(43)),
+  };
+
+  await harness.middleware(event, { runtime: "openclaw", sessionKey });
+  await harness.middleware(event, { runtime: "openclaw", sessionKey });
+
+  assert.equal(harness.sentPayloads.length, 1);
+});
+
+test("reports exact prepared-document outcomes to the central task", async () => {
+  const calls = [];
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: {
+      async callTool(name, params, options) {
+        calls.push({ name, params, options });
+        return { status: "succeeded" };
+      },
+    },
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-report",
+    runId: "run-certificate-report",
+    sessionKey,
+    toolName: "oa_certificate_prepare_downloads",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-certificate-report",
+      toolName: "oa_certificate_prepare_downloads",
+      result: preparedDocumentBatchResult(
+        [
+          ["certificate-a.pdf", "a".repeat(43)],
+          ["certificate-b.pdf", "b".repeat(43)],
+        ],
+        { taskId: "task-certificate-1234567890" },
+      ),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  const reportCall = calls.find(
+    (call) => call.name === "agentbridge_host_artifact_delivery_report",
+  );
+  assert.ok(reportCall);
+  assert.equal(reportCall.params.task_id, "task-certificate-1234567890");
+  assert.equal(reportCall.params.files.length, 2);
+  assert.deepEqual(
+    reportCall.params.files.map((file) => file.state),
+    ["attachment_sent", "attachment_sent"],
+  );
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.userMessage,
+    "2 份文件已准备，2 份已作为附件发送。",
+  );
 });
 
 function preparedDocumentDependencies() {
@@ -4450,7 +4647,7 @@ function preparedDocumentDependencies() {
   };
 }
 
-function preparedDocumentResult(filename, downloadId) {
+function preparedDocumentResult(filename, downloadId, { taskId = null } = {}) {
   const structuredContent = {
     protocolVersion: "0.1",
     schemaVersion: "agentbridge.document_delivery.v1",
@@ -4462,6 +4659,7 @@ function preparedDocumentResult(filename, downloadId) {
       size: 128,
       mediaUrl: `${CARD_ORIGIN}/download/${downloadId}/file`,
       expiresAt: "2099-07-14T12:00:00+00:00",
+      artifactId: `artifact-${downloadId}`,
     },
   };
   return {
@@ -4470,11 +4668,12 @@ function preparedDocumentResult(filename, downloadId) {
       mcpServer: "agentbridge",
       mcpTool: "oa_certificate_prepare_download",
       structuredContent,
+      ...(taskId ? { agentbridgeTaskId: taskId } : {}),
     },
   };
 }
 
-function preparedDocumentBatchResult(entries) {
+function preparedDocumentBatchResult(entries, { taskId = null } = {}) {
   const structuredContent = {
     protocolVersion: "0.1",
     schemaVersion: "agentbridge.document_delivery_batch.v1",
@@ -4489,6 +4688,7 @@ function preparedDocumentBatchResult(entries) {
       size: 128,
       mediaUrl: `${CARD_ORIGIN}/download/${downloadId}/file`,
       expiresAt: "2099-07-14T12:00:00+00:00",
+      artifactId: `artifact-${downloadId}`,
     })),
     errors: [],
   };
@@ -4498,6 +4698,7 @@ function preparedDocumentBatchResult(entries) {
       mcpServer: "agentbridge",
       mcpTool: "oa_certificate_prepare_downloads",
       structuredContent,
+      ...(taskId ? { agentbridgeTaskId: taskId } : {}),
     },
   };
 }
