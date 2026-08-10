@@ -1866,7 +1866,21 @@ class TaskHubStore:
         limit: int = 100,
     ) -> list[dict]:
         limit = min(max(int(limit), 1), 500)
+        now = _utc_now()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE task_continuations
+                SET state = 'expired', selected_task_id = NULL,
+                    candidate_task_ids_json = '[]', updated_at = ?,
+                    version = version + 1
+                WHERE user_subject = ?
+                  AND state IN ('awaiting_selection', 'selected')
+                  AND expires_at <= ?
+                """,
+                (now, user_subject, now),
+            )
             rows = connection.execute(
                 """
                 SELECT * FROM task_continuations
@@ -1886,6 +1900,7 @@ class TaskHubStore:
         """Read task-hub health without exposing message or business payloads."""
 
         resolved = Path(db_path).resolve().as_posix()
+        now = _utc_now()
         connection = sqlite3.connect(
             f"file:{quote(resolved, safe='/:')}?mode=ro",
             uri=True,
@@ -1960,13 +1975,22 @@ class TaskHubStore:
                 ).fetchall()
                 continuation_rows = connection.execute(
                     """
-                    SELECT state, execution_mode, COUNT(*) AS count
-                    FROM task_continuations
-                    WHERE user_subject = ?
+                    SELECT state, execution_mode, COUNT(*) AS count FROM (
+                        SELECT
+                            CASE
+                                WHEN state IN ('awaiting_selection', 'selected')
+                                 AND expires_at <= ?
+                                THEN 'expired'
+                                ELSE state
+                            END AS state,
+                            execution_mode
+                        FROM task_continuations
+                        WHERE user_subject = ?
+                    )
                     GROUP BY state, execution_mode
                     ORDER BY state, execution_mode
                     """,
-                    (user_subject,),
+                    (now, user_subject),
                 ).fetchall()
                 artifact_rows = connection.execute(
                     """
@@ -2212,7 +2236,8 @@ class TaskHubStore:
                     (SELECT COUNT(*) FROM notification_outbox
                      WHERE state = 'failed') AS failed_deliveries,
                     (SELECT COUNT(*) FROM task_continuations
-                     WHERE state IN ('awaiting_selection', 'selected'))
+                     WHERE state IN ('awaiting_selection', 'selected')
+                       AND expires_at > ?)
                         AS active_task_continuations,
                     (SELECT COUNT(*) FROM task_artifacts
                      WHERE state = 'ready'
@@ -2223,7 +2248,8 @@ class TaskHubStore:
                         OR datetime(expires_at) <= datetime('now'))
                         AS expired_artifacts,
                     (SELECT COUNT(*) FROM user_timeline) AS timeline_entries
-                """
+                """,
+                (now,),
             ).fetchone()
         finally:
             connection.close()

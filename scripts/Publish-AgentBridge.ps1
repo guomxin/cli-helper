@@ -7,6 +7,7 @@ param(
     [string]$GitHubKnownHostsFile = "",
     [string]$AgentBridgeIdentityFile = "",
     [string]$AgentBridgeKnownHostsFile = "",
+    [string[]]$IdentityLabel = @(),
     [switch]$SkipValidation,
     [switch]$RestartOpenClaw,
     [switch]$IncludeLoginReuseSmoke,
@@ -20,6 +21,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $gitDir = Join-Path $repoRoot ".gitrepo"
 $deployScript = Join-Path $PSScriptRoot "Deploy-AgentBridge.ps1"
 $validationScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeValidation.ps1"
+$releaseAcceptanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeReleaseAcceptance.ps1"
 $gitArguments = @("--git-dir=$gitDir", "--work-tree=$repoRoot")
 
 function Invoke-GitRead {
@@ -60,6 +62,9 @@ if (-not (Test-Path -LiteralPath $deployScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $validationScript -PathType Leaf)) {
     throw "The AgentBridge validation script was not found"
+}
+if (-not (Test-Path -LiteralPath $releaseAcceptanceScript -PathType Leaf)) {
+    throw "The AgentBridge release-acceptance script was not found"
 }
 if ($RemoteName -notmatch '^[A-Za-z0-9._-]+$') {
     throw "RemoteName contains unsupported characters"
@@ -113,6 +118,8 @@ $plan = [ordered]@{
     remoteUrl = $remoteUrl
     validation = -not $SkipValidation
     deployment = "root@10.10.50.213:/home/guomao/agentbridge"
+    governanceAcceptance = $true
+    isolationIdentities = @($IdentityLabel)
     restartOpenClaw = [bool]$RestartOpenClaw
     push = "$RemoteName/$BranchName"
 }
@@ -156,6 +163,18 @@ if ($IncludeLoginReuseSmoke) { $deployParameters["IncludeLoginReuseSmoke"] = $tr
 & $deployScript @deployParameters
 if ($LASTEXITCODE -ne 0) {
     throw "AgentBridge deployment failed; GitHub push was not attempted"
+}
+
+$acceptanceParameters = @{
+    IdentityFile = (Resolve-Path $AgentBridgeIdentityFile).Path
+    KnownHostsFile = (Resolve-Path $AgentBridgeKnownHostsFile).Path
+}
+if ($IdentityLabel.Count -gt 0) {
+    $acceptanceParameters["IdentityLabel"] = $IdentityLabel
+}
+& $releaseAcceptanceScript @acceptanceParameters
+if ($LASTEXITCODE -ne 0) {
+    throw "AgentBridge governance and release acceptance failed; GitHub push was not attempted"
 }
 
 $githubIdentityPath = (Resolve-Path $GitHubIdentityFile).Path.Replace("\", "/")

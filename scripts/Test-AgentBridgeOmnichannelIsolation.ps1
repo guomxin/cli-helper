@@ -12,6 +12,7 @@ param(
     [string]$HostName = "10.10.50.213",
     [string]$SshUser = "root",
     [string]$IdentityFile = "",
+    [string]$KnownHostsFile = "",
     [string]$RemoteRoot = "/home/guomao/agentbridge",
     [string]$CaCertificate = "",
     [string]$OpenClawConfig = "",
@@ -38,8 +39,16 @@ foreach ($expectation in $ExpectedEndpoint) {
 if (-not $IdentityFile) {
     $IdentityFile = Join-Path $env:USERPROFILE ".ssh\id_ed25519_10_10_50_213"
 }
+if (-not $KnownHostsFile) {
+    $KnownHostsFile = Join-Path (
+        (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    ) "deploy\ssh\agentbridge_known_hosts"
+}
 if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
     throw "SSH identity file was not found"
+}
+if (-not (Test-Path -LiteralPath $KnownHostsFile -PathType Leaf)) {
+    throw "SSH known-hosts file was not found"
 }
 
 $identityScript = Join-Path $PSScriptRoot "Test-AgentBridgeIdentityIsolation.ps1"
@@ -72,6 +81,7 @@ if (-not $ssh) { $ssh = Get-Command ssh -ErrorAction Stop }
 $connectionArguments = @(
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=15",
+    "-o", "UserKnownHostsFile=$((Resolve-Path $KnownHostsFile).Path)",
     "-i", (Resolve-Path $IdentityFile).Path
 )
 $remoteArguments = @(

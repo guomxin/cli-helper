@@ -408,6 +408,44 @@ class TaskHubStoreTests(unittest.TestCase):
                 endpoint_id=telegram["endpoint_id"],
             )
 
+    def test_expired_continuations_are_not_reported_as_active(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        self.store.select_continuation(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_id=endpoint["endpoint_id"],
+            task_id=task["task_id"],
+            execution_mode="follow_up",
+        )
+        with closing(sqlite3.connect(self.store.db_path)) as connection:
+            connection.execute(
+                "UPDATE task_continuations SET expires_at = ? WHERE endpoint_id = ?",
+                ("2000-01-01T00:00:00+00:00", endpoint["endpoint_id"]),
+            )
+            connection.commit()
+
+        diagnostics = self.store.runtime_diagnostics()
+        user = next(
+            item for item in diagnostics["users"]
+            if item["user_subject"] == "user-a"
+        )
+        self.assertEqual(diagnostics["summary"]["active_task_continuations"], 0)
+        self.assertEqual(
+            user["task_continuations"],
+            [{"state": "expired", "execution_mode": "follow_up", "count": 1}],
+        )
+
+        listed = self.store.list_continuations(user_subject="user-a")
+        self.assertEqual(listed[0]["state"], "expired")
+        self.assertIsNone(listed[0]["selected_task_id"])
+        with closing(sqlite3.connect(self.store.db_path)) as connection:
+            stored_state = connection.execute(
+                "SELECT state FROM task_continuations WHERE endpoint_id = ?",
+                (endpoint["endpoint_id"],),
+            ).fetchone()[0]
+        self.assertEqual(stored_state, "expired")
+
     def test_latest_user_event_id_tracks_only_the_owned_event_stream(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])

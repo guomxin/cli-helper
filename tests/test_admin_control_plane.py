@@ -426,6 +426,58 @@ class AdminControlPlaneTests(unittest.TestCase):
         ):
             self.assertNotIn(secret, serialized)
 
+    def test_coordination_does_not_count_expired_continuations_as_active(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            identities = McpIdentityTokenStore(service.db_path)
+            issued = identities.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read"],
+                ttl_seconds=3600,
+            )
+            endpoint, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id=issued["token_id"],
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                client_type="telegram",
+                external_subject="1001",
+                conversation_ref="agent:main:telegram:direct:1001",
+            )
+            task, _ = service.tasks.ensure_task(
+                user_subject="user-a",
+                agent_host="openclaw",
+                host_task_key="run-1",
+                origin_endpoint_id=endpoint["endpoint_id"],
+                active_conversation_ref=endpoint["conversation_ref"],
+                title="Read OA pending items",
+            )
+            service.tasks.select_continuation(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_id=endpoint["endpoint_id"],
+                task_id=task["task_id"],
+                execution_mode="follow_up",
+            )
+            with closing(sqlite3.connect(service.db_path)) as connection:
+                connection.execute(
+                    "UPDATE task_continuations SET expires_at = ? WHERE endpoint_id = ?",
+                    ("2000-01-01T00:00:00+00:00", endpoint["endpoint_id"]),
+                )
+                connection.commit()
+
+            result = AdminControlPlane(
+                service=service,
+                identity_store=identities,
+            ).coordination()
+
+        self.assertEqual(result["summary"]["active_continuations"], 0)
+        self.assertEqual(result["continuations"][0]["state"], "expired")
+
     def test_operation_effective_status_tracks_the_linked_user_interaction(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(

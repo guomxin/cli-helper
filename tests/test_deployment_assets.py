@@ -48,6 +48,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "& $validationScript -Mode Full",
             "SkipValidation = $true",
             "& $deployScript @deployParameters",
+            "& $releaseAcceptanceScript @acceptanceParameters",
             'push --porcelain $RemoteName "HEAD:refs/heads/$BranchName"',
             '"ls-remote", "--exit-code"',
             "GitHub verification mismatch",
@@ -59,6 +60,10 @@ class DeploymentAssetTests(unittest.TestCase):
         )
         self.assertLess(
             script.index("& $deployScript @deployParameters"),
+            script.index("& $releaseAcceptanceScript @acceptanceParameters"),
+        )
+        self.assertLess(
+            script.index("& $releaseAcceptanceScript @acceptanceParameters"),
             script.index("push --porcelain"),
         )
         self.assertTrue(github_known_hosts.is_file())
@@ -66,6 +71,16 @@ class DeploymentAssetTests(unittest.TestCase):
             "github.com ssh-ed25519 ",
             github_known_hosts.read_text(encoding="ascii"),
         )
+
+    def test_release_acceptance_uses_the_tracked_agentbridge_host_key(self) -> None:
+        for path in (
+            "scripts/Test-AgentBridgeReleaseAcceptance.ps1",
+            "scripts/Test-AgentBridgeOmnichannelIsolation.ps1",
+        ):
+            script = (ROOT / path).read_text(encoding="utf-8")
+            self.assertIn("KnownHostsFile", script)
+            self.assertIn("deploy\\ssh\\agentbridge_known_hosts", script)
+            self.assertIn("UserKnownHostsFile=", script)
 
     def test_admin_console_is_deployed_with_tls_and_release_metadata(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(

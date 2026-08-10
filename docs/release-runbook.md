@@ -14,8 +14,9 @@
 2. 拒绝发布尚未提交的跟踪文件；
 3. 在耗时验证开始前检查两把 SSH 私钥是否能被子进程读取；
 4. 执行全量验证、wheel 部署和远端 MCP 冒烟；
-5. 仅在部署成功后推送同一个提交到 `origin/main`；
-6. 从 GitHub 回读远端提交，确认与本地提交完全一致。
+5. 执行管理端、Workspace、systemd、近期错误和 OpenClaw 的治理与发布验收；
+6. 仅在部署及治理验收成功后推送同一个提交到 `origin/main`；
+7. 从 GitHub 回读远端提交，确认与本地提交完全一致。
 
 只预览，不访问服务器或 GitHub：
 
@@ -33,6 +34,12 @@
 
 ```powershell
 .\scripts\Publish-AgentBridge.ps1 -RestartOpenClaw
+```
+
+需要把双用户、四端点隔离也纳入本次发布门禁时：
+
+```powershell
+.\scripts\Publish-AgentBridge.ps1 -IdentityLabel "辛国茂","李世玉"
 ```
 
 ## Codex 执行约束
