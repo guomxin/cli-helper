@@ -16,7 +16,10 @@ from urllib.parse import parse_qs, urlparse
 
 from bscli.auth.server import validate_auth_server_config
 from bscli.core.tasks import TaskNotFound
-from bscli.workspace.application import WorkspaceApplication
+from bscli.workspace.application import (
+    WorkspaceApplication,
+    WorkspaceArtifactError,
+)
 from bscli.workspace.gateway import GatewayRequestError
 from bscli.workspace.stores import (
     WorkspaceConflictError,
@@ -199,6 +202,17 @@ def create_workspace_http_server(
                         },
                     )
                     return
+                if route.path == "/api/artifacts/history":
+                    self._json(
+                        200,
+                        {
+                            "items": application.artifact_history(
+                                account,
+                                limit=_query_int(query, "limit", 20),
+                            )
+                        },
+                    )
+                    return
                 task_match = re.fullmatch(
                     r"/api/tasks/([0-9a-f-]{36})",
                     route.path,
@@ -334,6 +348,21 @@ def create_workspace_http_server(
                         application.continue_task(
                             account,
                             continuation_match.group(1),
+                        ),
+                    )
+                    return
+                artifact_reissue_match = re.fullmatch(
+                    r"/api/tasks/([0-9a-f-]{36})/artifacts/"
+                    r"([0-9a-f-]{36})/reissue",
+                    route.path,
+                )
+                if artifact_reissue_match:
+                    self._json(
+                        200,
+                        application.reissue_artifact(
+                            account,
+                            task_id=artifact_reissue_match.group(1),
+                            artifact_id=artifact_reissue_match.group(2),
                         ),
                     )
                     return
@@ -817,6 +846,17 @@ def create_workspace_http_server(
                     {
                         "error": {
                             "code": "WORKSPACE_LINK_INVALID",
+                            "message": str(exc),
+                        }
+                    },
+                )
+                return
+            if isinstance(exc, WorkspaceArtifactError):
+                self._json(
+                    409,
+                    {
+                        "error": {
+                            "code": exc.code,
                             "message": str(exc),
                         }
                     },

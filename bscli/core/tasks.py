@@ -1022,6 +1022,157 @@ class TaskHubStore:
             ).fetchone()
         return _artifact_from_row(row), False
 
+    def get_artifact(
+        self,
+        *,
+        task_id: str,
+        artifact_id: str,
+        user_subject: str,
+        include_source_ref: bool = False,
+    ) -> dict:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_owned_task(connection, task_id, user_subject)
+            connection.execute(
+                """
+                UPDATE task_artifacts
+                SET state = 'expired', updated_at = ?
+                WHERE artifact_id = ? AND task_id = ? AND user_subject = ?
+                  AND state = 'ready' AND expires_at <= ?
+                """,
+                (now, artifact_id, task_id, user_subject, now),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM task_artifacts
+                WHERE artifact_id = ? AND task_id = ? AND user_subject = ?
+                """,
+                (artifact_id, task_id, user_subject),
+            ).fetchone()
+        if row is None:
+            raise TaskNotFound(f"artifact not found: {artifact_id}")
+        return _artifact_from_row(
+            row,
+            include_source_ref=include_source_ref,
+        )
+
+    def refresh_artifact(
+        self,
+        *,
+        task_id: str,
+        artifact_id: str,
+        user_subject: str,
+        expected_source_ref: str,
+        artifact: dict[str, Any],
+    ) -> dict:
+        source_ref = _required_text(
+            artifact.get("source_ref"),
+            "source_ref",
+            256,
+        )
+        filename = _required_text(artifact.get("filename"), "filename", 240)
+        content_type = _required_text(
+            artifact.get("content_type"),
+            "content_type",
+            120,
+        )
+        byte_size = int(artifact.get("byte_size") or 0)
+        if byte_size <= 0 or byte_size > 32 * 1024 * 1024:
+            raise ValueError("artifact byte_size is invalid")
+        download_url = _artifact_download_url(artifact.get("download_url"))
+        expires_at = _required_future_time(
+            artifact.get("expires_at"),
+            "expires_at",
+        )
+        expected_source_ref = _required_text(
+            expected_source_ref,
+            "expected_source_ref",
+            256,
+        )
+        now = _utc_now()
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_owned_task(connection, task_id, user_subject)
+            row = connection.execute(
+                """
+                SELECT * FROM task_artifacts
+                WHERE artifact_id = ? AND task_id = ? AND user_subject = ?
+                """,
+                (artifact_id, task_id, user_subject),
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound(f"artifact not found: {artifact_id}")
+            if row["source_ref"] != expected_source_ref:
+                raise TaskIntegrityError(
+                    "artifact source changed while the download was being refreshed"
+                )
+            if row["artifact_type"] != "certificate_scan":
+                raise TaskIntegrityError("artifact type cannot be refreshed")
+            if row["state"] != "expired":
+                raise TaskIntegrityError("only an expired artifact can be refreshed")
+            conflict = connection.execute(
+                """
+                SELECT artifact_id FROM task_artifacts
+                WHERE source_ref = ? AND artifact_id <> ?
+                """,
+                (source_ref, artifact_id),
+            ).fetchone()
+            if conflict is not None:
+                raise TaskIntegrityError(
+                    "replacement download is already linked to another artifact"
+                )
+            connection.execute(
+                """
+                UPDATE task_artifacts
+                SET source_ref = ?, filename = ?, content_type = ?,
+                    byte_size = ?, download_url = ?, state = 'ready',
+                    updated_at = ?, expires_at = ?
+                WHERE artifact_id = ?
+                """,
+                (
+                    source_ref,
+                    filename,
+                    content_type,
+                    byte_size,
+                    download_url,
+                    now,
+                    expires_at,
+                    artifact_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET version = version + 1, updated_at = ?
+                WHERE task_id = ?
+                """,
+                (now, task_id),
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.artifact.refreshed",
+                payload={
+                    "artifactId": artifact_id,
+                    "artifactType": row["artifact_type"],
+                    "filename": filename,
+                    "contentType": content_type,
+                    "size": byte_size,
+                    "downloadUrl": download_url,
+                    "expiresAt": expires_at,
+                },
+                causation_ref=source_ref,
+                created_at=now,
+            )
+            refreshed = connection.execute(
+                "SELECT * FROM task_artifacts WHERE artifact_id = ?",
+                (artifact_id,),
+            ).fetchone()
+        return _artifact_from_row(refreshed, include_source_ref=True)
+
     def complete_task(
         self,
         *,
@@ -2808,8 +2959,12 @@ def _task_from_row(row: sqlite3.Row) -> dict:
     return value
 
 
-def _artifact_from_row(row: sqlite3.Row) -> dict:
-    return {
+def _artifact_from_row(
+    row: sqlite3.Row,
+    *,
+    include_source_ref: bool = False,
+) -> dict:
+    result = {
         "artifact_id": row["artifact_id"],
         "task_id": row["task_id"],
         "user_subject": row["user_subject"],
@@ -2823,6 +2978,9 @@ def _artifact_from_row(row: sqlite3.Row) -> dict:
         "updated_at": row["updated_at"],
         "expires_at": row["expires_at"],
     }
+    if include_source_ref:
+        result["source_ref"] = row["source_ref"]
+    return result
 
 
 def _event_from_row(row: sqlite3.Row) -> dict:

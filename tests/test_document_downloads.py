@@ -410,6 +410,118 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
             )
             self.assertEqual(denied["error"]["code"], "DOWNLOAD_ACCESS_DENIED")
 
+    def test_expired_artifact_reissue_uses_current_session_and_same_card(self):
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://oa.example.test/seeyon/main.do",
+                trusted_card_base_url="https://10.10.50.213:8780",
+            )
+            session = service.sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Alice",
+            )
+            grant = service.document_downloads.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id=session["session_id"],
+                document=_reference(),
+                filename="certificate.pdf",
+                document_type="patent_certificate",
+                display_size="1.2 MB",
+                card_base_url="https://10.10.50.213:8780",
+            )
+            endpoint, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                client_type="telegram",
+                external_subject="1001",
+                conversation_ref="agent:main:telegram:direct:1001",
+            )
+            task, _ = service.tasks.ensure_task(
+                user_subject="user-a",
+                agent_host="openclaw",
+                host_task_key="session|expired-certificate",
+                origin_endpoint_id=endpoint["endpoint_id"],
+                active_conversation_ref=endpoint["conversation_ref"],
+                title="Download OA certificate",
+            )
+            artifact, _ = service.tasks.link_artifact(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                artifact={
+                    "artifact_type": "certificate_scan",
+                    "source_ref": grant["download_id"],
+                    "filename": "certificate.pdf",
+                    "content_type": "application/pdf",
+                    "byte_size": 2048,
+                    "download_url": f"{grant['card_url']}/file",
+                    "expires_at": "2099-07-30T00:30:00+00:00",
+                },
+            )
+            with service.tasks._connect() as connection:
+                connection.execute(
+                    "UPDATE task_artifacts SET state = 'expired' WHERE artifact_id = ?",
+                    (artifact["artifact_id"],),
+                )
+            fetched = []
+
+            def fetch(record):
+                fetched.append(record)
+                return {
+                    "body": b"%PDF-1.7\nrefetched",
+                    "filename": record["filename"],
+                    "content_type": "application/pdf",
+                }
+
+            service.fetch_document_download = fetch
+
+            result = service.reissue_document_download(
+                user_subject="user-a",
+                task_id=task["task_id"],
+                artifact_id=artifact["artifact_id"],
+            )
+
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["file"]["artifactId"], artifact["artifact_id"])
+            self.assertNotEqual(result["file"]["downloadId"], grant["download_id"])
+            self.assertEqual(len(fetched), 1)
+            self.assertEqual(fetched[0]["session_id"], session["session_id"])
+            refreshed = service.tasks.get_artifact(
+                task_id=task["task_id"],
+                artifact_id=artifact["artifact_id"],
+                user_subject="user-a",
+                include_source_ref=True,
+            )
+            self.assertEqual(refreshed["state"], "ready")
+            self.assertEqual(refreshed["source_ref"], result["file"]["downloadId"])
+            denied = service.reissue_document_download(
+                user_subject="user-b",
+                task_id=task["task_id"],
+                artifact_id=artifact["artifact_id"],
+            )
+            self.assertEqual(denied["error"]["code"], "DOWNLOAD_NOT_FOUND")
+
+            with service.tasks._connect() as connection:
+                connection.execute(
+                    "UPDATE task_artifacts SET state = 'expired' WHERE artifact_id = ?",
+                    (artifact["artifact_id"],),
+                )
+            service.sessions.mark_expired(session["session_id"])
+            login_required = service.reissue_document_download(
+                user_subject="user-a",
+                task_id=task["task_id"],
+                artifact_id=artifact["artifact_id"],
+            )
+            self.assertEqual(login_required["error"]["code"], "LOGIN_REQUIRED")
+
 def _reference() -> dict:
     return {
         "resource_id": "resource-1",

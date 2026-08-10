@@ -1381,6 +1381,91 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                     json.dumps(session, ensure_ascii=False),
                 )
 
+                endpoint = service.tasks.endpoint_for_key(
+                    user_subject="user-a",
+                    agent_host="openclaw",
+                    endpoint_key="telegram:*:alice",
+                )
+                task, _ = service.tasks.ensure_task(
+                    user_subject="user-a",
+                    agent_host="openclaw",
+                    host_task_key="workspace|historical-file",
+                    origin_endpoint_id=endpoint["endpoint_id"],
+                    active_conversation_ref=endpoint["conversation_ref"],
+                    title="Prepare and Deliver One OA Certificate Scan",
+                )
+                grant = service.document_downloads.create(
+                    user_subject="user-a",
+                    system_id="oa",
+                    session_id="session-a",
+                    document={"resource_id": "resource-a"},
+                    filename="certificate.pdf",
+                    document_type="patent_certificate",
+                    display_size="2 MB",
+                    card_base_url="https://10.10.50.213:8780",
+                )
+                artifact, _ = service.tasks.link_artifact(
+                    task_id=task["task_id"],
+                    user_subject="user-a",
+                    artifact={
+                        "artifact_type": "certificate_scan",
+                        "source_ref": grant["download_id"],
+                        "filename": "certificate.pdf",
+                        "content_type": "application/pdf",
+                        "byte_size": 2048,
+                        "download_url": f"{grant['card_url']}/file",
+                        "expires_at": "2099-07-30T00:30:00+00:00",
+                    },
+                )
+                with service.tasks._connect() as connection:
+                    connection.execute(
+                        "UPDATE task_artifacts SET state = 'expired' "
+                        "WHERE artifact_id = ?",
+                        (artifact["artifact_id"],),
+                    )
+
+                status, _, history = _request(
+                    port,
+                    "GET",
+                    "/api/artifacts/history?limit=20",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(history["items"]), 1)
+                historical = history["items"][0]["artifacts"][0]
+                self.assertEqual(historical["state"], "expired")
+                self.assertIsNone(historical["download_url"])
+                self.assertNotIn("source_ref", historical)
+
+                reissue_path = (
+                    f"/api/tasks/{task['task_id']}/artifacts/"
+                    f"{artifact['artifact_id']}/reissue"
+                )
+                status, _, error = _request(
+                    port,
+                    "POST",
+                    reissue_path,
+                    body={},
+                    origin=origin,
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 401)
+                self.assertEqual(
+                    error["error"]["code"],
+                    "AUTHENTICATION_REQUIRED",
+                )
+                status, _, error = _request(
+                    port,
+                    "POST",
+                    reissue_path,
+                    body={},
+                    origin=origin,
+                    cookies=cookies,
+                    csrf=cookies["agentbridge_workspace_csrf"],
+                )
+                self.assertEqual(status, 409)
+                self.assertEqual(error["error"]["code"], "LOGIN_REQUIRED")
+
                 status, _, error = _request(
                     port,
                     "POST",
@@ -1522,6 +1607,11 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("timelineReconnectTimer", script)
         self.assertIn("__WORKSPACE_ASSET_VERSION__", page)
         self.assertIn("task.completed", script)
+        self.assertIn('api("/api/artifacts/history?limit=20")', script)
+        self.assertIn("重新生成下载", script)
+        self.assertIn("reissueArtifact", script)
+        self.assertIn("task.artifact.refreshed", script)
+        self.assertIn("task-artifact-reissue", stylesheet)
         self.assertNotIn('"任务状态已更新",', script)
         self.assertIn("childElementCount > 2", script)
         self.assertIn("application-card", stylesheet)

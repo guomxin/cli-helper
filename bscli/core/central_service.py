@@ -2545,6 +2545,109 @@ class CentralCapabilityService:
             },
         }
 
+    def reissue_document_download(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        artifact_id: str,
+    ) -> dict:
+        try:
+            artifact = self.tasks.get_artifact(
+                task_id=task_id,
+                artifact_id=artifact_id,
+                user_subject=user_subject,
+                include_source_ref=True,
+            )
+            if artifact["artifact_type"] != "certificate_scan":
+                return _document_delivery_failure(
+                    "ARTIFACT_REISSUE_UNSUPPORTED",
+                    retryable=False,
+                )
+            if artifact["state"] == "ready":
+                return _reissued_document_delivery(artifact, reused=True)
+            source = self.document_downloads.get(
+                artifact["source_ref"],
+                include_document=True,
+            )
+            if source["user_subject"] != user_subject:
+                raise DocumentDownloadAccessDenied(
+                    "document download belongs to another user"
+                )
+            session = self.sessions.find(
+                user_subject=user_subject,
+                system_id=source["system_id"],
+            )
+            if session is None or session["state"] != "active":
+                return _document_delivery_failure(
+                    "LOGIN_REQUIRED",
+                    retryable=True,
+                )
+            replacement = self.document_downloads.create(
+                user_subject=user_subject,
+                system_id=source["system_id"],
+                session_id=session["session_id"],
+                document=source["document"],
+                filename=source["filename"],
+                document_type=source["document_type"],
+                display_size=source["display_size"],
+                card_base_url=self.trusted_card_base_url,
+                ttl_seconds=600,
+            )
+        except (TaskNotFound, DocumentDownloadNotFound):
+            return _document_delivery_failure("DOWNLOAD_NOT_FOUND", retryable=False)
+        except DocumentDownloadAccessDenied:
+            return _document_delivery_failure("DOWNLOAD_ACCESS_DENIED", retryable=False)
+        except DocumentDownloadIntegrityError:
+            return _document_delivery_failure("DOWNLOAD_INTEGRITY_FAILED", retryable=False)
+        except (TaskIntegrityError, ValueError):
+            return _document_delivery_failure(
+                "ARTIFACT_REISSUE_INVALID",
+                retryable=False,
+            )
+
+        prepared = self.prepare_document_download(
+            user_subject=user_subject,
+            download_id=replacement["download_id"],
+        )
+        if prepared.get("status") != "succeeded":
+            return prepared
+        file = prepared["file"]
+        try:
+            refreshed = self.tasks.refresh_artifact(
+                task_id=task_id,
+                artifact_id=artifact_id,
+                user_subject=user_subject,
+                expected_source_ref=artifact["source_ref"],
+                artifact={
+                    "source_ref": file["downloadId"],
+                    "filename": file["filename"],
+                    "content_type": file["contentType"],
+                    "byte_size": file["size"],
+                    "download_url": file["mediaUrl"],
+                    "expires_at": file["expiresAt"],
+                },
+            )
+        except TaskIntegrityError:
+            current = self.tasks.get_artifact(
+                task_id=task_id,
+                artifact_id=artifact_id,
+                user_subject=user_subject,
+                include_source_ref=True,
+            )
+            if current["state"] == "ready":
+                return _reissued_document_delivery(current, reused=True)
+            return _document_delivery_failure(
+                "ARTIFACT_REISSUE_CONFLICT",
+                retryable=True,
+            )
+        except (TaskNotFound, ValueError):
+            return _document_delivery_failure(
+                "TASK_ARTIFACT_REFRESH_FAILED",
+                retryable=True,
+            )
+        return _reissued_document_delivery(refreshed, reused=False)
+
     def _materialize_document_downloads(self, *, session: dict, result: dict) -> dict:
         public_result = {key: value for key, value in result.items() if key != "items"}
         public_items = []
@@ -3270,6 +3373,29 @@ def _document_delivery_failure(error_code: str, *, retryable: bool) -> dict:
             "code": error_code,
             "message": "AgentBridge could not prepare the OA certificate attachment.",
             "retryable": retryable,
+        },
+    }
+
+
+def _reissued_document_delivery(artifact: dict, *, reused: bool) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "schemaVersion": "agentbridge.document_delivery.v1",
+        "status": "succeeded",
+        "file": {
+            "downloadId": artifact.get("source_ref"),
+            "filename": artifact["filename"],
+            "contentType": artifact["content_type"],
+            "size": artifact["byte_size"],
+            "mediaUrl": artifact["download_url"],
+            "expiresAt": artifact["expires_at"],
+            "artifactId": artifact["artifact_id"],
+            "artifactReused": reused,
+        },
+        "hostDelivery": {
+            "mode": "direct_attachment",
+            "oneFilePerMessage": True,
+            "handledByHost": True,
         },
     }
 

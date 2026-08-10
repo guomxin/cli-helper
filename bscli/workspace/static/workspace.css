@@ -692,9 +692,22 @@ code {
   font-size: 11px;
 }
 
+.task-artifact-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .task-artifact-download {
   min-height: 32px;
   padding: 0 11px;
+}
+
+.task-artifact-reissue {
+  min-height: 32px;
+  padding: 0 11px;
+  white-space: nowrap;
 }
 
 @keyframes live-pulse {

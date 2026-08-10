@@ -825,21 +825,47 @@ function scrollChat() {
 
 async function hydrateTaskCards({ render = true } = {}) {
   try {
-    const result = await api("/api/tasks?active_only=false&limit=30");
+    const [taskResponse, historyResponse] = await Promise.allSettled([
+      api("/api/tasks?active_only=false&limit=30"),
+      api("/api/artifacts/history?limit=20"),
+    ]);
+    if (taskResponse.status !== "fulfilled") {
+      throw taskResponse.reason;
+    }
+    const result = taskResponse.value;
+    const artifactHistory = historyResponse.status === "fulfilled"
+      ? historyResponse.value.items || []
+      : [];
     const active = new Set(["active", "waiting_user", "running"]);
     const recentCutoff = Date.now() - 6 * 60 * 60 * 1000;
-    const candidates = result.items
+    const recentCandidates = result.items
       .filter((task) => {
         const updatedAt = Date.parse(task.updated_at || "");
         return active.has(task.status) ||
           (Number.isFinite(updatedAt) && updatedAt >= recentCutoff);
       })
-      .slice(0, 8)
-      .reverse();
+      .slice(0, 8);
+    const recentIds = new Set(
+      recentCandidates.map((task) => task.task_id),
+    );
+    const historicalDetails = new Map(
+      artifactHistory
+        .filter((detail) => detail?.task?.task_id)
+        .map((detail) => [detail.task.task_id, detail]),
+    );
+    const candidates = [
+      ...recentCandidates,
+      ...artifactHistory
+        .map((detail) => detail.task)
+        .filter((task) => !recentIds.has(task.task_id)),
+    ].reverse();
     const details = await Promise.allSettled(
-      candidates.map((task) =>
-        api(`/api/tasks/${encodeURIComponent(task.task_id)}`),
-      ),
+      candidates.map((task) => {
+        if (!recentIds.has(task.task_id)) {
+          return Promise.resolve(historicalDetails.get(task.task_id));
+        }
+        return api(`/api/tasks/${encodeURIComponent(task.task_id)}`);
+      }),
     );
     const candidateIds = new Set(candidates.map((task) => task.task_id));
     details.forEach((result) => {
@@ -971,7 +997,10 @@ function upsertTaskCard(result, { render = true } = {}) {
     );
   }
   if (facts.childElementCount) card.append(facts);
-  appendArtifactList(card, result.artifacts, { compact: true });
+  appendArtifactList(card, result.artifacts, {
+    compact: true,
+    taskId: task.task_id,
+  });
 
   const actions = document.createElement("div");
   actions.className = "application-card-actions";
@@ -1168,7 +1197,7 @@ function renderTaskDetail(result) {
     detail.append(band);
   }
 
-  appendArtifactList(detail, result.artifacts);
+  appendArtifactList(detail, result.artifacts, { taskId: task.task_id });
 
   const timeline = document.createElement("div");
   timeline.className = "timeline";
@@ -1523,12 +1552,17 @@ function eventLabel(type) {
       "task.operation.outcome_unknown": "操作结果待核对",
       "task.canceled": "任务已取消",
       "task.artifact.ready": "任务文件已就绪",
+      "task.artifact.refreshed": "文件下载已重新生成",
       "task.completed": "任务已完成",
     }[type] || type.replaceAll(".", " / ")
   );
 }
 
-function appendArtifactList(container, artifacts, { compact = false } = {}) {
+function appendArtifactList(
+  container,
+  artifacts,
+  { compact = false, taskId = null } = {},
+) {
   const items = Array.isArray(artifacts) ? artifacts : [];
   if (!items.length) return;
   const section = document.createElement("section");
@@ -1565,14 +1599,62 @@ function appendArtifactList(container, artifacts, { compact = false } = {}) {
       download.textContent = "下载";
       row.append(download);
     } else {
+      const actions = document.createElement("div");
+      actions.className = "task-artifact-actions";
       const state = document.createElement("span");
       state.className = "task-artifact-expired";
       state.textContent = "已过期";
-      row.append(state);
+      actions.append(state);
+      if (
+        artifact.artifact_type === "certificate_scan" &&
+        taskId &&
+        artifact.artifact_id
+      ) {
+        const reissue = document.createElement("button");
+        reissue.type = "button";
+        reissue.className = "secondary task-artifact-reissue";
+        reissue.textContent = "重新生成下载";
+        reissue.addEventListener("click", () =>
+          reissueArtifact(taskId, artifact.artifact_id, reissue),
+        );
+        actions.append(reissue);
+      }
+      row.append(actions);
     }
     section.append(row);
   });
   container.append(section);
+}
+
+async function reissueArtifact(taskId, artifactId, button) {
+  if (!taskId || !artifactId || button.disabled) return;
+  button.disabled = true;
+  button.textContent = "正在重新获取";
+  try {
+    const result = await api(
+      `/api/tasks/${encodeURIComponent(taskId)}/artifacts/` +
+        `${encodeURIComponent(artifactId)}/reissue`,
+      { method: "POST", body: {}, csrf: true },
+    );
+    upsertTaskCard(result);
+    if (state.selectedTaskId === taskId) renderTaskDetail(result);
+    toast(
+      "新的下载链接已生成，30 分钟内有效。",
+      false,
+      `artifact:${artifactId}:reissued`,
+    );
+  } catch (error) {
+    toast(
+      friendlyError(error),
+      true,
+      `artifact:${artifactId}:${error.code || "reissue"}`,
+    );
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = "重新生成下载";
+    }
+  }
 }
 
 function formatBytes(value) {

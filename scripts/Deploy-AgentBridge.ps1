@@ -3,6 +3,7 @@ param(
     [string]$HostName = "10.10.50.213",
     [string]$SshUser = "root",
     [string]$IdentityFile = "",
+    [string]$KnownHostsFile = "",
     [string]$RemoteRoot = "/home/guomao/agentbridge",
     [string]$ServiceName = "agentbridge",
     [string]$VenvPath = "",
@@ -42,6 +43,9 @@ if (-not (Test-Path -LiteralPath $systemdUnit -PathType Leaf)) {
 
 if (-not $IdentityFile) {
     $IdentityFile = Join-Path $env:USERPROFILE ".ssh\id_ed25519_10_10_50_213"
+}
+if (-not $KnownHostsFile) {
+    $KnownHostsFile = Join-Path $repoRoot "deploy\ssh\agentbridge_known_hosts"
 }
 if (-not $VenvPath) {
     $cacheRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:USERPROFILE }
@@ -92,6 +96,9 @@ if ($PlanOnly) {
 if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
     throw "SSH identity file was not found"
 }
+if (-not (Test-Path -LiteralPath $KnownHostsFile -PathType Leaf)) {
+    throw "SSH known-hosts file was not found"
+}
 
 if (-not $SkipValidation) {
     $validationParameters = @{
@@ -140,6 +147,7 @@ if (-not $scp) { $scp = Get-Command scp -ErrorAction Stop }
 $connectionArguments = @(
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=15",
+    "-o", "UserKnownHostsFile=$((Resolve-Path $KnownHostsFile).Path)",
     "-i", (Resolve-Path $IdentityFile).Path
 )
 $target = "$SshUser@$HostName"

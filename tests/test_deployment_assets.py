@@ -15,15 +15,23 @@ class DeploymentAssetTests(unittest.TestCase):
 
     def test_deployment_installs_unit_and_checks_runtime_module_source(self) -> None:
         script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(encoding="utf-8")
+        known_hosts = ROOT / "deploy/ssh/agentbridge_known_hosts"
 
         for marker in (
             "systemd-analyze verify",
             "systemctl daemon-reload",
             "service did not stabilize on the release unit",
             "service resolves unexpected bscli module",
+            "UserKnownHostsFile=",
+            "SSH known-hosts file was not found",
             "$smokeScript -Check Release",
         ):
             self.assertIn(marker, script)
+        self.assertTrue(known_hosts.is_file())
+        self.assertIn(
+            "10.10.50.213 ssh-ed25519 ",
+            known_hosts.read_text(encoding="ascii"),
+        )
 
     def test_admin_console_is_deployed_with_tls_and_release_metadata(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
@@ -47,7 +55,6 @@ class DeploymentAssetTests(unittest.TestCase):
             'chmod 0640 "$root/config/release.env"',
         ):
             self.assertIn(marker, script)
-
     def test_openclaw_restart_has_recovery_guardrails_and_warmup_gate(self) -> None:
         deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"

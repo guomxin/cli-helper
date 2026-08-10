@@ -187,6 +187,73 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertTrue(diagnostics["isolation"]["passed"])
         self.assertNotIn(artifact_input["download_url"], str(diagnostics))
 
+    def test_expired_artifact_is_refreshed_in_place_and_remains_user_bound(self):
+        origin, _ = self._endpoint()
+        task, _ = self._task(origin["endpoint_id"])
+        artifact, _ = self.store.link_artifact(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            artifact={
+                "artifact_type": "certificate_scan",
+                "source_ref": "download-old",
+                "filename": "certificate.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 4096,
+                "download_url": (
+                    "https://10.10.50.213:8780/download/download-old/file"
+                ),
+                "expires_at": "2099-07-30T00:30:00+00:00",
+            },
+        )
+        with self.store._connect() as connection:
+            connection.execute(
+                "UPDATE task_artifacts SET state = 'expired' WHERE artifact_id = ?",
+                (artifact["artifact_id"],),
+            )
+
+        refreshed = self.store.refresh_artifact(
+            task_id=task["task_id"],
+            artifact_id=artifact["artifact_id"],
+            user_subject="user-a",
+            expected_source_ref="download-old",
+            artifact={
+                "source_ref": "download-new",
+                "filename": "certificate.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 8192,
+                "download_url": (
+                    "https://10.10.50.213:8780/download/download-new/file"
+                ),
+                "expires_at": "2099-07-30T01:30:00+00:00",
+            },
+        )
+
+        self.assertEqual(refreshed["artifact_id"], artifact["artifact_id"])
+        self.assertEqual(refreshed["source_ref"], "download-new")
+        self.assertEqual(refreshed["state"], "ready")
+        self.assertEqual(
+            len(
+                self.store.list_artifacts(
+                    task_id=task["task_id"],
+                    user_subject="user-a",
+                )
+            ),
+            1,
+        )
+        with self.assertRaises(TaskNotFound):
+            self.store.get_artifact(
+                task_id=task["task_id"],
+                artifact_id=artifact["artifact_id"],
+                user_subject="user-b",
+                include_source_ref=True,
+            )
+        events = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertEqual(events[-1]["event_type"], "task.artifact.refreshed")
+        self.assertNotIn("download-old", str(events[-1]["payload"]))
+
     def test_completes_artifact_task_once_and_notifies_companion(self):
         origin, _ = self._endpoint()
         companion, _ = self.store.ensure_endpoint(

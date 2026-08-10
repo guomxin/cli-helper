@@ -15,6 +15,12 @@ from bscli.workspace.gateway import GatewayRequestError, OpenClawGatewayClient
 _LOG = logging.getLogger(__name__)
 
 
+class WorkspaceArtifactError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class WorkspaceChatResult:
     run_id: str | None
@@ -155,6 +161,67 @@ class WorkspaceApplication:
             "artifacts": [_public_artifact(item) for item in artifacts],
             "interaction": interaction,
         }
+
+    def artifact_history(self, account: dict, *, limit: int = 20) -> list[dict]:
+        limit = min(max(int(limit), 1), 50)
+        artifacts = self.service.tasks.list_user_artifacts(
+            user_subject=account["user_subject"],
+            limit=min(max(limit * 10, 100), 500),
+        )
+        artifacts.sort(
+            key=lambda item: str(item.get("updated_at") or ""),
+            reverse=True,
+        )
+        grouped: dict[str, list[dict]] = {}
+        for artifact in artifacts:
+            grouped.setdefault(artifact["task_id"], []).append(artifact)
+        items = []
+        for task_id, task_artifacts in grouped.items():
+            if len(items) >= limit:
+                break
+            task = self.service.tasks.get_task(
+                task_id,
+                user_subject=account["user_subject"],
+            )
+            items.append(
+                {
+                    "task": _public_task(task),
+                    "events": [],
+                    "artifacts": [
+                        _public_artifact(item) for item in task_artifacts
+                    ],
+                    "interaction": None,
+                }
+            )
+        return items
+
+    def reissue_artifact(
+        self,
+        account: dict,
+        *,
+        task_id: str,
+        artifact_id: str,
+    ) -> dict:
+        result = self.service.reissue_document_download(
+            user_subject=account["user_subject"],
+            task_id=task_id,
+            artifact_id=artifact_id,
+        )
+        if result.get("status") != "succeeded":
+            code = str(result.get("error", {}).get("code") or "REISSUE_FAILED")
+            messages = {
+                "LOGIN_REQUIRED": "OA 登录已失效，请先登录后再重新生成下载。",
+                "DOWNLOAD_NOT_FOUND": "原文件记录不存在，无法重新生成下载。",
+                "DOWNLOAD_ACCESS_DENIED": "无权重新生成这份文件。",
+                "DOWNLOAD_INTEGRITY_FAILED": "原文件记录校验失败，无法重新生成下载。",
+                "ARTIFACT_REISSUE_UNSUPPORTED": "这个文件暂不支持重新生成下载。",
+                "ARTIFACT_REISSUE_CONFLICT": "文件已在另一端更新，请刷新后重试。",
+            }
+            raise WorkspaceArtifactError(
+                code,
+                messages.get(code, "重新获取 OA 文件失败，请稍后再试。"),
+            )
+        return self.task_detail(account, task_id)
 
     def continue_task(self, account: dict, task_id: str) -> dict:
         response = self.service.resolve_host_task_continuation(
