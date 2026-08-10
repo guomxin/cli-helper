@@ -739,15 +739,26 @@ class WorkspaceApplicationTests(unittest.TestCase):
             ]
             self.assertEqual(len(timeline_deliveries), 4)
 
-    def test_workspace_chat_forwards_validated_image_without_timeline_payload(self) -> None:
+    def test_workspace_chat_persists_and_forwards_governed_timeline_image(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
             account = _create_account(
                 service,
                 user_subject="user-a",
                 username="alice",
-                endpoint_key="workspace:alice",
-                client_type="web",
+                endpoint_key="telegram:*:alice",
+                client_type="telegram",
+            )
+            service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-alice",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:alice",
+                client_type="telegram",
+                external_subject="alice",
+                conversation_ref="agent:main:telegram:direct:alice",
+                capabilities=["direct_status", "timeline_message"],
+                route={"channel": "telegram", "to": "alice"},
             )
             gateway = FakeGateway()
             app = WorkspaceApplication(service=service, gateway=gateway)
@@ -779,9 +790,34 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )
             self.assertEqual(sent["attachments"][0]["mimeType"], "image/png")
             self.assertEqual(sent["attachments"][0]["content"], image_content)
-            timeline = json.dumps(app.list_timeline(account), ensure_ascii=False)
-            self.assertIn("（附 1 张图片）", timeline)
+            timeline_items = app.list_timeline(account)
+            self.assertEqual(timeline_items[0]["text"], "读取图片中的软著名称")
+            attachments = timeline_items[0]["payload"]["attachments"]
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["fileName"], "clipboard.png")
+            self.assertRegex(
+                attachments[0]["mediaUrl"],
+                r"^http://127\.0\.0\.1:8780/media/.+/file$",
+            )
+            timeline = json.dumps(timeline_items, ensure_ascii=False)
             self.assertNotIn(image_content, timeline)
+            telegram = service.tasks.endpoint_for_key(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:alice",
+            )
+            deliveries = [
+                item
+                for item in service.tasks.list_outbox(
+                    user_subject="user-a",
+                    endpoint_id=telegram["endpoint_id"],
+                )
+                if item["payload_type"] == "timeline_message"
+            ]
+            self.assertEqual(
+                deliveries[0]["payload"]["attachments"][0]["fileName"],
+                "clipboard.png",
+            )
 
     def test_timeline_is_isolated_by_workspace_identity(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1665,6 +1701,9 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("response.body.getReader()", script)
         self.assertIn("activeStreams: new Map()", script)
         self.assertIn("reconcileOriginChatMessage", script)
+        self.assertIn("timelineEntryImages", script)
+        self.assertIn("removeMatchingHistoryMessage", script)
+        self.assertIn("请处理附加图片中的内容。", script)
         self.assertIn("activeStream.controller.abort()", script)
         self.assertIn("await reader.cancel().catch(() => {})", script)
         self.assertIn("parseSseBlock", script)

@@ -957,7 +957,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Fetch one certificate selected by oa_certificate_search into AgentBridge's short-lived cache. Call this once per download_id. The OpenClaw host adapter delivers the resulting file as one attachment message, so do not create local download scripts and do not repeat the returned media URL in a MEDIA line.",
+      "description": "Fetch one certificate selected by oa_certificate_search into AgentBridge's short-lived cache. Call this once per download_id. The OpenClaw host adapter delivers the resulting file as one attachment message, so do not create local download scripts and do not repeat the returned media URL in a MEDIA line. The tool confirms that the file is prepared, not that every endpoint has acknowledged delivery; describe it as prepared or being sent.",
       "inputSchema": {
         "properties": {
           "download_id": {
@@ -988,7 +988,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Fetch 1 to 20 certificate results selected by oa_certificate_search in one central OA session. Pass every selected download ID in one call. AgentBridge reuses one browser worker where possible and the OpenClaw host delivers each original file in its own attachment message. Do not call the singular prepare tool for the same IDs and do not repeat media URLs in model output.",
+      "description": "Fetch 1 to 20 certificate results selected by oa_certificate_search in one central OA session. Pass every selected download ID in one call. AgentBridge reuses one browser worker where possible and the OpenClaw host delivers each original file in its own attachment message. Do not call the singular prepare tool for the same IDs and do not repeat media URLs in model output. The tool confirms that files are prepared, not that every endpoint has acknowledged delivery; describe them as prepared or being sent.",
       "inputSchema": {
         "properties": {
           "download_ids": {

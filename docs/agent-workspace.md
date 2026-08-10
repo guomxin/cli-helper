@@ -5,7 +5,7 @@
 > 更新日期：2026-08-10
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.28
+> `agentbridge-interactions` 0.4.29
 
 ## 1. 定位
 
@@ -73,7 +73,7 @@ Agent Workspace 是普通用户使用智能体的独立网页客户端，与 Tel
 5. 插件把该网页 OpenClaw Session 固定到对应身份；
 6. BFF 再调用 `chat.send`。
 
-图片附件沿用同一条身份绑定与流式发送连接。浏览器一次最多提交 4 张图片；服务端重新校验 base64、实际文件头、单张 6 MiB 和合计 12 MiB 上限，再使用 OpenClaw 原生 `attachments` 参数传入模型。图片字节不写入 Task Hub 文本时间线、不进入命令行参数和应用日志；跨端时间线只保留“附几张图片”的提示，因此刷新页面后不会长期保存图片缩略图。写操作仍须经过原有字段卡和授权卡，图片本身不能绕过工具 scope 或可信交互。
+图片附件沿用同一条身份绑定与流式发送连接。浏览器一次最多提交 4 张图片；服务端重新校验 base64、实际文件头、单张 6 MiB 和合计 12 MiB 上限，再使用 OpenClaw 原生 `attachments` 参数传入模型。通过校验的图片同时进入 AgentBridge 中央附件存储，时间线只保存有序附件引用、类型、大小和到期时间，不保存 Base64；默认保留 7 天。网页任务结束、刷新或服务重启后仍可恢复缩略图，同一 `userSubject` 的 Telegram/微信端收到原图；通道不支持图片时降级为受控 HTTPS 链接。写操作仍须经过原有字段卡和授权卡，图片本身不能绕过工具 scope 或可信交互。
 
 进程内绑定只作为缓存。若 OpenClaw 在 Gateway RPC 与 Agent Runtime 工具创建之间
 重建插件实例或清空缓存，插件会使用当前候选 Bearer Token 调用宿主私有只读工具

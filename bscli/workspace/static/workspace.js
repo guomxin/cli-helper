@@ -327,6 +327,8 @@ async function loadChat() {
 function messageElement(message) {
   const item = document.createElement("article");
   item.className = `message ${message.role}`;
+  item.dataset.messageRole = String(message.role || "");
+  item.dataset.messageTextHash = textHash(message.text);
   const text = document.createElement("div");
   text.textContent = message.text;
   item.append(text);
@@ -335,8 +337,13 @@ function messageElement(message) {
     images.className = "message-image-list";
     message.images.forEach((image) => {
       const preview = document.createElement("img");
-      preview.src = image.dataUrl;
+      preview.src = image.dataUrl || image.mediaUrl;
       preview.alt = image.fileName || "附加图片";
+      preview.loading = "lazy";
+      preview.addEventListener("error", () => {
+        preview.classList.add("unavailable");
+        preview.alt = `${image.fileName || "附加图片"}（已不可用）`;
+      });
       images.append(preview);
     });
     item.append(images);
@@ -395,6 +402,7 @@ function ingestTimelineEntry(entry, render = true) {
       item = messageElement({
         role: entry.role === "user" ? "user" : "assistant",
         text: entry.text,
+        images: timelineEntryImages(entry),
         timestamp: entry.created_at,
         sourceLabel: entry.source?.display_label || "其他端",
       });
@@ -607,9 +615,11 @@ async function sendChat(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const textarea = form.elements.message;
-  const message = textarea.value.trim();
-  if (!message) return;
   const attachments = state.composerAttachments.map((item) => ({ ...item }));
+  const message =
+    textarea.value.trim() ||
+    (attachments.length > 0 ? "请处理附加图片中的内容。" : "");
+  if (!message) return;
   textarea.value = "";
   clearComposerAttachments();
   await executeChatMessage(message, form, attachments);
@@ -820,8 +830,35 @@ function unregisterActiveStream(activeStream) {
 }
 
 function reconcileOriginChatMessage(entry) {
-  if (entry?.role !== "assistant" || !entry.text) return;
+  if (!entry?.text) return;
   const messageKey = String(entry.message_key || "");
+  if (entry.role === "user") {
+    const images = timelineEntryImages(entry);
+    if (images.length === 0 || !entry.entry_id) return;
+    const localPrefix = "workspace:user:";
+    if (messageKey.startsWith(localPrefix)) {
+      state.localMessages.delete(messageKey.slice(localPrefix.length));
+    }
+    removeMatchingHistoryMessage(entry);
+    let item = state.syncedMessages.get(entry.entry_id);
+    if (!item) {
+      item = messageElement({
+        role: "user",
+        text: entry.text,
+        images,
+        timestamp: entry.created_at,
+      });
+      state.syncedMessages.set(entry.entry_id, item);
+    }
+    setTimelineNode(item, {
+      key: `timeline:${entry.entry_id}`,
+      createdAt: entry.created_at,
+      order: Number(entry.sequence) || 0,
+    });
+    renderChatTimeline();
+    return;
+  }
+  if (entry.role !== "assistant") return;
   const failurePrefix = "workspace:assistant:error:";
   const finalPrefix = "workspace:assistant:";
   const failed = messageKey.startsWith(failurePrefix);
@@ -831,21 +868,87 @@ function reconcileOriginChatMessage(entry) {
       ? messageKey.slice(finalPrefix.length)
       : "";
   const activeStream = state.activeStreams.get(runId);
-  if (!activeStream || activeStream.terminal) return;
-  activeStream.terminal = true;
-  activeStream.timelineCompleted = true;
-  if (failed) {
-    renderRunFailure(
-      runId,
-      entry.text,
-      false,
-      activeStream.requestMessage,
-      activeStream.requestAttachments,
-    );
-  } else {
-    handleChatDelta({ runId, state: "final", text: entry.text });
+  if (activeStream) {
+    if (!activeStream.terminal) {
+      activeStream.terminal = true;
+      activeStream.timelineCompleted = true;
+      if (failed) {
+        renderRunFailure(
+          runId,
+          entry.text,
+          false,
+          activeStream.requestMessage,
+          activeStream.requestAttachments,
+        );
+      } else {
+        handleChatDelta({ runId, state: "final", text: entry.text });
+      }
+      activeStream.controller.abort();
+    }
+    return;
   }
-  activeStream.controller.abort();
+  if (!entry.entry_id) return;
+  removeMatchingHistoryMessage(entry);
+  let item = state.syncedMessages.get(entry.entry_id);
+  if (!item) {
+    item = messageElement({
+      role: "assistant",
+      text: entry.text,
+      timestamp: entry.created_at,
+    });
+    state.syncedMessages.set(entry.entry_id, item);
+  }
+  setTimelineNode(item, {
+    key: `timeline:${entry.entry_id}`,
+    createdAt: entry.created_at,
+    order: Number(entry.sequence) || 0,
+  });
+  renderChatTimeline();
+}
+
+function timelineEntryImages(entry) {
+  const attachments = Array.isArray(entry?.payload?.attachments)
+    ? entry.payload.attachments
+    : [];
+  return attachments
+    .filter(
+      (attachment) =>
+        attachment?.type === "image" &&
+        typeof attachment.mediaUrl === "string" &&
+        attachment.mediaUrl,
+    )
+    .sort(
+      (left, right) =>
+        Number(left.ordinal || 0) - Number(right.ordinal || 0),
+    )
+    .map((attachment) => ({
+      mediaUrl: attachment.mediaUrl,
+      fileName: attachment.fileName || "附加图片",
+      mimeType: attachment.mimeType,
+    }));
+}
+
+function removeMatchingHistoryMessage(entry) {
+  const targetHash = textHash(entry.text);
+  const targetAt = parseTimestampMilliseconds(entry.created_at);
+  for (const [key, item] of state.historyMessages) {
+    if (
+      item.dataset.messageRole !== String(entry.role || "") ||
+      item.dataset.messageTextHash !== targetHash
+    ) {
+      continue;
+    }
+    const historyAt = Number(item.dataset.timelineAt);
+    if (
+      Number.isFinite(targetAt) &&
+      Number.isFinite(historyAt) &&
+      Math.abs(historyAt - targetAt) > 5 * 60 * 1000
+    ) {
+      continue;
+    }
+    state.historyMessages.delete(key);
+    return;
+  }
 }
 
 function parseSseBlock(block) {

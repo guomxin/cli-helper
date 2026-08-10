@@ -88,6 +88,7 @@ from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
+from bscli.auth.timeline_attachment import TrustedTimelineAttachmentApplication
 from bscli.auth.server import AuthServerConfig, create_auth_http_server
 from bscli.broker.credential import CredentialBroker
 from bscli.broker.remote_browser import (
@@ -754,7 +755,9 @@ def create_central_mcp_server(
             "Fetch one certificate selected by oa_certificate_search into AgentBridge's "
             "short-lived cache. Call this once per download_id. The OpenClaw host adapter "
             "delivers the resulting file as one attachment message, so do not create local "
-            "download scripts and do not repeat the returned media URL in a MEDIA line."
+            "download scripts and do not repeat the returned media URL in a MEDIA line. "
+            "The tool confirms that the file is prepared, not that every endpoint has "
+            "acknowledged delivery; describe it as prepared or being sent."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -791,7 +794,9 @@ def create_central_mcp_server(
             "central OA session. Pass every selected download ID in one call. AgentBridge "
             "reuses one browser worker where possible and the OpenClaw host delivers each "
             "original file in its own attachment message. Do not call the singular prepare "
-            "tool for the same IDs and do not repeat media URLs in model output."
+            "tool for the same IDs and do not repeat media URLs in model output. The tool "
+            "confirms that files are prepared, not that every endpoint has acknowledged "
+            "delivery; describe them as prepared or being sent."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2747,12 +2752,16 @@ def serve_central_mcp(
         download_store=service.document_downloads,
         fetcher=service.fetch_document_download,
     )
+    timeline_attachment_application = TrustedTimelineAttachmentApplication(
+        attachment_store=service.timeline_attachments,
+    )
     auth_server = create_auth_http_server(
         config=auth_config,
         application=auth_application,
         action_application=action_application,
         field_application=field_application,
         download_application=download_application,
+        timeline_attachment_application=timeline_attachment_application,
         interactive_application=interactive_application,
     )
     admin_server = None

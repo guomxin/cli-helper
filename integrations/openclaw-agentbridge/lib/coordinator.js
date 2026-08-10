@@ -171,6 +171,7 @@ export class InteractionCoordinator {
     this.recentUserMessages.set(sessionKey, {
       text,
       capturedAt: this.now(),
+      taskRunRef: `turn:${randomUUID()}`,
     });
   }
 
@@ -272,11 +273,18 @@ export class InteractionCoordinator {
     this.pruneToolBindings();
   }
 
-  taskRunRefForToolCall(toolCallId, sessionKey) {
+  taskRunRefForToolCall(toolCallId, sessionKey, toolName = null) {
     const normalized = normalizeToolCallId(toolCallId);
     const binding = normalized ? this.toolBindings.get(normalized) : null;
     if (!binding || (binding.sessionKey && binding.sessionKey !== sessionKey)) {
       return normalized;
+    }
+    const recent = this.recentUserMessages.get(sessionKey);
+    if (
+      !INDEPENDENT_TASK_ENTRY_TOOLS.has(String(toolName || "")) &&
+      recent?.taskRunRef
+    ) {
+      return recent.taskRunRef;
     }
     return binding.runId || normalized;
   }
@@ -886,6 +894,17 @@ export class InteractionCoordinator {
             notification.artifact,
           );
         } else if (
+          notification.deliveryMode === "timeline_message" &&
+          typeof notification.message === "string" &&
+          Array.isArray(notification.attachments) &&
+          notification.attachments.length > 0
+        ) {
+          delivered = await this.deliverTimelineMessageDirect(
+            sessionKey,
+            notification.message,
+            notification.attachments,
+          );
+        } else if (
           ["status", "timeline_message"].includes(
             notification.deliveryMode,
           ) &&
@@ -1342,7 +1361,11 @@ export class InteractionCoordinator {
         .split(";", 1)[0]
         .trim()
         .toLowerCase() || file.contentType;
-    if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
+    if (
+      !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(
+        contentType,
+      )
+    ) {
       throw new Error("prepared document content type is unsupported");
     }
     const saved = await this.saveMediaBufferImpl(
@@ -1397,6 +1420,95 @@ export class InteractionCoordinator {
     } catch (error) {
       this.api.logger.warn(
         `AgentBridge prepared document fallback delivery failed: ${safeErrorCode(error)}`,
+      );
+      return false;
+    }
+  }
+
+  async deliverTimelineMessageDirect(sessionKey, text, attachments) {
+    const route = this.sessionRoutes.get(sessionKey);
+    if (!route) {
+      this.api.logger.warn(
+        "AgentBridge timeline media delivery unavailable because the private session route is missing",
+      );
+      return false;
+    }
+    const files = normalizeTimelineAttachments(
+      attachments,
+      this.config.allowedCardOrigins,
+    );
+    if (files.length === 0) {
+      return this.deliverTextDirect(sessionKey, text);
+    }
+
+    let adapter;
+    try {
+      adapter = await this.api.runtime.channel.outbound.loadAdapter(
+        route.channel,
+      );
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge timeline media adapter unavailable: ${safeErrorCode(error)}`,
+      );
+    }
+    if (!adapter?.sendPayload) {
+      return this.deliverTimelineAttachmentLinks(sessionKey, text, files);
+    }
+
+    let materialized;
+    try {
+      materialized = await Promise.all(
+        files.map(async (file) => ({
+          ...file,
+          localMediaPath: await this.materializePreparedDocument(file),
+        })),
+      );
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge timeline media materialization failed: ${safeErrorCode(error)}`,
+      );
+      return this.deliverTimelineAttachmentLinks(sessionKey, text, files);
+    }
+
+    for (const [index, file] of materialized.entries()) {
+      try {
+        const delivered = await this.sendRoutePayload(sessionKey, route, {
+          text:
+            index === 0
+              ? text
+              : `附加图片 ${index + 1}/${materialized.length}：${file.filename}`,
+          mediaUrl: file.localMediaPath,
+        });
+        if (delivered) {
+          continue;
+        }
+      } catch (error) {
+        this.api.logger.warn(
+          `AgentBridge timeline media upload failed: ${safeErrorCode(error)}`,
+        );
+      }
+      return this.deliverTimelineAttachmentLinks(sessionKey, text, files);
+    }
+    this.api.logger.info(
+      `AgentBridge timeline media delivered directly (channel=${route.channel}, count=${materialized.length})`,
+    );
+    return true;
+  }
+
+  async deliverTimelineAttachmentLinks(sessionKey, text, files) {
+    const fallback = [
+      text,
+      "附加图片：",
+      ...files.map(
+        (file, index) =>
+          `${index + 1}. ${file.filename}\n${file.mediaUrl}`,
+      ),
+    ].join("\n");
+    try {
+      return await this.deliverTextDirect(sessionKey, fallback);
+    } catch (error) {
+      this.api.logger.warn(
+        `AgentBridge timeline media fallback failed: ${safeErrorCode(error)}`,
       );
       return false;
     }
@@ -1757,6 +1869,7 @@ async function saveOpenClawMediaBuffer(
     "application/pdf": ".pdf",
     "image/jpeg": ".jpg",
     "image/png": ".png",
+    "image/webp": ".webp",
   }[contentType];
   if (!extension) {
     throw new Error("prepared document content type is unsupported");
@@ -1787,6 +1900,57 @@ function resolveOpenClawStateDir() {
     return path.dirname(path.resolve(expand(configPath)));
   }
   return path.join(home, ".openclaw");
+}
+
+function normalizeTimelineAttachments(values, allowedOrigins) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .slice(0, 4)
+    .map((value) => normalizeTimelineAttachment(value, allowedOrigins))
+    .filter(Boolean)
+    .sort((left, right) => left.ordinal - right.ordinal);
+}
+
+function normalizeTimelineAttachment(value, allowedOrigins) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const filename = String(value.fileName || "").trim();
+  const mediaUrl = String(value.mediaUrl || "").trim();
+  if (!filename || !mediaUrl || value.type !== "image") {
+    return null;
+  }
+  try {
+    const parsed = new URL(mediaUrl);
+    const trustedOrigins = new Set(allowedOrigins || []);
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      !trustedOrigins.has(parsed.origin) ||
+      !/^\/media\/[A-Za-z0-9_-]{32,128}\/file$/.test(parsed.pathname) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const contentType = String(value.mimeType || "").trim().toLowerCase();
+  if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+    return null;
+  }
+  return {
+    filename: filename.slice(0, 120),
+    mediaUrl,
+    contentType,
+    ordinal: Number.isFinite(Number(value.ordinal))
+      ? Number(value.ordinal)
+      : 0,
+  };
 }
 
 function normalizePreparedDocuments(payload, allowedOrigins) {

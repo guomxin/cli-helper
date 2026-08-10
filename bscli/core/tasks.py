@@ -646,11 +646,12 @@ class TaskHubStore:
                 connection.execute(
                     """
                     UPDATE agent_tasks
-                    SET active_conversation_ref = ?, updated_at = ?
+                    SET active_conversation_ref = ?, title = ?, updated_at = ?
                     WHERE task_id = ?
                     """,
                     (
                         active_conversation_ref,
+                        title,
                         now,
                         existing["task_id"],
                     ),
@@ -1288,6 +1289,7 @@ class TaskHubStore:
         role: str,
         text: str,
         task_id: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> tuple[dict, bool]:
         user_subject = _required_text(user_subject, "user_subject", 256)
         message_key = _required_text(message_key, "message_key", 768)
@@ -1297,6 +1299,7 @@ class TaskHubStore:
         normalized_task_id = (
             _required_text(task_id, "task_id", 128) if task_id else None
         )
+        payload_json = _canonical_json(_safe_object(payload))
         now = _utc_now()
         dedupe_key = f"message:{message_key}"
 
@@ -1331,7 +1334,7 @@ class TaskHubStore:
                     entry_id, user_subject, entry_type, dedupe_key,
                     source_endpoint_id, task_id, role, text,
                     payload_json, created_at
-                ) VALUES (?, ?, 'chat_message', ?, ?, ?, ?, ?, '{}', ?)
+                ) VALUES (?, ?, 'chat_message', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry_id,
@@ -1341,6 +1344,7 @@ class TaskHubStore:
                     normalized_task_id,
                     role,
                     normalized_text,
+                    payload_json,
                     now,
                 ),
             )
@@ -2793,12 +2797,14 @@ class TaskHubStore:
             """,
             (entry["user_subject"], source_endpoint_id),
         ).fetchall()
+        entry_payload = json.loads(entry["payload_json"] or "{}")
         payload = _canonical_json(
             {
                 "entryId": entry["entry_id"],
                 "sequence": entry["sequence"],
                 "role": entry["role"],
                 "text": entry["text"],
+                "attachments": list(entry_payload.get("attachments") or []),
                 "createdAt": entry["created_at"],
                 "source": {
                     "endpointId": source_endpoint_id,

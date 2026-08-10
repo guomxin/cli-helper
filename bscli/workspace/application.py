@@ -11,6 +11,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.timeline_attachments import public_attachment
 from bscli.workspace.gateway import GatewayRequestError, OpenClawGatewayClient
 
 
@@ -154,6 +155,12 @@ class WorkspaceApplication:
             user_subject=account["user_subject"],
             limit=100,
         )
+        artifacts.sort(
+            key=lambda item: (
+                str(item.get("created_at") or ""),
+                str(item.get("artifact_id") or ""),
+            )
+        )
         interaction = None
         if task.get("current_interaction_id"):
             try:
@@ -193,6 +200,12 @@ class WorkspaceApplication:
             task = self.service.tasks.get_task(
                 task_id,
                 user_subject=account["user_subject"],
+            )
+            task_artifacts.sort(
+                key=lambda item: (
+                    str(item.get("created_at") or ""),
+                    str(item.get("artifact_id") or ""),
+                )
             )
             items.append(
                 {
@@ -393,9 +406,11 @@ class WorkspaceApplication:
         attachments: list[dict] | None = None,
     ) -> Iterator[dict[str, Any]]:
         message = str(message or "").strip()
+        normalized_attachments = _validated_chat_attachments(attachments)
+        if not message and normalized_attachments:
+            message = "请处理附加图片中的内容。"
         if not message or len(message) > 20_000:
             raise ValueError("chat message is empty or too long")
-        normalized_attachments = _validated_chat_attachments(attachments)
         effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
 
         def synchronized_stream() -> Iterator[dict[str, Any]]:
@@ -404,15 +419,25 @@ class WorkspaceApplication:
             assistant_recorded = False
             accepted_run_id = ""
             had_tool_activity = False
+            message_key = f"workspace:user:{effective_key}"
+            timeline_attachments = []
+            if normalized_attachments:
+                stored = self.service.timeline_attachments.create_many(
+                    user_subject=account["user_subject"],
+                    message_key=message_key,
+                    attachments=normalized_attachments,
+                    media_base_url=self.service.trusted_card_base_url,
+                )
+                timeline_attachments = [
+                    public_attachment(item) for item in stored
+                ]
             self._append_workspace_message(
                 account,
                 role="user",
-                text=(
-                    message
-                    if not normalized_attachments
-                    else f"{message}\n（附 {len(normalized_attachments)} 张图片）"
-                ),
-                message_key=f"workspace:user:{effective_key}",
+                text=message,
+                message_key=message_key,
+                payload={"attachments": timeline_attachments},
+                required=bool(timeline_attachments),
             )
             try:
                 self._claim_chat_account(account)
@@ -544,9 +569,13 @@ class WorkspaceApplication:
         role: str,
         text: str,
         message_key: str,
+        payload: dict[str, Any] | None = None,
+        required: bool = False,
     ) -> None:
         endpoint_id = _safe_text(account.get("endpoint_id"), 128)
         if not endpoint_id:
+            if required:
+                raise RuntimeError("workspace endpoint is unavailable")
             return
         try:
             self.service.tasks.append_timeline_message(
@@ -555,8 +584,11 @@ class WorkspaceApplication:
                 message_key=message_key,
                 role=role,
                 text=text,
+                payload=payload,
             )
         except (KeyError, RuntimeError, ValueError, sqlite3.Error):
+            if required:
+                raise
             # Chat remains available if the optional cross-end projection fails.
             return
 

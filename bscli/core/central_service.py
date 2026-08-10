@@ -164,6 +164,7 @@ from bscli.core.document_downloads import (
     DocumentDownloadStateError,
     DocumentDownloadStore,
 )
+from bscli.core.timeline_attachments import TimelineAttachmentStore
 from bscli.core.field_submissions import (
     FieldSubmissionAccessDenied,
     FieldSubmissionIntegrityError,
@@ -481,6 +482,7 @@ class CentralCapabilityService:
         self.challenges = AuthChallengeStore(self.db_path)
         self.field_submissions = FieldSubmissionStore(self.db_path)
         self.document_downloads = DocumentDownloadStore(self.db_path)
+        self.timeline_attachments = TimelineAttachmentStore(self.db_path)
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
         self.tasks = TaskHubStore(self.db_path)
@@ -843,6 +845,9 @@ class CentralCapabilityService:
             "deferred": 0,
             "outsideLease": 0,
             "inactive": 0,
+            "expiredTimelineAttachments": self.timeline_attachments.prune_expired(
+                now=checked_at
+            ),
         }
         lease = timedelta(seconds=activity_lease_seconds)
         for session in active_sessions:
@@ -1045,6 +1050,7 @@ class CentralCapabilityService:
                         "interaction": None,
                         "message": _timeline_notification_message(event),
                         "timeline": event,
+                        "attachments": list(event.get("attachments") or []),
                     }
                 )
                 continue
@@ -2557,6 +2563,8 @@ class CentralCapabilityService:
                 "mode": "direct_attachment",
                 "oneFilePerMessage": True,
                 "handledByHost": True,
+                "state": "prepared",
+                "completionMeaning": "file_ready_not_endpoint_acknowledged",
             },
         }
 
@@ -2710,6 +2718,8 @@ class CentralCapabilityService:
                 "mode": "direct_attachment_batch",
                 "oneFilePerMessage": True,
                 "handledByHost": True,
+                "state": "prepared",
+                "completionMeaning": "files_ready_not_endpoint_acknowledged",
             },
         }
 

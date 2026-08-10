@@ -14,6 +14,7 @@ from bscli.auth.card import MAX_AUTH_BODY_BYTES, AuthCardResponse, TrustedAuthAp
 from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
+from bscli.auth.timeline_attachment import TrustedTimelineAttachmentApplication
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 
 
@@ -89,6 +90,9 @@ def create_auth_http_server(
     action_application: TrustedActionApplication | None = None,
     field_application: TrustedFieldApplication | None = None,
     download_application: TrustedDocumentDownloadApplication | None = None,
+    timeline_attachment_application: (
+        TrustedTimelineAttachmentApplication | None
+    ) = None,
     interactive_application: TrustedInteractiveBrowserApplication | None = None,
 ) -> ThreadingHTTPServer:
     expected_scheme = urlparse(config.public_base_url).scheme.lower()
@@ -137,6 +141,17 @@ def create_auth_http_server(
             document_file_id = _document_file_id_from_path(self.path)
             if document_file_id is not None and download_application is not None:
                 self._send(download_application.get_file(document_file_id))
+                return
+            timeline_attachment_id = _timeline_attachment_id_from_path(self.path)
+            if (
+                timeline_attachment_id is not None
+                and timeline_attachment_application is not None
+            ):
+                self._send(
+                    timeline_attachment_application.get_file(
+                        timeline_attachment_id
+                    )
+                )
                 return
             card_application, card_id, presentation_id = self._card_target()
             if card_application is None or card_id is None:
@@ -300,6 +315,9 @@ def serve_auth_cards(
     action_application: TrustedActionApplication | None = None,
     field_application: TrustedFieldApplication | None = None,
     download_application: TrustedDocumentDownloadApplication | None = None,
+    timeline_attachment_application: (
+        TrustedTimelineAttachmentApplication | None
+    ) = None,
     interactive_application: TrustedInteractiveBrowserApplication | None = None,
 ) -> None:
     server = create_auth_http_server(
@@ -308,6 +326,7 @@ def serve_auth_cards(
         action_application=action_application,
         field_application=field_application,
         download_application=download_application,
+        timeline_attachment_application=timeline_attachment_application,
         interactive_application=interactive_application,
     )
     try:
@@ -386,6 +405,14 @@ def _document_download_id_from_path(path: str) -> str | None:
 def _document_file_id_from_path(path: str) -> str | None:
     match = re.fullmatch(
         r"/download/([A-Za-z0-9_-]{32,128})/file",
+        path.split("?", 1)[0],
+    )
+    return match.group(1) if match else None
+
+
+def _timeline_attachment_id_from_path(path: str) -> str | None:
+    match = re.fullmatch(
+        r"/media/([A-Za-z0-9_-]{32,128})/file",
         path.split("?", 1)[0],
     )
     return match.group(1) if match else None

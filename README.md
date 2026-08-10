@@ -267,6 +267,11 @@ and are deliberately absent from the plugin's model-visible native tool
 catalog. The independent [Agent Workspace](docs/agent-workspace.md) adds
 persistent web login, OpenClaw chat, task timelines, a Continue action, and
 endpoint visibility without placing MCP or Gateway tokens in the browser.
+Workspace image input is stored as user-bound, seven-day governed media: the
+timeline and notification outbox carry ordered opaque references rather than
+Base64. This lets a completed or refreshed web conversation restore its images
+and lets Telegram or WeChat receive the same media, with a trusted HTTPS-link
+fallback for text-only channels.
 Natural-language continuation can select one same-user task, reuse its pending
 trusted interaction, observe running or terminal state without duplicate work,
 or attach an explicit follow-up to the original task ID. Shared model Transcript

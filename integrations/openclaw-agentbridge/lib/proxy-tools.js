@@ -274,7 +274,10 @@ async function resolveTaskId({
     return resumedTaskId;
   }
   const runRef =
-    boundedText(taskRunRefResolver?.(toolCallId, sessionKey), 256) ||
+    boundedText(
+      taskRunRefResolver?.(toolCallId, sessionKey, descriptor.name),
+      256,
+    ) ||
     boundedText(context.runId, 256) ||
     boundedText(toolCallId, 256);
   if (!runRef) {

@@ -1125,6 +1125,41 @@ test("uses one host task run reference for multiple tools in the same agent run"
   );
 });
 
+test("uses one user-turn task reference when OpenClaw assigns per-tool run IDs", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  coordinator.recordUserMessage(
+    { sessionKey, content: "下载图片中的软著" },
+    { sessionKey },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-search-a",
+    runId: "call-search|fc-search",
+    sessionKey,
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-prepare-a",
+    runId: "call-prepare|fc-prepare",
+    sessionKey,
+  });
+
+  const searchRef = coordinator.taskRunRefForToolCall(
+    "tool-search-a",
+    sessionKey,
+    "oa_certificate_search",
+  );
+  const prepareRef = coordinator.taskRunRefForToolCall(
+    "tool-prepare-a",
+    sessionKey,
+    "oa_certificate_prepare_downloads",
+  );
+  assert.match(searchRef, /^turn:/);
+  assert.equal(prepareRef, searchRef);
+});
+
 test("restores a pending interaction and its original route on gateway start", async () => {
   const requests = [];
   const senderId = "7052061588";
@@ -1696,6 +1731,152 @@ test("delivers an ordered timeline message once and acknowledges it", async () =
   );
   assert.equal(acknowledgements.length, 1);
   assert.equal(acknowledgements[0].params.succeeded, true);
+});
+
+test("delivers governed timeline images with the ordered cross-end message", async () => {
+  const sessionKey = "agent:main:telegram:direct:1001";
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    documentFetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get(name) {
+          return name.toLowerCase() === "content-type"
+            ? "image/png"
+            : name.toLowerCase() === "content-length"
+              ? "12"
+              : null;
+        },
+      },
+      async arrayBuffer() {
+        return Buffer.from("timeline-png");
+      },
+    }),
+    saveMediaBufferImpl: async (_body, contentType) => ({
+      id: "timeline.png",
+      path: "C:/media/timeline.png",
+      size: 12,
+      contentType,
+    }),
+  });
+  const calls = [];
+  const attachmentId = "a".repeat(43);
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: sessionKey,
+            route: { channel: "telegram", to: "1001" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-timeline-image-1234567890",
+              deliveryMode: "timeline_message",
+              message: "【网页端 · 你】\n请识别图片",
+              attachments: [
+                {
+                  attachmentId,
+                  type: "image",
+                  mimeType: "image/png",
+                  fileName: "clipboard.png",
+                  mediaUrl: `${CARD_ORIGIN}/media/${attachmentId}/file`,
+                  ordinal: 0,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:1001",
+      channel: "telegram",
+      senderId: "1001",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/timeline.png");
+  assert.match(harness.sentPayloads[0].payload.text, /请识别图片/);
+  const acknowledgement = calls.find(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgement.params.succeeded, true);
+});
+
+test("falls back to governed timeline image links on a text-only channel", async () => {
+  const sessionKey = "agent:main:openclaw-weixin:direct:user-a";
+  const harness = fakeApi({ autoPoll: false });
+  harness.api.runtime.channel.outbound.loadAdapter = async () => ({
+    async sendText(context) {
+      harness.sentPayloads.push({ payload: { text: context.text } });
+      return { channel: "openclaw-weixin", messageId: "message-1" };
+    },
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const attachmentId = "b".repeat(43);
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "openclaw-weixin",
+            conversationRef: sessionKey,
+            route: { channel: "openclaw-weixin", to: "user-a" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-timeline-link-1234567890",
+              deliveryMode: "timeline_message",
+              message: "【网页端 · 你】\n请识别图片",
+              attachments: [
+                {
+                  attachmentId,
+                  type: "image",
+                  mimeType: "image/png",
+                  fileName: "clipboard.png",
+                  mediaUrl: `${CARD_ORIGIN}/media/${attachmentId}/file`,
+                  ordinal: 0,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "openclaw-weixin:*:user-a",
+      channel: "openclaw-weixin",
+      senderId: "user-a",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.match(harness.sentPayloads[0].payload.text, /clipboard\.png/);
+  assert.match(harness.sentPayloads[0].payload.text, /\/media\/.+\/file/);
 });
 
 test("defers an undeliverable WeChat notification until the next inbound activity", async () => {
