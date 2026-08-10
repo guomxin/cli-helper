@@ -109,6 +109,7 @@ const REQUIRED_RELEASE_TOOLS = [
   "agentbridge_host_notification_ack",
   "oa_certificate_search",
   "oa_certificate_prepare_download",
+  "oa_certificate_prepare_downloads",
   "oa_business_trip_prepare",
   "oa_business_trip_save_draft",
   "oa_business_trip_submit_prepare",

@@ -286,8 +286,11 @@ export class InteractionCoordinator {
       event.result,
       this.config.mcpServerName,
     );
-    const file = normalizePreparedDocument(payload, this.config.allowedCardOrigins);
-    if (!file) {
+    const files = normalizePreparedDocuments(
+      payload,
+      this.config.allowedCardOrigins,
+    );
+    if (files.length === 0) {
       return null;
     }
     const toolCallId = normalizeToolCallId(event.toolCallId);
@@ -302,7 +305,14 @@ export class InteractionCoordinator {
     const previous = this.documentDeliveries.get(sessionKey) || Promise.resolve();
     const delivery = previous
       .catch(() => undefined)
-      .then(() => this.deliverPreparedDocumentDirect(sessionKey, file));
+      .then(async () => {
+        let delivered = true;
+        for (const file of files) {
+          delivered =
+            (await this.deliverPreparedDocumentDirect(sessionKey, file)) && delivered;
+        }
+        return delivered;
+      });
     this.documentDeliveries.set(sessionKey, delivery);
     return delivery.finally(() => {
       if (this.documentDeliveries.get(sessionKey) === delivery) {
@@ -1364,6 +1374,7 @@ export class InteractionCoordinator {
         await this.sendRoutePayload(sessionKey, route, {
           text,
           mediaUrl: localMediaPath,
+          forceDocument: true,
         })
       ) {
         this.api.logger.info(
@@ -1778,17 +1789,30 @@ function resolveOpenClawStateDir() {
   return path.join(home, ".openclaw");
 }
 
-function normalizePreparedDocument(payload, allowedOrigins) {
+function normalizePreparedDocuments(payload, allowedOrigins) {
+  if (payload?.schemaVersion === "agentbridge.document_delivery.v1") {
+    const file = normalizePreparedDocumentFile(payload.file, allowedOrigins);
+    return payload.status === "succeeded" && file ? [file] : [];
+  }
   if (
-    payload?.schemaVersion !== "agentbridge.document_delivery.v1" ||
-    payload.status !== "succeeded" ||
-    !payload.file ||
-    typeof payload.file !== "object"
+    payload?.schemaVersion !== "agentbridge.document_delivery_batch.v1" ||
+    !["succeeded", "partial"].includes(payload.status) ||
+    !Array.isArray(payload.files)
   ) {
+    return [];
+  }
+  return payload.files
+    .slice(0, 20)
+    .map((file) => normalizePreparedDocumentFile(file, allowedOrigins))
+    .filter(Boolean);
+}
+
+function normalizePreparedDocumentFile(file, allowedOrigins) {
+  if (!file || typeof file !== "object") {
     return null;
   }
-  const filename = String(payload.file.filename || "").trim();
-  const mediaUrl = String(payload.file.mediaUrl || "").trim();
+  const filename = String(file.filename || "").trim();
+  const mediaUrl = String(file.mediaUrl || "").trim();
   if (!filename || !mediaUrl) {
     return null;
   }
@@ -1809,7 +1833,7 @@ function normalizePreparedDocument(payload, allowedOrigins) {
   } catch {
     return null;
   }
-  const contentType = String(payload.file.contentType || "").trim().toLowerCase();
+  const contentType = String(file.contentType || "").trim().toLowerCase();
   if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
     return null;
   }

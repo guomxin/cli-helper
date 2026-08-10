@@ -90,41 +90,50 @@ def search_certificate_documents(
             category_label=_CERTIFICATE_CATEGORIES[current_type],
         )
         for query_index, query in enumerate(queries):
-            search_query = _certificate_search_query(query, current_type)
-            rows = _search_current_folder(
-                worker,
-                frame=frame,
-                query=search_query,
-            )
-            for row in rows:
-                if not _row_matches_query(row, search_query):
-                    continue
-                if not _certificate_version_matches(
-                    row,
-                    document_type=current_type,
-                    query=query,
-                ):
-                    continue
-                public_item = _public_document_item(row, current_type, query)
-                public_item["query"] = query
-                public_item["_query_index"] = query_index
-                if not row["download_acl"] or not row["read_acl"]:
-                    inaccessible_count += 1
-                    continue
-                public_item["_download_reference"] = {
-                    "resource_id": row["resource_id"],
-                    "source_id": row["source_id"],
-                    "filename": row["filename"],
-                    "display_size": row["display_size"],
-                    "document_type": current_type,
-                    "category_label": _CERTIFICATE_CATEGORIES[current_type],
-                    "create_date": row["create_date"],
-                    "version": row["version"],
-                    "mime_type_id": row["mime_type_id"],
-                    "secret_level": row["secret_level"],
-                    "is_upload_file": row["is_upload_file"],
-                }
-                matches.append(public_item)
+            for search_query in _certificate_search_queries(query, current_type):
+                rows = _search_current_folder(
+                    worker,
+                    frame=frame,
+                    query=search_query,
+                )
+                accessible_matches = 0
+                for row in rows:
+                    if not _row_matches_query(row, search_query):
+                        continue
+                    if not _certificate_version_matches(
+                        row,
+                        document_type=current_type,
+                        query=query,
+                    ):
+                        continue
+                    public_item = _public_document_item(
+                        row,
+                        current_type,
+                        query,
+                        search_query=search_query,
+                    )
+                    public_item["query"] = query
+                    public_item["_query_index"] = query_index
+                    if not row["download_acl"] or not row["read_acl"]:
+                        inaccessible_count += 1
+                        continue
+                    public_item["_download_reference"] = {
+                        "resource_id": row["resource_id"],
+                        "source_id": row["source_id"],
+                        "filename": row["filename"],
+                        "display_size": row["display_size"],
+                        "document_type": current_type,
+                        "category_label": _CERTIFICATE_CATEGORIES[current_type],
+                        "create_date": row["create_date"],
+                        "version": row["version"],
+                        "mime_type_id": row["mime_type_id"],
+                        "secret_level": row["secret_level"],
+                        "is_upload_file": row["is_upload_file"],
+                    }
+                    matches.append(public_item)
+                    accessible_matches += 1
+                if accessible_matches:
+                    break
 
     match_counts = {
         _normalize_text(query): sum(
@@ -195,12 +204,64 @@ def fetch_certificate_document(
     base_url: str,
     reference: dict,
 ) -> dict:
-    reference = _validated_reference(reference)
-    frame = _open_certificate_category(
+    result = fetch_certificate_documents(
         worker,
         base_url=base_url,
-        category_label=reference["category_label"],
+        references=[reference],
+    )[0]
+    if isinstance(result, Exception):
+        raise result
+    return result
+
+
+def fetch_certificate_documents(
+    worker,
+    *,
+    base_url: str,
+    references: list[dict],
+) -> list[dict | Exception]:
+    validated = [_validated_reference(reference) for reference in references]
+    results: list[dict | Exception | None] = [None] * len(validated)
+    categories = dict.fromkeys(
+        reference["category_label"] for reference in validated
     )
+    for category_label in categories:
+        frame = _open_certificate_category(
+            worker,
+            base_url=base_url,
+            category_label=category_label,
+        )
+        for index, reference in enumerate(validated):
+            if reference["category_label"] != category_label:
+                continue
+            try:
+                results[index] = _fetch_certificate_document_from_frame(
+                    worker,
+                    frame=frame,
+                    base_url=base_url,
+                    reference=reference,
+                )
+            except AdapterLoginRequired:
+                raise
+            except Exception as exc:
+                results[index] = exc
+    return [
+        result
+        if result is not None
+        else SeeyonDocumentContractMismatch(
+            "OA certificate batch preparation returned no result"
+        )
+        for result in results
+    ]
+
+
+def _fetch_certificate_document_from_frame(
+    worker,
+    *,
+    frame,
+    base_url: str,
+    reference: dict,
+) -> dict:
     rows = _search_current_folder(
         worker,
         frame=frame,
@@ -505,9 +566,15 @@ def _has_login_form(pages) -> bool:
     return False
 
 
-def _public_document_item(row: dict, document_type: str, query: str) -> dict:
+def _public_document_item(
+    row: dict,
+    document_type: str,
+    query: str,
+    *,
+    search_query: str | None = None,
+) -> dict:
     title = _certificate_title(row["filename"])
-    normalized_query = _normalize_text(query)
+    normalized_query = _normalize_text(search_query or query)
     normalized_title = _normalize_text(title)
     return {
         "title": title,
@@ -556,15 +623,34 @@ def _row_matches_query(row: dict, query: str) -> bool:
     )
 
 
-def _certificate_search_query(query: str, document_type: str) -> str:
+def _certificate_search_queries(query: str, document_type: str) -> tuple[str, ...]:
     if document_type != "software_copyright_certificate":
-        return query
+        return (query,)
     normalized = unicodedata.normalize("NFKC", query).strip()
     match = _SOFTWARE_VERSION_SUFFIX.search(normalized)
-    if match is None:
-        return query
-    base_name = normalized[: match.start()].rstrip()
-    return base_name if len(_normalize_text(base_name)) >= 2 else query
+    stem = normalized[: match.start()].rstrip() if match is not None else normalized
+    aliases = re.findall(
+        r"[\[\u3010]\s*\u7b80\u79f0\s*[:\uff1a]\s*([^\]\u3011]+?)\s*[\]\u3011]",
+        stem,
+    )
+    canonical = re.sub(r"[\[\u3010][^\]\u3011]*[\]\u3011]", "", stem).strip()
+    candidates = [canonical, *aliases]
+    if match is None and not aliases:
+        candidates = [query]
+    result = []
+    seen = set()
+    for candidate in candidates:
+        candidate = " ".join(str(candidate or "").split())
+        key = _normalize_text(candidate)
+        if len(key) < 2 or key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return tuple(result or [query])
+
+
+def _certificate_search_query(query: str, document_type: str) -> str:
+    return _certificate_search_queries(query, document_type)[0]
 
 
 def _certificate_version_matches(

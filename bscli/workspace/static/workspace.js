@@ -22,7 +22,17 @@ const state = {
   taskCardMeta: new Map(),
   taskSyncTimers: new Map(),
   toasts: new Map(),
+  composerAttachments: [],
 };
+
+const MAX_COMPOSER_IMAGES = 4;
+const MAX_COMPOSER_IMAGE_BYTES = 6 * 1024 * 1024;
+const MAX_COMPOSER_IMAGES_TOTAL_BYTES = 12 * 1024 * 1024;
+const SUPPORTED_COMPOSER_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 const CLIENT_VERSION =
   document.querySelector('meta[name="agentbridge-workspace-version"]')
@@ -57,6 +67,19 @@ function bindActions() {
   $("#enroll-complete").addEventListener("submit", completeEnrollment);
   $("#logout-button").addEventListener("click", logout);
   $("#chat-form").addEventListener("submit", sendChat);
+  $("#attach-image").addEventListener("click", () => {
+    $("#image-input").click();
+  });
+  $("#image-input").addEventListener("change", async (event) => {
+    await addComposerFiles(event.currentTarget.files);
+    event.currentTarget.value = "";
+  });
+  const messageInput = $("#chat-form textarea[name='message']");
+  messageInput.addEventListener("paste", handleComposerPaste);
+  const composer = $("#chat-form");
+  composer.addEventListener("dragover", handleComposerDragOver);
+  composer.addEventListener("dragleave", handleComposerDragLeave);
+  composer.addEventListener("drop", handleComposerDrop);
   $("#refresh-chat").addEventListener("click", loadChat);
   $("#refresh-tasks").addEventListener("click", loadTasks);
   $("#active-only").addEventListener("change", loadTasks);
@@ -226,6 +249,7 @@ async function logout() {
   state.syncedMessages.clear();
   state.taskCards.clear();
   state.taskCardMeta.clear();
+  state.composerAttachments = [];
   state.timelineCursor = 0;
   state.account = null;
   location.reload();
@@ -306,6 +330,17 @@ function messageElement(message) {
   const text = document.createElement("div");
   text.textContent = message.text;
   item.append(text);
+  if (Array.isArray(message.images) && message.images.length > 0) {
+    const images = document.createElement("div");
+    images.className = "message-image-list";
+    message.images.forEach((image) => {
+      const preview = document.createElement("img");
+      preview.src = image.dataUrl;
+      preview.alt = image.fileName || "附加图片";
+      images.append(preview);
+    });
+    item.append(images);
+  }
   if (message.timestamp || message.sourceLabel) {
     const time = document.createElement("time");
     time.className = "message-meta";
@@ -424,20 +459,174 @@ function renderChatTimeline() {
   container.replaceChildren(...stable, ...live);
 }
 
+async function handleComposerPaste(event) {
+  const files = [...(event.clipboardData?.items || [])]
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (files.length === 0) return;
+  event.preventDefault();
+  await addComposerFiles(files);
+}
+
+function handleComposerDragOver(event) {
+  if (![...(event.dataTransfer?.items || [])].some(
+    (item) => item.kind === "file" && item.type.startsWith("image/"),
+  )) {
+    return;
+  }
+  event.preventDefault();
+  event.currentTarget.classList.add("drag-active");
+}
+
+function handleComposerDragLeave(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    event.currentTarget.classList.remove("drag-active");
+  }
+}
+
+async function handleComposerDrop(event) {
+  event.currentTarget.classList.remove("drag-active");
+  const files = [...(event.dataTransfer?.files || [])].filter((file) =>
+    file.type.startsWith("image/"),
+  );
+  if (files.length === 0) return;
+  event.preventDefault();
+  await addComposerFiles(files);
+}
+
+async function addComposerFiles(fileList) {
+  const available = MAX_COMPOSER_IMAGES - state.composerAttachments.length;
+  if (available <= 0) {
+    toast("一次最多添加 4 张图片。", true, "image-limit");
+    return;
+  }
+  const files = [...(fileList || [])];
+  if (files.length > available) {
+    toast("一次最多添加 4 张图片。", true, "image-limit");
+  }
+  let totalBytes = state.composerAttachments.reduce(
+    (total, attachment) => total + Number(attachment.size || 0),
+    0,
+  );
+  for (const file of files.slice(0, available)) {
+    const mimeType = normalizedImageType(file);
+    if (!SUPPORTED_COMPOSER_IMAGE_TYPES.has(mimeType)) {
+      toast("仅支持 JPEG、PNG 和 WebP 图片。", true, "image-type");
+      continue;
+    }
+    if (!file.size || file.size > MAX_COMPOSER_IMAGE_BYTES) {
+      toast("单张图片不能超过 6 MB。", true, "image-size");
+      continue;
+    }
+    if (totalBytes + file.size > MAX_COMPOSER_IMAGES_TOTAL_BYTES) {
+      toast("图片总大小不能超过 12 MB。", true, "image-total-size");
+      continue;
+    }
+    try {
+      state.composerAttachments.push(
+        await readComposerImage(file, mimeType),
+      );
+      totalBytes += file.size;
+    } catch {
+      toast("图片读取失败，请重新选择。", true, "image-read");
+    }
+  }
+  renderComposerAttachments();
+}
+
+function normalizedImageType(file) {
+  const supplied = String(file?.type || "").toLowerCase();
+  if (supplied === "image/jpg") return "image/jpeg";
+  if (supplied) return supplied;
+  const name = String(file?.name || "").toLowerCase();
+  if (/\.jpe?g$/.test(name)) return "image/jpeg";
+  if (/\.png$/.test(name)) return "image/png";
+  if (/\.webp$/.test(name)) return "image/webp";
+  return "";
+}
+
+function readComposerImage(file, mimeType) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.addEventListener("load", () => {
+      const dataUrl = String(reader.result || "");
+      const separator = dataUrl.indexOf(",");
+      const content = separator >= 0 ? dataUrl.slice(separator + 1) : "";
+      if (!content) {
+        reject(new Error("image content is empty"));
+        return;
+      }
+      resolve({
+        id: crypto.randomUUID(),
+        fileName: String(file.name || "pasted-image").slice(0, 120),
+        mimeType,
+        content,
+        dataUrl,
+        size: file.size,
+      });
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderComposerAttachments() {
+  const container = $("#composer-attachments");
+  container.replaceChildren();
+  state.composerAttachments.forEach((attachment) => {
+    const preview = document.createElement("div");
+    preview.className = "attachment-preview";
+    const image = document.createElement("img");
+    image.src = attachment.dataUrl;
+    image.alt = attachment.fileName;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.title = `移除 ${attachment.fileName}`;
+    remove.setAttribute("aria-label", remove.title);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      state.composerAttachments = state.composerAttachments.filter(
+        (item) => item.id !== attachment.id,
+      );
+      renderComposerAttachments();
+    });
+    preview.append(image, remove);
+    container.append(preview);
+  });
+  container.hidden = state.composerAttachments.length === 0;
+}
+
+function clearComposerAttachments() {
+  state.composerAttachments = [];
+  renderComposerAttachments();
+}
+
 async function sendChat(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const textarea = form.elements.message;
   const message = textarea.value.trim();
   if (!message) return;
+  const attachments = state.composerAttachments.map((item) => ({ ...item }));
   textarea.value = "";
-  await executeChatMessage(message, form);
+  clearComposerAttachments();
+  await executeChatMessage(message, form, attachments);
 }
 
-async function executeChatMessage(message, form = $("#chat-form")) {
+async function executeChatMessage(
+  message,
+  form = $("#chat-form"),
+  attachments = [],
+) {
   dismissTerminalLiveMessages();
   const idempotencyKey = crypto.randomUUID();
-  const local = messageElement({ role: "user", text: message });
+  const local = messageElement({
+    role: "user",
+    text: message,
+    images: attachments,
+  });
   setTimelineNode(local, {
     key: `local:${idempotencyKey}`,
     createdAt: new Date().toISOString(),
@@ -451,7 +640,7 @@ async function executeChatMessage(message, form = $("#chat-form")) {
   live.requestMessage = message;
   addLiveProgress(idempotencyKey, "正在连接智能体", "active");
   try {
-    await consumeChatStream({ message, idempotencyKey });
+    await consumeChatStream({ message, idempotencyKey, attachments });
     scheduleChatRefresh(500, 1);
   } catch (error) {
     if (!error.rendered) {
@@ -461,6 +650,7 @@ async function executeChatMessage(message, form = $("#chat-form")) {
         text,
         error.safeToRetry === true,
         message,
+        attachments,
       );
       toast(text, true, error.code || "chat-failed");
     }
@@ -478,10 +668,11 @@ function scheduleChatRefresh(delay, attempts) {
   }, delay);
 }
 
-async function consumeChatStream({ message, idempotencyKey }) {
+async function consumeChatStream({ message, idempotencyKey, attachments = [] }) {
   const activeStream = {
     controller: new AbortController(),
     requestMessage: message,
+    requestAttachments: attachments,
     runIds: new Set(),
     terminal: false,
     timelineCompleted: false,
@@ -504,7 +695,16 @@ async function consumeChatStream({ message, idempotencyKey }) {
       },
       credentials: "same-origin",
       signal: activeStream.controller.signal,
-      body: JSON.stringify({ message, idempotencyKey }),
+      body: JSON.stringify({
+        message,
+        idempotencyKey,
+        attachments: attachments.map((item) => ({
+          type: "image",
+          mimeType: item.mimeType,
+          fileName: item.fileName,
+          content: item.content,
+        })),
+      }),
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -582,7 +782,7 @@ async function consumeChatStream({ message, idempotencyKey }) {
         safeToRetry,
         terminalFailure.state,
       );
-      renderRunFailure(runId, text, safeToRetry, message);
+      renderRunFailure(runId, text, safeToRetry, message, attachments);
       const error = new Error(text);
       error.code =
         terminalFailure.state === "aborted"
@@ -640,6 +840,7 @@ function reconcileOriginChatMessage(entry) {
       entry.text,
       false,
       activeStream.requestMessage,
+      activeStream.requestAttachments,
     );
   } else {
     handleChatDelta({ runId, state: "final", text: entry.text });
@@ -770,7 +971,13 @@ function handleChatDelta(payload) {
   scrollChat();
 }
 
-function renderRunFailure(runId, text, canRetry, requestMessage) {
+function renderRunFailure(
+  runId,
+  text,
+  canRetry,
+  requestMessage,
+  requestAttachments = [],
+) {
   const live = ensureLiveMessage(runId);
   live.item.classList.add("failed");
   live.text.textContent = text;
@@ -783,7 +990,11 @@ function renderRunFailure(runId, text, canRetry, requestMessage) {
     retry.textContent = "重新发送";
     retry.addEventListener("click", async () => {
       retry.disabled = true;
-      await executeChatMessage(requestMessage);
+      await executeChatMessage(
+        requestMessage,
+        $("#chat-form"),
+        requestAttachments,
+      );
     });
     live.actions.append(retry);
   }
@@ -1066,6 +1277,7 @@ function displayTaskTitle(value) {
       "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
       "Prepare OA Meeting Creation": "OA 会议创建",
       "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
+      "Prepare and Deliver OA Certificate Scans": "OA 证书文件批量交付",
       "Prepare Taihua Work Log": "泰华工作日志提交",
     }[title] ||
     title ||

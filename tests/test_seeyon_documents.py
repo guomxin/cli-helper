@@ -6,10 +6,12 @@ from unittest.mock import patch
 from bscli.adapters.seeyon_documents import (
     SeeyonDocumentAccessDenied,
     _certificate_content_type,
+    _certificate_search_queries,
     _certificate_title,
     _request_download_with_redirects,
     _validated_queries,
     _validated_reference,
+    fetch_certificate_documents,
     search_certificate_documents,
 )
 
@@ -121,6 +123,94 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
         self.assertEqual(
             [(item["query"], item["title"]) for item in result["items"]],
             [("系统甲V1.0", "系统甲V1.0"), ("系统乙Ｖ 1.0", "系统乙V1.0")],
+        )
+
+    def test_software_search_uses_formal_name_then_bracketed_short_name(self):
+        query = "泰华视图云大数据平台软件[简称:视图云大数据平台]V2.0"
+        self.assertEqual(
+            _certificate_search_queries(
+                query,
+                "software_copyright_certificate",
+            ),
+            ("泰华视图云大数据平台软件", "视图云大数据平台"),
+        )
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ) as open_category,
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                side_effect=[
+                    [],
+                    [
+                        _row(
+                            resource_id="soft-short-name",
+                            filename="视图云大数据平台V2.0.jpg",
+                        )
+                    ],
+                ],
+            ) as search_folder,
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "name": query,
+                    "document_type": "software_copyright_certificate",
+                },
+            )
+
+        self.assertEqual(open_category.call_count, 1)
+        self.assertEqual(
+            [call.kwargs["query"] for call in search_folder.call_args_list],
+            ["泰华视图云大数据平台软件", "视图云大数据平台"],
+        )
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["matched_queries"], [query])
+        self.assertEqual(result["items"][0]["title"], "视图云大数据平台V2.0")
+
+    def test_software_search_does_not_treat_plain_bracket_notes_as_aliases(self):
+        self.assertEqual(
+            _certificate_search_queries(
+                "泰华数据平台[企业版]V2.0",
+                "software_copyright_certificate",
+            ),
+            ("泰华数据平台",),
+        )
+
+    def test_batch_fetch_opens_each_certificate_category_only_once(self):
+        first = {
+            **_row(resource_id="soft-1", filename="系统甲V1.0.jpg"),
+            "document_type": "software_copyright_certificate",
+            "category_label": "2-著作权证书扫描件",
+        }
+        second = {
+            **_row(resource_id="soft-2", filename="系统乙V1.0.pdf"),
+            "document_type": "software_copyright_certificate",
+            "category_label": "2-著作权证书扫描件",
+        }
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ) as open_category,
+            patch(
+                "bscli.adapters.seeyon_documents._fetch_certificate_document_from_frame",
+                side_effect=[{"filename": first["filename"]}, {"filename": second["filename"]}],
+            ) as fetch_one,
+        ):
+            result = fetch_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                references=[first, second],
+            )
+
+        self.assertEqual(open_category.call_count, 1)
+        self.assertEqual(fetch_one.call_count, 2)
+        self.assertEqual(
+            [item["filename"] for item in result],
+            ["系统甲V1.0.jpg", "系统乙V1.0.pdf"],
         )
 
     def test_batch_reports_unmatched_queries_and_keeps_one_slot_per_name(self):

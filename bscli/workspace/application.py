@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -13,6 +15,15 @@ from bscli.workspace.gateway import GatewayRequestError, OpenClawGatewayClient
 
 
 _LOG = logging.getLogger(__name__)
+
+MAX_CHAT_ATTACHMENTS = 4
+MAX_CHAT_ATTACHMENT_BYTES = 6 * 1024 * 1024
+MAX_CHAT_ATTACHMENTS_TOTAL_BYTES = 12 * 1024 * 1024
+_CHAT_IMAGE_TYPES = {
+    "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
+    "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
+    "image/webp": (b"RIFF", ".webp"),
+}
 
 
 class WorkspaceArtifactError(RuntimeError):
@@ -379,10 +390,12 @@ class WorkspaceApplication:
         *,
         message: str,
         idempotency_key: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> Iterator[dict[str, Any]]:
         message = str(message or "").strip()
         if not message or len(message) > 20_000:
             raise ValueError("chat message is empty or too long")
+        normalized_attachments = _validated_chat_attachments(attachments)
         effective_key = _safe_text(idempotency_key, 128) or str(uuid4())
 
         def synchronized_stream() -> Iterator[dict[str, Any]]:
@@ -394,7 +407,11 @@ class WorkspaceApplication:
             self._append_workspace_message(
                 account,
                 role="user",
-                text=message,
+                text=(
+                    message
+                    if not normalized_attachments
+                    else f"{message}\n（附 {len(normalized_attachments)} 张图片）"
+                ),
                 message_key=f"workspace:user:{effective_key}",
             )
             try:
@@ -408,6 +425,7 @@ class WorkspaceApplication:
                     grant=grant["grant"],
                     message=message,
                     idempotency_key=effective_key,
+                    attachments=normalized_attachments,
                     timeout_seconds=300,
                 )
                 for item in source:
@@ -498,6 +516,7 @@ class WorkspaceApplication:
         *,
         message: str,
         idempotency_key: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> WorkspaceChatResult:
         run_id = ""
         status = "completed"
@@ -505,6 +524,7 @@ class WorkspaceApplication:
             account,
             message=message,
             idempotency_key=idempotency_key,
+            attachments=attachments,
         ):
             if item.get("type") != "accepted":
                 continue
@@ -583,6 +603,57 @@ class WorkspaceApplication:
                 "OpenClaw Gateway is not configured.",
             )
         return self.gateway
+
+
+def _validated_chat_attachments(values: list[dict] | None) -> list[dict]:
+    if values is None:
+        return []
+    if not isinstance(values, list) or len(values) > MAX_CHAT_ATTACHMENTS:
+        raise ValueError("chat attachments must contain at most 4 images")
+    normalized = []
+    total_bytes = 0
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            raise ValueError("chat attachment is invalid")
+        mime_type = str(value.get("mimeType") or "").strip().lower()
+        signature = _CHAT_IMAGE_TYPES.get(mime_type)
+        if signature is None:
+            raise ValueError("chat attachment type is unsupported")
+        content = str(value.get("content") or "").strip()
+        if not content or content.startswith("data:"):
+            raise ValueError("chat attachment content is invalid")
+        try:
+            body = base64.b64decode(content, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("chat attachment content is invalid") from exc
+        if not body or len(body) > MAX_CHAT_ATTACHMENT_BYTES:
+            raise ValueError("chat attachment exceeds the per-image size limit")
+        if mime_type == "image/webp":
+            magic_matches = (
+                body.startswith(signature[0])
+                and len(body) >= 12
+                and body[8:12] == b"WEBP"
+            )
+        else:
+            magic_matches = body.startswith(signature[0])
+        if not magic_matches:
+            raise ValueError("chat attachment content does not match its image type")
+        total_bytes += len(body)
+        if total_bytes > MAX_CHAT_ATTACHMENTS_TOTAL_BYTES:
+            raise ValueError("chat attachments exceed the total size limit")
+        supplied_name = str(value.get("fileName") or "").replace("\\", "/")
+        supplied_name = supplied_name.rsplit("/", 1)[-1].strip()
+        if not supplied_name or any(ord(character) < 32 for character in supplied_name):
+            supplied_name = f"image-{index + 1}{signature[1]}"
+        normalized.append(
+            {
+                "type": "image",
+                "mimeType": mime_type,
+                "fileName": supplied_name[:120],
+                "content": content,
+            }
+        )
+    return normalized
 
 
 def _workspace_gateway_failure_text(error: GatewayRequestError) -> str:

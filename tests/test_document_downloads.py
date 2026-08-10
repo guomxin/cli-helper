@@ -522,6 +522,66 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
             )
             self.assertEqual(login_required["error"]["code"], "LOGIN_REQUIRED")
 
+    def test_batch_prepare_fetches_selected_certificates_in_one_service_call(self):
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://oa.example.test/seeyon/main.do",
+                trusted_card_base_url="https://10.10.50.213:8780",
+            )
+            grants = []
+            for index in range(2):
+                reference = {
+                    **_reference(),
+                    "resource_id": f"resource-{index}",
+                    "source_id": f"file-{index}",
+                    "filename": f"certificate-{index}.pdf",
+                }
+                grants.append(
+                    service.document_downloads.create(
+                        user_subject="user-a",
+                        system_id="oa",
+                        session_id="session-a",
+                        document=reference,
+                        filename=reference["filename"],
+                        document_type="patent_certificate",
+                        display_size="1.2 MB",
+                        card_base_url="https://10.10.50.213:8780",
+                    )
+                )
+            calls = []
+
+            def fetch_many(records):
+                calls.append([record["download_id"] for record in records])
+                return [
+                    {
+                        "body": f"%PDF-1.7\n{index}".encode(),
+                        "filename": record["filename"],
+                        "content_type": "application/pdf",
+                    }
+                    for index, record in enumerate(records)
+                ]
+
+            service.fetch_document_downloads = fetch_many
+            result = service.prepare_document_downloads(
+                user_subject="user-a",
+                download_ids=[grant["download_id"] for grant in grants],
+            )
+
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(result["requestedCount"], 2)
+            self.assertEqual(result["preparedCount"], 2)
+            self.assertEqual(result["failedCount"], 0)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(
+                calls[0],
+                [grant["download_id"] for grant in grants],
+            )
+            self.assertEqual(
+                [file["filename"] for file in result["files"]],
+                ["certificate-0.pdf", "certificate-1.pdf"],
+            )
+
 def _reference() -> dict:
     return {
         "resource_id": "resource-1",

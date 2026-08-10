@@ -4161,7 +4161,44 @@ test("delivers a prepared OA certificate as one direct attachment message", asyn
   assert.equal(replacement, undefined);
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/certificate.bin");
+  assert.equal(harness.sentPayloads[0].payload.forceDocument, true);
   assert.match(harness.sentPayloads[0].payload.text, /certificate-a\.pdf/);
+});
+
+test("delivers a prepared OA certificate batch as ordered original files", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-batch",
+    runId: "run-certificate-batch",
+    sessionKey,
+    toolName: "oa_certificate_prepare_downloads",
+  });
+
+  await harness.middleware(
+    {
+      toolCallId: "tool-certificate-batch",
+      toolName: "oa_certificate_prepare_downloads",
+      result: preparedDocumentBatchResult([
+        ["certificate-a.jpg", "a".repeat(43)],
+        ["certificate-b.pdf", "b".repeat(43)],
+      ]),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  assert.equal(harness.sentPayloads.length, 2);
+  assert.deepEqual(
+    harness.sentPayloads.map((item) => item.payload.forceDocument),
+    [true, true],
+  );
+  assert.match(harness.sentPayloads[0].payload.text, /certificate-a\.jpg/);
+  assert.match(harness.sentPayloads[1].payload.text, /certificate-b\.pdf/);
 });
 
 test("falls back to a short-lived download link when attachment upload fails", async () => {
@@ -4251,6 +4288,34 @@ function preparedDocumentResult(filename, downloadId) {
     details: {
       mcpServer: "agentbridge",
       mcpTool: "oa_certificate_prepare_download",
+      structuredContent,
+    },
+  };
+}
+
+function preparedDocumentBatchResult(entries) {
+  const structuredContent = {
+    protocolVersion: "0.1",
+    schemaVersion: "agentbridge.document_delivery_batch.v1",
+    status: "succeeded",
+    requestedCount: entries.length,
+    preparedCount: entries.length,
+    failedCount: 0,
+    files: entries.map(([filename, downloadId]) => ({
+      downloadId,
+      filename,
+      contentType: filename.endsWith(".pdf") ? "application/pdf" : "image/jpeg",
+      size: 128,
+      mediaUrl: `${CARD_ORIGIN}/download/${downloadId}/file`,
+      expiresAt: "2099-07-14T12:00:00+00:00",
+    })),
+    errors: [],
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+    details: {
+      mcpServer: "agentbridge",
+      mcpTool: "oa_certificate_prepare_downloads",
       structuredContent,
     },
   };

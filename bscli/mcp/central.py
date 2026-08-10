@@ -129,6 +129,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_template_list": frozenset({"oa:read"}),
     "oa_certificate_search": frozenset({"oa:read"}),
     "oa_certificate_prepare_download": frozenset({"oa:read"}),
+    "oa_certificate_prepare_downloads": frozenset({"oa:read"}),
     "oa_workflow_pending_list": frozenset({"oa:read"}),
     "oa_workflow_sent_list": frozenset({"oa:read"}),
     "oa_workflow_done_list": frozenset({"oa:read"}),
@@ -708,12 +709,14 @@ def create_central_mcp_server(
             "launch parallel searches for the same user. When the user says software "
             "copyright or 软著, set document_type=software_copyright_certificate. "
             "Software-copyright lookup removes a trailing version only for OA recall, "
-            "then verifies the requested version against every returned title. "
+            "tries a bracketed short name only when the formal name has no accessible "
+            "match, then verifies the requested version against every returned title. "
             "Use all only when the type is genuinely unknown. Exact matches rank first; "
             "each accessible result contains a short-lived trusted download ID and URL. "
-            "When the user asks to receive a file in chat, call "
-            "oa_certificate_prepare_download once per selected result; never write an ad-hoc "
-            "download script or emit several MEDIA attachments in one model reply."
+            "When the user selects several results, call "
+            "oa_certificate_prepare_downloads once with all download IDs. Use the singular "
+            "prepare tool only for one result. Never write an ad-hoc download script or emit "
+            "several MEDIA attachments in one model reply."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -777,6 +780,46 @@ def create_central_mcp_server(
             service.prepare_document_download,
             user_subject=identity["user_subject"],
             download_id=download_id,
+            task_id=task_id,
+        )
+
+    @mcp.tool(
+        name="oa_certificate_prepare_downloads",
+        title="Prepare and Deliver OA Certificate Scans",
+        description=(
+            "Fetch 1 to 20 certificate results selected by oa_certificate_search in one "
+            "central OA session. Pass every selected download ID in one call. AgentBridge "
+            "reuses one browser worker where possible and the OpenClaw host delivers each "
+            "original file in its own attachment message. Do not call the singular prepare "
+            "tool for the same IDs and do not repeat media URLs in model output."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_certificate_prepare_downloads(
+        ctx: Context,
+        download_ids: Annotated[
+            list[Annotated[str, Field(min_length=32, max_length=128)]],
+            Field(min_length=1, max_length=20),
+        ],
+    ) -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"oa:read"},
+        )
+        task_id = _request_task_id(ctx)
+        if task_id:
+            await asyncio.to_thread(
+                service.observe_host_task,
+                user_subject=identity["user_subject"],
+                task_id=task_id,
+                operation_ids=[],
+                interaction_ids=[],
+            )
+        return await asyncio.to_thread(
+            service.prepare_document_downloads,
+            user_subject=identity["user_subject"],
+            download_ids=download_ids,
             task_id=task_id,
         )
 

@@ -28,6 +28,7 @@ from bscli.workspace.stores import (
 
 
 MAX_BODY_BYTES = 128 * 1024
+MAX_CHAT_BODY_BYTES = 18 * 1024 * 1024
 SESSION_COOKIE = "agentbridge_workspace_session"
 CSRF_COOKIE = "agentbridge_workspace_csrf"
 ENROLLMENT_COOKIE = "agentbridge_workspace_enrollment"
@@ -333,7 +334,13 @@ def create_workspace_http_server(
             if account is None:
                 return
             try:
-                body = self._read_json()
+                body = self._read_json(
+                    max_bytes=(
+                        MAX_CHAT_BODY_BYTES
+                        if route.path in {"/api/chat/send", "/api/chat/send-stream"}
+                        else MAX_BODY_BYTES
+                    )
+                )
                 if route.path == "/api/logout":
                     application.logout(self._cookie(SESSION_COOKIE))
                     self._json(200, {"status": "signed_out"}, clear=True)
@@ -374,6 +381,7 @@ def create_workspace_http_server(
                             body,
                             "idempotencyKey",
                         ),
+                        attachments=body.get("attachments"),
                     )
                     self._json(
                         202,
@@ -604,6 +612,7 @@ def create_workspace_http_server(
                     account,
                     message=message,
                     idempotency_key=idempotency_key,
+                    attachments=body.get("attachments"),
                 )
                 for item in stream:
                     event_name = {
@@ -646,12 +655,16 @@ def create_workspace_http_server(
                 if callable(close):
                     close()
 
-        def _read_json(self) -> dict[str, Any]:
+        def _read_json(
+            self,
+            *,
+            max_bytes: int = MAX_BODY_BYTES,
+        ) -> dict[str, Any]:
             try:
                 length = int(self.headers.get("Content-Length") or "0")
             except ValueError as exc:
                 raise ValueError("invalid request body length") from exc
-            if length <= 0 or length > MAX_BODY_BYTES:
+            if length <= 0 or length > max_bytes:
                 raise ValueError("invalid request body length")
             try:
                 value = json.loads(self.rfile.read(length))

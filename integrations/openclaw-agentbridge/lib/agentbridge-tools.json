@@ -874,7 +874,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, then verifies the requested version against every returned title. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download ID and URL. When the user asks to receive a file in chat, call oa_certificate_prepare_download once per selected result; never write an ad-hoc download script or emit several MEDIA attachments in one model reply.",
+      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, tries a bracketed short name only when the formal name has no accessible match, then verifies the requested version against every returned title. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download ID and URL. When the user selects several results, call oa_certificate_prepare_downloads once with all download IDs. Use the singular prepare tool only for one result. Never write an ad-hoc download script or emit several MEDIA attachments in one model reply.",
       "inputSchema": {
         "properties": {
           "document_type": {
@@ -980,6 +980,42 @@
         "type": "object"
       },
       "title": "Prepare and Deliver One OA Certificate Scan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Fetch 1 to 20 certificate results selected by oa_certificate_search in one central OA session. Pass every selected download ID in one call. AgentBridge reuses one browser worker where possible and the OpenClaw host delivers each original file in its own attachment message. Do not call the singular prepare tool for the same IDs and do not repeat media URLs in model output.",
+      "inputSchema": {
+        "properties": {
+          "download_ids": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 32,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Download Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "download_ids"
+        ],
+        "title": "oa_certificate_prepare_downloadsArguments",
+        "type": "object"
+      },
+      "name": "oa_certificate_prepare_downloads",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_certificate_prepare_downloadsDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare and Deliver OA Certificate Scans"
     },
     {
       "annotations": {

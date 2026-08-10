@@ -23,6 +23,17 @@ function trace(request) {
       method: request.method,
       runId: request.params?.runId ?? null,
       idempotencyKey: request.params?.idempotencyKey ?? null,
+      attachments: Array.isArray(request.params?.attachments)
+        ? request.params.attachments.map((attachment) => ({
+            type: attachment?.type ?? null,
+            mimeType: attachment?.mimeType ?? null,
+            fileName: attachment?.fileName ?? null,
+            contentLength:
+              typeof attachment?.content === "string"
+                ? attachment.content.length
+                : 0,
+          }))
+        : [],
     })}\n`,
     "utf8",
   );

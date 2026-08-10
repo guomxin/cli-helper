@@ -164,6 +164,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_workflow_pending_list", names)
         self.assertIn("oa_certificate_search", names)
         self.assertIn("oa_certificate_prepare_download", names)
+        self.assertIn("oa_certificate_prepare_downloads", names)
         certificate_tool = next(
             tool for tool in tools if tool["name"] == "oa_certificate_search"
         )
@@ -393,6 +394,39 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         call = service.prepare_document_download.call_args.kwargs
         self.assertEqual(call["download_id"], "a" * 43)
+        self.assertNotIn("user_subject", response.text)
+        self.assertEqual(
+            response.json()["result"]["structuredContent"]["status"],
+            "succeeded",
+        )
+
+    def test_certificate_batch_prepare_is_bound_to_authenticated_identity(self):
+        with self._server() as (service, _store, token, client):
+            service.prepare_document_downloads.return_value = {
+                "protocolVersion": "0.1",
+                "schemaVersion": "agentbridge.document_delivery_batch.v1",
+                "status": "succeeded",
+                "requestedCount": 2,
+                "preparedCount": 2,
+                "failedCount": 0,
+                "files": [],
+                "errors": [],
+            }
+            download_ids = ["a" * 43, "b" * 43]
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=192,
+                token=token,
+                params={
+                    "name": "oa_certificate_prepare_downloads",
+                    "arguments": {"download_ids": download_ids},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        call = service.prepare_document_downloads.call_args.kwargs
+        self.assertEqual(call["download_ids"], download_ids)
         self.assertNotIn("user_subject", response.text)
         self.assertEqual(
             response.json()["result"]["structuredContent"]["status"],

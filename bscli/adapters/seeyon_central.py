@@ -82,6 +82,7 @@ from bscli.adapters.seeyon_documents import (
     DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY,
     DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA,
     fetch_certificate_document as fetch_oa_certificate_document,
+    fetch_certificate_documents as fetch_oa_certificate_documents,
     search_certificate_documents,
 )
 from bscli.adapters.seeyon_home import (
@@ -854,6 +855,18 @@ class SeeyonCentralAdapter:
             base_url=self.base_url,
             reference=reference,
         )
+
+    def fetch_certificate_documents(
+        self,
+        worker,
+        references: list[dict],
+    ) -> list[dict | Exception]:
+        return fetch_oa_certificate_documents(
+            worker,
+            base_url=self.base_url,
+            references=references,
+        )
+
     def list_workflows(self, worker, *, collection: str, arguments: dict | None = None) -> dict:
         collection = _validated_internal_collection(collection)
         arguments = arguments or {}

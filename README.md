@@ -128,12 +128,14 @@ form fields.
 
 `oa_certificate_search` returns opaque, user-bound download IDs and browser download
 cards. When a chat user asks to receive a patent or software-copyright scan, the
-host calls `oa_certificate_prepare_download` once for each selected ID. AgentBridge
+host calls `oa_certificate_prepare_download` for one selected ID or
+`oa_certificate_prepare_downloads` once for a selected batch. AgentBridge
 fetches the file from OA under the same central session, caches it only for the
 short grant lifetime, and exposes a fast media URL. A prepared file receives a fresh
 30-minute delivery window and is linked to the current Task Hub task as a user-bound
 artifact. Agent Workspace shows that artifact in the task card and task detail, while
-Telegram and WeChat companion endpoints receive one attachment per message. If the
+Telegram and WeChat companion endpoints receive one original-file attachment per
+message. Batch preparation reuses one OA browser worker and serial session lock. If the
 channel upload fails, the adapter sends the same short-lived URL as an explicit
 fallback instead of silently dropping the file. Artifact metadata is user-isolated;
 the administration surface can see state, size, task and expiry but never the download

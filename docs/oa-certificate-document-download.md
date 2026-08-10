@@ -24,9 +24,10 @@ MCP 工具：
 ```text
 oa_certificate_search
 oa_certificate_prepare_download
+oa_certificate_prepare_downloads
 ```
 
-第一个工具只检索并返回用户绑定的不透明 `download_id`；用户要求接收某个文件时，宿主对选中的 ID 调用第二个工具。文件准备工具从 MCP 私有任务元数据取得 `taskId`，模型和用户不需要填写任务号。
+第一个工具只检索并返回用户绑定的不透明 `download_id`；用户要求接收一个文件时调用单文件准备工具，选择多个文件时把全部 ID 一次传给 `oa_certificate_prepare_downloads`。文件准备工具从 MCP 私有任务元数据取得 `taskId`，模型和用户不需要填写任务号。
 
 主要参数：
 
@@ -49,7 +50,7 @@ oa_certificate_prepare_download
 
 返回结果按精确标题匹配优先排序。文件名前的内部编号以及 `.pdf`、`.jpg`、`.jpeg`、`.png` 后缀不参与标题精确匹配。存在多个结果时，智能体应把候选名称列给用户选择，不得自行猜测。
 
-软著名称采用两阶段匹配。请求名称末尾存在 `V1.0`、`V2.0` 等版本号时，AgentBridge 先去掉末尾版本号向 OA 召回候选，再用用户原始名称中的版本号逐项核对结果。版本号不一致或候选标题没有版本号时不会返回；不带版本号的请求则保留宽松查询。该规则只作用于软著，专利名称不做版本号剥离。
+软著名称采用分层匹配。请求名称末尾存在 `V1.0`、`V2.0` 等版本号时，AgentBridge 先去掉版本号，以方括号外的正式名称召回；正式名称没有可访问结果时，再使用 `[简称:...]` 或 `【简称：...】` 中的简称兜底。候选返回前始终用原请求的版本号逐项核对，版本不一致或候选没有版本号时不会返回。该规则只作用于软著，专利名称不做版本号剥离。
 
 每个可访问结果包含：
 
@@ -61,6 +62,8 @@ oa_certificate_prepare_download
 ## 批量检索与并发规则
 
 同一 OA 用户只有一个受控浏览器会话，页面操作必须串行。智能体需要查询多篇证书时，应把最多 20 个名称放入一次 `names` 调用；AgentBridge 只进入一次目标目录，再依次执行目录内搜索。批量请求会为每个名称保留最佳匹配，避免同一名称的历史重复件挤占其他名称；结果同时给出 `matched_queries` 和 `unmatched_queries`，智能体必须明确报告未找到的名称。
+
+选中多篇后必须调用一次 `oa_certificate_prepare_downloads`。中心端在一次会话锁和一个浏览器 Worker 中按目录分组复核、下载并建立多个 Task Artifact；单个文件失败会在批量结果中单独报告，其余已准备文件仍可交付。OpenClaw 按返回顺序逐个发送，并强制使用“文件”模式，JPEG/PNG 扫描件不会被聊天通道压缩成照片。
 
 不要为同一用户并行调用多个 `oa_certificate_search`。若已有 OA 操作占用会话，并发证书检索会在 1 秒左右返回 `SESSION_BUSY`，而不是继续排队直到 MCP 超时。智能体应等待当前操作完成后重试一次，或把多个名称合并为批量请求。
 
@@ -90,7 +93,7 @@ sequenceDiagram
     O-->>B: 当前可见结果和文档权限
     B-->>A: 脱敏结果、下载 ID 和短时链接
     U->>A: 选择要接收的文件
-    A->>B: oa_certificate_prepare_download + 私有 taskId
+    A->>B: 单文件或批量 prepare + 私有 taskId
     B->>O: 重新检索并复核绑定、权限和密级
     B->>O: 记录 OA 原生下载审计
     B->>O: 读取证书扫描件
@@ -100,7 +103,7 @@ sequenceDiagram
     A-->>U: 聊天附件或 Workspace 任务文件
 ```
 
-准备完成后的文件拥有从完成时重新计算的 30 分钟交付窗口，避免 OA 下载较慢时把检索阶段的 10 分钟耗尽。Agent Workspace 从 Task Hub 拉取同一个任务文件；Telegram 和微信由 OpenClaw 发送单个附件。通道附件上传失败时，宿主发送短时下载链接作为明确回退。重新调用同一个 `download_id` 不会再次读取 OA，也不会创建重复 Task Artifact。
+准备完成后的文件拥有从完成时重新计算的 30 分钟交付窗口，避免 OA 下载较慢时把检索阶段的 10 分钟耗尽。Agent Workspace 从 Task Hub 拉取同一个任务中的全部文件；Telegram 和微信由 OpenClaw 每个文件发送一条附件。通道附件上传失败时，宿主发送短时下载链接作为明确回退。重新调用同一个 `download_id` 不会再次读取 OA，也不会创建重复 Task Artifact。
 
 ## 安全边界
 
@@ -126,11 +129,11 @@ sequenceDiagram
 
 发布前至少完成：
 
-1. 工具目录包含 `oa_certificate_search`。
+1. 工具目录包含 `oa_certificate_search`、单文件与批量准备工具。
 2. 使用辛国茂身份检索一个已知专利名称，结果不暴露 OA 内部 ID。
 3. 搜索结果只有当前 OA 用户具备读取和下载权限的文件。
 4. 浏览器下载页面先展示文件名，确认后按实际格式返回 `application/pdf`、`image/jpeg` 或 `image/png`。
 5. 宿主准备同一下载 ID 两次只读取 OA 一次，并复用同一个 Task Artifact。
-6. Workspace 能在所属任务中看到文件；伴随聊天端收到附件，上传失败时收到短时链接。
+6. 批量准备只创建一个 OA Worker；Workspace 能在所属任务中看到全部文件，伴随聊天端按序收到原始文件，上传失败时收到短时链接。
 7. 另一个 `userSubject` 不能读取该 Task Artifact，管理 API 不返回下载 URL 和 OA 引用。
 8. 登录过期、权限变化、密级不足、文件绑定变化和不受支持或魔数不匹配的响应均明确失败。

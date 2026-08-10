@@ -49,6 +49,8 @@ const message =
   mode === "send-stream"
     ? requiredText(input.message, "message", 20_000)
     : null;
+const attachments =
+  mode === "send-stream" ? normalizeChatAttachments(input.attachments) : [];
 const idempotencyKey =
   mode === "send-stream"
     ? requiredText(input.idempotencyKey, "idempotencyKey", 128)
@@ -386,6 +388,7 @@ function requestChatSend() {
       params: {
         sessionKey: streamSessionKey,
         message,
+        ...(attachments.length > 0 ? { attachments } : {}),
         deliver: false,
         idempotencyKey: currentIdempotencyKey,
         timeoutMs,
@@ -983,6 +986,38 @@ function requiredText(value, name, maximum) {
     fail("GATEWAY_REQUEST_INVALID", `${name} is invalid.`);
   }
   return normalized;
+}
+
+function normalizeChatAttachments(values) {
+  if (values === undefined || values === null) return [];
+  if (!Array.isArray(values) || values.length > 4) {
+    fail("GATEWAY_REQUEST_INVALID", "attachments are invalid.");
+  }
+  return values.map((value, index) => {
+    if (!isRecord(value)) {
+      fail("GATEWAY_REQUEST_INVALID", "attachment is invalid.");
+    }
+    const mimeType = requiredText(value.mimeType, "attachment mimeType", 80)
+      .toLowerCase();
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+      fail("GATEWAY_REQUEST_INVALID", "attachment mimeType is unsupported.");
+    }
+    return {
+      type: "image",
+      mimeType,
+      fileName:
+        requiredText(
+          value.fileName || `image-${index + 1}`,
+          "attachment fileName",
+          120,
+        ),
+      content: requiredText(
+        value.content,
+        "attachment content",
+        8_500_000,
+      ),
+    };
+  });
 }
 
 function safeCode(value) {

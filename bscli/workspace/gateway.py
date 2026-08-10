@@ -149,6 +149,7 @@ class OpenClawGatewayClient:
         grant: str,
         message: str,
         idempotency_key: str,
+        attachments: list[dict] | None = None,
         timeout_seconds: float = 300,
     ) -> Iterator[dict[str, Any]]:
         values = {
@@ -167,6 +168,7 @@ class OpenClawGatewayClient:
         payload = {
             "mode": "send-stream",
             **normalized,
+            "attachments": list(attachments or []),
             "preflightAbort": True,
             "acceptTimeoutMs": 35_000,
             "startupProgressTimeoutMs": 15_000,

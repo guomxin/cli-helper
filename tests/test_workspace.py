@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import http.client
@@ -14,7 +15,10 @@ from unittest.mock import patch
 
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.tasks import TaskNotFound
-from bscli.workspace.application import WorkspaceApplication
+from bscli.workspace.application import (
+    WorkspaceApplication,
+    _validated_chat_attachments,
+)
 from bscli.workspace.gateway import (
     GatewayRequestError,
     OpenClawGatewayClient,
@@ -118,6 +122,7 @@ class FakeGateway:
         grant: str,
         message: str,
         idempotency_key: str,
+        attachments: list[dict] | None = None,
         timeout_seconds: float = 150,
     ):
         self.calls.append(
@@ -129,6 +134,7 @@ class FakeGateway:
                     "grant": grant,
                     "message": message,
                     "idempotencyKey": idempotency_key,
+                    "attachments": list(attachments or []),
                     "timeoutSeconds": timeout_seconds,
                 },
             )
@@ -424,6 +430,21 @@ class WorkspaceStoreTests(unittest.TestCase):
 
 
 class WorkspaceApplicationTests(unittest.TestCase):
+    def test_workspace_images_reject_mime_spoofing_and_oversized_sets(self) -> None:
+        png_content = base64.b64encode(b"not-a-png").decode("ascii")
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            _validated_chat_attachments(
+                [
+                    {
+                        "mimeType": "image/png",
+                        "fileName": "spoofed.png",
+                        "content": png_content,
+                    }
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "at most 4"):
+            _validated_chat_attachments([{}] * 5)
+
     def test_authenticated_request_touches_workspace_endpoint(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -717,6 +738,50 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 if delivery["payload_type"] == "timeline_message"
             ]
             self.assertEqual(len(timeline_deliveries), 4)
+
+    def test_workspace_chat_forwards_validated_image_without_timeline_payload(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="workspace:alice",
+                client_type="web",
+            )
+            gateway = FakeGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+            image_content = base64.b64encode(
+                b"\x89PNG\r\n\x1a\nsmall-test-image"
+            ).decode("ascii")
+
+            events = list(
+                app.send_chat_stream(
+                    account,
+                    message="读取图片中的软著名称",
+                    idempotency_key="web-image-1",
+                    attachments=[
+                        {
+                            "type": "image",
+                            "mimeType": "image/png",
+                            "fileName": "clipboard.png",
+                            "content": image_content,
+                        }
+                    ],
+                )
+            )
+
+            self.assertEqual(events[0]["type"], "accepted")
+            sent = next(
+                params
+                for method, params in gateway.calls
+                if method == "send_stream"
+            )
+            self.assertEqual(sent["attachments"][0]["mimeType"], "image/png")
+            self.assertEqual(sent["attachments"][0]["content"], image_content)
+            timeline = json.dumps(app.list_timeline(account), ensure_ascii=False)
+            self.assertIn("（附 1 张图片）", timeline)
+            self.assertNotIn(image_content, timeline)
 
     def test_timeline_is_isolated_by_workspace_identity(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1074,6 +1139,14 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                         grant="g" * 48,
                         message="检查 OA 登录状态",
                         idempotency_key="run-1",
+                        attachments=[
+                            {
+                                "type": "image",
+                                "mimeType": "image/png",
+                                "fileName": "clipboard.png",
+                                "content": "iVBORw0KGgo=",
+                            }
+                        ],
                         timeout_seconds=150,
                     )
                 )
@@ -1085,6 +1158,10 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
             request = json.loads(input_pipe.value)
             self.assertEqual(request["mode"], "send-stream")
             self.assertEqual(request["idempotencyKey"], "run-1")
+            self.assertEqual(
+                request["attachments"][0]["fileName"],
+                "clipboard.png",
+            )
             self.assertTrue(request["preflightAbort"])
             self.assertEqual(request["acceptTimeoutMs"], 35_000)
             self.assertEqual(request["startupProgressTimeoutMs"], 15_000)
@@ -1577,6 +1654,14 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("页面已刷新，请重新生成配对码。", script)
         self.assertNotIn("setBusy(event.currentTarget", script)
         self.assertIn('fetch("/api/chat/send-stream"', script)
+        self.assertIn('id="image-input"', page)
+        self.assertIn('id="composer-attachments"', page)
+        self.assertIn('addEventListener("paste", handleComposerPaste)', script)
+        self.assertIn("MAX_COMPOSER_IMAGES_TOTAL_BYTES", script)
+        self.assertIn("attachments: attachments.map", script)
+        self.assertIn("readAsDataURL", script)
+        self.assertIn("composer-attachments", stylesheet)
+        self.assertIn("message-image-list", stylesheet)
         self.assertIn("response.body.getReader()", script)
         self.assertIn("activeStreams: new Map()", script)
         self.assertIn("reconcileOriginChatMessage", script)

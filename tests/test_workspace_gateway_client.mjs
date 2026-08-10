@@ -88,6 +88,28 @@ test("waits for the previous run to become idle before sending", () => {
   );
 });
 
+test("forwards Workspace image attachments to chat.send", () => {
+  const { trace } = runScenario("normal", {
+    attachments: [
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "clipboard.png",
+        content: "iVBORw0KGgo=",
+      },
+    ],
+  });
+  const send = trace.find((item) => item.method === "chat.send");
+  assert.deepEqual(send.attachments, [
+    {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "clipboard.png",
+      contentLength: 12,
+    },
+  ]);
+});
+
 test("refuses to send while the previous session remains active", () => {
   const { events, trace } = runScenario("preflight_stuck");
   assert.equal(

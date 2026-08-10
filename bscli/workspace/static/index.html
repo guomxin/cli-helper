@@ -99,7 +99,14 @@
           </header>
           <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
           <form id="chat-form" class="composer">
-            <textarea name="message" rows="2" maxlength="20000" placeholder="输入你的任务或问题" required></textarea>
+            <div id="composer-drop-zone" class="composer-panel">
+              <div id="composer-attachments" class="composer-attachments" aria-live="polite" hidden></div>
+              <div class="composer-input-row">
+                <button id="attach-image" class="attach-image-button" type="button" title="添加图片" aria-label="添加图片">＋</button>
+                <input id="image-input" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+                <textarea name="message" rows="2" maxlength="20000" placeholder="输入你的任务或问题" required></textarea>
+              </div>
+            </div>
             <button class="primary send-button" type="submit">发送</button>
           </form>
         </section>

@@ -2403,15 +2403,28 @@ class CentralCapabilityService:
                 ) from exc
 
     def fetch_document_download(self, record: dict) -> dict:
-        session = self.sessions.get(record["session_id"])
-        if any(
-            (
-                session["user_subject"] != record["user_subject"],
-                session["system_id"] != record["system_id"],
-                session["state"] != "active",
-            )
-        ):
-            raise ValueError("document download session binding is invalid")
+        result = self.fetch_document_downloads([record])[0]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def fetch_document_downloads(
+        self,
+        records: list[dict],
+    ) -> list[dict | Exception]:
+        if not records:
+            return []
+        session = self.sessions.get(records[0]["session_id"])
+        for record in records:
+            if any(
+                (
+                    record["session_id"] != session["session_id"],
+                    session["user_subject"] != record["user_subject"],
+                    session["system_id"] != record["system_id"],
+                    session["state"] != "active",
+                )
+            ):
+                raise ValueError("document download session binding is invalid")
         runtime = self._runtime_for_system(session["system_id"])
         if runtime is None:
             raise ValueError("document download system is not configured")
@@ -2423,16 +2436,36 @@ class CentralCapabilityService:
             try:
                 with worker_factory(session, adapter) as worker:
                     worker.restore_session_state(state)
-                    payload = adapter.fetch_certificate_document(
-                        worker,
-                        record["document"],
-                    )
+                    fetch_many = getattr(adapter, "fetch_certificate_documents", None)
+                    if callable(fetch_many):
+                        payloads = fetch_many(
+                            worker,
+                            [record["document"] for record in records],
+                        )
+                    else:
+                        payloads = []
+                        for record in records:
+                            try:
+                                payloads.append(
+                                    adapter.fetch_certificate_document(
+                                        worker,
+                                        record["document"],
+                                    )
+                                )
+                            except AdapterLoginRequired:
+                                raise
+                            except Exception as exc:
+                                payloads.append(exc)
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
                     )
                     self.sessions.touch_activity(session["session_id"])
-                    return payload
+                    if len(payloads) != len(records):
+                        raise ValueError(
+                            "document download batch returned an invalid result count"
+                        )
+                    return payloads
             except AdapterLoginRequired:
                 self.sessions.mark_expired(
                     session["session_id"],
@@ -2466,12 +2499,10 @@ class CentralCapabilityService:
                 )
                 try:
                     payload = self.fetch_document_download(record)
-                    body = payload.get("body")
-                    content_type = str(payload.get("content_type") or "")
                     ready = self.document_downloads.mark_ready(
                         download_id,
-                        body=body,
-                        content_type=content_type,
+                        body=payload.get("body"),
+                        content_type=str(payload.get("content_type") or ""),
                     )
                 except Exception:
                     try:
@@ -2479,20 +2510,11 @@ class CentralCapabilityService:
                     except DocumentDownloadStateError:
                         pass
                     raise
-        except DocumentDownloadNotFound:
-            return _document_delivery_failure("DOWNLOAD_NOT_FOUND", retryable=False)
-        except DocumentDownloadAccessDenied:
-            return _document_delivery_failure("DOWNLOAD_ACCESS_DENIED", retryable=False)
-        except DocumentDownloadIntegrityError:
-            return _document_delivery_failure("DOWNLOAD_INTEGRITY_FAILED", retryable=False)
-        except DocumentDownloadStateError:
-            return _document_delivery_failure("DOWNLOAD_NOT_READY", retryable=True)
-        except AdapterLoginRequired:
-            return _document_delivery_failure("LOGIN_REQUIRED", retryable=True)
         except Exception as exc:
+            error = _document_batch_error(download_id, exc)
             return _document_delivery_failure(
-                _document_download_error_code(exc),
-                retryable=True,
+                error["code"],
+                retryable=error["retryable"],
             )
         artifact = None
         artifact_reused = False
@@ -2526,20 +2548,166 @@ class CentralCapabilityService:
             "protocolVersion": "0.1",
             "schemaVersion": "agentbridge.document_delivery.v1",
             "status": "succeeded",
-            "file": {
-                "downloadId": ready["download_id"],
-                "filename": ready["filename"],
-                "contentType": ready["content_type"],
-                "size": ready["prepared_size"],
-                "mediaUrl": f"{ready['card_url']}/file",
-                "expiresAt": ready["expires_at"],
-                "artifactId": (
-                    artifact["artifact_id"] if artifact is not None else None
-                ),
-                "artifactReused": artifact_reused,
-            },
+            "file": _prepared_document_file(
+                ready,
+                artifact=artifact,
+                artifact_reused=artifact_reused,
+            ),
             "hostDelivery": {
                 "mode": "direct_attachment",
+                "oneFilePerMessage": True,
+                "handledByHost": True,
+            },
+        }
+
+    def prepare_document_downloads(
+        self,
+        *,
+        user_subject: str,
+        download_ids: list[str],
+        task_id: str | None = None,
+    ) -> dict:
+        normalized_ids = _validated_document_download_ids(download_ids)
+        ready_by_id: dict[str, dict] = {}
+        claimed: list[dict] = []
+        errors: list[dict] = []
+        for download_id in normalized_ids:
+            try:
+                existing = self.document_downloads.get(
+                    download_id,
+                    include_document=True,
+                )
+                if existing["user_subject"] != user_subject:
+                    raise DocumentDownloadAccessDenied(
+                        "document download belongs to another user"
+                    )
+                if existing["state"] == "ready":
+                    ready_by_id[download_id] = existing
+                else:
+                    claimed.append(
+                        self.document_downloads.claim_for_prepare(
+                            download_id,
+                            user_subject=user_subject,
+                        )
+                    )
+            except Exception as exc:
+                errors.append(_document_batch_error(download_id, exc))
+
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for record in claimed:
+            groups.setdefault(
+                (record["system_id"], record["session_id"]),
+                [],
+            ).append(record)
+        for records in groups.values():
+            try:
+                payloads = self.fetch_document_downloads(records)
+            except Exception as exc:
+                payloads = [exc] * len(records)
+            for record, payload in zip(records, payloads, strict=True):
+                if isinstance(payload, Exception):
+                    try:
+                        self.document_downloads.release(record["download_id"])
+                    except DocumentDownloadStateError:
+                        pass
+                    errors.append(
+                        _document_batch_error(record["download_id"], payload)
+                    )
+                    continue
+                try:
+                    ready_by_id[record["download_id"]] = (
+                        self.document_downloads.mark_ready(
+                            record["download_id"],
+                            body=payload.get("body"),
+                            content_type=str(payload.get("content_type") or ""),
+                        )
+                    )
+                except Exception as exc:
+                    try:
+                        self.document_downloads.release(record["download_id"])
+                    except DocumentDownloadStateError:
+                        pass
+                    errors.append(
+                        _document_batch_error(record["download_id"], exc)
+                    )
+
+        files = []
+        for download_id in normalized_ids:
+            ready = ready_by_id.get(download_id)
+            if ready is None:
+                continue
+            artifact = None
+            artifact_reused = False
+            if task_id:
+                try:
+                    artifact, artifact_reused = self.tasks.link_artifact(
+                        task_id=task_id,
+                        user_subject=user_subject,
+                        artifact={
+                            "artifact_type": "certificate_scan",
+                            "source_ref": ready["download_id"],
+                            "filename": ready["filename"],
+                            "content_type": ready["content_type"],
+                            "byte_size": ready["prepared_size"],
+                            "download_url": f"{ready['card_url']}/file",
+                            "expires_at": ready["expires_at"],
+                        },
+                    )
+                except (KeyError, RuntimeError, ValueError) as exc:
+                    errors.append(
+                        _document_batch_error(
+                            download_id,
+                            exc,
+                            code="TASK_ARTIFACT_LINK_FAILED",
+                        )
+                    )
+                    continue
+            files.append(
+                _prepared_document_file(
+                    ready,
+                    artifact=artifact,
+                    artifact_reused=artifact_reused,
+                )
+            )
+        if task_id and files:
+            try:
+                self.tasks.complete_task(
+                    task_id=task_id,
+                    user_subject=user_subject,
+                    reason=(
+                        "artifact_batch_ready"
+                        if not errors
+                        else "artifact_batch_partially_ready"
+                    ),
+                    causation_ref=files[-1]["downloadId"],
+                )
+            except (KeyError, RuntimeError, ValueError) as exc:
+                return _document_delivery_batch_failure(
+                    normalized_ids,
+                    _document_batch_error(
+                        files[-1]["downloadId"],
+                        exc,
+                        code="TASK_ARTIFACT_LINK_FAILED",
+                    ),
+                )
+        status = (
+            "succeeded"
+            if len(files) == len(normalized_ids)
+            else "partial"
+            if files
+            else "failed"
+        )
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.document_delivery_batch.v1",
+            "status": status,
+            "requestedCount": len(normalized_ids),
+            "preparedCount": len(files),
+            "failedCount": len(errors),
+            "files": files,
+            "errors": errors,
+            "hostDelivery": {
+                "mode": "direct_attachment_batch",
                 "oneFilePerMessage": True,
                 "handledByHost": True,
             },
@@ -3374,6 +3542,99 @@ def _document_delivery_failure(error_code: str, *, retryable: bool) -> dict:
             "message": "AgentBridge could not prepare the OA certificate attachment.",
             "retryable": retryable,
         },
+    }
+
+
+def _document_delivery_batch_failure(
+    download_ids: list[str],
+    error: dict,
+) -> dict:
+    return {
+        "protocolVersion": "0.1",
+        "schemaVersion": "agentbridge.document_delivery_batch.v1",
+        "status": "failed",
+        "requestedCount": len(download_ids),
+        "preparedCount": 0,
+        "failedCount": 1,
+        "files": [],
+        "errors": [error],
+        "hostDelivery": {
+            "mode": "direct_attachment_batch",
+            "oneFilePerMessage": True,
+            "handledByHost": True,
+        },
+    }
+
+
+def _prepared_document_file(
+    ready: dict,
+    *,
+    artifact: dict | None,
+    artifact_reused: bool,
+) -> dict:
+    return {
+        "downloadId": ready["download_id"],
+        "filename": ready["filename"],
+        "contentType": ready["content_type"],
+        "size": ready["prepared_size"],
+        "mediaUrl": f"{ready['card_url']}/file",
+        "expiresAt": ready["expires_at"],
+        "artifactId": artifact["artifact_id"] if artifact is not None else None,
+        "artifactReused": artifact_reused,
+    }
+
+
+def _validated_document_download_ids(values: list[str]) -> list[str]:
+    if not isinstance(values, list) or not 1 <= len(values) <= 20:
+        raise ValueError("download_ids must contain between 1 and 20 items")
+    result = []
+    seen = set()
+    for value in values:
+        download_id = str(value or "").strip()
+        if not 32 <= len(download_id) <= 128 or any(
+            character
+            not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+            for character in download_id
+        ):
+            raise ValueError("document download ID is invalid")
+        if download_id not in seen:
+            seen.add(download_id)
+            result.append(download_id)
+    return result
+
+
+def _document_batch_error(
+    download_id: str,
+    exc: Exception,
+    *,
+    code: str | None = None,
+) -> dict:
+    if code is not None:
+        error_code = code
+        retryable = True
+    elif isinstance(exc, DocumentDownloadNotFound):
+        error_code = "DOWNLOAD_NOT_FOUND"
+        retryable = False
+    elif isinstance(exc, DocumentDownloadAccessDenied):
+        error_code = "DOWNLOAD_ACCESS_DENIED"
+        retryable = False
+    elif isinstance(exc, DocumentDownloadIntegrityError):
+        error_code = "DOWNLOAD_INTEGRITY_FAILED"
+        retryable = False
+    elif isinstance(exc, DocumentDownloadStateError):
+        error_code = "DOWNLOAD_NOT_READY"
+        retryable = True
+    elif isinstance(exc, AdapterLoginRequired):
+        error_code = "LOGIN_REQUIRED"
+        retryable = True
+    else:
+        error_code = _document_download_error_code(exc)
+        retryable = True
+    return {
+        "downloadId": download_id,
+        "code": error_code,
+        "message": "AgentBridge could not prepare this OA certificate attachment.",
+        "retryable": retryable,
     }
 
 

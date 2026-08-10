@@ -19,6 +19,7 @@
       "oa_template_list",
       "oa_certificate_search",
       "oa_certificate_prepare_download",
+      "oa_certificate_prepare_downloads",
       "oa_workflow_pending_list",
       "oa_workflow_sent_list",
       "oa_workflow_done_list",

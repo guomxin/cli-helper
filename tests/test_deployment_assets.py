@@ -189,6 +189,7 @@ class DeploymentAssetTests(unittest.TestCase):
         for tool in (
             "oa_certificate_search",
             "oa_certificate_prepare_download",
+            "oa_certificate_prepare_downloads",
             "oa_business_trip_prepare",
             "oa_business_trip_save_draft",
             "oa_business_trip_submit_prepare",
