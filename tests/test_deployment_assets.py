@@ -33,6 +33,40 @@ class DeploymentAssetTests(unittest.TestCase):
             known_hosts.read_text(encoding="ascii"),
         )
 
+    def test_publish_entry_is_pinned_to_the_validated_release_path(self) -> None:
+        script = (ROOT / "scripts/Publish-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+        github_known_hosts = ROOT / "deploy/ssh/github_known_hosts"
+
+        for marker in (
+            '"git@github.com:guomxin/cli-helper.git"',
+            'Join-Path $repoRoot ".gitrepo"',
+            '"Tracked files are modified. Commit the tested candidate before publishing."',
+            "Assert-PrivateKeyReadable -Path $GitHubIdentityFile",
+            "Assert-PrivateKeyReadable -Path $AgentBridgeIdentityFile",
+            "& $validationScript -Mode Full",
+            "SkipValidation = $true",
+            "& $deployScript @deployParameters",
+            'push --porcelain $RemoteName "HEAD:refs/heads/$BranchName"',
+            '"ls-remote", "--exit-code"',
+            "GitHub verification mismatch",
+        ):
+            self.assertIn(marker, script)
+        self.assertLess(
+            script.index("& $validationScript -Mode Full"),
+            script.index("& $deployScript @deployParameters"),
+        )
+        self.assertLess(
+            script.index("& $deployScript @deployParameters"),
+            script.index("push --porcelain"),
+        )
+        self.assertTrue(github_known_hosts.is_file())
+        self.assertIn(
+            "github.com ssh-ed25519 ",
+            github_known_hosts.read_text(encoding="ascii"),
+        )
+
     def test_admin_console_is_deployed_with_tls_and_release_metadata(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
             encoding="utf-8"
