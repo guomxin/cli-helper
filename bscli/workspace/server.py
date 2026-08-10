@@ -122,6 +122,20 @@ def create_workspace_http_server(
     expected = urlparse(config.public_base_url)
     expected_origin = f"{expected.scheme.lower()}://{expected.netloc.lower()}"
     allowed_host = (expected.hostname or "").lower()
+    trusted_media = urlparse(application.service.trusted_card_base_url)
+    if (
+        trusted_media.scheme.lower() not in {"http", "https"}
+        or not trusted_media.netloc
+        or trusted_media.username
+        or trusted_media.password
+    ):
+        raise ValueError("trusted media origin is invalid")
+    trusted_media_origin = (
+        f"{trusted_media.scheme.lower()}://{trusted_media.netloc.lower()}"
+    )
+    image_sources = "'self' data:"
+    if trusted_media_origin != expected_origin:
+        image_sources = f"{image_sources} {trusted_media_origin}"
     limiter = _RateLimiter()
     asset_version = _workspace_asset_version()
 
@@ -813,7 +827,7 @@ def create_workspace_http_server(
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
-                "form-action 'self'; img-src 'self' data:; "
+                f"form-action 'self'; img-src {image_sources}; "
                 "style-src 'self'; script-src 'self'; connect-src 'self'",
             )
             if config.secure_cookie:

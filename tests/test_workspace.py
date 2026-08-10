@@ -1440,6 +1440,10 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(page_headers.get("Cache-Control"), "no-store")
+                self.assertIn(
+                    "img-src 'self' data: http://127.0.0.1:8780",
+                    page_headers.get("Content-Security-Policy", ""),
+                )
                 self.assertNotIn("__WORKSPACE_ASSET_VERSION__", page)
                 self.assertIn(
                     f'/assets/workspace.js?v={version["version"]}',
