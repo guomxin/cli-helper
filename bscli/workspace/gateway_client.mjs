@@ -370,6 +370,7 @@ function requestWorkspaceBind() {
         sessionKey: streamSessionKey,
         endpointKey,
         grant,
+        turnRef: idempotencyKey,
       },
     }),
   );

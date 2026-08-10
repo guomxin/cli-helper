@@ -86,6 +86,11 @@ test("waits for the previous run to become idle before sending", () => {
     events.map((event) => event.type),
     ["accepted", "progress", "chat"],
   );
+  assert.equal(
+    trace.find((item) => item.method === "agentbridge.workspace.bind")
+      ?.turnRef,
+    "initial-run",
+  );
 });
 
 test("forwards Workspace image attachments to chat.send", () => {

@@ -157,7 +157,7 @@ failure. The next inbound message from the same trusted WeChat endpoint
 reactivates only that endpoint's deferred notifications with a fresh attempt
 budget. Telegram retry behavior and Workspace SSE delivery are unchanged.
 
-Version 0.4.30 keeps image-plus-text certificate requests in one Task Hub task,
+Version 0.4.31 keeps image-plus-text certificate requests in one Task Hub task,
 deduplicates repeated prepared-file results, and retries one transient native
 attachment failure before sending the governed download-link fallback. The host
 reports each file's actual attachment, fallback-link, or failed outcome to the
@@ -198,7 +198,7 @@ hot reload can leave Node's previously imported module in memory. Verify the
 startup log contains the expected plugin version, for example:
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.30, ...)
+AgentBridge interaction plugin registered (version=0.4.31, ...)
 ```
 
 The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell

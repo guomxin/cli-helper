@@ -184,6 +184,24 @@ export class InteractionCoordinator {
     });
   }
 
+  bindWorkspaceTurn(sessionKey, turnRef) {
+    if (!isPrivateSessionKey(sessionKey)) {
+      return false;
+    }
+    const normalizedTurnRef = safeRoutePart(turnRef);
+    if (!normalizedTurnRef) {
+      return false;
+    }
+    this.taskContinuations.delete(sessionKey);
+    this.independentTaskBindings.delete(sessionKey);
+    this.recentUserMessages.set(sessionKey, {
+      text: null,
+      capturedAt: this.now(),
+      taskRunRef: `workspace:${normalizedTurnRef}`,
+    });
+    return true;
+  }
+
   bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
     if (!isPrivateSessionKey(sessionKey)) {
       return false;
@@ -1466,6 +1484,17 @@ export class InteractionCoordinator {
         "AgentBridge prepared document delivery unavailable because the private session route is missing",
       );
       return preparedDocumentReceipt(file, "failed", 0, "ROUTE_MISSING");
+    }
+    if (this.isPullBasedSession(sessionKey)) {
+      this.api.logger.info(
+        `AgentBridge prepared document exposed through the pull-based task card (channel=${route.channel}, filename=${safeCode(file.filename)})`,
+      );
+      return preparedDocumentReceipt(
+        file,
+        "fallback_link_sent",
+        0,
+        null,
+      );
     }
     const text = `OA 证书已准备完成：${file.filename}`;
     let localMediaPath = null;

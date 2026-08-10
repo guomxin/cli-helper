@@ -5,7 +5,7 @@
 > 更新日期：2026-08-10
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.30
+> `agentbridge-interactions` 0.4.31
 
 ## 1. 定位
 

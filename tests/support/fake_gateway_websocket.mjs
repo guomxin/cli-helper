@@ -23,6 +23,7 @@ function trace(request) {
       method: request.method,
       runId: request.params?.runId ?? null,
       idempotencyKey: request.params?.idempotencyKey ?? null,
+      turnRef: request.params?.turnRef ?? null,
       attachments: Array.isArray(request.params?.attachments)
         ? request.params.attachments.map((attachment) => ({
             type: attachment?.type ?? null,

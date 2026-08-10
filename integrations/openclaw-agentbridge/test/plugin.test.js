@@ -817,6 +817,7 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
       sessionKey,
       endpointKey: "workspace:account-123",
       grant: "abwg_1234567890123456789012345678901234567890",
+      turnRef: "workspace-turn-123",
     },
     respond(ok, payload, error) {
       responses.push({ ok, payload, error });
@@ -857,6 +858,113 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
       (request) => request.authorization === "Bearer token-a",
     ),
     true,
+  );
+});
+
+test("shares one task reference across per-tool Workspace run IDs", async () => {
+  const sharedState = createInteractionSharedState();
+  const requests = [];
+  const pluginConfig = {
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      {
+        channel: "telegram",
+        senderId: "7052061588",
+        tokenEnv: "USER_TOKEN",
+        label: "User A",
+      },
+    ],
+  };
+  const fetchImpl = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const name = body.params?.name;
+    const structuredContent =
+      name === "agentbridge_host_task_ensure"
+        ? {
+            status: "succeeded",
+            task: { taskId: "task-workspace-turn-1234567890" },
+          }
+        : { status: "succeeded", result: { count: 0, items: [] } };
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { structuredContent },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  const gateway = fakeApi(pluginConfig);
+  const runtime = fakeApi(pluginConfig);
+  registerAgentBridgeInteractions(gateway.api, {
+    sharedState,
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl,
+  });
+  registerAgentBridgeInteractions(runtime.api, {
+    sharedState,
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl,
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+
+  await gateway.gatewayMethods.get("agentbridge.workspace.bind").handler({
+    params: {
+      sessionKey,
+      endpointKey: "workspace:account-123",
+      grant: "abwg_1234567890123456789012345678901234567890",
+      turnRef: "request-123456",
+    },
+    respond() {},
+  });
+  const firstTools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+    runId: "call-search|fc-search",
+  });
+  runtime.hooks.before_tool_call(
+    {
+      toolCallId: "tool-search",
+      runId: "call-search|fc-search",
+      toolName: "oa_workflow_pending_list",
+    },
+    { sessionKey },
+  );
+  await firstTools
+    .find((tool) => tool.name === "oa_workflow_pending_list")
+    .execute("tool-search", { limit: 5 });
+  const secondTools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+    runId: "call-prepare|fc-prepare",
+  });
+  runtime.hooks.before_tool_call(
+    {
+      toolCallId: "tool-prepare",
+      runId: "call-prepare|fc-prepare",
+      toolName: "oa_workflow_sent_list",
+    },
+    { sessionKey },
+  );
+  await secondTools
+    .find((tool) => tool.name === "oa_workflow_sent_list")
+    .execute("tool-prepare", { limit: 5 });
+
+  const taskEnsures = requests.filter(
+    (request) => request.params?.name === "agentbridge_host_task_ensure",
+  );
+  assert.equal(taskEnsures.length, 2);
+  assert.deepEqual(
+    taskEnsures.map(
+      (request) => request.params.arguments.host_task_key,
+    ),
+    [
+      `${sessionKey}|workspace:request-123456`,
+      `${sessionKey}|workspace:request-123456`,
+    ],
   );
 });
 
@@ -4540,6 +4648,46 @@ test("falls back to a short-lived download link when attachment upload fails", a
   assert.equal(harness.sentPayloads.length, 1);
   assert.match(harness.sentPayloads[0].payload.text, /附件上传失败/);
   assert.match(harness.sentPayloads[0].payload.text, /\/file/);
+});
+
+test("treats the Workspace task-card download as a successful fallback delivery", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    ...preparedDocumentDependencies(),
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    channel: "webchat",
+    to: "account-123",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-certificate-workspace",
+    runId: "run-certificate-workspace",
+    sessionKey,
+    toolName: "oa_certificate_prepare_download",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-certificate-workspace",
+      toolName: "oa_certificate_prepare_download",
+      result: preparedDocumentResult(
+        "certificate-workspace.pdf",
+        "w".repeat(43),
+      ),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  const report = replacement.result.details.structuredContent.hostDelivery;
+  assert.equal(report.state, "delivered");
+  assert.equal(report.attachmentSentCount, 0);
+  assert.equal(report.fallbackLinkSentCount, 1);
+  assert.equal(report.failedCount, 0);
+  assert.equal(harness.sentPayloads.length, 0);
 });
 
 test("deduplicates a repeated prepared-document tool result", async () => {

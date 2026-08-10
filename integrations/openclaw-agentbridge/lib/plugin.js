@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.30";
+export const PLUGIN_VERSION = "0.4.31";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -388,6 +388,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
         bindWorkspaceGatewaySession({
           ...options,
           identityRouter,
+          coordinator,
           logger: api.logger,
         }),
       { scope: "operator.write" },
@@ -937,11 +938,13 @@ async function bindWorkspaceGatewaySession({
   params,
   respond,
   identityRouter,
+  coordinator,
   logger,
 }) {
   const sessionKey = safeText(params?.sessionKey, 1024);
   const endpointKey = safeText(params?.endpointKey, 768);
   const grant = safeText(params?.grant, 256);
+  const turnRef = safeText(params?.turnRef, 128);
   if (
     !sessionKey ||
     !endpointKey ||
@@ -974,6 +977,9 @@ async function bindWorkspaceGatewaySession({
           endpointKey,
         })
       ) {
+        if (turnRef) {
+          coordinator.bindWorkspaceTurn(sessionKey, turnRef);
+        }
         respond(true, {
           status: "bound",
           sessionKey,
