@@ -32,13 +32,30 @@ _FORM_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
 }
 
+_CAS_HTML_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
 
 class SmartlightLoginRequired(AdapterLoginRequired):
     pass
 
 
 class SmartlightAuthenticationRejected(AdapterAuthenticationRejected):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str = "AUTHENTICATION_REJECTED",
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 class SmartlightLoginContractMismatch(AdapterLoginContractMismatch):
@@ -106,7 +123,7 @@ class SmartlightCentralAdapter:
         response = worker.request_bytes(
             "GET",
             self.base_url,
-            headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+            headers=_CAS_HTML_HEADERS,
             timeout_seconds=timeout_seconds,
         )
         response = self._follow_login_redirects(
@@ -143,7 +160,11 @@ class SmartlightCentralAdapter:
         captcha = worker.request_bytes(
             "GET",
             f"{captcha_url}{separator}agentbridge={quote(str(datetime.now(timezone.utc).timestamp()))}",
-            headers={"Accept": "image/avif,image/webp,image/png,image/jpeg,*/*"},
+            headers={
+                **_CAS_HTML_HEADERS,
+                "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*",
+                "Referer": page_url,
+            },
             timeout_seconds=timeout_seconds,
         )
         content_type = str(captcha.get("content_type") or "").split(";", 1)[0].lower()
@@ -160,6 +181,7 @@ class SmartlightCentralAdapter:
             {
                 "smartlight_prepared_login": {
                     "form_url": form_url,
+                    "login_page_url": page_url,
                     "hidden_fields": {
                         name: parser.hidden_fields[name]
                         for name in sorted(required_hidden)
@@ -204,6 +226,10 @@ class SmartlightCentralAdapter:
                 "Prepared CAS login state is unavailable."
             )
         form_url = _same_origin_url(self.origin, prepared.get("form_url"))
+        login_page_url = _same_origin_url(
+            self.origin,
+            prepared.get("login_page_url"),
+        )
         hidden = prepared.get("hidden_fields")
         if not isinstance(hidden, dict) or set(hidden) != {"lt", "execution", "_eventId"}:
             raise SmartlightLoginContractMismatch(
@@ -227,8 +253,10 @@ class SmartlightCentralAdapter:
             "POST",
             form_url,
             headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                **_CAS_HTML_HEADERS,
                 "Content-Type": "application/x-www-form-urlencoded",
+                "Origin": self.origin,
+                "Referer": login_page_url,
             },
             body=urlencode(payload),
             timeout_seconds=timeout_seconds,
@@ -238,9 +266,18 @@ class SmartlightCentralAdapter:
             response,
             timeout_seconds=timeout_seconds,
         )
-        if response["status"] != 200 or "/cas/login" in response["url"]:
+        if response["status"] != 200:
             raise SmartlightAuthenticationRejected(
-                "The system rejected the account, password, or verification code."
+                "The system rejected the authentication request."
+            )
+        if "/cas/login" in response["url"]:
+            parser = _CasLoginParser()
+            parser.feed(response["body"].decode("utf-8", errors="replace"))
+            parser.close()
+            error_code = _login_rejection_code(parser.error_message)
+            raise SmartlightAuthenticationRejected(
+                "The system rejected the account, password, or verification code.",
+                error_code=error_code,
             )
         probe = self.probe_session(worker)
         return {
@@ -489,7 +526,7 @@ class SmartlightCentralAdapter:
             response = worker.request_bytes(
                 "GET",
                 target,
-                headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+                headers=_CAS_HTML_HEADERS,
                 timeout_seconds=timeout_seconds,
             )
         raise SmartlightLoginContractMismatch("CAS login redirect chain is too long.")
@@ -705,13 +742,18 @@ class _CasLoginParser(HTMLParser):
         self.form_action: str | None = None
         self.captcha_src: str | None = None
         self.hidden_fields: dict[str, str] = {}
+        self.error_message = ""
         self._in_auth_form = False
+        self._in_error = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name: value or "" for name, value in attrs}
         if tag == "form" and values.get("id") == "auth-form":
             self._in_auth_form = True
             self.form_action = values.get("action") or None
+            return
+        if tag == "div" and "login-error-info" in values.get("class", "").split():
+            self._in_error = True
             return
         if tag == "img" and values.get("id") == "captchaImage":
             self.captcha_src = values.get("src") or None
@@ -725,8 +767,27 @@ class _CasLoginParser(HTMLParser):
             self.hidden_fields[values["name"]] = values.get("value", "")
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "div" and self._in_error:
+            self._in_error = False
         if tag == "form":
             self._in_auth_form = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_error:
+            text = " ".join(data.split())
+            if text:
+                self.error_message = " ".join(
+                    part for part in (self.error_message, text) if part
+                )
+
+
+def _login_rejection_code(message: str) -> str:
+    normalized = "".join(str(message or "").split())
+    if "验证码" in normalized:
+        return "CAPTCHA_REJECTED"
+    if any(token in normalized for token in ("用户名", "账号", "密码", "凭证")):
+        return "CREDENTIALS_REJECTED"
+    return "AUTHENTICATION_REJECTED"
 
 
 def _same_origin_url(origin: str, value: Any) -> str:

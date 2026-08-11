@@ -10,6 +10,7 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
+    SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     build_smartlight_capability_registry,
 )
@@ -63,6 +64,36 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(submitted["username"], ["eWFuc2hp"])
         self.assertEqual(submitted["authcode"], ["1234"])
         self.assertNotEqual(submitted["password"], ["secret"])
+        self.assertEqual(worker.cas_headers["Origin"], self.adapter.origin)
+        self.assertIn("/cas/login", worker.cas_headers["Referer"])
+        self.assertIn("Mozilla/5.0", worker.cas_headers["User-Agent"])
+        self.assertIn("/cas/login", worker.captcha_headers["Referer"])
+
+    def test_classifies_captcha_rejection_from_cas_error_page(self):
+        worker = FakeSmartlightWorker(login_rejection="验证码错误，请重新输入")
+        self.adapter.prepare_authentication(worker, timeout_seconds=20)
+
+        with self.assertRaises(SmartlightAuthenticationRejected) as raised:
+            self.adapter.authenticate(
+                worker,
+                {"username": "yanshi", "password": "secret", "authcode": "1234"},
+                timeout_seconds=20,
+            )
+
+        self.assertEqual(raised.exception.error_code, "CAPTCHA_REJECTED")
+
+    def test_classifies_account_rejection_from_cas_error_page(self):
+        worker = FakeSmartlightWorker(login_rejection="用户名或密码错误")
+        self.adapter.prepare_authentication(worker, timeout_seconds=20)
+
+        with self.assertRaises(SmartlightAuthenticationRejected) as raised:
+            self.adapter.authenticate(
+                worker,
+                {"username": "yanshi", "password": "secret", "authcode": "1234"},
+                timeout_seconds=20,
+            )
+
+        self.assertEqual(raised.exception.error_code, "CREDENTIALS_REJECTED")
 
     def test_read_capabilities_use_observed_api_contracts(self):
         worker = FakeSmartlightWorker(authenticated=True)
@@ -121,11 +152,19 @@ class FakePage:
 
 
 class FakeSmartlightWorker:
-    def __init__(self, *, authenticated: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        authenticated: bool = False,
+        login_rejection: str | None = None,
+    ) -> None:
         self.state = {}
         self.page_url = ""
         self.cas_submission = ""
+        self.cas_headers: dict = {}
+        self.captcha_headers: dict = {}
         self.api_headers: list[dict] = []
+        self.login_rejection = login_rejection
         self.login_completed = authenticated
         if authenticated:
             self.state = {
@@ -158,6 +197,7 @@ class FakeSmartlightWorker:
                 "location": None,
             }
         if method == "GET" and path.endswith("/cas/captcha.jpg"):
+            self.captcha_headers = dict(kwargs.get("headers") or {})
             return {
                 "status": 200,
                 "url": url,
@@ -167,6 +207,22 @@ class FakeSmartlightWorker:
             }
         if method == "POST" and path.startswith("/cas/login"):
             self.cas_submission = kwargs["body"]
+            self.cas_headers = dict(kwargs.get("headers") or {})
+            if self.login_rejection is not None:
+                body = f"""
+                <form id="auth-form">
+                  <div class="controls login-error-info">
+                    {self.login_rejection}
+                  </div>
+                </form>
+                """.encode("utf-8")
+                return {
+                    "status": 200,
+                    "url": url,
+                    "content_type": "text/html; charset=UTF-8",
+                    "body": body,
+                    "location": None,
+                }
             self.login_completed = True
             return {
                 "status": 302,

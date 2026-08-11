@@ -4,11 +4,21 @@ from tempfile import TemporaryDirectory
 import unittest
 from urllib.parse import urlencode
 
-from bscli.auth.card import TrustedAuthApplication
+from bscli.auth.card import TrustedAuthApplication, _safe_failure_message
 from bscli.core.auth_challenges import AuthChallengeStore
 
 
 class TrustedAuthCardTests(unittest.TestCase):
+    def test_safe_failure_messages_distinguish_captcha_and_credentials(self):
+        self.assertIn(
+            "验证码",
+            _safe_failure_message("CAPTCHA_REJECTED", system_name="照明系统"),
+        )
+        self.assertIn(
+            "账号或密码",
+            _safe_failure_message("CREDENTIALS_REJECTED", system_name="照明系统"),
+        )
+
     def test_card_renders_registered_fields_and_strict_security_headers(self):
         with TemporaryDirectory() as tmp:
             store = AuthChallengeStore(Path(tmp) / "agentbridge.db")

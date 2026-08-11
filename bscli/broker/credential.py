@@ -166,12 +166,29 @@ class CredentialBroker:
                 code="LOGIN_CONTRACT_MISMATCH",
                 message="The login no longer matches its registered contract.",
             )
-        except AdapterAuthenticationRejected:
+        except AdapterAuthenticationRejected as exc:
+            rejection_code = str(
+                getattr(exc, "error_code", "AUTHENTICATION_REJECTED")
+            )
+            messages = {
+                "AUTHENTICATION_REJECTED": (
+                    "The downstream system did not accept the submitted "
+                    "authentication information."
+                ),
+                "CAPTCHA_REJECTED": (
+                    "The downstream system did not accept the verification code."
+                ),
+                "CREDENTIALS_REJECTED": (
+                    "The downstream system did not accept the account or password."
+                ),
+            }
+            if rejection_code not in messages:
+                rejection_code = "AUTHENTICATION_REJECTED"
             return self._fail(
                 challenge_id,
                 session,
-                code="AUTHENTICATION_REJECTED",
-                message="The downstream system did not accept the submitted authentication information.",
+                code=rejection_code,
+                message=messages[rejection_code],
             )
         except (AdapterSessionCheckUnavailable, ConnectionError):
             return self._fail(

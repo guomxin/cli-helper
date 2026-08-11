@@ -482,6 +482,8 @@ def _safe_failure_message(code: str, *, system_name: str = "目标系统") -> st
         "UNSUPPORTED_AUTH_METHOD": "OA 登录需要当前认证卡片不支持的验证方式。",
         "LOGIN_CONTRACT_MISMATCH": "OA 登录页面结构已变化，中心服务已安全停止。",
         "AUTHENTICATION_REJECTED": f"{system_name}未接受本次登录信息。",
+        "CAPTCHA_REJECTED": f"{system_name}未接受本次验证码，请从智能体重新发起登录。",
+        "CREDENTIALS_REJECTED": f"{system_name}未接受本次账号或密码。",
         "SESSION_STATE_UNAVAILABLE": "OA 已登录，但中心服务无法安全保存会话。",
         "AUTHENTICATION_REQUEST_INVALID": "认证请求与已登记的登录契约不一致。",
         "BROKER_LOGIN_FAILED": "中心凭据代理未能完成本次登录。",

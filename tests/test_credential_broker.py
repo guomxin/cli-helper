@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from bscli.adapters.base import AdapterSessionCheckUnavailable
+from bscli.adapters.base import AdapterAuthenticationRejected, AdapterSessionCheckUnavailable
 from bscli.broker.credential import CredentialBroker
 from bscli.browser.central import CentralProfileUnavailableError
 from bscli.core.auth_challenges import AuthChallengeStore, ChallengeAccessDenied
@@ -217,6 +217,42 @@ class CredentialBrokerTests(unittest.TestCase):
             self.assertEqual(result["error"]["code"], "DOWNSTREAM_UNAVAILABLE")
             self.assertEqual(sessions.get(session["session_id"])["state"], "expired")
 
+    def test_broker_preserves_a_supported_authentication_rejection_code(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            challenges = AuthChallengeStore(root / "agentbridge.db")
+            challenge = _create_challenge(challenges, session)
+            csrf = challenges.issue_csrf(challenge["challenge_id"])
+            broker = CredentialBroker(
+                challenge_store=challenges,
+                session_registry=sessions,
+                session_state_store=SessionStateStore(
+                    root / "session-secrets",
+                    protector=ReversingProtector(),
+                ),
+                adapter_factory=lambda _challenge: RejectedLoginAdapter(
+                    observed_principal="Alice"
+                ),
+                worker_factory=lambda _session, _adapter: FakeWorker(),
+            )
+
+            result = broker.authenticate(
+                challenge_id=challenge["challenge_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                credentials={"username": "alice", "password": "secret"},
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["code"], "CAPTCHA_REJECTED")
+            self.assertEqual(sessions.get(session["session_id"])["state"], "expired")
+
     def test_broker_reports_an_unwritable_managed_browser_profile(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -328,6 +364,13 @@ class PreparedLoginAdapter(FakeLoginAdapter):
 class UnavailableLoginAdapter(FakeLoginAdapter):
     def authenticate(self, _worker, _credentials: dict, *, timeout_seconds: float) -> dict:
         raise AdapterSessionCheckUnavailable("downstream unavailable")
+
+
+class RejectedLoginAdapter(FakeLoginAdapter):
+    def authenticate(self, _worker, _credentials: dict, *, timeout_seconds: float) -> dict:
+        rejection = AdapterAuthenticationRejected("captcha rejected")
+        rejection.error_code = "CAPTCHA_REJECTED"
+        raise rejection
 
 
 class FailingProfileWorker:
