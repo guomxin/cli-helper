@@ -63,7 +63,10 @@ class SmartlightAdapterTests(unittest.TestCase):
         submitted = parse_qs(worker.cas_submission)
         self.assertEqual(submitted["username"], ["eWFuc2hp"])
         self.assertEqual(submitted["authcode"], ["1234"])
-        self.assertNotEqual(submitted["password"], ["secret"])
+        self.assertEqual(
+            submitted["password"],
+            ["5EBE2294ECD0E0F08EAB7690D2A6EE69"],
+        )
         self.assertEqual(worker.cas_headers["Origin"], self.adapter.origin)
         self.assertIn("/cas/login", worker.cas_headers["Referer"])
         self.assertIn("Mozilla/5.0", worker.cas_headers["User-Agent"])

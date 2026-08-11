@@ -245,7 +245,7 @@ class SmartlightCentralAdapter:
         payload = {
             **hidden,
             "username": base64.b64encode(username.encode("utf-8")).decode("ascii"),
-            "password": hashlib.md5(password.encode("utf-8")).hexdigest(),  # noqa: S324
+            "password": hashlib.md5(password.encode("utf-8")).hexdigest().upper(),  # noqa: S324
             "authcode": authcode,
             "submit": "登录",
         }
