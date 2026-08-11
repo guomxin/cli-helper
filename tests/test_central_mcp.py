@@ -188,6 +188,13 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("taihua_work_log_create", names)
         self.assertIn("taihua_session_status", names)
         self.assertIn("taihua_session_login", names)
+        self.assertIn("smartlight_system_overview", names)
+        self.assertIn("smartlight_lamppost_list", names)
+        self.assertIn("smartlight_alarm_list", names)
+        self.assertIn("smartlight_inspection_task_list", names)
+        self.assertIn("smartlight_leakage_summary", names)
+        self.assertIn("smartlight_session_status", names)
+        self.assertIn("smartlight_session_login", names)
         self.assertIn("agentbridge_operation_list", names)
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)
@@ -665,6 +672,49 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(read_allowed.json()["result"]["isError"])
         self.assertTrue(write_denied.json()["result"]["isError"])
         self.assertFalse(write_allowed.json()["result"]["isError"])
+
+    def test_smartlight_tools_require_smartlight_read_scope(self):
+        with self._server() as (service, store, oa_read_token, client):
+            smartlight_reader = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="无为",
+                scopes=["smartlight:read"],
+                ttl_seconds=3600,
+            )
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "smartlight-scope",
+                "operationId": "operation-1",
+                "status": "succeeded",
+                "result": {"cabinetTotal": 0, "lampPostTotal": 0},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+
+            denied = self._request(
+                client,
+                "tools/call",
+                request_id=25,
+                token=oa_read_token,
+                params={"name": "smartlight_system_overview", "arguments": {}},
+            )
+            allowed = self._request(
+                client,
+                "tools/call",
+                request_id=26,
+                token=smartlight_reader["token"],
+                params={"name": "smartlight_system_overview", "arguments": {}},
+            )
+
+        self.assertTrue(denied.json()["result"]["isError"])
+        self.assertFalse(allowed.json()["result"]["isError"])
+        self.assertEqual(
+            service.invoke.call_args.kwargs["capability_name"],
+            "smartlight.system.overview",
+        )
+
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):
         with self._server() as (service, store, read_token, client):
             approval_identity = store.issue(

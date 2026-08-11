@@ -88,6 +88,57 @@ class CredentialBrokerTests(unittest.TestCase):
             self.assertIsNone(adapter.received_username)
             self.assertEqual(credentials, {})
 
+    def test_prepared_authentication_state_is_encrypted_and_restored_for_submit(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice",
+            )
+            challenges = AuthChallengeStore(root / "agentbridge.db")
+            challenge = _create_challenge(challenges, session)
+            csrf = challenges.issue_csrf(challenge["challenge_id"])
+            adapter = PreparedLoginAdapter(observed_principal="Alice")
+            workers = []
+
+            def worker_factory(_session, _adapter):
+                worker = FakeWorker()
+                workers.append(worker)
+                return worker
+
+            session_states = SessionStateStore(
+                root / "session-secrets",
+                protector=ReversingProtector(),
+            )
+            broker = CredentialBroker(
+                challenge_store=challenges,
+                session_registry=sessions,
+                session_state_store=session_states,
+                adapter_factory=lambda _challenge: adapter,
+                worker_factory=worker_factory,
+            )
+
+            prepared = broker.prepare_authentication(
+                challenge_id=challenge["challenge_id"]
+            )
+            result = broker.authenticate(
+                challenge_id=challenge["challenge_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                credentials={"username": "alice.login", "password": "secret"},
+            )
+
+            self.assertEqual(prepared["captcha"]["body"], b"captcha")
+            self.assertEqual(result["status"], "succeeded")
+            self.assertEqual(len(workers), 2)
+            self.assertEqual(
+                workers[1].restored_state["http"]["prepared"],
+                "opaque-captcha-session",
+            )
+            self.assertNotIn(b"opaque-captcha-session", (root / "agentbridge.db").read_bytes())
+
     def test_broker_quarantines_session_when_observed_principal_differs(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -253,6 +304,12 @@ class FakeLoginAdapter:
         }
 
 
+class PreparedLoginAdapter(FakeLoginAdapter):
+    def prepare_authentication(self, worker, *, timeout_seconds: float) -> dict:
+        worker.set_http_state({"prepared": "opaque-captcha-session"})
+        return {"captcha": {"content_type": "image/png", "body": b"captcha"}}
+
+
 class UnavailableLoginAdapter(FakeLoginAdapter):
     def authenticate(self, _worker, _credentials: dict, *, timeout_seconds: float) -> dict:
         raise AdapterSessionCheckUnavailable("downstream unavailable")
@@ -267,6 +324,10 @@ class FailingProfileWorker:
 
 
 class FakeWorker:
+    def __init__(self) -> None:
+        self.http_state = {}
+        self.restored_state = None
+
     def __enter__(self):
         return self
 
@@ -274,7 +335,17 @@ class FakeWorker:
         return None
 
     def clear_session_state(self) -> None:
-        return None
+        self.http_state = {}
+
+    def restore_session_state(self, state: dict) -> None:
+        self.restored_state = state
+        self.http_state = dict(state.get("http") or {})
+
+    def get_http_state(self) -> dict:
+        return dict(self.http_state)
+
+    def set_http_state(self, state: dict) -> None:
+        self.http_state = dict(state)
 
     def capture_session_state(self) -> dict:
         return {
@@ -285,7 +356,8 @@ class FakeWorker:
                     "domain": "oa.example.test",
                     "path": "/",
                 }
-            ]
+            ],
+            "http": dict(self.http_state),
         }
 
 

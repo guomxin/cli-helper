@@ -5,6 +5,7 @@ const CHECKS = new Map([
   [
     "TaihuaSessionStatus",
     { tool: "taihua_session_status", arguments: {}, kind: "session" },
+    { tool: "smartlight_session_status", arguments: {}, kind: "session" },
   ],
   [
     "OaPendingRead",
@@ -155,6 +156,13 @@ const REQUIRED_RELEASE_TOOLS = [
   "taihua_work_log_create",
   "taihua_session_status",
   "taihua_session_login",
+  "smartlight_system_overview",
+  "smartlight_lamppost_list",
+  "smartlight_alarm_list",
+  "smartlight_inspection_task_list",
+  "smartlight_leakage_summary",
+  "smartlight_session_status",
+  "smartlight_session_login",
   "yuque_public_books_list",
   "yuque_document_catalog",
   "yuque_document_search",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
@@ -43,9 +44,27 @@ class TrustedAuthApplication:
             )
 
         if challenge["state"] == "pending":
+            prepared = None
+            if any(field["name"] == "authcode" for field in challenge["fields"]):
+                prepare = getattr(self.broker, "prepare_authentication", None)
+                if callable(prepare):
+                    try:
+                        prepared = prepare(challenge_id=challenge_id)
+                    except Exception:
+                        return self._message_response(
+                            status=503,
+                            title="验证码加载失败",
+                            message="目标系统暂时无法提供验证码，请稍后重新打开登录卡。",
+                            tone="error",
+                        )
             csrf_token = self.challenge_store.issue_csrf(challenge_id)
             nonce = secrets.token_urlsafe(18)
-            html = _render_form(challenge, csrf_token=csrf_token, nonce=nonce)
+            html = _render_form(
+                challenge,
+                csrf_token=csrf_token,
+                nonce=nonce,
+                prepared=prepared,
+            )
             cookie = (
                 f"agentbridge_csrf={csrf_token}; Path=/auth/{challenge_id}; "
                 f"HttpOnly; SameSite=Strict; Max-Age={_challenge_ttl_seconds(challenge)}"
@@ -198,16 +217,40 @@ class TrustedAuthApplication:
         return AuthCardResponse(status, _security_headers(nonce), html.encode("utf-8"))
 
 
-def _render_form(challenge: dict, *, csrf_token: str, nonce: str) -> str:
+def _render_form(
+    challenge: dict,
+    *,
+    csrf_token: str,
+    nonce: str,
+    prepared: dict | None = None,
+) -> str:
     fields_html = []
     for field in challenge["fields"]:
         input_type = "password" if field["input_type"] == "password" else "text"
         input_mode = ' inputmode="numeric"' if field["input_type"] == "otp" else ""
         required = " required" if field.get("required") else ""
+        captcha_html = ""
+        if field["name"] == "authcode" and prepared:
+            captcha = prepared.get("captcha")
+            if isinstance(captcha, dict):
+                content_type = str(captcha.get("content_type") or "").lower()
+                body = captcha.get("body")
+                if content_type in {"image/jpeg", "image/png", "image/gif"} and isinstance(
+                    body, bytes
+                ):
+                    encoded = base64.b64encode(body).decode("ascii")
+                    captcha_html = (
+                        '<span class="captcha-image">'
+                        f'<img src="data:{content_type};base64,{encoded}" '
+                        'alt="登录验证码" width="94" height="46">'
+                        '<small>看不清时请重新打开本卡刷新</small>'
+                        "</span>"
+                    )
         fields_html.append(
             f"""
             <label class="field">
               <span>{escape(field['label'])}</span>
+              {captcha_html}
               <input name="{escape(field['name'])}" type="{input_type}"
                      autocomplete="{escape(field['autocomplete'])}"{input_mode}{required}
                      maxlength="2048">
@@ -361,6 +404,8 @@ def _document(
       outline: none;
     }}
     input:focus {{ border-color: var(--teal); box-shadow: 0 0 0 3px rgba(8, 125, 114, 0.14); }}
+    .captcha-image {{ display: flex; align-items: center; gap: 12px; font-weight: 400; color: var(--muted); }}
+    .captcha-image img {{ width: 94px; height: 46px; border: 1px solid var(--line); object-fit: contain; background: #fff; }}
     button {{
       min-height: 47px;
       border: 0;
@@ -404,6 +449,7 @@ def _security_headers(nonce: str) -> dict[str, str]:
         "Content-Security-Policy": (
             "default-src 'none'; "
             f"style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'; "
+            "img-src data:; "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         ),
     }

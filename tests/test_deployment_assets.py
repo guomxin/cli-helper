@@ -104,6 +104,17 @@ class DeploymentAssetTests(unittest.TestCase):
             'chmod 0640 "$root/config/release.env"',
         ):
             self.assertIn(marker, script)
+
+    def test_smartlight_adapter_requires_explicit_plain_http_opt_in(self) -> None:
+        unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "--smartlight-base-url http://123.232.113.241:4101/smartlight",
+            unit,
+        )
+        self.assertIn("--smartlight-allow-insecure-http", unit)
     def test_openclaw_restart_has_recovery_guardrails_and_warmup_gate(self) -> None:
         deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"

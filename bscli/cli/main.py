@@ -123,6 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
     capability_invoke.add_argument("--request-id")
     capability_invoke.add_argument("--base-url")
     capability_invoke.add_argument("--taihua-base-url")
+    capability_invoke.add_argument("--smartlight-base-url")
+    capability_invoke.add_argument("--smartlight-allow-insecure-http", action="store_true")
     capability_invoke.add_argument("--yuque-base-url")
     capability_invoke.add_argument("--yuque-organization-id", type=int)
     capability_invoke.add_argument("--card-base-url", default="http://127.0.0.1:8780")
@@ -133,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     session_status.add_argument("--system", required=True)
     session_status.add_argument("--user-subject", required=True)
     session_status.add_argument("--taihua-base-url")
+    session_status.add_argument("--smartlight-base-url")
+    session_status.add_argument("--smartlight-allow-insecure-http", action="store_true")
     session_status.add_argument("--yuque-base-url")
     session_status.add_argument("--yuque-organization-id", type=int)
     session_login = session_sub.add_parser("login")
@@ -141,6 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     session_login.add_argument("--expected-principal", required=True)
     session_login.add_argument("--base-url")
     session_login.add_argument("--taihua-base-url")
+    session_login.add_argument("--smartlight-base-url")
+    session_login.add_argument("--smartlight-allow-insecure-http", action="store_true")
     session_login.add_argument("--yuque-base-url")
     session_login.add_argument("--yuque-organization-id", type=int)
     session_login.add_argument("--card-base-url", default="http://127.0.0.1:8780")
@@ -163,6 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_serve.add_argument("--base-url")
     auth_serve.add_argument("--taihua-base-url")
+    auth_serve.add_argument("--smartlight-base-url")
+    auth_serve.add_argument("--smartlight-allow-insecure-http", action="store_true")
     auth_serve.add_argument("--yuque-base-url")
     auth_serve.add_argument("--yuque-organization-id", type=int)
     auth_serve.add_argument("--login-timeout", type=float, default=45)
@@ -182,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_get.add_argument("--user-subject", required=True)
     interaction_get.add_argument("--base-url")
     interaction_get.add_argument("--taihua-base-url")
+    interaction_get.add_argument("--smartlight-base-url")
+    interaction_get.add_argument("--smartlight-allow-insecure-http", action="store_true")
     interaction_get.add_argument("--yuque-base-url")
     interaction_get.add_argument("--yuque-organization-id", type=int)
     interaction_get.add_argument("--card-base-url", default="http://127.0.0.1:8780")
@@ -191,6 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
     interaction_resume.add_argument("--idempotency-key")
     interaction_resume.add_argument("--base-url")
     interaction_resume.add_argument("--taihua-base-url")
+    interaction_resume.add_argument("--smartlight-base-url")
+    interaction_resume.add_argument("--smartlight-allow-insecure-http", action="store_true")
     interaction_resume.add_argument("--yuque-base-url")
     interaction_resume.add_argument("--yuque-organization-id", type=int)
     interaction_resume.add_argument(
@@ -263,6 +275,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_central_serve.add_argument("--base-url")
     mcp_central_serve.add_argument("--taihua-base-url")
+    mcp_central_serve.add_argument("--smartlight-base-url")
+    mcp_central_serve.add_argument(
+        "--smartlight-allow-insecure-http",
+        action="store_true",
+        help="explicitly allow the configured Smartlight downstream to use plain HTTP",
+    )
     mcp_central_serve.add_argument("--yuque-base-url")
     mcp_central_serve.add_argument("--yuque-organization-id", type=int)
     mcp_central_serve.add_argument("--login-timeout", type=float, default=45)
@@ -307,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
             "taihua:read",
             "taihua:write:worklog",
             "yuque:read",
+            "smartlight:read",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")
@@ -484,6 +503,13 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
             home,
             getattr(args, "taihua_base_url", None),
         ),
+        smartlight_base_url=_smartlight_base_url(
+            home,
+            getattr(args, "smartlight_base_url", None),
+        ),
+        smartlight_allow_insecure_http=bool(
+            getattr(args, "smartlight_allow_insecure_http", False)
+        ),
         yuque_base_url=(yuque_url := _yuque_base_url(
             home,
             getattr(args, "yuque_base_url", None),
@@ -542,6 +568,13 @@ def handle_central_session(args: argparse.Namespace, home: Path) -> int:
         taihua_base_url=_taihua_base_url(
             home,
             getattr(args, "taihua_base_url", None),
+        ),
+        smartlight_base_url=_smartlight_base_url(
+            home,
+            getattr(args, "smartlight_base_url", None),
+        ),
+        smartlight_allow_insecure_http=bool(
+            getattr(args, "smartlight_allow_insecure_http", False)
         ),
         yuque_base_url=(yuque_url := _yuque_base_url(
             home,
@@ -605,6 +638,8 @@ def handle_auth(args: argparse.Namespace, home: Path) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        smartlight_base_url=_smartlight_base_url(home, args.smartlight_base_url),
+        smartlight_allow_insecure_http=args.smartlight_allow_insecure_http,
         yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
         yuque_organization_id=_yuque_organization_id(
             yuque_url, args.yuque_organization_id
@@ -714,6 +749,8 @@ def handle_interaction(args: argparse.Namespace, home: Path) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        smartlight_base_url=_smartlight_base_url(home, args.smartlight_base_url),
+        smartlight_allow_insecure_http=args.smartlight_allow_insecure_http,
         yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
         yuque_organization_id=_yuque_organization_id(
             yuque_url, args.yuque_organization_id
@@ -769,12 +806,14 @@ def handle_mcp(args: argparse.Namespace) -> int:
                     scopes.add("oa:read")
                 if any(scope.startswith("taihua:") for scope in scopes):
                     scopes.add("taihua:read")
+                if any(scope.startswith("smartlight:") for scope in scopes):
+                    scopes.add("smartlight:read")
                 if any(scope.startswith("yuque:") for scope in scopes):
                     scopes.add("yuque:read")
                 system_ids = {
                     scope.split(":", 1)[0]
                     for scope in scopes
-                    if scope.startswith(("oa:", "taihua:", "yuque:"))
+                    if scope.startswith(("oa:", "taihua:", "smartlight:", "yuque:"))
                 }
                 principal_bindings = _parse_system_principals(
                     args.system_principal or []
@@ -936,6 +975,8 @@ def handle_mcp(args: argparse.Namespace) -> int:
         home=home,
         base_url=_central_base_url(home, args.base_url),
         taihua_base_url=_taihua_base_url(home, args.taihua_base_url),
+        smartlight_base_url=_smartlight_base_url(home, args.smartlight_base_url),
+        smartlight_allow_insecure_http=args.smartlight_allow_insecure_http,
         yuque_base_url=(yuque_url := _yuque_base_url(home, args.yuque_base_url)),
         yuque_organization_id=_yuque_organization_id(
             yuque_url, args.yuque_organization_id
@@ -1020,9 +1061,13 @@ def _parse_system_principals(values: list[str]) -> dict[str, str]:
         system_id, separator, principal_ref = str(value or "").partition("=")
         system_id = system_id.strip()
         principal_ref = principal_ref.strip()
-        if separator != "=" or system_id not in {"oa", "taihua", "yuque"} or not principal_ref:
+        if (
+            separator != "="
+            or system_id not in {"oa", "taihua", "smartlight", "yuque"}
+            or not principal_ref
+        ):
             raise ValueError(
-                "--system-principal must use oa|taihua|yuque=PRINCIPAL"
+                "--system-principal must use oa|taihua|smartlight|yuque=PRINCIPAL"
             )
         if system_id in bindings and bindings[system_id] != principal_ref:
             raise ValueError(f"duplicate principal binding for {system_id}")
@@ -1071,6 +1116,15 @@ def _taihua_base_url(home: Path, explicit: str | None) -> str | None:
         return explicit
     try:
         return ConfigStore(home).load_system("taihua").base_url
+    except KeyError:
+        return None
+
+
+def _smartlight_base_url(home: Path, explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    try:
+        return ConfigStore(home).load_system("smartlight").base_url
     except KeyError:
         return None
 

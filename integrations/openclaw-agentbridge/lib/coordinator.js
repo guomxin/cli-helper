@@ -78,6 +78,26 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "taihua_project", system: "泰华日志系统", label: "项目" },
   ],
   [
+    "smartlight_system_overview",
+    { kind: "smartlight_overview", system: "照明实验室测试系统", label: "系统概览" },
+  ],
+  [
+    "smartlight_lamppost_list",
+    { kind: "smartlight_lamppost", system: "照明实验室测试系统", label: "灯杆" },
+  ],
+  [
+    "smartlight_alarm_list",
+    { kind: "smartlight_alarm", system: "照明实验室测试系统", label: "RTU 告警" },
+  ],
+  [
+    "smartlight_inspection_task_list",
+    { kind: "smartlight_inspection", system: "照明实验室测试系统", label: "巡检任务" },
+  ],
+  [
+    "smartlight_leakage_summary",
+    { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电统计" },
+  ],
+  [
     "yuque_public_books_list",
     { kind: "yuque_book", system: "部门信息库", label: "公共区知识库" },
   ],

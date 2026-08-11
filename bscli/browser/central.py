@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
@@ -35,6 +36,7 @@ class CentralBrowserWorker:
         self._playwright_starter = playwright_starter or _start_playwright
         self._controller = None
         self._context = None
+        self._http_state: dict[str, Any] = {}
         self._lease = _ProfileLease(self.profile_path / ".agentbridge-browser-lease.json")
 
     def __enter__(self) -> CentralBrowserWorker:
@@ -267,7 +269,7 @@ class CentralBrowserWorker:
         cookies = self._context.cookies()
         if any(not self._cookie_is_allowed(cookie) for cookie in cookies):
             raise ValueError("central browser produced a disallowed cookie")
-        return {"cookies": cookies}
+        return {"cookies": cookies, "http": deepcopy(self._http_state)}
 
     def restore_session_state(self, state: dict) -> None:
         self._require_started()
@@ -277,12 +279,25 @@ class CentralBrowserWorker:
         for cookie in cookies:
             if not isinstance(cookie, dict) or not self._cookie_is_allowed(cookie):
                 raise ValueError("central browser session state contains a disallowed cookie")
+        http_state = state.get("http", {})
+        if not isinstance(http_state, dict):
+            raise ValueError("central browser session state contains invalid HTTP state")
+        self._http_state = deepcopy(http_state)
         if cookies:
             self._context.add_cookies(cookies)
 
     def clear_session_state(self) -> None:
         self._require_started()
         self._context.clear_cookies()
+        self._http_state = {}
+
+    def get_http_state(self) -> dict:
+        return deepcopy(self._http_state)
+
+    def set_http_state(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            raise TypeError("HTTP session state must be an object")
+        self._http_state = deepcopy(state)
 
     def _require_started(self) -> None:
         if self._context is None:
@@ -335,6 +350,7 @@ class AttachedCentralBrowserWorker:
         self._controller = None
         self._browser = None
         self._context = None
+        self._http_state: dict[str, Any] = {}
 
     def __enter__(self) -> AttachedCentralBrowserWorker:
         return self.start()
@@ -443,7 +459,35 @@ class AttachedCentralBrowserWorker:
         cookies = self._context.cookies()
         if any(not self._cookie_is_allowed(cookie) for cookie in cookies):
             raise ValueError("direct Chromium produced a disallowed cookie")
-        return {"cookies": cookies}
+        return {"cookies": cookies, "http": deepcopy(self._http_state)}
+
+    def restore_session_state(self, state: dict) -> None:
+        self._require_started()
+        cookies = state.get("cookies") if isinstance(state, dict) else None
+        if not isinstance(cookies, list):
+            raise ValueError("direct Chromium session state must contain cookies")
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or not self._cookie_is_allowed(cookie):
+                raise ValueError("direct Chromium session state contains a disallowed cookie")
+        http_state = state.get("http", {})
+        if not isinstance(http_state, dict):
+            raise ValueError("direct Chromium session state contains invalid HTTP state")
+        self._http_state = deepcopy(http_state)
+        if cookies:
+            self._context.add_cookies(cookies)
+
+    def clear_session_state(self) -> None:
+        self._require_started()
+        self._context.clear_cookies()
+        self._http_state = {}
+
+    def get_http_state(self) -> dict:
+        return deepcopy(self._http_state)
+
+    def set_http_state(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            raise TypeError("HTTP session state must be an object")
+        self._http_state = deepcopy(state)
 
     def _require_started(self) -> None:
         if self._context is None:

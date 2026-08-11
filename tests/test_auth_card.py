@@ -36,6 +36,23 @@ class TrustedAuthCardTests(unittest.TestCase):
             self.assertIn("SameSite=Strict", response.headers["Set-Cookie"])
             self.assertIn("Max-Age=300", response.headers["Set-Cookie"])
 
+    def test_card_embeds_prepared_image_captcha_without_downstream_url(self):
+        with TemporaryDirectory() as tmp:
+            store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
+            challenge = _captcha_challenge(store)
+            broker = CaptchaBroker()
+            app = TrustedAuthApplication(challenge_store=store, broker=broker)
+
+            response = app.get_card(challenge["challenge_id"], secure_cookie=True)
+
+            html = response.body.decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(broker.prepared_challenge_id, challenge["challenge_id"])
+            self.assertIn('src="data:image/png;base64,aW1hZ2UtYnl0ZXM="', html)
+            self.assertIn('name="authcode"', html)
+            self.assertNotIn("123.232.113.241", html)
+            self.assertIn("img-src data:", response.headers["Content-Security-Policy"])
+
     def test_card_submission_requires_matching_csrf_and_does_not_echo_password(self):
         with TemporaryDirectory() as tmp:
             store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
@@ -156,6 +173,43 @@ def _challenge(store: AuthChallengeStore) -> dict:
     )
 
 
+def _captcha_challenge(store: AuthChallengeStore) -> dict:
+    return store.create(
+        user_subject="user-a",
+        system_id="smartlight",
+        session_id="session-smartlight",
+        origin="http://smartlight.example.test",
+        page_fingerprint="smartlight-captcha-v1",
+        nonce="nonce",
+        fields=[
+            {
+                "name": "username",
+                "label": "系统账号",
+                "input_type": "text",
+                "autocomplete": "username",
+                "required": True,
+            },
+            {
+                "name": "password",
+                "label": "密码",
+                "input_type": "password",
+                "autocomplete": "current-password",
+                "required": True,
+            },
+            {
+                "name": "authcode",
+                "label": "验证码",
+                "input_type": "text",
+                "autocomplete": "off",
+                "required": True,
+            },
+        ],
+        card_base_url="https://agentbridge.example.test",
+        system_name="照明实验室测试系统",
+        expected_principal_ref="无为",
+    )
+
+
 class FakeBroker:
     def __init__(self, *, result=None) -> None:
         self.received = None
@@ -165,6 +219,21 @@ class FakeBroker:
         self.received = dict(credentials)
         credentials.clear()
         return {**self.result, "challengeId": challenge_id}
+
+
+class CaptchaBroker(FakeBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prepared_challenge_id = None
+
+    def prepare_authentication(self, *, challenge_id):
+        self.prepared_challenge_id = challenge_id
+        return {
+            "captcha": {
+                "content_type": "image/png",
+                "body": b"image-bytes",
+            }
+        }
 
 
 if __name__ == "__main__":

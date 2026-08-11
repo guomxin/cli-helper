@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Callable
 
 from bscli.adapters.base import (
@@ -35,6 +36,31 @@ class CredentialBroker:
         self.adapter_factory = adapter_factory
         self.worker_factory = worker_factory
         self.login_timeout_seconds = login_timeout_seconds
+        self._preparation_lock = threading.Lock()
+
+    def prepare_authentication(self, *, challenge_id: str) -> dict | None:
+        challenge = self.challenge_store.get(challenge_id)
+        session = self.session_registry.get(challenge["session_id"])
+        adapter = self.adapter_factory(challenge)
+        contract = adapter.authentication_contract()
+        self._validate_bindings(challenge, session, contract)
+        prepare = getattr(adapter, "prepare_authentication", None)
+        if not callable(prepare):
+            return None
+
+        with self._preparation_lock:
+            with self.worker_factory(session, adapter) as worker:
+                worker.clear_session_state()
+                prepared = prepare(
+                    worker,
+                    timeout_seconds=self.login_timeout_seconds,
+                )
+                self.session_state_store.save(
+                    session["session_id"],
+                    worker.capture_session_state(),
+                )
+            self.session_registry.mark_awaiting_login(session["session_id"])
+        return prepared
 
     def authenticate(
         self,
@@ -61,11 +87,21 @@ class CredentialBroker:
             contract = adapter.authentication_contract()
             self._validate_bindings(challenge, session, contract)
             self._validate_credentials(challenge["fields"], credentials)
-            self.session_state_store.delete(session["session_id"])
             self.session_registry.mark_awaiting_login(session["session_id"])
 
             with self.worker_factory(session, adapter) as worker:
-                worker.clear_session_state()
+                if callable(getattr(adapter, "prepare_authentication", None)):
+                    prepared_state = self.session_state_store.load(
+                        session["session_id"]
+                    )
+                    if prepared_state is None:
+                        raise AdapterLoginContractMismatch(
+                            "The prepared authentication state is missing."
+                        )
+                    worker.restore_session_state(prepared_state)
+                else:
+                    self.session_state_store.delete(session["session_id"])
+                    worker.clear_session_state()
                 authentication = adapter.authenticate(
                     worker,
                     credentials,

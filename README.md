@@ -12,7 +12,8 @@ The active runtime is central AgentBridge:
 - A durable operation ledger with idempotency and explicit outcome states
 - A persistent Task Hub that links host tasks, operations, trusted interactions,
   client endpoints, subscriptions, and notification outbox records
-- Seeyon OA, API-first Taihua work logs, and trusted-browser Yuque knowledge access under one multi-system runtime
+- Seeyon OA, API-first Taihua work logs, trusted-browser Yuque knowledge access,
+  and read-only Smartlight laboratory monitoring under one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
@@ -121,6 +122,20 @@ table, link, image OCR, and attachment metadata. Search snippets remain omitted,
 selected content is redacted for likely credentials and tokens. Attachment download is
 not claimed until a real independent file card is available for acceptance. See the
 [Yuque department knowledge adapter guide](docs/yuque-department-knowledge-adapter.md).
+
+Published Smartlight capabilities:
+
+- `smartlight.system.overview`
+- `smartlight.lamppost.list`
+- `smartlight.alarm.list`
+- `smartlight.inspection_task.list`
+- `smartlight.leakage.summary`
+
+Smartlight uses a trusted username/password/image-captcha card only for login.
+After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
+normal reads do not open a remote browser. The current integration deliberately
+does not expose device control, configuration, alarm handling, or CRUD operations.
+See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden

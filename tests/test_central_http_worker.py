@@ -40,11 +40,12 @@ class CentralHttpWorkerTests(unittest.TestCase):
 
         open_request.assert_not_called()
 
-    def test_http_redirect_handler_fails_closed(self):
+    def test_http_redirect_handler_prevents_automatic_follow(self):
         handler = _RejectRedirectHandler()
 
-        with self.assertRaisesRegex(ValueError, "redirects are not allowed"):
+        self.assertIsNone(
             handler.redirect_request(None, None, 302, "Found", {}, "http://other/")
+        )
     def test_redirect_to_unregistered_origin_is_rejected(self):
         worker = CentralHttpWorker(allowed_origins={"http://10.10.50.101"})
         response = FakeResponse(

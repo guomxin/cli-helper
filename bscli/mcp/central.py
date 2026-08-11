@@ -74,6 +74,13 @@ from bscli.adapters.taihua import (
     TAIHUA_WORK_LOG_CREATE_CAPABILITY,
     TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
 )
+from bscli.adapters.smartlight import (
+    SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
+    SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
+    SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
+    SMARTLIGHT_OVERVIEW_CAPABILITY,
+)
 from bscli.adapters.yuque import (
     YUQUE_DOCUMENT_CATALOG_CAPABILITY,
     YUQUE_DOCUMENT_READ_CAPABILITY,
@@ -172,6 +179,13 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "taihua_work_log_create_prepare": frozenset({"taihua:write:worklog"}),
     "taihua_session_status": frozenset({"taihua:read"}),
     "taihua_session_login": frozenset({"taihua:read"}),
+    "smartlight_system_overview": frozenset({"smartlight:read"}),
+    "smartlight_lamppost_list": frozenset({"smartlight:read"}),
+    "smartlight_alarm_list": frozenset({"smartlight:read"}),
+    "smartlight_inspection_task_list": frozenset({"smartlight:read"}),
+    "smartlight_leakage_summary": frozenset({"smartlight:read"}),
+    "smartlight_session_status": frozenset({"smartlight:read"}),
+    "smartlight_session_login": frozenset({"smartlight:read"}),
     "yuque_public_books_list": frozenset({"yuque:read"}),
     "yuque_document_catalog": frozenset({"yuque:read"}),
     "yuque_document_search": frozenset({"yuque:read"}),
@@ -2064,6 +2078,187 @@ def create_central_mcp_server(
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="taihua",
+        )
+        return package_interaction_result(response)
+
+    @mcp.tool(
+        name="smartlight_system_overview",
+        title="Summarize Smartlight System",
+        description="Summarize visible lighting cabinets and lamp posts.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_system_overview(
+        ctx: Context,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_OVERVIEW_CAPABILITY,
+            {},
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_lamppost_list",
+        title="List Smartlight Lamp Posts",
+        description="List lamp posts visible to the authenticated lighting-system user.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_lamppost_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        if keyword is not None:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_list",
+        title="List Smartlight RTU Alarms",
+        description="List RTU alarms visible to the authenticated lighting-system user.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_alarm_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        if keyword is not None:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_inspection_task_list",
+        title="List Smartlight Inspection Tasks",
+        description="List inspection tasks, optionally filtered by task, plan, or state.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_inspection_task_list(
+        ctx: Context,
+        task_name: Annotated[str | None, Field(max_length=200)] = None,
+        plan_name: Annotated[str | None, Field(max_length=200)] = None,
+        state: Annotated[str | int | None, Field()] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        for name, value in (
+            ("task_name", task_name),
+            ("plan_name", plan_name),
+            ("state", state),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_leakage_summary",
+        title="Summarize Smartlight Leakage Records",
+        description="Summarize lamp leakage records in an optional date range.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_leakage_summary(
+        ctx: Context,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        if start_date is not None:
+            arguments["start_date"] = start_date
+        if end_date is not None:
+            arguments["end_date"] = end_date
+        return await invoke(
+            ctx,
+            SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_session_status",
+        title="Verify Smartlight Session Status",
+        description="Verify the authenticated caller's central Smartlight CAS/JWT session.",
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_session_status() -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"smartlight:read"},
+        )
+        return await asyncio.to_thread(
+            service.session_status,
+            user_subject=identity["user_subject"],
+            system_id="smartlight",
+        )
+
+    @mcp.tool(
+        name="smartlight_session_login",
+        title="Ensure Smartlight Session Login",
+        meta=interaction_tool_meta(),
+        description=(
+            "Reuse a valid Smartlight session or open a trusted CAPTCHA login card. "
+            "The password and verification code never enter MCP arguments."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_session_login(
+        ctx: Context,
+        challenge_ttl_seconds: Annotated[int, Field(ge=30, le=900)] = 300,
+    ) -> dict[str, Any]:
+        identity = _request_identity(
+            identity_store,
+            required_scopes={"smartlight:read"},
+        )
+        response = await asyncio.to_thread(
+            service.start_login,
+            user_subject=identity["user_subject"],
+            expected_principal_ref=None,
+            card_base_url=auth_card_base_url,
+            ttl_seconds=challenge_ttl_seconds,
+            system_id="smartlight",
         )
         return package_interaction_result(response)
 

@@ -22,6 +22,7 @@ _ALLOWED_SCOPES = frozenset(
         "taihua:read",
         "taihua:write:worklog",
         "yuque:read",
+        "smartlight:read",
     }
 )
 

@@ -32,6 +32,12 @@ from bscli.adapters.taihua import (
     commit_taihua_work_log_create,
     prepare_taihua_work_log_create,
 )
+from bscli.adapters.smartlight import (
+    SMARTLIGHT_ADAPTER_ID,
+    SMARTLIGHT_SYSTEM_ID,
+    SmartlightCentralAdapter,
+    build_smartlight_capability_registry,
+)
 from bscli.adapters.yuque import (
     YUQUE_ADAPTER_ID,
     YUQUE_SYSTEM_ID,
@@ -494,6 +500,8 @@ class CentralCapabilityService:
         home: Path | str,
         base_url: str,
         taihua_base_url: str | None = None,
+        smartlight_base_url: str | None = None,
+        smartlight_allow_insecure_http: bool = False,
         yuque_base_url: str | None = None,
         yuque_organization_id: int | None = None,
         registry: CapabilityRegistry | None = None,
@@ -507,6 +515,8 @@ class CentralCapabilityService:
         if registry is None:
             self.registry = build_central_capability_registry()
             for spec in build_taihua_capability_registry().list():
+                self.registry.register(spec)
+            for spec in build_smartlight_capability_registry().list():
                 self.registry.register(spec)
             for spec in build_yuque_capability_registry().list():
                 self.registry.register(spec)
@@ -540,6 +550,16 @@ class CentralCapabilityService:
                 self._default_http_worker_factory
             )
             self._adapter_systems[TAIHUA_ADAPTER_ID] = TAIHUA_SYSTEM_ID
+        if smartlight_base_url:
+            smartlight_adapter = SmartlightCentralAdapter(
+                base_url=smartlight_base_url,
+                allow_insecure_http=smartlight_allow_insecure_http,
+            )
+            self._adapters_by_system[SMARTLIGHT_SYSTEM_ID] = smartlight_adapter
+            self._worker_factories_by_system[SMARTLIGHT_SYSTEM_ID] = (
+                self._default_http_worker_factory
+            )
+            self._adapter_systems[SMARTLIGHT_ADAPTER_ID] = SMARTLIGHT_SYSTEM_ID
         if yuque_base_url and yuque_organization_id:
             yuque_adapter = YuqueCentralAdapter(
                 base_url=yuque_base_url,

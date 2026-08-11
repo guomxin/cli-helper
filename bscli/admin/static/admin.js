@@ -34,6 +34,7 @@ const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
   { label: "泰华日志", items: ["taihua:read", "taihua:write:worklog"] },
   { label: "部门信息库", items: ["yuque:read"] },
+  { label: "照明实验室", items: ["smartlight:read"] },
 ];
 
 const $ = selector => document.querySelector(selector);

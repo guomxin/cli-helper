@@ -106,6 +106,46 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertTrue(has_taihua_session)
         self.assertFalse(has_oa_session)
 
+    def test_smartlight_token_only_binds_smartlight_session(self):
+        with TemporaryDirectory() as tmp:
+            with redirect_stdout(io.StringIO()) as issued_stdout:
+                exit_code = main(
+                    [
+                        "--home",
+                        tmp,
+                        "mcp",
+                        "token",
+                        "issue",
+                        "--user-subject",
+                        "user-a",
+                        "--expected-principal",
+                        "无为",
+                        "--scope",
+                        "smartlight:read",
+                    ]
+                )
+            issued = json.loads(issued_stdout.getvalue())
+            sessions = SessionRegistry(
+                Path(tmp) / "agentbridge.db",
+                Path(tmp) / "profiles",
+            )
+            has_smartlight_session = (
+                sessions.find(user_subject="user-a", system_id="smartlight")
+                is not None
+            )
+            has_oa_session = (
+                sessions.find(user_subject="user-a", system_id="oa") is not None
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(issued["identityToken"]["scopes"], ["smartlight:read"])
+        self.assertEqual(
+            issued["identityToken"]["principalBindings"],
+            {"smartlight": "无为"},
+        )
+        self.assertTrue(has_smartlight_session)
+        self.assertFalse(has_oa_session)
+
     def test_identity_token_can_be_revoked(self):
         with TemporaryDirectory() as tmp:
             with redirect_stdout(io.StringIO()) as issued_stdout:

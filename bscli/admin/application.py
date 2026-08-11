@@ -29,11 +29,13 @@ MCP_SCOPES = (
     "taihua:read",
     "taihua:write:worklog",
     "yuque:read",
+    "smartlight:read",
 )
 SYSTEM_LABELS = {
     "oa": "致远 OA",
     "taihua": "泰华日志",
     "yuque": "部门信息库",
+    "smartlight": "照明实验室测试系统",
 }
 
 
@@ -418,10 +420,12 @@ class AdminControlPlane:
             normalized_scopes.add("taihua:read")
         if any(scope.startswith("yuque:") for scope in normalized_scopes):
             normalized_scopes.add("yuque:read")
+        if any(scope.startswith("smartlight:") for scope in normalized_scopes):
+            normalized_scopes.add("smartlight:read")
         system_ids = {
             scope.split(":", 1)[0]
             for scope in normalized_scopes
-            if scope.startswith(("oa:", "taihua:", "yuque:"))
+            if scope.startswith(("oa:", "taihua:", "yuque:", "smartlight:"))
         }
         try:
             resolved_bindings = self.service.sessions.ensure_principal_bindings(

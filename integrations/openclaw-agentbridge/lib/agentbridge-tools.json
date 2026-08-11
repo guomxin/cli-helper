@@ -3915,6 +3915,390 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "Summarize visible lighting cabinets and lamp posts.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "title": "smartlight_system_overviewArguments",
+        "type": "object"
+      },
+      "name": "smartlight_system_overview",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_system_overviewDictOutput",
+        "type": "object"
+      },
+      "title": "Summarize Smartlight System"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List lamp posts visible to the authenticated lighting-system user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_lamppost_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_lamppost_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_lamppost_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Smartlight Lamp Posts"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List RTU alarms visible to the authenticated lighting-system user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_alarm_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Smartlight RTU Alarms"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List inspection tasks, optionally filtered by task, plan, or state.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "plan_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plan Name"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State"
+          },
+          "task_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Name"
+          }
+        },
+        "title": "smartlight_inspection_task_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_inspection_task_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_inspection_task_listDictOutput",
+        "type": "object"
+      },
+      "title": "List Smartlight Inspection Tasks"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Summarize lamp leakage records in an optional date range.",
+      "inputSchema": {
+        "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "smartlight_leakage_summaryArguments",
+        "type": "object"
+      },
+      "name": "smartlight_leakage_summary",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_leakage_summaryDictOutput",
+        "type": "object"
+      },
+      "title": "Summarize Smartlight Leakage Records"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Verify the authenticated caller's central Smartlight CAS/JWT session.",
+      "inputSchema": {
+        "properties": {},
+        "title": "smartlight_session_statusArguments",
+        "type": "object"
+      },
+      "name": "smartlight_session_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_session_statusDictOutput",
+        "type": "object"
+      },
+      "title": "Verify Smartlight Session Status"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Reuse a valid Smartlight session or open a trusted CAPTCHA login card. The password and verification code never enter MCP arguments.",
+      "inputSchema": {
+        "properties": {
+          "challenge_ttl_seconds": {
+            "default": 300,
+            "maximum": 900,
+            "minimum": 30,
+            "title": "Challenge Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_session_loginArguments",
+        "type": "object"
+      },
+      "name": "smartlight_session_login",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_session_loginDictOutput",
+        "type": "object"
+      },
+      "title": "Ensure Smartlight Session Login"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "Verify the authenticated caller's active central OA session against OA. Non-active sessions are reported from the registry without asking for credentials.",
       "inputSchema": {
         "properties": {},
