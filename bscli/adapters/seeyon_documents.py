@@ -19,6 +19,25 @@ DOCUMENT_CERTIFICATE_SEARCH_INPUT_SCHEMA = {
             "minItems": 1,
             "maxItems": 20,
         },
+        "documents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "version": {"type": "string"},
+                    "aliases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 5,
+                    },
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+            "minItems": 1,
+            "maxItems": 20,
+        },
         "document_type": {
             "type": "string",
             "enum": [
@@ -71,7 +90,6 @@ def search_certificate_documents(
     base_url: str,
     arguments: dict,
 ) -> dict:
-    queries = _validated_queries(arguments)
     document_type = str(arguments.get("document_type") or "all").strip()
     if document_type == "all":
         requested_types = tuple(_CERTIFICATE_CATEGORIES)
@@ -79,6 +97,11 @@ def search_certificate_documents(
         requested_types = (document_type,)
     else:
         raise ValueError("document_type is invalid")
+    requests = _validated_document_requests(
+        arguments,
+        document_type=document_type,
+    )
+    queries = [request["query"] for request in requests]
     limit = max(_validated_limit(arguments.get("limit")), len(queries))
 
     matches: list[dict] = []
@@ -89,8 +112,14 @@ def search_certificate_documents(
             base_url=base_url,
             category_label=_CERTIFICATE_CATEGORIES[current_type],
         )
-        for query_index, query in enumerate(queries):
-            for search_query in _certificate_search_queries(query, current_type):
+        for query_index, request in enumerate(requests):
+            if request["version"] and current_type != "software_copyright_certificate":
+                continue
+            query = request["query"]
+            for search_query in _certificate_request_search_queries(
+                request,
+                current_type,
+            ):
                 rows = _search_current_folder(
                     worker,
                     frame=frame,
@@ -103,7 +132,7 @@ def search_certificate_documents(
                     if not _certificate_version_matches(
                         row,
                         document_type=current_type,
-                        query=query,
+                        requested_version=request["version"],
                     ):
                         continue
                     public_item = _public_document_item(
@@ -113,6 +142,8 @@ def search_certificate_documents(
                         search_query=search_query,
                     )
                     public_item["query"] = query
+                    public_item["requested_name"] = request["name"]
+                    public_item["requested_version"] = request["version"]
                     public_item["_query_index"] = query_index
                     if not row["download_acl"] or not row["read_acl"]:
                         inaccessible_count += 1
@@ -129,20 +160,46 @@ def search_certificate_documents(
                         "mime_type_id": row["mime_type_id"],
                         "secret_level": row["secret_level"],
                         "is_upload_file": row["is_upload_file"],
+                        "requested_name": request["name"],
+                        "requested_version": request["version"],
                     }
                     matches.append(public_item)
                     accessible_matches += 1
                 if accessible_matches:
                     break
 
-    match_counts = {
-        _normalize_text(query): sum(
-            1
+    ambiguous_indexes: set[int] = set()
+    ambiguities = []
+    for query_index, request in enumerate(requests):
+        if request["version"]:
+            continue
+        candidates = [
+            item
             for item in matches
-            if _normalize_text(item["query"]) == _normalize_text(query)
+            if item["_query_index"] == query_index
+            and item["document_type"] == "software_copyright_certificate"
+        ]
+        versions = sorted(
+            {
+                version
+                for version in (
+                    _software_version(item["title"]) for item in candidates
+                )
+                if version
+            }
         )
-        for query in queries
-    }
+        if len(versions) <= 1:
+            continue
+        ambiguous_indexes.add(query_index)
+        ambiguities.append(
+            {
+                "query": request["query"],
+                "requested_name": request["name"],
+                "versions": [version.upper() for version in versions],
+                "candidates": sorted({item["title"] for item in candidates}),
+                "reason": "multiple_software_versions",
+            }
+        )
     deduplicated = {}
     for item in matches:
         key = (
@@ -168,6 +225,8 @@ def search_certificate_documents(
     represented_queries = set()
     for item in ranked:
         query_index = item["_query_index"]
+        if query_index in ambiguous_indexes:
+            continue
         if query_index in represented_queries:
             extras.append(item)
             continue
@@ -180,17 +239,33 @@ def search_certificate_documents(
         "schema_version": "bscli.oa_certificate_search.v2",
         "query": queries[0] if len(queries) == 1 else None,
         "queries": queries,
+        "requested_documents": [
+            {
+                "name": request["name"],
+                "version": request["version"],
+                "aliases": request["aliases"],
+            }
+            for request in requests
+        ],
         "requested_document_type": document_type,
         "scope": "unit_documents/intellectual_property/group_certificates",
         "count": len(ordered),
         "source_count": source_count,
         "inaccessible_count": inaccessible_count,
         "matched_queries": [
-            query for query in queries if match_counts[_normalize_text(query)]
+            query
+            for index, query in enumerate(queries)
+            if index not in ambiguous_indexes
+            and any(item["_query_index"] == index for item in matches)
         ],
         "unmatched_queries": [
-            query for query in queries if not match_counts[_normalize_text(query)]
+            query
+            for index, query in enumerate(queries)
+            if index not in ambiguous_indexes
+            and not any(item["_query_index"] == index for item in matches)
         ],
+        "ambiguous_queries": [item["query"] for item in ambiguities],
+        "ambiguities": ambiguities,
         "items": [
             {key: value for key, value in item.items() if key != "_query_index"}
             for item in ordered
@@ -649,6 +724,23 @@ def _certificate_search_queries(query: str, document_type: str) -> tuple[str, ..
     return tuple(result or [query])
 
 
+def _certificate_request_search_queries(
+    request: dict,
+    document_type: str,
+) -> tuple[str, ...]:
+    candidates = list(_certificate_search_queries(request["name"], document_type))
+    for alias in request["aliases"]:
+        candidates.extend(_certificate_search_queries(alias, document_type))
+    result = []
+    seen = set()
+    for candidate in candidates:
+        key = _normalize_text(candidate)
+        if key and key not in seen:
+            seen.add(key)
+            result.append(candidate)
+    return tuple(result)
+
+
 def _certificate_search_query(query: str, document_type: str) -> str:
     return _certificate_search_queries(query, document_type)[0]
 
@@ -657,14 +749,17 @@ def _certificate_version_matches(
     row: dict,
     *,
     document_type: str,
-    query: str,
+    query: str | None = None,
+    requested_version: str | None = None,
 ) -> bool:
     if document_type != "software_copyright_certificate":
         return True
-    requested_version = _software_version(query)
-    if requested_version is None:
+    expected_version = _normalize_software_version(requested_version)
+    if expected_version is None and query is not None:
+        expected_version = _software_version(query)
+    if expected_version is None:
         return True
-    return requested_version == _software_version(
+    return expected_version == _software_version(
         _certificate_title(row["filename"])
     )
 
@@ -677,6 +772,18 @@ def _software_version(value: str) -> str | None:
     return f"v{match.group('version')}".casefold()
 
 
+def _normalize_software_version(value) -> str | None:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).strip()
+    if not normalized:
+        return None
+    if not normalized.casefold().startswith("v"):
+        normalized = f"V{normalized}"
+    version = _software_version(normalized)
+    if version is None or _normalize_text(normalized) != _normalize_text(version):
+        raise ValueError("software copyright version must look like V1.0")
+    return version
+
+
 def _validated_query(value) -> str:
     query = " ".join(str(value or "").split())
     if len(query) < 2:
@@ -687,6 +794,14 @@ def _validated_query(value) -> str:
 
 
 def _validated_queries(arguments: dict) -> list[str]:
+    return [request["query"] for request in _validated_document_requests(arguments)]
+
+
+def _validated_document_requests(
+    arguments: dict,
+    *,
+    document_type: str | None = None,
+) -> list[dict]:
     values = []
     if arguments.get("name") is not None:
         values.append(arguments.get("name"))
@@ -697,17 +812,85 @@ def _validated_queries(arguments: dict) -> list[str]:
         if len(supplied_names) < 1 or len(supplied_names) > 20:
             raise ValueError("certificate names must contain between 1 and 20 items")
         values.extend(supplied_names)
-    if not values:
-        raise ValueError("certificate name or names is required")
-    queries = []
+    supplied_documents = arguments.get("documents")
+    if supplied_documents is not None:
+        if values:
+            raise ValueError("certificate documents cannot be combined with name or names")
+        if not isinstance(supplied_documents, list):
+            raise ValueError("certificate documents must be an array")
+        if len(supplied_documents) < 1 or len(supplied_documents) > 20:
+            raise ValueError("certificate documents must contain between 1 and 20 items")
+    if not values and supplied_documents is None:
+        raise ValueError("certificate name or names or documents is required")
+    requests = []
     seen = set()
     for value in values:
         query = _validated_query(value)
-        key = _normalize_text(query)
+        version = (
+            _software_version(query)
+            if document_type in {"all", "software_copyright_certificate"}
+            else None
+        )
+        key = (_normalize_text(query), version)
         if key not in seen:
             seen.add(key)
-            queries.append(query)
-    return queries
+            requests.append(
+                {
+                    "name": query,
+                    "version": version,
+                    "aliases": [],
+                    "query": query,
+                }
+            )
+    for value in supplied_documents or []:
+        if not isinstance(value, dict):
+            raise ValueError("certificate document must be an object")
+        unknown = set(value) - {"name", "version", "aliases"}
+        if unknown:
+            raise ValueError("certificate document contains unsupported fields")
+        name = _validated_query(value.get("name"))
+        version = _normalize_software_version(value.get("version"))
+        embedded_version = (
+            _software_version(name)
+            if document_type in {None, "all", "software_copyright_certificate"}
+            else None
+        )
+        if version is None:
+            version = embedded_version
+        elif embedded_version is not None and embedded_version != version:
+            raise ValueError("certificate name and version do not match")
+        if version is not None and document_type == "patent_certificate":
+            raise ValueError(
+                "certificate version is only valid for software copyright certificates"
+            )
+        aliases_value = value.get("aliases") or []
+        if not isinstance(aliases_value, list) or len(aliases_value) > 5:
+            raise ValueError("certificate aliases must be an array with at most 5 items")
+        aliases = []
+        alias_keys = set()
+        for alias_value in aliases_value:
+            alias = _validated_query(alias_value)
+            alias_key = _normalize_text(alias)
+            if alias_key != _normalize_text(name) and alias_key not in alias_keys:
+                alias_keys.add(alias_key)
+                aliases.append(alias)
+        key = (_normalize_text(name), version)
+        if key in seen:
+            continue
+        seen.add(key)
+        requests.append(
+            {
+                "name": name,
+                "version": version,
+                "aliases": aliases,
+                "query": (
+                    name
+                    if version is None or embedded_version is not None
+                    else f"{name} {version.upper()}"
+                ),
+            }
+        )
+    return requests
 
 
 def _validated_limit(value) -> int:
@@ -748,6 +931,15 @@ def _validated_reference(value) -> dict:
     if _certificate_file_type(str(value["filename"])) is None:
         raise SeeyonDocumentAccessDenied(
             "document download is not a supported certificate scan"
+        )
+    requested_version = _normalize_software_version(value.get("requested_version"))
+    if (
+        requested_version is not None
+        and document_type == "software_copyright_certificate"
+        and requested_version != _software_version(_certificate_title(value["filename"]))
+    ):
+        raise SeeyonDocumentAccessDenied(
+            "document download does not match the requested software version"
         )
     return dict(value)
 

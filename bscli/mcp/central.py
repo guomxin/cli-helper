@@ -706,12 +706,17 @@ def create_central_mcp_server(
         title="Search OA Certificate Scans",
         description=(
             "Search one or up to 20 patent or software-copyright certificate scans "
-            "in OA Document Center. Use names for multiple titles in one call; do not "
+            "in OA Document Center. When extracting titles from an image, read each row "
+            "independently and preserve every visible software version. Prefer documents "
+            "with separate name, version, and aliases fields; names remains available for "
+            "older clients. Use one batch call and do not "
             "launch parallel searches for the same user. When the user says software "
             "copyright or 软著, set document_type=software_copyright_certificate. "
             "Software-copyright lookup removes a trailing version only for OA recall, "
             "tries a bracketed short name only when the formal name has no accessible "
             "match, then verifies the requested version against every returned title. "
+            "If ambiguous_queries is non-empty, do not prepare any candidate for those "
+            "queries; ask for the desired version instead. "
             "Use all only when the type is genuinely unknown. Exact matches rank first; "
             "each accessible result contains a short-lived trusted download ID and URL. "
             "When the user selects several results, call "
@@ -726,6 +731,10 @@ def create_central_mcp_server(
         ctx: Context,
         name: Annotated[str | None, Field(min_length=2, max_length=160)] = None,
         names: Annotated[list[str] | None, Field(min_length=1, max_length=20)] = None,
+        documents: Annotated[
+            list[dict[str, Any]] | None,
+            Field(min_length=1, max_length=20),
+        ] = None,
         document_type: Literal[
             "all",
             "patent_certificate",
@@ -742,6 +751,8 @@ def create_central_mcp_server(
             arguments["name"] = name
         if names is not None:
             arguments["names"] = names
+        if documents is not None:
+            arguments["documents"] = documents
         return await invoke(
             ctx,
             "oa.document.certificate.search",

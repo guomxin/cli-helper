@@ -345,6 +345,10 @@ export class InteractionCoordinator {
       );
     }
     const previous = this.documentDeliveries.get(sessionKey) || Promise.resolve();
+    const route = this.sessionRoutes.get(sessionKey);
+    const endpointMode = this.isPullBasedSession(sessionKey)
+      ? "workspace_download"
+      : "native_channel";
     const delivery = previous
       .catch(() => undefined)
       .then(async () => {
@@ -356,7 +360,10 @@ export class InteractionCoordinator {
             }),
           );
         }
-        const report = preparedDocumentDeliveryReport(files, receipts);
+        const report = preparedDocumentDeliveryReport(files, receipts, {
+          channel: route?.channel || "unknown",
+          endpointMode,
+        });
         await this.reportPreparedDocumentDelivery({
           sessionKey,
           taskId,
@@ -2293,20 +2300,25 @@ function preparedDocumentDeliveryReport(files, receipts, override = {}) {
       : deliveredCount > 0
         ? "partial"
         : "failed";
-  const parts = [
-    `${outcomes.length} 份文件已准备`,
-    `${attachmentSentCount} 份已作为附件发送`,
-  ];
-  if (fallbackLinkSentCount > 0) {
-    parts.push(`${fallbackLinkSentCount} 份已改发下载链接`);
+  const endpointMode = override.endpointMode || "native_channel";
+  const parts = [`${outcomes.length} 份文件已准备`];
+  if (endpointMode === "workspace_download") {
+    parts.push(`当前网页任务卡已生成 ${fallbackLinkSentCount} 个下载入口`);
+  } else {
+    if (attachmentSentCount > 0) {
+      parts.push(`${attachmentSentCount} 份已作为附件发送`);
+    }
+    if (fallbackLinkSentCount > 0) {
+      parts.push(`${fallbackLinkSentCount} 份附件上传失败，已改发下载链接`);
+    }
   }
-  if (failedCount > 0) {
-    parts.push(`${failedCount} 份未能送达`);
-  }
+  if (failedCount > 0) parts.push(`${failedCount} 份未能送达`);
   return {
     mode: outcomes.length === 1 ? "direct_attachment" : "direct_attachment_batch",
     oneFilePerMessage: true,
     handledByHost: true,
+    endpointMode,
+    channel: override.channel || "unknown",
     state,
     completionMeaning: "endpoint_delivery_reported",
     preparedCount: outcomes.length,

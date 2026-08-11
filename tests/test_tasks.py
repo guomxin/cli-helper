@@ -326,6 +326,57 @@ class TaskHubStoreTests(unittest.TestCase):
                 ],
             )
 
+    def test_artifact_delivery_summary_keeps_cross_endpoint_results(self):
+        origin, _ = self._endpoint()
+        task, _ = self._task(origin["endpoint_id"])
+        artifact, _ = self.store.link_artifact(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            artifact={
+                "artifact_type": "certificate_scan",
+                "source_ref": "download-cross-end",
+                "filename": "certificate.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 4096,
+                "download_url": "https://10.10.50.213:8780/download/cross-end/file",
+                "expires_at": "2099-07-30T00:30:00+00:00",
+            },
+        )
+        self.store.record_artifact_delivery(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            agent_host="openclaw",
+            delivery_ref="tool-result:workspace",
+            channel="webchat",
+            files=[
+                {
+                    "artifact_id": artifact["artifact_id"],
+                    "state": "fallback_link_sent",
+                    "attempt_count": 0,
+                }
+            ],
+        )
+        reported_task, _, _ = self.store.record_artifact_delivery(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            agent_host="openclaw",
+            delivery_ref="tool-result:telegram",
+            channel="telegram",
+            files=[
+                {
+                    "artifact_id": artifact["artifact_id"],
+                    "state": "attachment_sent",
+                    "attempt_count": 1,
+                }
+            ],
+        )
+
+        aggregate = reported_task["summary"]["artifactDeliveryAggregate"]
+        self.assertEqual(aggregate["preparedCount"], 1)
+        self.assertEqual(aggregate["channelCount"], 2)
+        self.assertIn("网页端：1 个下载入口可用", aggregate["userMessage"])
+        self.assertIn("Telegram：1 份附件已送达", aggregate["userMessage"])
+
     def test_expired_artifact_is_refreshed_in_place_and_remains_user_bound(self):
         origin, _ = self._endpoint()
         task, _ = self._task(origin["endpoint_id"])

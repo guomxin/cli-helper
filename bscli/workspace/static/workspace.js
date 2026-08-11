@@ -89,6 +89,13 @@ function bindActions() {
   });
   document.addEventListener("visibilitychange", refreshWorkspaceState);
   window.addEventListener("focus", refreshWorkspaceState);
+  $("#image-viewer-close").addEventListener("click", closeImageViewer);
+  $("#image-viewer-backdrop").addEventListener("click", closeImageViewer);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#image-viewer").hidden) {
+      closeImageViewer();
+    }
+  });
 }
 
 function showAuth() {
@@ -336,15 +343,27 @@ function messageElement(message) {
     const images = document.createElement("div");
     images.className = "message-image-list";
     message.images.forEach((image) => {
+      const source = image.dataUrl || image.mediaUrl;
+      const fileName = image.fileName || "附加图片";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "message-image-button";
+      open.title = `放大查看 ${fileName}`;
+      open.setAttribute("aria-label", `放大查看 ${fileName}`);
       const preview = document.createElement("img");
-      preview.src = image.dataUrl || image.mediaUrl;
-      preview.alt = image.fileName || "附加图片";
+      preview.src = source;
+      preview.alt = fileName;
       preview.loading = "lazy";
       preview.addEventListener("error", () => {
         preview.classList.add("unavailable");
-        preview.alt = `${image.fileName || "附加图片"}（已不可用）`;
+        preview.alt = `${fileName}（已不可用）`;
+        open.disabled = true;
       });
-      images.append(preview);
+      open.addEventListener("click", () => {
+        openImageViewer({ source, fileName });
+      });
+      open.append(preview);
+      images.append(open);
     });
     item.append(images);
   }
@@ -358,6 +377,32 @@ function messageElement(message) {
     item.append(time);
   }
   return item;
+}
+
+function openImageViewer({ source, fileName }) {
+  if (!source) return;
+  const viewer = $("#image-viewer");
+  const image = $("#image-viewer-image");
+  const caption = $("#image-viewer-caption");
+  const download = $("#image-viewer-download");
+  image.src = source;
+  image.alt = fileName;
+  caption.textContent = fileName;
+  download.href = source;
+  download.download = fileName;
+  download.setAttribute("aria-label", `下载原图 ${fileName}`);
+  viewer.hidden = false;
+  document.body.classList.add("image-viewer-open");
+  $("#image-viewer-close").focus();
+}
+
+function closeImageViewer() {
+  const viewer = $("#image-viewer");
+  if (viewer.hidden) return;
+  viewer.hidden = true;
+  $("#image-viewer-image").removeAttribute("src");
+  $("#image-viewer-download").removeAttribute("href");
+  document.body.classList.remove("image-viewer-open");
 }
 
 function historyMessageKey(message, index) {
@@ -1433,6 +1478,13 @@ function taskCardStatusMessage(status, summary = null) {
 }
 
 function taskCardArtifactDeliveryMessage(summary) {
+  const aggregate = summary?.artifactDeliveryAggregate;
+  if (
+    aggregate?.completionMeaning === "cross_endpoint_delivery_reported" &&
+    String(aggregate.userMessage || "").trim()
+  ) {
+    return String(aggregate.userMessage).trim();
+  }
   const delivery = summary?.artifactDelivery;
   if (!delivery || typeof delivery !== "object") return null;
   if (

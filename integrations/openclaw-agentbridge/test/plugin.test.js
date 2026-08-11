@@ -4715,6 +4715,9 @@ test("treats the Workspace task-card download as a successful fallback delivery"
   assert.equal(report.attachmentSentCount, 0);
   assert.equal(report.fallbackLinkSentCount, 1);
   assert.equal(report.failedCount, 0);
+  assert.equal(report.endpointMode, "workspace_download");
+  assert.match(report.userMessage, /网页任务卡已生成 1 个下载入口/);
+  assert.doesNotMatch(report.userMessage, /0 份已作为附件发送/);
   assert.equal(harness.sentPayloads.length, 0);
 });
 

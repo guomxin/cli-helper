@@ -125,6 +125,79 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
             [("系统甲V1.0", "系统甲V1.0"), ("系统乙Ｖ 1.0", "系统乙V1.0")],
         )
 
+    def test_structured_software_request_preserves_version_and_aliases(self):
+        rows = [
+            _row(resource_id="soft-v1", filename="泰华视图云大数据平台软件V1.0.jpg"),
+            _row(resource_id="soft-v2", filename="泰华视图云大数据平台软件V2.0.jpg"),
+        ]
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ),
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                return_value=rows,
+            ) as search_folder,
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "documents": [
+                        {
+                            "name": "泰华视图云大数据平台软件",
+                            "version": "V2.0",
+                            "aliases": ["视图云大数据平台"],
+                        }
+                    ],
+                    "document_type": "software_copyright_certificate",
+                },
+            )
+
+        self.assertEqual(search_folder.call_args_list[0].kwargs["query"], "泰华视图云大数据平台软件")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["ambiguous_queries"], [])
+        self.assertEqual(result["items"][0]["title"], "泰华视图云大数据平台软件V2.0")
+        self.assertEqual(result["items"][0]["requested_version"], "v2.0")
+        self.assertEqual(
+            result["items"][0]["_download_reference"]["requested_version"],
+            "v2.0",
+        )
+
+    def test_versionless_software_request_reports_ambiguity_without_download(self):
+        rows = [
+            _row(resource_id="soft-v1", filename="泰华视图云大数据平台软件V1.0.jpg"),
+            _row(resource_id="soft-v2", filename="泰华视图云大数据平台软件V2.0.jpg"),
+        ]
+        with (
+            patch(
+                "bscli.adapters.seeyon_documents._open_certificate_category",
+                return_value=object(),
+            ),
+            patch(
+                "bscli.adapters.seeyon_documents._search_current_folder",
+                return_value=rows,
+            ),
+        ):
+            result = search_certificate_documents(
+                object(),
+                base_url="http://oa.example.test/seeyon/main.do",
+                arguments={
+                    "documents": [{"name": "泰华视图云大数据平台软件"}],
+                    "document_type": "software_copyright_certificate",
+                },
+            )
+
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["matched_queries"], [])
+        self.assertEqual(result["unmatched_queries"], [])
+        self.assertEqual(
+            result["ambiguous_queries"],
+            ["泰华视图云大数据平台软件"],
+        )
+        self.assertEqual(result["ambiguities"][0]["versions"], ["V1.0", "V2.0"])
+
     def test_software_search_uses_formal_name_then_bracketed_short_name(self):
         query = "泰华视图云大数据平台软件[简称:视图云大数据平台]V2.0"
         self.assertEqual(
@@ -295,6 +368,19 @@ class SeeyonCertificateSearchTests(unittest.TestCase):
         }
 
         with self.assertRaises(SeeyonDocumentAccessDenied):
+            _validated_reference(reference)
+
+    def test_reference_rejects_requested_software_version_mismatch(self):
+        reference = {
+            **_row(resource_id="soft-1", filename="系统甲V1.0.jpg"),
+            "document_type": "software_copyright_certificate",
+            "category_label": "2-著作权证书扫描件",
+            "requested_version": "V2.0",
+        }
+        with self.assertRaisesRegex(
+            SeeyonDocumentAccessDenied,
+            "requested software version",
+        ):
             _validated_reference(reference)
 
     def test_reference_accepts_image_scan_and_rejects_other_extensions(self):

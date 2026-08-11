@@ -874,7 +874,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. Use names for multiple titles in one call; do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, tries a bracketed short name only when the formal name has no accessible match, then verifies the requested version against every returned title. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download ID and URL. When the user selects several results, call oa_certificate_prepare_downloads once with all download IDs. Use the singular prepare tool only for one result. Never write an ad-hoc download script or emit several MEDIA attachments in one model reply.",
+      "description": "Search one or up to 20 patent or software-copyright certificate scans in OA Document Center. When extracting titles from an image, read each row independently and preserve every visible software version. Prefer documents with separate name, version, and aliases fields; names remains available for older clients. Use one batch call and do not launch parallel searches for the same user. When the user says software copyright or 软著, set document_type=software_copyright_certificate. Software-copyright lookup removes a trailing version only for OA recall, tries a bracketed short name only when the formal name has no accessible match, then verifies the requested version against every returned title. If ambiguous_queries is non-empty, do not prepare any candidate for those queries; ask for the desired version instead. Use all only when the type is genuinely unknown. Exact matches rank first; each accessible result contains a short-lived trusted download ID and URL. When the user selects several results, call oa_certificate_prepare_downloads once with all download IDs. Use the singular prepare tool only for one result. Never write an ad-hoc download script or emit several MEDIA attachments in one model reply.",
       "inputSchema": {
         "properties": {
           "document_type": {
@@ -886,6 +886,24 @@
             ],
             "title": "Document Type",
             "type": "string"
+          },
+          "documents": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Documents"
           },
           "idempotency_key": {
             "anyOf": [

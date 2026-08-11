@@ -366,6 +366,46 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["capability_name"], "oa.document.certificate.search")
         self.assertNotIn("name", call["arguments"])
         self.assertEqual(call["arguments"]["names"], ["系统甲V1.0", "系统乙V1.0"])
+
+    def test_certificate_tool_forwards_structured_documents(self):
+        with self._server() as (service, _store, token, client):
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "certificate-structured",
+                "operationId": "certificate-operation",
+                "status": "succeeded",
+                "result": {"count": 0, "items": []},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            documents = [
+                {
+                    "name": "泰华视图云大数据平台软件",
+                    "version": "V2.0",
+                    "aliases": ["视图云大数据平台"],
+                }
+            ]
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=190,
+                token=token,
+                params={
+                    "name": "oa_certificate_search",
+                    "arguments": {
+                        "documents": documents,
+                        "document_type": "software_copyright_certificate",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        call = service.invoke.call_args.kwargs
+        self.assertEqual(call["arguments"]["documents"], documents)
+        self.assertNotIn("name", call["arguments"])
+        self.assertNotIn("names", call["arguments"])
     def test_certificate_prepare_download_is_bound_to_authenticated_identity(self):
         with self._server() as (service, _store, token, client):
             service.prepare_document_download.return_value = {

@@ -1177,6 +1177,9 @@ class TaskHubStore:
             by_channel[channel] = report
             summary["artifactDeliveryByChannel"] = by_channel
             summary["artifactDelivery"] = report
+            summary["artifactDeliveryAggregate"] = _artifact_delivery_aggregate(
+                by_channel
+            )
             connection.execute(
                 """
                 UPDATE agent_tasks
@@ -3252,6 +3255,60 @@ def _continuation_from_row(row: sqlite3.Row) -> dict:
         "follow_up",
     }
     return value
+
+
+def _artifact_delivery_aggregate(by_channel: dict[str, dict]) -> dict:
+    artifacts: set[str] = set()
+    parts: list[str] = []
+    delivered_channels = 0
+    failed_channels = 0
+    for channel, report in sorted(by_channel.items()):
+        files = report.get("files") if isinstance(report, dict) else []
+        for item in (files if isinstance(files, list) else []):
+            artifact_id = item.get("artifactId") if isinstance(item, dict) else None
+            if artifact_id:
+                artifacts.add(str(artifact_id))
+        attachment_count = max(0, int(report.get("attachmentSentCount") or 0))
+        fallback_count = max(0, int(report.get("fallbackLinkSentCount") or 0))
+        failed_count = max(0, int(report.get("failedCount") or 0))
+        label = {
+            "telegram": "Telegram",
+            "openclaw-weixin": "微信",
+            "weixin": "微信",
+            "wechat": "微信",
+            "web": "网页端",
+            "webchat": "网页端",
+            "agentbridge-workspace": "网页端",
+        }.get(str(channel).casefold(), str(channel))
+        channel_parts = []
+        if attachment_count:
+            channel_parts.append(f"{attachment_count} 份附件已送达")
+        if fallback_count:
+            channel_parts.append(
+                f"{fallback_count} 个下载入口可用"
+                if label == "网页端"
+                else f"{fallback_count} 份已通过下载链接送达"
+            )
+        if failed_count:
+            channel_parts.append(f"{failed_count} 份未送达")
+        if channel_parts:
+            parts.append(f"{label}：{'，'.join(channel_parts)}")
+        if report.get("state") == "delivered":
+            delivered_channels += 1
+        elif report.get("state") in {"partial", "failed"}:
+            failed_channels += 1
+    prepared_count = len(artifacts)
+    prefix = f"{prepared_count} 份文件已准备" if prepared_count else "文件已准备"
+    return {
+        "state": "partial" if failed_channels else "delivered",
+        "completionMeaning": "cross_endpoint_delivery_reported",
+        "preparedCount": prepared_count,
+        "channelCount": len(by_channel),
+        "deliveredChannelCount": delivered_channels,
+        "failedChannelCount": failed_channels,
+        "channels": by_channel,
+        "userMessage": f"{prefix}；{'；'.join(parts)}。" if parts else f"{prefix}。",
+    }
 
 
 def _safe_object(value: dict[str, Any] | None) -> dict[str, Any]:
