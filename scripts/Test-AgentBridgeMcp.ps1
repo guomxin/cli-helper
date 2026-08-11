@@ -3,6 +3,8 @@ param(
     [ValidateSet(
         "SessionStatus",
         "TaihuaSessionStatus",
+        "SmartlightSessionStatus",
+        "SmartlightOverview",
         "OaPendingRead",
         "OaPendingInspect",
         "CertificateSearch",

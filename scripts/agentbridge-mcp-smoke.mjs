@@ -5,7 +5,14 @@ const CHECKS = new Map([
   [
     "TaihuaSessionStatus",
     { tool: "taihua_session_status", arguments: {}, kind: "session" },
+  ],
+  [
+    "SmartlightSessionStatus",
     { tool: "smartlight_session_status", arguments: {}, kind: "session" },
+  ],
+  [
+    "SmartlightOverview",
+    { tool: "smartlight_system_overview", arguments: {}, kind: "smartlightOverview" },
   ],
   [
     "OaPendingRead",
@@ -459,6 +466,16 @@ try {
               identityLabel,
               itemCount: Number(result?.count ?? result?.items?.length ?? 0),
               total: Number(result?.total ?? result?.count ?? result?.items?.length ?? 0),
+              errorCode,
+            }
+          : effectiveCheck.kind === "smartlightOverview"
+          ? {
+              status: "succeeded",
+              check: checkName,
+              identityLabel,
+              cabinetTotal: Number(result?.cabinetTotal ?? 0),
+              lampPostTotal: Number(result?.lampPostTotal ?? 0),
+              observedPrincipal: result?.principal?.name ?? null,
               errorCode,
             }
           : effectiveCheck.kind === "pendingInspect"
