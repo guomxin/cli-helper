@@ -1614,6 +1614,37 @@ class TaskHubStore:
             ).fetchone()
         return str(row["task_id"]) if row else None
 
+    def list_task_interactions(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            self._select_owned_task(connection, task_id, user_subject)
+            rows = connection.execute(
+                """
+                SELECT * FROM task_interactions
+                WHERE task_id = ? AND user_subject = ?
+                ORDER BY linked_at, rowid
+                LIMIT ?
+                """,
+                (task_id, user_subject, limit),
+            ).fetchall()
+        return [
+            {
+                "task_id": row["task_id"],
+                "interaction_id": row["interaction_id"],
+                "user_subject": row["user_subject"],
+                "linked_at": row["linked_at"],
+                "last_state": row["last_state"],
+                "last_observed_at": row["last_observed_at"],
+            }
+            for row in rows
+        ]
+
     def recovery_candidates(
         self,
         *,

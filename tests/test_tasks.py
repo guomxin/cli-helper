@@ -122,6 +122,43 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
+    def test_lists_every_interaction_linked_to_one_task_in_order(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        for interaction_id, interaction_type in (
+            ("interaction-a", "business_input"),
+            ("interaction-b", "execution_authorization"),
+        ):
+            self.store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": interaction_id,
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": interaction_id,
+                    "type": interaction_type,
+                    "state": "pending",
+                },
+            )
+
+        linked = self.store.list_task_interactions(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )
+
+        self.assertEqual(
+            [item["interaction_id"] for item in linked],
+            ["interaction-a", "interaction-b"],
+        )
+        self.assertEqual([item["last_state"] for item in linked], ["pending"] * 2)
+        with self.assertRaises(TaskNotFound):
+            self.store.list_task_interactions(
+                task_id=task["task_id"],
+                user_subject="user-b",
+            )
+
     def test_task_artifact_is_user_bound_idempotent_and_queued_for_companion(self):
         origin, _ = self._endpoint()
         companion, _ = self.store.ensure_endpoint(

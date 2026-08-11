@@ -655,9 +655,82 @@ class WorkspaceApplicationTests(unittest.TestCase):
             detail = app.task_detail(account, task["task"]["taskId"])
 
             presentation = detail["interaction"]["presentation"]
+            self.assertEqual(len(detail["interactions"]), 1)
+            self.assertEqual(
+                detail["interactions"][0]["interactionId"],
+                detail["interaction"]["interactionId"],
+            )
             self.assertTrue(presentation["individualized"])
             self.assertEqual(presentation["endpointId"], account["endpoint_id"])
             self.assertIn("/present/", presentation["url"])
+
+    def test_task_detail_exposes_all_parallel_interactions(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            task = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="workspace-token",
+                agent_host="openclaw",
+                host_task_key="workspace-task|parallel-1",
+                endpoint_key=account["endpoint_key"],
+                client_type="web",
+                external_subject=account["account_id"],
+                conversation_ref=account["openclaw_session_key"],
+                title="Handle two pending workflows",
+            )
+            interactions = []
+            for suffix, title in (
+                ("efficiency", "Approve efficiency data"),
+                ("weekly", "Acknowledge weekly report"),
+            ):
+                authorization = service.write_authorizations.create(
+                    user_subject="user-a",
+                    system_id="oa",
+                    session_id="session-a",
+                    capability_name=f"oa.{suffix}.submit",
+                    capability_version="1",
+                    prepare_operation_id=f"prepare-{suffix}",
+                    plan={"target": suffix},
+                    summary={"title": title, "fields": []},
+                    card_base_url="https://cards.example.test",
+                )
+                interactions.append(
+                    service._execution_authorization_interaction(authorization)
+                )
+            service.observe_host_task(
+                user_subject="user-a",
+                task_id=task["task"]["taskId"],
+                interaction_ids=[
+                    interaction["interactionId"] for interaction in interactions
+                ],
+            )
+            app = WorkspaceApplication(service=service)
+
+            detail = app.task_detail(account, task["task"]["taskId"])
+
+            self.assertEqual(
+                [item["interactionId"] for item in detail["interactions"]],
+                [item["interactionId"] for item in interactions],
+            )
+            self.assertEqual(
+                detail["interaction"]["interactionId"],
+                interactions[-1]["interactionId"],
+            )
+            self.assertTrue(
+                all(
+                    item["presentation"]["individualized"]
+                    for item in detail["interactions"]
+                )
+            )
+            self.assertTrue(
+                all(item.get("linkedAt") for item in detail["interactions"])
+            )
 
     def test_task_detail_exposes_only_owned_short_lived_artifacts(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1820,7 +1893,11 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn('classList.contains("failed")', script)
         self.assertIn("parseTimestampMilliseconds", script)
         self.assertIn(r"/^\d{10,13}$/", script)
-        self.assertIn("state.taskCards.get(task.task_id)", script)
+        self.assertIn("state.taskCards.get(cardKey)", script)
+        self.assertIn("upsertTaskCardVariant", script)
+        self.assertIn("result.interactions", script)
+        self.assertIn(":interaction:${interaction.interactionId}", script)
+        self.assertIn("taskCardStatusForInteraction", script)
         self.assertIn("displayTaskTitle", script)
         self.assertIn("OA 出差申请提交", script)
         self.assertIn('source.addEventListener("cursor"', script)

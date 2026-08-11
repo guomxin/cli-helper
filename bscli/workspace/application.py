@@ -161,23 +161,50 @@ class WorkspaceApplication:
                 str(item.get("artifact_id") or ""),
             )
         )
-        interaction = None
-        if task.get("current_interaction_id"):
+        interactions = []
+        for linked in self.service.tasks.list_task_interactions(
+            task_id=task_id,
+            user_subject=account["user_subject"],
+            limit=100,
+        ):
             try:
-                response = self.service.present_interaction(
+                response = self.service.get_interaction(
                     user_subject=account["user_subject"],
-                    agent_host="openclaw",
-                    endpoint_key=account["endpoint_key"],
-                    interaction_id=task["current_interaction_id"],
+                    interaction_id=linked["interaction_id"],
                 )
                 interaction = response["interaction"]
+                if interaction.get("state") in {"pending", "processing"}:
+                    response = self.service.present_interaction(
+                        user_subject=account["user_subject"],
+                        agent_host="openclaw",
+                        endpoint_key=account["endpoint_key"],
+                        interaction_id=linked["interaction_id"],
+                    )
+                    interaction = response["interaction"]
+                interactions.append(
+                    {
+                        **interaction,
+                        "linkedAt": linked["linked_at"],
+                        "lastObservedAt": linked["last_observed_at"],
+                    }
+                )
             except (KeyError, RuntimeError):
-                interaction = None
+                continue
+        interaction = next(
+            (
+                item
+                for item in interactions
+                if item.get("interactionId")
+                == task.get("current_interaction_id")
+            ),
+            None,
+        )
         return {
             "task": _public_task(task),
             "events": [_public_event(event) for event in events],
             "artifacts": [_public_artifact(item) for item in artifacts],
             "interaction": interaction,
+            "interactions": interactions,
         }
 
     def artifact_history(self, account: dict, *, limit: int = 20) -> list[dict]:

@@ -422,8 +422,12 @@ function ingestTimelineEntry(entry, render = true) {
   if (entry?.entry_type === "task_event") {
     const taskId = entry.task_id || entry.payload?.taskId;
     const eventType = entry.payload?.eventType;
-    if (taskId && !state.taskCardMeta.has(taskId)) {
-      state.taskCardMeta.set(taskId, {
+    const interactionId = entry.payload?.payload?.interactionId;
+    const cardKey = interactionId
+      ? `${taskId}:interaction:${interactionId}`
+      : `${taskId}:summary`;
+    if (taskId && !state.taskCardMeta.has(cardKey)) {
+      state.taskCardMeta.set(cardKey, {
         createdAt: entry.created_at,
         sequence,
       });
@@ -1187,11 +1191,11 @@ async function hydrateTaskCards({ render = true } = {}) {
         upsertTaskCard(result.value, { render: false });
       }
     });
-    state.taskCards.forEach((card, taskId) => {
-      if (!candidateIds.has(taskId)) {
+    state.taskCards.forEach((card, cardKey) => {
+      if (!candidateIds.has(card.dataset.taskId || cardKey)) {
         card.remove();
-        state.taskCards.delete(taskId);
-        state.taskCardMeta.delete(taskId);
+        state.taskCards.delete(cardKey);
+        state.taskCardMeta.delete(cardKey);
       }
     });
     if (render) renderChatTimeline();
@@ -1244,28 +1248,78 @@ async function syncTaskCard(taskId) {
 function upsertTaskCard(result, { render = true } = {}) {
   const task = result?.task;
   if (!task?.task_id) return;
+  const interactions = Array.isArray(result.interactions) &&
+    result.interactions.length
+    ? result.interactions
+    : result.interaction
+      ? [result.interaction]
+      : [];
+  const variants = interactions.length
+    ? interactions.map((interaction) => ({
+        cardKey: `${task.task_id}:interaction:${interaction.interactionId}`,
+        interaction,
+      }))
+    : [{ cardKey: `${task.task_id}:summary`, interaction: null }];
+  const desiredKeys = new Set(variants.map((variant) => variant.cardKey));
+  let nearBottom = false;
+  variants.forEach((variant, index) => {
+    nearBottom = upsertTaskCardVariant(
+      result,
+      variant.cardKey,
+      variant.interaction,
+      { showArtifacts: index === variants.length - 1 },
+    ) || nearBottom;
+  });
+  state.taskCards.forEach((card, cardKey) => {
+    if (
+      card.dataset.taskId === task.task_id &&
+      !desiredKeys.has(cardKey)
+    ) {
+      card.remove();
+      state.taskCards.delete(cardKey);
+      state.taskCardMeta.delete(cardKey);
+    }
+  });
+  if (render) renderChatTimeline();
+  if (nearBottom) scrollChat();
+}
+
+function upsertTaskCardVariant(
+  result,
+  cardKey,
+  interaction,
+  { showArtifacts = true } = {},
+) {
+  const task = result?.task;
+  if (!task?.task_id) return;
   const container = $("#chat-messages");
   const nearBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-  let card = state.taskCards.get(task.task_id);
+  let card = state.taskCards.get(cardKey);
   if (!card) {
     card = document.createElement("article");
     card.className = "message assistant application-card";
     card.dataset.taskId = task.task_id;
-    state.taskCards.set(task.task_id, card);
+    card.dataset.interactionId = interaction?.interactionId || "";
+    state.taskCards.set(cardKey, card);
   }
-  const timelineMeta = state.taskCardMeta.get(task.task_id) || {
-    createdAt: task.created_at,
+  const timelineMeta = state.taskCardMeta.get(cardKey) || {
+    createdAt: interaction?.linkedAt || task.created_at,
     sequence: 0,
   };
-  state.taskCardMeta.set(task.task_id, timelineMeta);
+  state.taskCardMeta.set(cardKey, timelineMeta);
   setTimelineNode(card, {
-    key: `task:${task.task_id}`,
-    createdAt: timelineMeta.createdAt || task.created_at,
+    key: `task:${cardKey}`,
+    createdAt:
+      timelineMeta.createdAt || interaction?.linkedAt || task.created_at,
     order: timelineMeta.sequence || 0,
   });
+  const cardStatus = taskCardStatusForInteraction(
+    interaction?.state,
+    task.status,
+  );
   card.className =
-    `message assistant application-card ${escapeClass(task.status)}`;
+    `message assistant application-card ${escapeClass(cardStatus)}`;
   card.replaceChildren();
 
   const header = document.createElement("div");
@@ -1276,24 +1330,23 @@ function upsertTaskCard(result, { render = true } = {}) {
   eyebrow.textContent = "AGENTBRIDGE 应用卡";
   const title = document.createElement("strong");
   title.className = "application-card-title";
-  title.textContent = displayTaskTitle(task.title);
+  title.textContent = interaction?.title || displayTaskTitle(task.title);
   heading.append(eyebrow, title);
   const status = document.createElement("span");
   status.className =
-    `application-card-status ${escapeClass(task.status)}`;
-  status.textContent = statusLabel(task.status);
+    `application-card-status ${escapeClass(cardStatus)}`;
+  status.textContent = statusLabel(cardStatus);
   header.append(heading, status);
   card.append(header);
 
-  const interaction = result.interaction;
   const description = document.createElement("p");
   description.className = "application-card-copy";
   const interactionActive =
     interaction &&
     ["pending", "processing"].includes(interaction.state);
   description.textContent = interactionActive
-    ? interaction.message || taskCardStatusMessage(task.status, task.summary)
-    : taskCardStatusMessage(task.status, task.summary);
+    ? interaction.message || taskCardStatusMessage(cardStatus, task.summary)
+    : taskCardStatusMessage(cardStatus, task.summary);
   card.append(description);
 
   const facts = document.createElement("dl");
@@ -1311,10 +1364,12 @@ function upsertTaskCard(result, { render = true } = {}) {
     );
   }
   if (facts.childElementCount) card.append(facts);
-  appendArtifactList(card, result.artifacts, {
-    compact: true,
-    taskId: task.task_id,
-  });
+  if (showArtifacts) {
+    appendArtifactList(card, result.artifacts, {
+      compact: true,
+      taskId: task.task_id,
+    });
+  }
 
   const actions = document.createElement("div");
   actions.className = "application-card-actions";
@@ -1342,8 +1397,21 @@ function upsertTaskCard(result, { render = true } = {}) {
   });
   actions.append(progress);
   card.append(actions);
-  if (render) renderChatTimeline();
-  if (nearBottom) scrollChat();
+  return nearBottom;
+}
+
+function taskCardStatusForInteraction(state, fallback) {
+  return (
+    {
+      pending: "waiting_user",
+      processing: "running",
+      completed: "succeeded",
+      declined: "canceled",
+      expired: "expired",
+      failed: "failed",
+      superseded: "superseded",
+    }[state] || fallback
+  );
 }
 
 function taskCardStatusMessage(status, summary = null) {
@@ -1517,27 +1585,35 @@ function renderTaskDetail(result) {
   addDetail(metadata, "任务编号", task.task_id);
   detail.append(metadata);
 
-  const interaction = result.interaction;
-  const url = interaction?.presentation?.url;
-  if (
-    interaction &&
-    ["pending", "processing"].includes(interaction.state) &&
-    typeof url === "string" &&
-    /^https:\/\//.test(url)
-  ) {
-    const band = document.createElement("div");
-    band.className = "interaction-band";
-    const label = document.createElement("span");
-    label.textContent = interactionLabel(interaction.type);
-    const link = document.createElement("a");
-    link.className = "primary";
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = "打开";
-    band.append(label, link);
-    detail.append(band);
-  }
+  const interactions = Array.isArray(result.interactions)
+    ? result.interactions
+    : result.interaction
+      ? [result.interaction]
+      : [];
+  interactions
+    .filter((interaction) => {
+      const url = interaction?.presentation?.url;
+      return (
+        ["pending", "processing"].includes(interaction?.state) &&
+        typeof url === "string" &&
+        /^https:\/\//.test(url)
+      );
+    })
+    .forEach((interaction) => {
+      const url = interaction.presentation.url;
+      const band = document.createElement("div");
+      band.className = "interaction-band";
+      const label = document.createElement("span");
+      label.textContent = interaction.title || interactionLabel(interaction.type);
+      const link = document.createElement("a");
+      link.className = "primary";
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "打开";
+      band.append(label, link);
+      detail.append(band);
+    });
 
   appendArtifactList(detail, result.artifacts, { taskId: task.task_id });
 
