@@ -123,6 +123,9 @@ class CredentialBrokerTests(unittest.TestCase):
             prepared = broker.prepare_authentication(
                 challenge_id=challenge["challenge_id"]
             )
+            prepared_again = broker.prepare_authentication(
+                challenge_id=challenge["challenge_id"]
+            )
             result = broker.authenticate(
                 challenge_id=challenge["challenge_id"],
                 csrf_token=csrf,
@@ -131,10 +134,12 @@ class CredentialBrokerTests(unittest.TestCase):
             )
 
             self.assertEqual(prepared["captcha"]["body"], b"captcha")
+            self.assertEqual(prepared_again["captcha"]["body"], b"captcha")
+            self.assertEqual(adapter.prepare_calls, 1)
             self.assertEqual(result["status"], "succeeded")
-            self.assertEqual(len(workers), 2)
+            self.assertEqual(len(workers), 3)
             self.assertEqual(
-                workers[1].restored_state["http"]["prepared"],
+                workers[2].restored_state["http"]["prepared"],
                 "opaque-captcha-session",
             )
             self.assertNotIn(b"opaque-captcha-session", (root / "agentbridge.db").read_bytes())
@@ -305,8 +310,18 @@ class FakeLoginAdapter:
 
 
 class PreparedLoginAdapter(FakeLoginAdapter):
+    def __init__(self, *, observed_principal: str) -> None:
+        super().__init__(observed_principal=observed_principal)
+        self.prepare_calls = 0
+
     def prepare_authentication(self, worker, *, timeout_seconds: float) -> dict:
+        self.prepare_calls += 1
         worker.set_http_state({"prepared": "opaque-captcha-session"})
+        return {"captcha": {"content_type": "image/png", "body": b"captcha"}}
+
+    def recover_prepared_authentication(self, worker) -> dict | None:
+        if worker.get_http_state().get("prepared") != "opaque-captcha-session":
+            return None
         return {"captcha": {"content_type": "image/png", "body": b"captcha"}}
 
 

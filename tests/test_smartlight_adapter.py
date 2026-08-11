@@ -46,6 +46,7 @@ class SmartlightAdapterTests(unittest.TestCase):
         worker = FakeSmartlightWorker()
 
         prepared = self.adapter.prepare_authentication(worker, timeout_seconds=20)
+        recovered = self.adapter.recover_prepared_authentication(worker)
         result = self.adapter.authenticate(
             worker,
             {"username": "yanshi", "password": "secret", "authcode": "1234"},
@@ -53,6 +54,7 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(prepared["captcha"]["content_type"], "image/jpeg")
+        self.assertEqual(recovered, prepared)
         self.assertEqual(result["observed_principal_ref"], "无为")
         self.assertEqual(result["principal"]["account"], "yanshi")
         self.assertNotIn("password_digest", result["principal"])

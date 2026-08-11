@@ -50,15 +50,25 @@ class CredentialBroker:
 
         with self._preparation_lock:
             with self.worker_factory(session, adapter) as worker:
-                worker.clear_session_state()
-                prepared = prepare(
-                    worker,
-                    timeout_seconds=self.login_timeout_seconds,
-                )
-                self.session_state_store.save(
-                    session["session_id"],
-                    worker.capture_session_state(),
-                )
+                prepared = None
+                recover = getattr(adapter, "recover_prepared_authentication", None)
+                existing_state = self.session_state_store.load(session["session_id"])
+                if existing_state is not None and callable(recover):
+                    try:
+                        worker.restore_session_state(existing_state)
+                        prepared = recover(worker)
+                    except (KeyError, TypeError, ValueError):
+                        prepared = None
+                if prepared is None:
+                    worker.clear_session_state()
+                    prepared = prepare(
+                        worker,
+                        timeout_seconds=self.login_timeout_seconds,
+                    )
+                    self.session_state_store.save(
+                        session["session_id"],
+                        worker.capture_session_state(),
+                    )
             self.session_registry.mark_awaiting_login(session["session_id"])
         return prepared
 

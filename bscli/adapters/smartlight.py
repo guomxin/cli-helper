@@ -164,12 +164,31 @@ class SmartlightCentralAdapter:
                         name: parser.hidden_fields[name]
                         for name in sorted(required_hidden)
                     },
+                    "captcha_content_type": content_type,
+                    "captcha_body_base64": base64.b64encode(body).decode("ascii"),
                 }
             }
         )
         return {
             "captcha": {"content_type": content_type, "body": body},
         }
+
+    def recover_prepared_authentication(self, worker) -> dict | None:
+        state = worker.get_http_state()
+        prepared = state.get("smartlight_prepared_login")
+        if not isinstance(prepared, dict):
+            return None
+        content_type = str(prepared.get("captcha_content_type") or "").lower()
+        encoded = str(prepared.get("captcha_body_base64") or "")
+        if content_type not in {"image/jpeg", "image/png", "image/gif"} or not encoded:
+            return None
+        try:
+            body = base64.b64decode(encoded, validate=True)
+        except ValueError:
+            return None
+        if not body or len(body) > 256 * 1024:
+            return None
+        return {"captcha": {"content_type": content_type, "body": body}}
 
     def authenticate(
         self,

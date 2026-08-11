@@ -142,6 +142,40 @@ class TrustedAuthCardTests(unittest.TestCase):
             self.assertIn("LOGIN_CONTRACT_MISMATCH", rendered)
             self.assertNotIn("card-secret", rendered)
 
+    def test_authentication_rejection_names_the_actual_downstream_system(self):
+        with TemporaryDirectory() as tmp:
+            store = AuthChallengeStore(Path(tmp) / "agentbridge.db")
+            challenge = _captcha_challenge(store)
+            broker = CaptchaBroker(
+                result={
+                    "status": "failed",
+                    "error": {"code": "AUTHENTICATION_REJECTED"},
+                }
+            )
+            app = TrustedAuthApplication(challenge_store=store, broker=broker)
+            page = app.get_card(challenge["challenge_id"], secure_cookie=True)
+            html = page.body.decode("utf-8")
+            csrf = re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+            cookie = page.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+
+            response = app.submit_card(
+                challenge["challenge_id"],
+                body=urlencode(
+                    {
+                        "csrf_token": csrf,
+                        "username": "yanshi",
+                        "password": "secret",
+                        "authcode": "1234",
+                    }
+                ).encode("utf-8"),
+                content_type="application/x-www-form-urlencoded",
+                csrf_cookie=cookie,
+            )
+
+            rendered = response.body.decode("utf-8")
+            self.assertIn("照明实验室测试系统未接受本次登录信息", rendered)
+            self.assertNotIn("OA 未接受", rendered)
+
 
 def _challenge(store: AuthChallengeStore) -> dict:
     return store.create(
@@ -222,8 +256,8 @@ class FakeBroker:
 
 
 class CaptchaBroker(FakeBroker):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, result=None) -> None:
+        super().__init__(result=result)
         self.prepared_challenge_id = None
 
     def prepare_authentication(self, *, challenge_id):

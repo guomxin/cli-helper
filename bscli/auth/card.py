@@ -78,14 +78,14 @@ class TrustedAuthApplication:
             return self._message_response(
                 status=200,
                 title="正在验证",
-                message="中心服务正在核验 OA 登录结果。",
+                message=f"中心服务正在核验{challenge['system_name']}登录结果。",
                 tone="processing",
             )
         if challenge["state"] == "succeeded":
             return self._message_response(
                 status=200,
                 title="认证完成",
-                message="OA 会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
+                message=f"{challenge['system_name']}会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
                 tone="success",
             )
         return self._message_response(
@@ -188,14 +188,17 @@ class TrustedAuthApplication:
                 return self._message_response(
                     status=200,
                     title="认证完成",
-                    message="OA 会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
+                    message=f"{challenge['system_name']}会话已经建立。此页面可以关闭，智能体将检测状态并继续操作。",
                     tone="success",
                 )
             error_code = str((result.get("error") or {}).get("code") or "BROKER_LOGIN_FAILED")
             return self._message_response(
                 status=401,
                 title="认证未完成",
-                message=_safe_failure_message(error_code),
+                message=_safe_failure_message(
+                    error_code,
+                    system_name=challenge["system_name"],
+                ),
                 tone="error",
             )
         finally:
@@ -472,13 +475,13 @@ def _challenge_ttl_seconds(challenge: dict) -> int:
         return 300
 
 
-def _safe_failure_message(code: str) -> str:
+def _safe_failure_message(code: str, *, system_name: str = "目标系统") -> str:
     messages = {
         "SESSION_PROFILE_UNAVAILABLE": "中心受控浏览器的用户目录不可写。",
         "PRINCIPAL_MISMATCH": "登录身份与预期身份不一致，会话已被隔离。",
         "UNSUPPORTED_AUTH_METHOD": "OA 登录需要当前认证卡片不支持的验证方式。",
         "LOGIN_CONTRACT_MISMATCH": "OA 登录页面结构已变化，中心服务已安全停止。",
-        "AUTHENTICATION_REJECTED": "OA 未接受本次登录信息。",
+        "AUTHENTICATION_REJECTED": f"{system_name}未接受本次登录信息。",
         "SESSION_STATE_UNAVAILABLE": "OA 已登录，但中心服务无法安全保存会话。",
         "AUTHENTICATION_REQUEST_INVALID": "认证请求与已登记的登录契约不一致。",
         "BROKER_LOGIN_FAILED": "中心凭据代理未能完成本次登录。",
