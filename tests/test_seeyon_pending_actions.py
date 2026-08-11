@@ -4,12 +4,14 @@ from bscli.adapters.seeyon_pending_actions import (
     PendingActionContractMismatch,
     acknowledge_weekly_report,
     approve_efficiency_data,
+    approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
     confirm_attendance,
     pending_action_contract_fingerprint,
     preflight_pending_action,
     prepare_attendance_confirmation,
     prepare_efficiency_data_approval,
+    prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
@@ -91,6 +93,58 @@ class PendingActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
             approve_labor_contract_renewal(
+                adapter,
+                worker,
+                plan,
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+        self.assertEqual(boundary, [])
+
+    def test_intellectual_property_declaration_freezes_read_only_business_values(self):
+        fixture = _fixture("intellectual_property_declaration")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_intellectual_property_declaration_approval(
+            adapter, worker, _inputs()
+        )
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+
+        self.assertEqual(fields["知识产权类型"], "软件著作权")
+        self.assertEqual(fields["申报名称"], "综合管理工作台1.0")
+        self.assertEqual(fields["权属类型"], "集团独有")
+        self.assertEqual(fields["申请材料"], "软著-综合管理工作台.rar (14M)")
+        self.assertTrue(
+            prepared["plan"]["target"]["business_snapshot"][
+                "business_fields_browse_only"
+            ]
+        )
+
+        result = approve_intellectual_property_declaration(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(
+            result["workflow_profile"], "intellectual_property_declaration"
+        )
+
+    def test_intellectual_property_business_change_blocks_before_boundary(self):
+        fixture = _fixture("intellectual_property_declaration")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        plan = prepare_intellectual_property_declaration_approval(
+            adapter, worker, _inputs()
+        )["plan"]
+        fixture["business_snapshot"]["declaration_name"] = "changed"
+        boundary = []
+
+        with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
+            approve_intellectual_property_declaration(
                 adapter,
                 worker,
                 plan,
@@ -221,12 +275,13 @@ class PendingActionTests(unittest.TestCase):
                 "efficiency_data",
                 "travel_expense",
                 "labor_contract_renewal",
+                "intellectual_property_declaration",
                 "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 6)
+        self.assertEqual(len(fingerprints), 7)
 
 
 class FakeAdapter:
@@ -283,13 +338,15 @@ class FakeBusinessFrame:
         self.fixture = fixture
 
     def locator(self, selector):
-        expected = (
-            "#field0097_id"
-            if self.fixture.get("profile") == "attendance_confirmation"
-            else "#field0008_id"
+        expected_by_profile = {
+            "attendance_confirmation": "#field0097_id",
+            "intellectual_property_declaration": "#field0010_id",
+        }
+        expected = expected_by_profile.get(
+            self.fixture.get("profile"), "#field0008_id"
         )
         if selector != expected:
-            raise AssertionError("unexpected labor-contract selector")
+            raise AssertionError("unexpected business-form selector")
         return FakeCountLocator()
 
     def evaluate(self, _script):
@@ -358,6 +415,43 @@ def _fixture(profile):
                 "guidance": "创新能力强，研发能力强，继续保持。",
                 "evaluation": "优秀，完全胜任岗位工作",
                 "renewal_recommendation": "续签劳动合同",
+            },
+        },
+        "intellectual_property_declaration": {
+            "title": "【知识产权】知识产权申报审批单-软件著作权",
+            "fields": [
+                {"name": "申请人", "value": "孙冯林 TH2104 人工智能研发中心"},
+                {"name": "知识产权类型", "value": "软件著作权"},
+                {"name": "研发项目名称", "value": ""},
+                {"name": "名称", "value": "综合管理工作台1.0"},
+                {"name": "申报名称", "value": ""},
+                {"name": "发明/设计人", "value": "郑其荣、侯建民、孙冯林"},
+                {"name": "权属类型", "value": "集团独有"},
+                {"name": "权属单位", "value": "泰华智慧产业集团股份有限公司"},
+                {"name": "其他权属", "value": ""},
+                {"name": "申请用途", "value": "其他"},
+                {"name": "著作权名称", "value": ""},
+                {"name": "申请材料", "value": "软著-综合管理工作台.rar (14M)"},
+            ],
+            "template_id": "-2986710992990286032",
+            "form_app_id": "-6972097064001584076",
+            "node_policy": "approve",
+            "node_policy_name": "审批",
+            "attitudes": ["agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "applicant": "孙冯林",
+                "employee_number": "TH2104",
+                "department": "人工智能研发中心",
+                "application_date": "2026-08-06",
+                "intellectual_property_type": "软件著作权",
+                "declaration_name": "综合管理工作台1.0",
+                "inventors": "郑其荣、侯建民、孙冯林",
+                "ownership_type": "集团独有",
+                "ownership_unit": "泰华智慧产业集团股份有限公司",
+                "application_purpose": "其他",
+                "other_purpose": "保护创新",
+                "application_material": "软著-综合管理工作台.rar (14M)",
             },
         },
         "weekly_report": {

@@ -101,6 +101,9 @@ from bscli.adapters.seeyon_pending_actions import (
     EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA,
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA,
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
@@ -118,10 +121,12 @@ from bscli.adapters.seeyon_pending_actions import (
     acknowledge_weekly_report,
     confirm_attendance,
     approve_efficiency_data,
+    approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
     approve_standard_collaboration,
     approve_travel_expense,
     prepare_efficiency_data_approval,
+    prepare_intellectual_property_declaration_approval,
     prepare_attendance_confirmation,
     prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
@@ -324,6 +329,29 @@ _TRUSTED_WRITE_DEFINITIONS.update(
             "field_message": "The labor-contract renewal opinion must be entered in the trusted field card.",
             "authorization_message": "The labor-contract renewal approval requires trusted confirmation.",
         },
+        INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY: {
+            "commit_capability": (
+                INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY
+            ),
+            "field_schema": (
+                INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA
+            ),
+            "context_fields": ("affair_id",),
+            "prepare_function": (
+                "prepare_intellectual_property_declaration_approval"
+            ),
+            "commit_function": "approve_intellectual_property_declaration",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": (
+                "The intellectual-property declaration opinion must be entered "
+                "in the trusted field card."
+            ),
+            "authorization_message": (
+                "The intellectual-property declaration approval requires trusted "
+                "confirmation."
+            ),
+        },
         ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: {
             "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
             "field_schema": ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
@@ -364,6 +392,10 @@ for _pending_profile, _pending_prepare_capability in (
     ("efficiency_data", EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY),
     ("travel_expense", TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY),
     ("labor_contract_renewal", LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY),
+    (
+        "intellectual_property_declaration",
+        INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
+    ),
     ("attendance_confirmation", ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY),
     ("weekly_report", WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY),
     ("standard_collaboration", STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY),
@@ -418,6 +450,12 @@ _CAPABILITY_SCOPES = {
     TRAVEL_EXPENSE_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY: frozenset(
+        {"oa:write:approval"}
+    ),
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY: frozenset(
+        {"oa:write:approval"}
+    ),
     ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     ATTENDANCE_CONFIRM_CAPABILITY: frozenset({"oa:write:approval"}),
     WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
@@ -3926,6 +3964,7 @@ _TASK_TITLE_LABELS = {
     "Prepare OA Efficiency-Data Approval": "OA 效能数据审批",
     "Prepare OA Travel-Expense Approval": "OA 差旅费审批",
     "Prepare OA Labor-Contract Renewal Approval": "OA 劳动合同续签审批",
+    "Prepare OA Intellectual-Property Declaration Approval": "OA 知识产权申报审批",
     "Prepare OA Attendance Confirmation": "OA 月度考勤确认",
     "Prepare OA Weekly-Report Acknowledgement": "OA 周报阅办",
     "Prepare OA Standard-Collaboration Approval": "OA 普通事项审批",

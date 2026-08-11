@@ -4,6 +4,7 @@ param(
         "SessionStatus",
         "TaihuaSessionStatus",
         "OaPendingRead",
+        "OaPendingInspect",
         "CertificateSearch",
         "TaihuaMyLogs",
         "YuqueSessionStatus",

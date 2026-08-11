@@ -49,12 +49,20 @@ _PAGE_CONTRACT_SCRIPT = r"""
 _FRAME_FIELDS_SCRIPT = r"""
 () => {
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-  const keywords = ['考勤是否有异议', '有异议', '无异议', '异议说明'];
-  const containers = Array.from(document.querySelectorAll('[id^="field"]'))
-    .filter((element) => keywords.some((keyword) => clean(element.innerText).includes(keyword)))
+  const containers = Array.from(document.querySelectorAll('[id^="field"][id$="_id"]'))
+    .filter((element) => element.closest('[id^="field"][id$="_id"]') === element)
     .map((element) => ({
       id: String(element.id || ''),
       text: clean(element.innerText).slice(0, 1000),
+      section_classes: Array.from(element.querySelectorAll(':scope > section'))
+        .map((section) => String(section.className || '')),
+      selected_text: Array.from(element.querySelectorAll(
+        '.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong, '
+        + '.cap4-checkbox-xuanzhong, .cap-icon-fuxuan-xuanzhong'
+      )).map((marker) => clean(
+        marker.closest('.cap4-radio__item, .cap4-checkbox__item')?.innerText
+        || marker.parentElement?.innerText
+      )).filter(Boolean),
       controls: Array.from(element.querySelectorAll('input,textarea,select')).map((control) => ({
         tag: control.tagName.toLowerCase(),
         id: String(control.id || ''),
@@ -66,7 +74,9 @@ _FRAME_FIELDS_SCRIPT = r"""
         read_only: Boolean(control.readOnly),
       })),
       html: String(element.outerHTML || '').slice(0, 5000),
-    }));
+    }))
+    .filter((item) => item.text || item.controls.length || item.selected_text.length)
+    .slice(0, 300);
   return {
     url: location.href,
     title: document.title,

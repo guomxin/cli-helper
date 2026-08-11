@@ -52,6 +52,8 @@ from bscli.adapters.seeyon_pending_actions import (
     ATTENDANCE_CONFIRM_CAPABILITY,
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
+    INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
@@ -142,6 +144,9 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_efficiency_data_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_travel_expense_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_labor_contract_renewal_approval_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
+    "oa_intellectual_property_declaration_approval_prepare": frozenset(
         {"oa:write:approval"}
     ),
     "oa_attendance_confirmation_prepare": frozenset(
@@ -621,6 +626,34 @@ def create_central_mcp_server(
                 "labor-contract renewal item leaves the pending collection."
             ),
             "commit_capability": LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": (
+                "oa_intellectual_property_declaration_approval_prepare"
+            ),
+            "prepare_title": (
+                "Prepare OA Intellectual-Property Declaration Approval"
+            ),
+            "prepare_description": (
+                "Bind one exact pending intellectual-property declaration. "
+                "AgentBridge freezes applicant, declaration type and name, inventors, "
+                "ownership, purpose, and application material; pass any opinion "
+                "already supplied by the user."
+            ),
+            "prepare_capability": (
+                INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY
+            ),
+            "commit_tool_name": "oa_intellectual_property_declaration_approve",
+            "commit_title": (
+                "Approve Authorized OA Intellectual-Property Declaration"
+            ),
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "intellectual-property declaration leaves the pending collection."
+            ),
+            "commit_capability": (
+                INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY
+            ),
         },
         {
             "prepare_tool_name": "oa_attendance_confirmation_prepare",

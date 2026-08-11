@@ -3935,6 +3935,73 @@ test("reports a verified labor-contract renewal approval after authorization res
   );
 });
 
+test("reports a verified intellectual-property declaration approval", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-intellectual-property-authorization-123456",
+    type: "execution_authorization",
+    title: "Approve intellectual-property declaration",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          pending_action_processed: true,
+          action_kind: "approval",
+          workflow_profile: "intellectual_property_declaration",
+          workflow_approved: true,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-intellectual-property-authorization",
+    runId: "run-intellectual-property-authorization",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-intellectual-property-authorization",
+      toolName: "oa_intellectual_property_declaration_approval_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA \u77e5\u8bc6\u4ea7\u6743\u7533\u62a5\u5ba1\u6279\u5355\u5df2\u5ba1\u6279\u901a\u8fc7\u3002",
+  );
+});
+
 test("reports a verified monthly-attendance confirmation after authorization resumes", async () => {
   const harness = fakeApi({
     autoPoll: true,

@@ -19,6 +19,12 @@ LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY = (
     "oa.labor_contract_renewal.approval.prepare"
 )
 LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY = "oa.labor_contract_renewal.approve"
+INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY = (
+    "oa.intellectual_property_declaration.approval.prepare"
+)
+INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY = (
+    "oa.intellectual_property_declaration.approve"
+)
 ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
     "oa.attendance_confirmation.prepare"
 )
@@ -99,6 +105,12 @@ LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_labor_contract_renewal_approval_fields.v1",
     title="填写劳动合同续签审批意见",
     effect="审批通过一条劳动合同续签表",
+    submit_label="提交审批意见",
+)
+INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_intellectual_property_declaration_approval_fields.v1",
+    title="填写知识产权申报审批意见",
+    effect="审批通过一条知识产权申报审批单",
     submit_label="提交审批意见",
 )
 ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
@@ -205,6 +217,46 @@ _PROFILES = {
         "authorize_label": "授权审批通过",
         "business_snapshot_policy": "labor_contract_renewal_v1",
     },
+    "intellectual_property_declaration": {
+        "prepare_capability": (
+            INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY
+        ),
+        "commit_capability": INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-intellectual-property-declaration-approval-v1",
+        "plan_schema": (
+            "agentbridge.oa_intellectual_property_declaration_approval_plan.v1"
+        ),
+        "result_schema": (
+            "agentbridge.oa_intellectual_property_declaration_approval_result.v1"
+        ),
+        "business_intent": "approve_intellectual_property_declaration",
+        "title_rule": {
+            "kind": "prefix",
+            "value": "【知识产权】知识产权申报审批单-",
+        },
+        "required_fields": {
+            "申请人",
+            "知识产权类型",
+            "名称",
+            "发明/设计人",
+            "权属类型",
+            "权属单位",
+            "申请用途",
+            "申请材料",
+        },
+        "allowed_fields": None,
+        "template_id": "-2986710992990286032",
+        "form_app_id": "-6972097064001584076",
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批知识产权申报单",
+        "summary_effect": "审批通过后该知识产权申报事项将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "intellectual_property_declaration_v1",
+    },
     "attendance_confirmation": {
         "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
         "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
@@ -301,6 +353,7 @@ _SPECIALIZED_TITLE_MARKERS = (
     "【报销】",
     "【采购】",
     "【用印】",
+    "【知识产权】",
 )
 
 
@@ -370,6 +423,30 @@ def approve_labor_contract_renewal(
         worker,
         plan,
         profile_key="labor_contract_renewal",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_intellectual_property_declaration_approval(
+    adapter, worker, arguments: dict
+) -> dict:
+    return _prepare_pending_action(
+        adapter, worker, arguments, "intellectual_property_declaration"
+    )
+
+
+def approve_intellectual_property_declaration(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="intellectual_property_declaration",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -739,6 +816,14 @@ def _validate_target(
         signals["business_snapshot"] = _attendance_confirmation_business_snapshot(
             page, detail
         )
+    elif (
+        profile.get("business_snapshot_policy")
+        == "intellectual_property_declaration_v1"
+    ):
+        signals = dict(signals)
+        signals["business_snapshot"] = (
+            _intellectual_property_declaration_business_snapshot(page, detail)
+        )
     return signals
 
 
@@ -877,6 +962,98 @@ def _attendance_confirmation_business_snapshot(page, detail: dict) -> dict:
     }
 
 
+def _intellectual_property_declaration_business_snapshot(
+    page, detail: dict
+) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0010_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA intellectual-property CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = (id) => document.querySelector(`#${id}`);
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const value = (id) => clean(field(id)?.innerText);
+          const selected = (id) => {
+            const wrapper = field(id);
+            const items = Array.from(wrapper?.querySelectorAll('.cap4-radio__item') || []);
+            const chosen = items.filter((item) => item.querySelector(
+              '.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong'
+            ));
+            return chosen.length === 1
+              ? clean(chosen[0].querySelector('.cap4-radio__text')?.textContent)
+              : '';
+          };
+          const ids = [
+            'field0001_id', 'field0002_id', 'field0003_id', 'field0004_id',
+            'field0010_id', 'field0011_id', 'field0018_id', 'field0037_id',
+            'field0034_id', 'field0041_id', 'field0046_id', 'field0027_id'
+          ];
+          const browseOnly = ids.every((id) => {
+            const section = field(id)?.querySelector('section');
+            return Boolean(section?.classList.contains('is-none'));
+          });
+          return {
+            browse_only: browseOnly,
+            applicant: value('field0001_id'),
+            employee_number: value('field0002_id'),
+            department: value('field0003_id'),
+            application_date: value('field0004_id'),
+            intellectual_property_type: selected('field0010_id'),
+            declaration_name: value('field0011_id'),
+            inventors: value('field0018_id'),
+            ownership_type: selected('field0037_id'),
+            ownership_unit: value('field0034_id'),
+            application_purpose: value('field0041_id'),
+            other_purpose: value('field0046_id'),
+            application_material: value('field0027_id'),
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA intellectual-property business fields are editable at this node; "
+            "a separate field-entry contract is required."
+        )
+    required = (
+        "applicant",
+        "employee_number",
+        "department",
+        "application_date",
+        "intellectual_property_type",
+        "declaration_name",
+        "inventors",
+        "ownership_type",
+        "ownership_unit",
+        "application_purpose",
+        "application_material",
+    )
+    for name in required:
+        if not str(snapshot.get(name) or "").strip():
+            raise PendingActionContractMismatch(
+                f"The OA intellectual-property {name} value is unavailable."
+            )
+    result = {
+        name: re.sub(r"\s+", " ", str(value or "")).strip()[:1000]
+        for name, value in snapshot.items()
+        if name != "browse_only"
+    }
+    result["business_fields_browse_only"] = True
+    return result
+
+
 def _frozen_target(
     source: dict,
     detail: dict,
@@ -972,6 +1149,22 @@ def _summary(
             ("employee", "员工与月份"),
             ("attendance_totals", "出勤统计"),
             ("decision", "OA 当前确认结论"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
+    elif profile_key == "intellectual_property_declaration":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("applicant", "申请人"),
+            ("department", "申请部门"),
+            ("intellectual_property_type", "知识产权类型"),
+            ("declaration_name", "申报名称"),
+            ("inventors", "发明/设计人"),
+            ("ownership_type", "权属类型"),
+            ("ownership_unit", "权属单位"),
+            ("application_purpose", "申请用途"),
+            ("other_purpose", "其他用途"),
+            ("application_material", "申请材料"),
         ):
             if snapshot.get(name):
                 fields.append({"label": label, "value": snapshot[name]})

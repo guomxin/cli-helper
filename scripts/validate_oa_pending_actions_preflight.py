@@ -10,6 +10,7 @@ from bscli.adapters.seeyon_missed_punch import prepare_missed_punch_approval
 from bscli.adapters.seeyon_pending_actions import (
     prepare_attendance_confirmation,
     prepare_efficiency_data_approval,
+    prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
@@ -24,6 +25,9 @@ from bscli.core.sessions import SessionRegistry
 _PREPARE_FUNCTIONS = {
     "attendance_confirmation": prepare_attendance_confirmation,
     "efficiency_data": prepare_efficiency_data_approval,
+    "intellectual_property_declaration": (
+        prepare_intellectual_property_declaration_approval
+    ),
     "labor_contract_renewal": prepare_labor_contract_renewal_approval,
     "missed_punch_approval": prepare_missed_punch_approval,
     "travel_expense": prepare_travel_expense_approval,

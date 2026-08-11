@@ -11,6 +11,14 @@ const CHECKS = new Map([
     { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
   ],
   [
+    "OaPendingInspect",
+    {
+      tool: "oa_workflow_pending_list",
+      arguments: { limit: 100 },
+      kind: "pendingInspect",
+    },
+  ],
+  [
     "CertificateSearch",
     {
       tool: "oa_certificate_search",
@@ -130,6 +138,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_travel_expense_approve",
   "oa_labor_contract_renewal_approval_prepare",
   "oa_labor_contract_renewal_approve",
+  "oa_intellectual_property_declaration_approval_prepare",
+  "oa_intellectual_property_declaration_approve",
   "oa_attendance_confirmation_prepare",
   "oa_attendance_confirm",
   "oa_weekly_report_acknowledgement_prepare",
@@ -384,8 +394,34 @@ try {
         : undefined,
     );
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
-    const result = payload?.result ?? payload;
+    let result = payload?.result ?? payload;
     const expectedText = argument("--expected-text", "");
+    if (effectiveCheck.kind === "pendingInspect") {
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const selected = expectedText
+        ? items.find((item) => String(item?.title ?? "").includes(expectedText))
+        : items[0];
+      if (!selected?.affair_id) {
+        throw Object.assign(new Error("Pending workflow was not found"), {
+          code: "PENDING_WORKFLOW_NOT_FOUND",
+        });
+      }
+      const detailPayload = await client.callTool("oa_workflow_detail_get", {
+        collection: "pending",
+        affair_id: String(selected.affair_id),
+        text_limit: 20_000,
+      });
+      if (detailPayload?.error) {
+        throw Object.assign(new Error("Pending workflow detail read failed"), {
+          code: detailPayload.error.code || "PENDING_WORKFLOW_DETAIL_FAILED",
+        });
+      }
+      const detail = detailPayload?.result ?? detailPayload;
+      result = {
+        selected,
+        detail,
+      };
+    }
     const summary =
       effectiveCheck.kind === "login"
         ? {
@@ -415,6 +451,15 @@ try {
               identityLabel,
               itemCount: Number(result?.count ?? result?.items?.length ?? 0),
               total: Number(result?.total ?? result?.count ?? result?.items?.length ?? 0),
+              errorCode,
+            }
+          : effectiveCheck.kind === "pendingInspect"
+          ? {
+              status: "succeeded",
+              check: checkName,
+              identityLabel,
+              selected: result.selected,
+              detail: result.detail,
               errorCode,
             }
           : effectiveCheck.kind === "yuqueDocument"
