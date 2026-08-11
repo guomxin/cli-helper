@@ -967,6 +967,22 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 attachments[0]["mediaUrl"],
                 r"^http://127\.0\.0\.1:8780/media/.+/file$",
             )
+            attachment = app.timeline_attachment(
+                account,
+                attachments[0]["attachmentId"],
+            )
+            self.assertEqual(attachment["body"], base64.b64decode(image_content))
+            other_account = _create_account(
+                service,
+                user_subject="user-b",
+                username="bob",
+                endpoint_key="telegram:*:bob",
+            )
+            with self.assertRaises(PermissionError):
+                app.timeline_attachment(
+                    other_account,
+                    attachments[0]["attachmentId"],
+                )
             timeline = json.dumps(timeline_items, ensure_ascii=False)
             self.assertNotIn(image_content, timeline)
             telegram = service.tasks.endpoint_for_key(
@@ -1666,6 +1682,48 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                     json.dumps(session, ensure_ascii=False),
                 )
 
+                stored_attachment = service.timeline_attachments.create_many(
+                    user_subject="user-a",
+                    message_key="workspace:user:http-download",
+                    attachments=[
+                        {
+                            "type": "image",
+                            "mimeType": "image/png",
+                            "fileName": "证书列表.png",
+                            "content": base64.b64encode(
+                                b"\x89PNG\r\n\x1a\nworkspace-download"
+                            ).decode("ascii"),
+                        }
+                    ],
+                    media_base_url="http://127.0.0.1:8780",
+                )[0]
+                status, download_headers, downloaded = _bytes_request(
+                    port,
+                    "GET",
+                    (
+                        "/api/timeline/attachments/"
+                        f"{stored_attachment['attachment_id']}/download"
+                    ),
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    download_headers.get_content_type(),
+                    "image/png",
+                )
+                self.assertIn(
+                    "attachment;",
+                    download_headers.get("Content-Disposition", ""),
+                )
+                self.assertIn(
+                    "filename*=UTF-8''",
+                    download_headers.get("Content-Disposition", ""),
+                )
+                self.assertEqual(
+                    downloaded,
+                    b"\x89PNG\r\n\x1a\nworkspace-download",
+                )
+
                 endpoint = service.tasks.endpoint_for_key(
                     user_subject="user-a",
                     agent_host="openclaw",
@@ -1877,6 +1935,7 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("message-image-button", stylesheet)
         self.assertIn("image-viewer-canvas", stylesheet)
         self.assertIn("download = fileName", script)
+        self.assertIn("/api/timeline/attachments/", script)
         self.assertIn("response.body.getReader()", script)
         self.assertIn("activeStreams: new Map()", script)
         self.assertIn("reconcileOriginChatMessage", script)
@@ -2034,6 +2093,27 @@ def _raw_request(
     connection.request(method, path, body=payload, headers=headers)
     response = connection.getresponse()
     raw = response.read().decode("utf-8")
+    result = (response.status, response.headers, raw)
+    connection.close()
+    return result
+
+
+def _bytes_request(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    cookies: dict[str, str] | None = None,
+) -> tuple[int, http.client.HTTPMessage, bytes]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {"Host": f"127.0.0.1:{port}"}
+    if cookies:
+        headers["Cookie"] = "; ".join(
+            f"{name}={value}" for name, value in cookies.items()
+        )
+    connection.request(method, path, headers=headers)
+    response = connection.getresponse()
+    raw = response.read()
     result = (response.status, response.headers, raw)
     connection.close()
     return result

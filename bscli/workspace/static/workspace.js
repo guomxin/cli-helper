@@ -344,6 +344,7 @@ function messageElement(message) {
     images.className = "message-image-list";
     message.images.forEach((image) => {
       const source = image.dataUrl || image.mediaUrl;
+      const downloadSource = image.downloadUrl || source;
       const fileName = image.fileName || "附加图片";
       const open = document.createElement("button");
       open.type = "button";
@@ -360,7 +361,7 @@ function messageElement(message) {
         open.disabled = true;
       });
       open.addEventListener("click", () => {
-        openImageViewer({ source, fileName });
+        openImageViewer({ source, downloadSource, fileName });
       });
       open.append(preview);
       images.append(open);
@@ -379,7 +380,7 @@ function messageElement(message) {
   return item;
 }
 
-function openImageViewer({ source, fileName }) {
+function openImageViewer({ source, downloadSource, fileName }) {
   if (!source) return;
   const viewer = $("#image-viewer");
   const image = $("#image-viewer-image");
@@ -388,7 +389,7 @@ function openImageViewer({ source, fileName }) {
   image.src = source;
   image.alt = fileName;
   caption.textContent = fileName;
-  download.href = source;
+  download.href = downloadSource || source;
   download.download = fileName;
   download.setAttribute("aria-label", `下载原图 ${fileName}`);
   viewer.hidden = false;
@@ -972,6 +973,9 @@ function timelineEntryImages(entry) {
     )
     .map((attachment) => ({
       mediaUrl: attachment.mediaUrl,
+      downloadUrl: attachment.attachmentId
+        ? `/api/timeline/attachments/${encodeURIComponent(attachment.attachmentId)}/download`
+        : attachment.mediaUrl,
       fileName: attachment.fileName || "附加图片",
       mimeType: attachment.mimeType,
     }));

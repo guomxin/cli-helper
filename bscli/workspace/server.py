@@ -12,7 +12,7 @@ import ssl
 import threading
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from bscli.auth.server import validate_auth_server_config
 from bscli.core.tasks import TaskNotFound
@@ -283,6 +283,18 @@ def create_workspace_http_server(
                         after_sequence=(
                             int(cursor_value) if cursor_value else None
                         ),
+                    )
+                    return
+                attachment_match = re.fullmatch(
+                    r"/api/timeline/attachments/([A-Za-z0-9_-]{32,128})/download",
+                    route.path,
+                )
+                if attachment_match:
+                    self._download(
+                        application.timeline_attachment(
+                            account,
+                            attachment_match.group(1),
+                        )
                     )
                     return
                 if route.path == "/api/events/stream":
@@ -737,6 +749,28 @@ def create_workspace_http_server(
                     "no-store"
                     if path.name == "index.html"
                     else "public, max-age=31536000, immutable"
+                ),
+            )
+            self._security_headers()
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _download(self, attachment: dict) -> None:
+            body = attachment["body"]
+            filename = str(attachment["filename"])
+            ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
+            if not ascii_name:
+                ascii_name = "image"
+            encoded_name = quote(filename, safe="")
+            self.send_response(200)
+            self.send_header("Content-Type", attachment["content_type"])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header(
+                "Content-Disposition",
+                (
+                    f'attachment; filename="{ascii_name}"; '
+                    f"filename*=UTF-8''{encoded_name}"
                 ),
             )
             self._security_headers()

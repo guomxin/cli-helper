@@ -11,7 +11,12 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from bscli.core.central_service import CentralCapabilityService
-from bscli.core.timeline_attachments import public_attachment
+from bscli.core.timeline_attachments import (
+    TimelineAttachmentExpired,
+    TimelineAttachmentIntegrityError,
+    TimelineAttachmentNotFound,
+    public_attachment,
+)
 from bscli.workspace.gateway import GatewayRequestError, OpenClawGatewayClient
 
 
@@ -357,6 +362,30 @@ class WorkspaceApplication:
         return self.service.tasks.latest_timeline_sequence(
             user_subject=account["user_subject"],
         )
+
+    def timeline_attachment(self, account: dict, attachment_id: str) -> dict:
+        try:
+            attachment = self.service.timeline_attachments.ready_payload(
+                attachment_id
+            )
+        except TimelineAttachmentNotFound as exc:
+            raise WorkspaceArtifactError(
+                "TIMELINE_ATTACHMENT_NOT_FOUND",
+                "The timeline attachment was not found.",
+            ) from exc
+        except TimelineAttachmentExpired as exc:
+            raise WorkspaceArtifactError(
+                "TIMELINE_ATTACHMENT_EXPIRED",
+                "The timeline attachment has expired.",
+            ) from exc
+        except TimelineAttachmentIntegrityError as exc:
+            raise WorkspaceArtifactError(
+                "TIMELINE_ATTACHMENT_INTEGRITY_FAILED",
+                "The timeline attachment failed its integrity check.",
+            ) from exc
+        if attachment["user_subject"] != account["user_subject"]:
+            raise PermissionError("timeline attachment belongs to another user")
+        return attachment
 
     def list_endpoints(self, account: dict) -> list[dict]:
         return [
