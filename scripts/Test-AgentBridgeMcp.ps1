@@ -11,6 +11,9 @@ param(
         "SmartlightInspectionRunning",
         "SmartlightLeakage",
         "SmartlightCabinets",
+        "SmartlightRtus",
+        "SmartlightAssetDetail",
+        "SmartlightInspectionDetail",
         "SmartlightAlarmAnalysis",
         "SmartlightLeakageAnalysis",
         "OaPendingRead",
@@ -52,6 +55,11 @@ param(
     [string]$YuqueBook = "",
     [string]$YuqueQuery = "AI",
     [string]$YuqueDocument = "",
+    [ValidateSet("cabinet", "rtu", "lamppost")]
+    [string]$SmartlightAssetType = "rtu",
+    [string]$SmartlightAssetId = "",
+    [string]$SmartlightTaskId = "",
+    [string]$SmartlightDetailDate = "",
     [ValidateRange(0, 100000)]
     [int]$YuqueRowOffset = 0,
     [ValidateRange(1, 500)]
@@ -264,6 +272,24 @@ try {
     }
     if ($Check -eq "CertificateSearch" -and $CertificateDocumentType) {
         $nodeArguments += @("--certificate-document-type", $CertificateDocumentType)
+    }
+    if ($Check -eq "SmartlightAssetDetail") {
+        if ([string]::IsNullOrWhiteSpace($SmartlightAssetId)) {
+            throw "SmartlightAssetId is required for the selected check"
+        }
+        $nodeArguments += @(
+            "--smartlight-asset-type", $SmartlightAssetType,
+            "--smartlight-asset-id", $SmartlightAssetId
+        )
+    }
+    if ($Check -eq "SmartlightInspectionDetail") {
+        if ([string]::IsNullOrWhiteSpace($SmartlightTaskId)) {
+            throw "SmartlightTaskId is required for the selected check"
+        }
+        $nodeArguments += @("--smartlight-task-id", $SmartlightTaskId)
+        if ($SmartlightDetailDate) {
+            $nodeArguments += @("--smartlight-detail-date", $SmartlightDetailDate)
+        }
     }
     if ($Check -in @("YuqueDocumentCatalog", "YuqueDocumentSearch", "YuqueDocumentRead") -and $YuqueBook) {
         $nodeArguments += @("--yuque-book", $YuqueBook)

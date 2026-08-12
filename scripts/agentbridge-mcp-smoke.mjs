@@ -67,6 +67,30 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightRtus",
+    {
+      tool: "smartlight_asset_search",
+      arguments: { asset_type: "rtu", page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightAssetDetail",
+    {
+      tool: "smartlight_asset_detail",
+      arguments: { asset_type: "rtu", asset_id: "" },
+      kind: "smartlightAssetDetail",
+    },
+  ],
+  [
+    "SmartlightInspectionDetail",
+    {
+      tool: "smartlight_inspection_task_detail",
+      arguments: { task_id: "" },
+      kind: "smartlightInspectionDetail",
+    },
+  ],
+  [
     "SmartlightAlarmAnalysis",
     {
       tool: "smartlight_alarm_analysis",
@@ -304,6 +328,27 @@ try {
         check.arguments.document_type,
       ),
     };
+  }
+  if (checkName === "SmartlightAssetDetail") {
+    const assetId = argument("--smartlight-asset-id", "").trim();
+    const assetType = argument("--smartlight-asset-type", "rtu").trim();
+    if (!assetId || !["cabinet", "rtu", "lamppost"].includes(assetType)) {
+      throw Object.assign(new Error("Smartlight asset detail arguments are invalid"), {
+        code: "SMARTLIGHT_ASSET_ARGUMENTS_INVALID",
+      });
+    }
+    check.arguments = { asset_type: assetType, asset_id: assetId };
+  }
+  if (checkName === "SmartlightInspectionDetail") {
+    const taskId = argument("--smartlight-task-id", "").trim();
+    const detailDate = argument("--smartlight-detail-date", "").trim();
+    if (!taskId) {
+      throw Object.assign(new Error("Smartlight task ID is required"), {
+        code: "SMARTLIGHT_TASK_ID_REQUIRED",
+      });
+    }
+    check.arguments = { task_id: taskId };
+    if (detailDate) check.arguments.detail_date = detailDate;
   }
   if (
     ["YuqueDocumentCatalog", "YuqueDocumentSearch", "YuqueDocumentRead"].includes(
@@ -657,6 +702,22 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "smartlightAssetDetail"
+          ? smartlightAssetDetailSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
+          : effectiveCheck.kind === "smartlightInspectionDetail"
+          ? smartlightInspectionDetailSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "pendingInspect"
           ? {
               status: "succeeded",
@@ -810,6 +871,58 @@ function smartlightAnalysisSummary({
     truncated: Boolean(result.truncated),
     dateRange: result.dateRange ?? null,
     dailyTrend: result.dailyTrend ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightAssetDetailSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode || result?.found !== true || !result?.detail) {
+    throw Object.assign(new Error("Smartlight asset detail failed"), {
+      code: errorCode || "SMARTLIGHT_ASSET_DETAIL_FAILED",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    assetType: result.assetType ?? null,
+    assetId: result.assetId ?? null,
+    code: result.detail.code ?? null,
+    name: result.detail.name ?? null,
+    relayTotal: result.relayTotal ?? null,
+    firstRelay: result.relays?.[0] ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightInspectionDetailSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode || result?.found !== true || !Array.isArray(result?.days)) {
+    throw Object.assign(new Error("Smartlight inspection detail failed"), {
+      code: errorCode || "SMARTLIGHT_INSPECTION_DETAIL_FAILED",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    taskId: result.taskId ?? null,
+    taskName: result.task?.taskName ?? null,
+    dailyCount: Number(result.dailyCount ?? result.days.length),
+    firstDay: result.days[0] ?? null,
+    detailDateFound: result.detailDateFound ?? null,
+    clockinCount: result.clockinCount ?? null,
     errorCode: null,
   };
 }

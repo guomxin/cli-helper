@@ -15,11 +15,11 @@
 
 | MCP 工具 | AgentBridge capability | 业务用途 | 状态 |
 | --- | --- | --- | --- |
-| `smartlight_asset_search` | `smartlight.asset.search` | 统一查询控制柜、RTU 和灯杆 | 本期开发 |
-| `smartlight_asset_detail` | `smartlight.asset.detail` | 读取单个设施详情；RTU 同时返回继电器和回路 | 本期开发 |
-| `smartlight_alarm_analysis` | `smartlight.alarm.analysis` | 按时间、状态和关键词分析 RTU 告警 | 本期开发 |
-| `smartlight_inspection_task_detail` | `smartlight.inspection_task.detail` | 查询巡检任务每日进度和实际打卡记录 | 本期开发 |
-| `smartlight_leakage_analysis` | `smartlight.leakage.analysis` | 分析漏电趋势、集中灯杆、道路、类型和状态 | 本期开发 |
+| `smartlight_asset_search` | `smartlight.asset.search` | 统一查询控制柜、RTU 和灯杆 | 已发布验收 |
+| `smartlight_asset_detail` | `smartlight.asset.detail` | 读取单个设施详情；RTU 同时返回继电器和回路 | 已发布验收 |
+| `smartlight_alarm_analysis` | `smartlight.alarm.analysis` | 按时间、状态和关键词分析 RTU 告警 | 已发布验收 |
+| `smartlight_inspection_task_detail` | `smartlight.inspection_task.detail` | 查询巡检任务每日进度和实际打卡记录 | 已发布验收 |
+| `smartlight_leakage_analysis` | `smartlight.leakage.analysis` | 分析漏电趋势、集中灯杆、道路、类型和状态 | 已发布验收 |
 
 一期的五个读取工具继续保留，避免已有智能体提示词和客户端失效。统一资产查询是新增
 入口，不会删除 `smartlight_lamppost_list`。
@@ -149,3 +149,6 @@ flowchart LR
 2. 在中心服务器部署，完成第一用户真实只读验收。
 3. 观察一段实际问法，修正字段命名和智能体工具说明。
 4. 扩展通用报告附件契约，再交付二期 B 的 CSV 报告导出。
+
+二期 A 的真实验收记录见
+[照明实验室测试系统二期 A 验收报告](smartlight-phase2-acceptance-2026-08-12.md)。
