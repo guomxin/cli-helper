@@ -21,16 +21,20 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.40";
+export const PLUGIN_VERSION = "0.4.41";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
 const CROSS_ENDPOINT_CONTEXT_TIMEOUT_MS = 3_000;
 const TASK_CONTINUATION_TIMEOUT_MS = 5_000;
 const TASK_CONTINUATION_HINT_PATTERN =
-  /(?:(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u56de\u5230|\u521a\u624d|\u4e4b\u524d|\u4e0a\u4e00\u4e2a).{0,24}(?:\u4efb\u52a1|\u4e8b\u9879|\u6d41\u7a0b|\u7533\u8bf7)|(?:\u4efb\u52a1|\u4e8b\u9879|\u6d41\u7a0b|\u7533\u8bf7).{0,16}(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u56de\u5230))/iu;
+  /(?:(?:\u7ee7\u7eed|\u63a5\u7740|\u6062\u590d|\u56de\u5230).{0,12}(?:\u521a\u624d|\u4e4b\u524d|\u4e0a\u4e00\u4e2a|\u539f\u6765|\u5386\u53f2|\u8fd9\u4e2a|\u90a3\u4e2a).{0,16}(?:\u4efb\u52a1|\u4e8b\u9879|\u6d41\u7a0b|\u7533\u8bf7)|(?:\u521a\u624d|\u4e4b\u524d|\u4e0a\u4e00\u4e2a|\u539f\u6765|\u5386\u53f2|\u8fd9\u4e2a|\u90a3\u4e2a).{0,24}(?:\u4efb\u52a1|\u4e8b\u9879|\u6d41\u7a0b|\u7533\u8bf7))/iu;
+const TASK_ORDINAL_SELECTION_PATTERN =
+  /(?:\u9009\u62e9|\u9009\u4e2d|\u5c31\u9009|\u6253\u5f00|\u5207\u6362(?:\u5230)?).{0,24}(?:\u7b2c\s*)?(?:[1-9]|10|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341])\s*(?:\u4e2a|\u9879|\u6761)?(?:\u4efb\u52a1)?/iu;
+const TASK_ORDINAL_REPLY_PATTERN =
+  /^\s*(?:\u7b2c\s*)?(?:[1-9]|10|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341])\s*(?:\u4e2a|\u9879|\u6761)?(?:\u4efb\u52a1)?\s*(?:\u5427|[.\u3002])?\s*$/iu;
 const TASK_FOLLOW_UP_HINT_PATTERN =
-  /(?:\u8be6\u60c5|\u64a4\u9500|\u63d0\u4ea4|\u5ba1\u6279|\u4e0b\u8f7d|\u67e5\u8be2|\u521b\u5efa|\u586b\u5199|\u5904\u7406|\u7b2c\s*[0-9\u4e00-\u5341]+\s*\u6761)/iu;
+  /(?:\u8be6\u60c5|\u64a4\u9500|\u63d0\u4ea4|\u5ba1\u6279|\u4e0b\u8f7d|\u67e5\u8be2|\u521b\u5efa|\u586b\u5199|\u5904\u7406|\u5bfc\u51fa|\u751f\u6210.{0,8}(?:\u62a5\u544a|\u6587\u4ef6|\u6e05\u5355|CSV)|\u7b2c\s*[0-9\u4e00-\u5341]+\s*\u6761)/iu;
 const TASK_ID_PATTERN =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu;
 const CROSS_ENDPOINT_HINT_PATTERN =
@@ -681,10 +685,13 @@ function isCrossEndpointReference(prompt) {
 
 function isTaskContinuationIntent(prompt) {
   const text = safeText(prompt, 20_000) || "";
+  const ordinal = taskContinuationOrdinal(text);
   return (
     TASK_ID_PATTERN.test(text) ||
     TASK_CONTINUATION_HINT_PATTERN.test(text) ||
-    taskContinuationOrdinal(text) !== null ||
+    (ordinal !== null &&
+      (TASK_ORDINAL_SELECTION_PATTERN.test(text) ||
+        TASK_ORDINAL_REPLY_PATTERN.test(text))) ||
     /\b(?:continue|resume)\b.{0,24}\btask\b/iu.test(text)
   );
 }
@@ -694,6 +701,9 @@ function taskContinuationOrdinal(prompt) {
   const match =
     text.match(
       /(?:\u7b2c\s*)?([1-9]|10|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341])\s*(?:\u4e2a|\u9879)?\s*\u4efb\u52a1/iu,
+    ) ||
+    text.match(
+      /(?:\u9009\u62e9|\u9009\u4e2d|\u5c31\u9009|\u6253\u5f00|\u5207\u6362(?:\u5230)?).{0,24}(?:\u7b2c\s*)?([1-9]|10|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341])\s*(?:\u4e2a|\u9879|\u6761)?(?:\u4efb\u52a1)?/iu,
     ) ||
     text.match(
       /^\s*(?:\u7b2c\s*)?([1-9]|10|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341])\s*(?:\u4e2a|\u9879|\u6761)?\s*$/iu,

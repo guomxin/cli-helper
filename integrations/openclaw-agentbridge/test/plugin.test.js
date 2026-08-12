@@ -238,6 +238,134 @@ test("persists ambiguous task choices and blocks duplicate work after selection"
   );
 });
 
+test("does not treat an in-request business task sequence as host task continuation", async () => {
+  const calls = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      throw new Error(`unexpected tool: ${name}`);
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  registerAgentBridgeInteractions(harness.api, { identityRouter });
+
+  const result = await harness.hooks.before_prompt_build(
+    {
+      prompt: "查看照明系统巡检任务，并继续读取第 1 个任务每日进度",
+      messages: [],
+    },
+    {
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+  );
+
+  assert.equal(result, undefined);
+  assert.deepEqual(calls, []);
+});
+
+test("allows report export while selecting a previous task choice", async () => {
+  const calls = [];
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const taskId = "12345678-1234-4123-8123-123456789098";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      assert.equal(name, "agentbridge_host_task_continuation_resolve");
+      return {
+        status: "selected",
+        task: {
+          taskId,
+          title: "Choose Smartlight inspection task",
+          status: "succeeded",
+        },
+        continuation: {
+          state: "selected",
+          executionMode: "follow_up",
+          allowNewOperation: arguments_.allow_follow_up,
+          expiresAt: "2099-08-03T12:00:00+00:00",
+        },
+        snapshot: {
+          summary: {
+            phase: "terminal",
+            origin: { clientType: "web", label: "Agent Workspace" },
+            operation: {
+              operationId: "operation-inspection-list",
+              capability: "smartlight.inspection_task.list",
+              status: "succeeded",
+            },
+          },
+        },
+      };
+    },
+  };
+  const identity = {
+    bound: true,
+    binding: { key: "telegram:*:user-a" },
+    client,
+  };
+  const identityRouter = {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
+  };
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    identityRouter,
+  });
+
+  const result = await harness.hooks.before_prompt_build(
+    {
+      prompt: "选择刚才列出的第 2 项并导出每日进度 CSV",
+      messages: [],
+    },
+    {
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+  );
+
+  assert.match(result.prependContext, new RegExp(taskId));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].arguments_.ordinal, 2);
+  assert.equal(calls[0].arguments_.allow_follow_up, true);
+  assert.equal(
+    coordinator.taskContinuationForSession(sessionKey).allowNewOperation,
+    true,
+  );
+});
+
 test("binds an explicit task follow-up to the existing task ID", async () => {
   const calls = [];
   const businessCalls = [];
