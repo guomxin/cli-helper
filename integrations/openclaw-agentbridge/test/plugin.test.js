@@ -4605,6 +4605,55 @@ test("delivers a prepared OA certificate as one direct attachment message", asyn
   assert.match(harness.sentPayloads[0].payload.text, /certificate-a\.pdf/);
 });
 
+test("delivers a prepared Smartlight CSV report as a document attachment", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    sleep: async () => undefined,
+    ...preparedDocumentDependencies({
+      contentType: "text/csv",
+      body: Buffer.from("\ufeffdate,count\r\n2026-08-12,3\r\n", "utf8"),
+      savedId: "smartlight-report.csv",
+      savedPath: "C:/media/smartlight-report.csv",
+    }),
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-smartlight-report-delivery",
+    runId: "run-smartlight-report-delivery",
+    sessionKey,
+    toolName: "smartlight_report_export",
+  });
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-smartlight-report-delivery",
+      toolName: "smartlight_report_export",
+      result: preparedDocumentResult(
+        "smartlight-alarm-analysis-20260812.csv",
+        "s".repeat(43),
+      ),
+    },
+    { runtime: "openclaw", sessionKey },
+  );
+
+  assert.equal(
+    replacement.result.details.structuredContent.hostDelivery.state,
+    "delivered",
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.mediaUrl,
+    "C:/media/smartlight-report.csv",
+  );
+  assert.equal(harness.sentPayloads[0].payload.forceDocument, true);
+  assert.match(
+    harness.sentPayloads[0].payload.text,
+    /smartlight-alarm-analysis-20260812\.csv/,
+  );
+});
+
 test("delivers a prepared OA certificate batch as ordered original files", async () => {
   const harness = fakeApi({ autoPoll: false });
   registerAgentBridgeInteractions(harness.api, {
@@ -4866,7 +4915,12 @@ test("reports exact prepared-document outcomes to the central task", async () =>
   );
 });
 
-function preparedDocumentDependencies() {
+function preparedDocumentDependencies({
+  contentType = "application/pdf",
+  body = Buffer.from("%PDF-1.7 prepared"),
+  savedId = "certificate.bin",
+  savedPath = "C:/media/certificate.bin",
+} = {}) {
   return {
     documentFetchImpl: async () => ({
       ok: true,
@@ -4874,21 +4928,21 @@ function preparedDocumentDependencies() {
       headers: {
         get(name) {
           return name.toLowerCase() === "content-type"
-            ? "application/pdf"
+            ? contentType
             : name.toLowerCase() === "content-length"
-              ? "21"
+              ? String(body.length)
               : null;
         },
       },
       async arrayBuffer() {
-        return Buffer.from("%PDF-1.7 prepared");
+        return body;
       },
     }),
     saveMediaBufferImpl: async () => ({
-      id: "certificate.bin",
-      path: "C:/media/certificate.bin",
-      size: 21,
-      contentType: "application/pdf",
+      id: savedId,
+      path: savedPath,
+      size: body.length,
+      contentType,
     }),
   };
 }
@@ -4901,7 +4955,11 @@ function preparedDocumentResult(filename, downloadId, { taskId = null } = {}) {
     file: {
       downloadId,
       filename,
-      contentType: filename.endsWith(".pdf") ? "application/pdf" : "image/jpeg",
+      contentType: filename.endsWith(".pdf")
+        ? "application/pdf"
+        : filename.endsWith(".csv")
+          ? "text/csv"
+          : "image/jpeg",
       size: 128,
       mediaUrl: `${CARD_ORIGIN}/download/${downloadId}/file`,
       expiresAt: "2099-07-14T12:00:00+00:00",

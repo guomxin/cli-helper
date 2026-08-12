@@ -1563,6 +1563,7 @@ function displayTaskTitle(value) {
       "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
       "Prepare and Deliver OA Certificate Scans": "OA 证书文件批量交付",
       "Search OA Certificate Scans": "OA 证书查询与下载",
+      "导出照明系统 CSV 报告": "照明系统报告导出",
       "Prepare Taihua Work Log": "泰华工作日志提交",
     }[title] ||
     title ||
@@ -2113,7 +2114,9 @@ function appendArtifactList(
       state.textContent = "已过期";
       actions.append(state);
       if (
-        artifact.artifact_type === "certificate_scan" &&
+        ["certificate_scan", "smartlight_report"].includes(
+          artifact.artifact_type,
+        ) &&
         taskId &&
         artifact.artifact_id
       ) {

@@ -17,6 +17,7 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     _resolve_date_range,
@@ -299,10 +300,41 @@ class SmartlightAdapterTests(unittest.TestCase):
                 {"last_days": 30, "start_date": "2026-08-01"}
             )
 
-    def test_registry_contains_ten_read_only_capabilities(self):
+    def test_report_export_returns_bounded_rows_and_csv_contract_metadata(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        alarm_report = self.adapter.invoke_capability(
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            worker,
+            {"report_type": "alarm_analysis", "last_days": 30},
+        )
+        asset_report = self.adapter.invoke_capability(
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            worker,
+            {"report_type": "asset_inventory", "asset_type": "rtu"},
+        )
+        inspection_report = self.adapter.invoke_capability(
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            worker,
+            {
+                "report_type": "inspection_progress",
+                "task_id": "task-1",
+                "detail_date": "2026-08-12",
+            },
+        )
+
+        self.assertEqual(alarm_report["reportType"], "alarm_analysis")
+        self.assertEqual(alarm_report["metadata"]["exportedCount"], 1)
+        self.assertEqual(alarm_report["rows"][0]["id"], "alarm-1")
+        self.assertEqual(asset_report["reportTitle"], "照明RTU清单")
+        self.assertEqual(asset_report["rows"][0]["code"], "RTU-001")
+        self.assertEqual(inspection_report["metadata"]["exportedCount"], 1)
+        self.assertEqual(inspection_report["rows"][0]["deviceCode"], "LP-001")
+
+    def test_registry_contains_eleven_read_only_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 10)
+        self.assertEqual(len(capabilities), 11)
         self.assertTrue(all(spec.effect == "read" for spec in capabilities))
         inspection = next(
             spec

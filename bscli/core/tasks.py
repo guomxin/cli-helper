@@ -31,6 +31,7 @@ ARTIFACT_DELIVERY_STATES = {
     "fallback_link_sent",
     "failed",
 }
+REFRESHABLE_ARTIFACT_TYPES = {"certificate_scan", "smartlight_report"}
 
 PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
 
@@ -1339,7 +1340,7 @@ class TaskHubStore:
                 raise TaskIntegrityError(
                     "artifact source changed while the download was being refreshed"
                 )
-            if row["artifact_type"] != "certificate_scan":
+            if row["artifact_type"] not in REFRESHABLE_ARTIFACT_TYPES:
                 raise TaskIntegrityError("artifact type cannot be refreshed")
             if row["state"] != "expired":
                 raise TaskIntegrityError("only an expired artifact can be refreshed")

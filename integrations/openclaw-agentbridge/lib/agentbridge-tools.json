@@ -4712,6 +4712,214 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 alarm_analysis、leakage_analysis、asset_inventory 或 inspection_progress。设施清单必须传 asset_type；巡检报告必须传 task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "cleared"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "alarm_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alarm Type"
+          },
+          "asset_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cabinet",
+                  "rtu",
+                  "lamppost"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Asset Type"
+          },
+          "clockin_user": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Clockin User"
+          },
+          "detail_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detail Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "has_issues": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Issues"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "report_type": {
+            "enum": [
+              "alarm_analysis",
+              "leakage_analysis",
+              "asset_inventory",
+              "inspection_progress"
+            ],
+            "title": "Report Type",
+            "type": "string"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          },
+          "time_field": {
+            "default": "last_activity",
+            "enum": [
+              "last_activity",
+              "occurred"
+            ],
+            "title": "Time Field",
+            "type": "string"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "report_type"
+        ],
+        "title": "smartlight_report_exportArguments",
+        "type": "object"
+      },
+      "name": "smartlight_report_export",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_report_exportDictOutput",
+        "type": "object"
+      },
+      "title": "导出照明系统 CSV 报告"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "Verify the authenticated caller's central Smartlight CAS/JWT session.",
       "inputSchema": {
         "properties": {},

@@ -57,6 +57,7 @@
       "smartlight_alarm_analysis",
       "smartlight_inspection_task_detail",
       "smartlight_leakage_analysis",
+      "smartlight_report_export",
       "smartlight_session_status",
       "smartlight_session_login",
       "oa_session_status",

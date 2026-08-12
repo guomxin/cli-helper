@@ -758,17 +758,31 @@ class CentralMcpTests(unittest.TestCase):
                     "arguments": {"last_days": 30},
                 },
             )
+            report = self._request(
+                client,
+                "tools/call",
+                request_id=28,
+                token=smartlight_reader["token"],
+                params={
+                    "name": "smartlight_report_export",
+                    "arguments": {
+                        "report_type": "asset_inventory",
+                        "asset_type": "rtu",
+                    },
+                },
+            )
 
         self.assertTrue(denied.json()["result"]["isError"])
         self.assertFalse(allowed.json()["result"]["isError"])
         self.assertFalse(relative_range.json()["result"]["isError"])
+        self.assertFalse(report.json()["result"]["isError"])
         self.assertEqual(
             service.invoke.call_args.kwargs["capability_name"],
-            "smartlight.leakage.summary",
+            "smartlight.report.export",
         )
         self.assertEqual(
-            service.invoke.call_args.kwargs["arguments"]["last_days"],
-            30,
+            service.invoke.call_args.kwargs["arguments"]["asset_type"],
+            "rtu",
         )
 
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):

@@ -85,6 +85,7 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
 )
 from bscli.adapters.yuque import (
     YUQUE_DOCUMENT_CATALOG_CAPABILITY,
@@ -194,6 +195,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_alarm_analysis": frozenset({"smartlight:read"}),
     "smartlight_inspection_task_detail": frozenset({"smartlight:read"}),
     "smartlight_leakage_analysis": frozenset({"smartlight:read"}),
+    "smartlight_report_export": frozenset({"smartlight:read"}),
     "smartlight_session_status": frozenset({"smartlight:read"}),
     "smartlight_session_login": frozenset({"smartlight:read"}),
     "yuque_public_books_list": frozenset({"yuque:read"}),
@@ -584,6 +586,7 @@ def create_central_mcp_server(
                 arguments=arguments,
                 idempotency_key=idempotency_key,
                 request_id=str(ctx.request_id),
+                task_id=task_id,
             )
         except Exception as exc:
             if task_id:
@@ -2433,6 +2436,82 @@ def create_central_mcp_server(
         return await invoke(
             ctx,
             SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_report_export",
+        title="导出照明系统 CSV 报告",
+        description=(
+            "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 "
+            "alarm_analysis、leakage_analysis、asset_inventory 或 "
+            "inspection_progress。设施清单必须传 asset_type；巡检报告必须传 "
+            "task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。"
+            "单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，"
+            "不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_report_export(
+        ctx: Context,
+        report_type: Annotated[
+            Literal[
+                "alarm_analysis",
+                "leakage_analysis",
+                "asset_inventory",
+                "inspection_progress",
+            ],
+            Field(),
+        ],
+        asset_type: Annotated[
+            Literal["cabinet", "rtu", "lamppost"] | None,
+            Field(),
+        ] = None,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_type: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_state: Annotated[
+            Literal["all", "current", "cleared"], Field()
+        ] = "all",
+        time_field: Annotated[
+            Literal["last_activity", "occurred"], Field()
+        ] = "last_activity",
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=3660)] = None,
+        top_n: Annotated[int, Field(ge=1, le=20)] = 10,
+        task_id: Annotated[str | None, Field(max_length=200)] = None,
+        detail_date: Annotated[str | None, Field(max_length=10)] = None,
+        clockin_user: Annotated[str | None, Field(max_length=200)] = None,
+        has_issues: Annotated[bool | None, Field()] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"report_type": report_type}
+        for name, value in (
+            ("asset_type", asset_type),
+            ("keyword", keyword),
+            ("alarm_type", alarm_type),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+            ("task_id", task_id),
+            ("detail_date", detail_date),
+            ("clockin_user", clockin_user),
+            ("has_issues", has_issues),
+        ):
+            if value is not None:
+                arguments[name] = value
+        if report_type == "alarm_analysis":
+            arguments["alarm_state"] = alarm_state
+            arguments["time_field"] = time_field
+            arguments["top_n"] = top_n
+        elif report_type == "leakage_analysis":
+            arguments["top_n"] = top_n
+        return await invoke(
+            ctx,
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
             arguments,
             idempotency_key,
             {"smartlight:read"},

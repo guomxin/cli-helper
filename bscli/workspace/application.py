@@ -266,16 +266,17 @@ class WorkspaceApplication:
         if result.get("status") != "succeeded":
             code = str(result.get("error", {}).get("code") or "REISSUE_FAILED")
             messages = {
-                "LOGIN_REQUIRED": "OA 登录已失效，请先登录后再重新生成下载。",
+                "LOGIN_REQUIRED": "对应系统登录已失效，请先登录后再重新生成下载。",
                 "DOWNLOAD_NOT_FOUND": "原文件记录不存在，无法重新生成下载。",
                 "DOWNLOAD_ACCESS_DENIED": "无权重新生成这份文件。",
                 "DOWNLOAD_INTEGRITY_FAILED": "原文件记录校验失败，无法重新生成下载。",
                 "ARTIFACT_REISSUE_UNSUPPORTED": "这个文件暂不支持重新生成下载。",
                 "ARTIFACT_REISSUE_CONFLICT": "文件已在另一端更新，请刷新后重试。",
+                "REPORT_REGENERATION_FAILED": "报告数据暂时无法重新读取，请稍后再试。",
             }
             raise WorkspaceArtifactError(
                 code,
-                messages.get(code, "重新获取 OA 文件失败，请稍后再试。"),
+                messages.get(code, "重新生成文件失败，请稍后再试。"),
             )
         return self.task_detail(account, task_id)
 

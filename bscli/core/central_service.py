@@ -34,6 +34,7 @@ from bscli.adapters.taihua import (
 )
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ADAPTER_ID,
+    SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
     SMARTLIGHT_SYSTEM_ID,
     SmartlightCentralAdapter,
     build_smartlight_capability_registry,
@@ -174,6 +175,16 @@ from bscli.core.document_downloads import (
     DocumentDownloadNotFound,
     DocumentDownloadStateError,
     DocumentDownloadStore,
+    PREPARED_DOCUMENT_TTL_SECONDS,
+)
+from bscli.core.report_exports import (
+    SMARTLIGHT_REPORT_ARTIFACT_TYPE,
+    SMARTLIGHT_REPORT_CONTENT_TYPE,
+    SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+    is_smartlight_report_recipe,
+    render_smartlight_report_csv,
+    smartlight_report_filename,
+    smartlight_report_recipe,
 )
 from bscli.core.timeline_attachments import TimelineAttachmentStore
 from bscli.core.field_submissions import (
@@ -623,6 +634,7 @@ class CentralCapabilityService:
         arguments: dict,
         idempotency_key: str | None = None,
         request_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict:
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
@@ -650,6 +662,7 @@ class CentralCapabilityService:
                     worker_factory=selected_worker_factory,
                     capability_name=capability_name,
                     arguments=inputs,
+                    task_id=task_id,
                 ),
             )
         return engine.invoke(
@@ -2395,6 +2408,7 @@ class CentralCapabilityService:
         worker_factory: WorkerFactory,
         capability_name: str,
         arguments: dict,
+        task_id: str | None = None,
     ) -> dict:
         self._assert_write_allowed(context=context, system_id=system_id)
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)
@@ -2523,6 +2537,13 @@ class CentralCapabilityService:
                                 session=session,
                                 result=result,
                             )
+                        elif capability_name == SMARTLIGHT_REPORT_EXPORT_CAPABILITY:
+                            result = self._materialize_smartlight_report(
+                                session=session,
+                                arguments=arguments,
+                                report=result,
+                                task_id=task_id,
+                            )
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
@@ -2612,6 +2633,98 @@ class CentralCapabilityService:
                 )
                 self.session_states.delete(session["session_id"])
                 raise
+
+    def _materialize_smartlight_report(
+        self,
+        *,
+        session: dict,
+        arguments: dict,
+        report: dict,
+        task_id: str | None,
+    ) -> dict:
+        report_type = str(report.get("reportType") or "").strip()
+        if report_type != str(arguments.get("report_type") or "").strip():
+            raise ValueError("Smartlight report type does not match the request")
+        body = render_smartlight_report_csv(report)
+        filename = smartlight_report_filename(report)
+        download = self.document_downloads.create(
+            user_subject=session["user_subject"],
+            system_id=session["system_id"],
+            session_id=session["session_id"],
+            document=smartlight_report_recipe(
+                report_type=report_type,
+                arguments=arguments,
+            ),
+            filename=filename,
+            document_type=SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+            display_size=_display_file_size(len(body)),
+            card_base_url=self.trusted_card_base_url,
+            ttl_seconds=PREPARED_DOCUMENT_TTL_SECONDS,
+        )
+        self.document_downloads.claim_for_prepare(
+            download["download_id"],
+            user_subject=session["user_subject"],
+        )
+        try:
+            ready = self.document_downloads.mark_ready(
+                download["download_id"],
+                body=body,
+                content_type=SMARTLIGHT_REPORT_CONTENT_TYPE,
+            )
+        except Exception:
+            try:
+                self.document_downloads.release(download["download_id"])
+            except DocumentDownloadStateError:
+                pass
+            raise
+
+        artifact = None
+        artifact_reused = False
+        if task_id:
+            artifact, artifact_reused = self.tasks.link_artifact(
+                task_id=task_id,
+                user_subject=session["user_subject"],
+                artifact={
+                    "artifact_type": SMARTLIGHT_REPORT_ARTIFACT_TYPE,
+                    "source_ref": ready["download_id"],
+                    "filename": ready["filename"],
+                    "content_type": ready["content_type"],
+                    "byte_size": ready["prepared_size"],
+                    "download_url": f"{ready['card_url']}/file",
+                    "expires_at": ready["expires_at"],
+                },
+            )
+            self.tasks.complete_task(
+                task_id=task_id,
+                user_subject=session["user_subject"],
+                reason="smartlight_report_ready",
+                causation_ref=ready["download_id"],
+            )
+        metadata = dict(report.get("metadata") or {})
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.document_delivery.v1",
+            "status": "succeeded",
+            "report": {
+                "reportType": report_type,
+                "title": report.get("reportTitle"),
+                "rowCount": len(report.get("rows") or []),
+                "metadata": metadata,
+                "regenerationSemantics": "rerun_current_data_with_original_filters",
+            },
+            "file": _prepared_document_file(
+                ready,
+                artifact=artifact,
+                artifact_reused=artifact_reused,
+            ),
+            "hostDelivery": {
+                "mode": "direct_attachment",
+                "oneFilePerMessage": True,
+                "handledByHost": True,
+                "state": "prepared",
+                "completionMeaning": "file_ready_not_endpoint_acknowledged",
+            },
+        }
 
     def prepare_document_download(
         self,
@@ -2870,7 +2983,11 @@ class CentralCapabilityService:
                 user_subject=user_subject,
                 include_source_ref=True,
             )
-            if artifact["artifact_type"] != "certificate_scan":
+            artifact_type = artifact["artifact_type"]
+            if artifact_type not in {
+                "certificate_scan",
+                SMARTLIGHT_REPORT_ARTIFACT_TYPE,
+            }:
                 return _document_delivery_failure(
                     "ARTIFACT_REISSUE_UNSUPPORTED",
                     retryable=False,
@@ -2894,17 +3011,26 @@ class CentralCapabilityService:
                     "LOGIN_REQUIRED",
                     retryable=True,
                 )
-            replacement = self.document_downloads.create(
-                user_subject=user_subject,
-                system_id=source["system_id"],
-                session_id=session["session_id"],
-                document=source["document"],
-                filename=source["filename"],
-                document_type=source["document_type"],
-                display_size=source["display_size"],
-                card_base_url=self.trusted_card_base_url,
-                ttl_seconds=600,
-            )
+            if artifact_type == "certificate_scan":
+                replacement = self.document_downloads.create(
+                    user_subject=user_subject,
+                    system_id=source["system_id"],
+                    session_id=session["session_id"],
+                    document=source["document"],
+                    filename=source["filename"],
+                    document_type=source["document_type"],
+                    display_size=source["display_size"],
+                    card_base_url=self.trusted_card_base_url,
+                    ttl_seconds=600,
+                )
+            elif (
+                source["document_type"] != SMARTLIGHT_REPORT_DOCUMENT_TYPE
+                or not is_smartlight_report_recipe(source["document"])
+            ):
+                return _document_delivery_failure(
+                    "ARTIFACT_REISSUE_INVALID",
+                    retryable=False,
+                )
         except (TaskNotFound, DocumentDownloadNotFound):
             return _document_delivery_failure("DOWNLOAD_NOT_FOUND", retryable=False)
         except DocumentDownloadAccessDenied:
@@ -2917,10 +3043,32 @@ class CentralCapabilityService:
                 retryable=False,
             )
 
-        prepared = self.prepare_document_download(
-            user_subject=user_subject,
-            download_id=replacement["download_id"],
-        )
+        if artifact_type == "certificate_scan":
+            prepared = self.prepare_document_download(
+                user_subject=user_subject,
+                download_id=replacement["download_id"],
+            )
+        else:
+            recipe = source["document"]
+            report_arguments = dict(recipe["arguments"])
+            report_arguments["report_type"] = recipe["reportType"]
+            operation = self.invoke(
+                user_subject=user_subject,
+                capability_name=SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+                arguments=report_arguments,
+            )
+            if operation.get("status") != "succeeded":
+                error_code = str(
+                    (operation.get("error") or {}).get("code")
+                    or "REPORT_REGENERATION_FAILED"
+                )
+                return _document_delivery_failure(
+                    "LOGIN_REQUIRED"
+                    if error_code == "LOGIN_REQUIRED"
+                    else "REPORT_REGENERATION_FAILED",
+                    retryable=True,
+                )
+            prepared = operation.get("result") or {}
         if prepared.get("status") != "succeeded":
             return prepared
         file = prepared["file"]
@@ -3688,7 +3836,7 @@ def _document_delivery_failure(error_code: str, *, retryable: bool) -> dict:
         "status": "failed",
         "error": {
             "code": error_code,
-            "message": "AgentBridge could not prepare the OA certificate attachment.",
+            "message": "AgentBridge could not prepare the file attachment.",
             "retryable": retryable,
         },
     }
@@ -3731,6 +3879,14 @@ def _prepared_document_file(
         "artifactId": artifact["artifact_id"] if artifact is not None else None,
         "artifactReused": artifact_reused,
     }
+
+
+def _display_file_size(byte_size: int) -> str:
+    if byte_size < 1024:
+        return f"{byte_size} B"
+    if byte_size < 1024 * 1024:
+        return f"{byte_size / 1024:.1f} KB"
+    return f"{byte_size / (1024 * 1024):.1f} MB"
 
 
 def _validated_document_download_ids(values: list[str]) -> list[str]:
@@ -3782,7 +3938,7 @@ def _document_batch_error(
     return {
         "downloadId": download_id,
         "code": error_code,
-        "message": "AgentBridge could not prepare this OA certificate attachment.",
+        "message": "AgentBridge could not prepare this file attachment.",
         "retryable": retryable,
     }
 

@@ -14,10 +14,17 @@ from bscli.core.document_downloads import (
     DocumentDownloadNotFound,
     DocumentDownloadStateError,
     DocumentDownloadStore,
+    SUPPORTED_DOCUMENT_CONTENT_TYPES,
 )
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
+_CONTENT_TYPE_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "text/csv": ".csv",
+}
 
 
 class TrustedDocumentDownloadApplication:
@@ -37,14 +44,14 @@ class TrustedDocumentDownloadApplication:
             return _message_response(
                 status=404,
                 title="下载链接不存在",
-                message="请返回智能体重新查找证书。",
+                message="请返回智能体重新生成文件。",
                 tone="error",
             )
         except DocumentDownloadIntegrityError:
             return _message_response(
                 status=409,
                 title="下载链接不可用",
-                message="下载引用校验失败，请返回智能体重新查找证书。",
+                message="下载引用校验失败，请返回智能体重新生成文件。",
                 tone="error",
             )
         if record["state"] == "ready":
@@ -68,13 +75,13 @@ class TrustedDocumentDownloadApplication:
                 ),
             )
         messages = {
-            "processing": ("下载处理中", "AgentBridge 正在从 OA 读取证书，请稍候。"),
-            "completed": ("链接已使用", "请返回智能体重新查找后生成新的下载链接。"),
-            "expired": ("下载链接已失效", "请返回智能体重新查找证书。"),
+            "processing": ("下载处理中", "AgentBridge 正在准备文件，请稍候。"),
+            "completed": ("链接已使用", "请返回智能体生成新的下载链接。"),
+            "expired": ("下载链接已失效", "请返回智能体重新生成文件。"),
         }
         title, message = messages.get(
             record["state"],
-            ("下载链接不可用", "请返回智能体重新查找证书。"),
+            ("下载链接不可用", "请返回智能体重新生成文件。"),
         )
         return _message_response(
             status=409,
@@ -90,7 +97,7 @@ class TrustedDocumentDownloadApplication:
             return _message_response(
                 status=404,
                 title="下载链接不存在",
-                message="请返回智能体重新查找证书。",
+                message="请返回智能体重新生成文件。",
                 tone="error",
             )
         except (
@@ -99,19 +106,15 @@ class TrustedDocumentDownloadApplication:
         ):
             return _message_response(
                 status=409,
-                title="证书尚未准备好",
-                message="请返回智能体重新准备或下载证书。",
+                title="文件尚未准备好",
+                message="请返回智能体重新准备或下载文件。",
                 tone="error",
             )
         content_type = str(payload["content_type"])
         filename = str(payload["filename"])
-        ascii_suffix = {
-            "application/pdf": ".pdf",
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-        }[content_type]
+        ascii_name = _ascii_download_name(payload["document_type"], content_type)
         disposition = (
-            f"attachment; filename=certificate{ascii_suffix}; "
+            f"attachment; filename={ascii_name}; "
             f"filename*=UTF-8''{quote(filename, safe='')}"
         )
         return AuthCardResponse(
@@ -166,7 +169,7 @@ class TrustedDocumentDownloadApplication:
             return _message_response(
                 status=404,
                 title="下载链接不存在",
-                message="请返回智能体重新查找证书。",
+                message="请返回智能体重新生成文件。",
                 tone="error",
             )
         except (
@@ -177,7 +180,7 @@ class TrustedDocumentDownloadApplication:
             return _message_response(
                 status=409,
                 title="下载请求已失效",
-                message="请刷新页面；若仍失败，请返回智能体重新查找证书。",
+                message="请刷新页面；若仍失败，请返回智能体重新生成文件。",
                 tone="error",
             )
 
@@ -188,7 +191,7 @@ class TrustedDocumentDownloadApplication:
             content_type = str(payload.get("content_type") or "application/pdf")
             if not isinstance(file_body, bytes):
                 raise TypeError("document fetcher did not return bytes")
-            if content_type not in {"application/pdf", "image/jpeg", "image/png"}:
+            if content_type not in SUPPORTED_DOCUMENT_CONTENT_TYPES:
                 raise TypeError("document fetcher returned an unsupported content type")
             self.download_store.complete(download_id)
         except Exception as exc:
@@ -206,18 +209,13 @@ class TrustedDocumentDownloadApplication:
                 status=502,
                 title="暂时无法下载",
                 message=(
-                    "AgentBridge 未能从 OA 取得证书，请刷新页面重试。"
+                    "AgentBridge 未能从目标系统取得文件，请刷新页面重试。"
                     f"错误代码：{error_code}。"
                 ),
                 tone="error",
             )
 
-        ascii_suffix = {
-            "application/pdf": ".pdf",
-            "image/jpeg": ".jpg",
-            "image/png": ".png",
-        }[content_type]
-        ascii_name = f"certificate{ascii_suffix}"
+        ascii_name = _ascii_download_name(record["document_type"], content_type)
         disposition = (
             f"attachment; filename={ascii_name}; "
             f"filename*=UTF-8''{quote(filename, safe='')}"
@@ -240,7 +238,16 @@ def _render_download_form(record: dict, *, csrf_token: str, nonce: str) -> str:
     type_label = {
         "patent_certificate": "专利证书",
         "software_copyright_certificate": "软件著作权证书",
-    }.get(record["document_type"], "证书")
+        "smartlight_csv_report": "照明分析报告",
+    }.get(record["document_type"], "文件")
+    action_label = (
+        "下载证书扫描件"
+        if record["document_type"] in {
+            "patent_certificate",
+            "software_copyright_certificate",
+        }
+        else "下载报告"
+    )
     size_html = (
         f'<p class="meta">文件大小：{escape(record["display_size"])}</p>'
         if record.get("display_size")
@@ -259,13 +266,26 @@ def _render_download_form(record: dict, *, csrf_token: str, nonce: str) -> str:
             {size_html}
             <form method="post" action="/download/{escape(record["download_id"])}">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
-              <button type="submit">下载证书扫描件</button>
+              <button type="submit">{escape(action_label)}</button>
             </form>
             <p class="hint">链接为一次性短时授权，文件不会经过聊天内容。</p>
           </section>
         </main>
         """,
     )
+
+
+def _ascii_download_name(document_type: str, content_type: str) -> str:
+    suffix = _CONTENT_TYPE_SUFFIXES[content_type]
+    stem = (
+        "certificate"
+        if document_type in {
+            "patent_certificate",
+            "software_copyright_certificate",
+        }
+        else "agentbridge-report"
+    )
+    return f"{stem}{suffix}"
 
 
 def _message_response(

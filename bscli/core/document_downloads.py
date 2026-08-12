@@ -10,8 +10,24 @@ import secrets
 import sqlite3
 from typing import Any, Callable, Iterator
 
+from bscli.core.report_exports import (
+    SMARTLIGHT_REPORT_CONTENT_TYPE,
+    SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+)
+
 
 PREPARED_DOCUMENT_TTL_SECONDS = 1_800
+SUPPORTED_DOCUMENT_TYPES = {
+    "patent_certificate",
+    "software_copyright_certificate",
+    SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+}
+SUPPORTED_DOCUMENT_CONTENT_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    SMARTLIGHT_REPORT_CONTENT_TYPE,
+}
 
 
 class DocumentDownloadNotFound(KeyError):
@@ -141,8 +157,8 @@ class DocumentDownloadStore:
             raise ValueError("document download reference is required")
         filename = _validate_filename(filename)
         document_type = str(document_type or "").strip()
-        if document_type not in {"patent_certificate", "software_copyright_certificate"}:
-            raise ValueError("unsupported certificate document type")
+        if document_type not in SUPPORTED_DOCUMENT_TYPES:
+            raise ValueError("unsupported document download type")
         if ttl_seconds < 60 or ttl_seconds > 1800:
             raise ValueError("document download TTL must be between 60 and 1800 seconds")
         base_url = _validate_card_base_url(card_base_url)
@@ -320,7 +336,7 @@ class DocumentDownloadStore:
     ) -> dict:
         if not isinstance(body, bytes) or not body:
             raise ValueError("prepared document body is required")
-        if content_type not in {"application/pdf", "image/jpeg", "image/png"}:
+        if content_type not in SUPPORTED_DOCUMENT_CONTENT_TYPES:
             raise ValueError("prepared document content type is unsupported")
         cache_path = self._cache_path(download_id)
         temporary_path = cache_path.with_suffix(".tmp")
@@ -485,8 +501,8 @@ def _validate_filename(value: str) -> str:
         raise ValueError("document download filename is invalid")
     if any(ord(character) < 32 for character in filename):
         raise ValueError("document download filename is invalid")
-    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
-        raise ValueError("only PDF and image certificate downloads are supported")
+    if Path(filename).suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png", ".csv"}:
+        raise ValueError("document download filename type is unsupported")
     return filename[:240]
 
 

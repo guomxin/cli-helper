@@ -32,6 +32,7 @@ SMARTLIGHT_ASSET_DETAIL_CAPABILITY = "smartlight.asset.detail"
 SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY = "smartlight.alarm.analysis"
 SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY = "smartlight.inspection_task.detail"
 SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY = "smartlight.leakage.analysis"
+SMARTLIGHT_REPORT_EXPORT_CAPABILITY = "smartlight.report.export"
 
 _SMARTLIGHT_ANALYSIS_LIMIT = 500
 _SMARTLIGHT_ANALYSIS_PAGE_SIZE = 100
@@ -334,6 +335,8 @@ class SmartlightCentralAdapter:
             return self.inspection_task_detail(worker, arguments)
         if capability_name == SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY:
             return self.analyze_leakage(worker, arguments)
+        if capability_name == SMARTLIGHT_REPORT_EXPORT_CAPABILITY:
+            return self.export_report(worker, arguments)
         raise KeyError(f"unsupported Smartlight capability: {capability_name}")
 
     def system_overview(self, worker) -> dict:
@@ -746,7 +749,7 @@ class SmartlightCentralAdapter:
             key=lambda item: str(item.get(sort_field) or ""),
             reverse=True,
         )
-        return {
+        result = {
             "filters": {
                 "keyword": keyword or None,
                 "alarmType": alarm_type or None,
@@ -778,6 +781,9 @@ class SmartlightCentralAdapter:
                 "lastActivityAt": "Most recent alarm activity.",
             },
         }
+        if arguments.get("_include_report_rows") is True:
+            result["_reportRows"] = normalized
+        return result
 
     def _alarm_analysis_page(
         self,
@@ -1130,7 +1136,7 @@ class SmartlightCentralAdapter:
                 break
         normalized = [_normalize_leakage(item) for item in raw_items]
         normalized.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
-        return {
+        result = {
             "dateRange": {
                 "source": range_source,
                 "lastDays": last_days,
@@ -1155,6 +1161,247 @@ class SmartlightCentralAdapter:
                 "globalDashboardCountersIncluded": False,
             },
         }
+        if arguments.get("_include_report_rows") is True:
+            result["_reportRows"] = normalized
+        return result
+
+    def export_report(self, worker, arguments: dict) -> dict:
+        report_type = _normalize_choice(
+            arguments.get("report_type"),
+            default="",
+            allowed={
+                "alarm_analysis",
+                "leakage_analysis",
+                "asset_inventory",
+                "inspection_progress",
+            },
+            field_name="report_type",
+        )
+        report_arguments = {
+            key: value
+            for key, value in arguments.items()
+            if key != "report_type" and value is not None
+        }
+        if report_type == "alarm_analysis":
+            analysis = self.analyze_alarms(
+                worker,
+                {**report_arguments, "_include_report_rows": True},
+            )
+            rows = analysis.pop("_reportRows")
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明RTU告警分析",
+                columns=(
+                    ("id", "告警ID"),
+                    ("occurredAt", "首次发生时间"),
+                    ("lastActivityAt", "最近活动时间"),
+                    ("device", "设备"),
+                    ("deviceCode", "设备编号"),
+                    ("type", "告警类型"),
+                    ("level", "告警级别"),
+                    ("stateLabel", "状态"),
+                    ("message", "告警内容"),
+                    ("workArea", "工区"),
+                    ("group", "分组"),
+                ),
+                rows=rows,
+                metadata={
+                    "filters": analysis["filters"],
+                    "dateRange": analysis["dateRange"],
+                    "downstreamTotal": analysis["downstreamTotal"],
+                    "retrievedCount": analysis["retrievedCount"],
+                    "truncated": analysis["truncated"],
+                },
+            )
+        if report_type == "leakage_analysis":
+            analysis = self.analyze_leakage(
+                worker,
+                {**report_arguments, "_include_report_rows": True},
+            )
+            rows = analysis.pop("_reportRows")
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明漏电分析",
+                columns=(
+                    ("id", "记录ID"),
+                    ("time", "时间"),
+                    ("lampPost", "灯杆"),
+                    ("lamp", "灯具"),
+                    ("road", "道路"),
+                    ("value", "漏电值"),
+                    ("voltage", "电压"),
+                    ("alarmType", "告警类型"),
+                    ("state", "状态"),
+                ),
+                rows=rows,
+                metadata={
+                    "dateRange": analysis["dateRange"],
+                    "downstreamTotal": analysis["downstreamTotal"],
+                    "retrievedCount": analysis["retrievedCount"],
+                    "truncated": analysis["truncated"],
+                },
+            )
+        if report_type == "asset_inventory":
+            return self._export_asset_inventory(worker, report_arguments)
+        return self._export_inspection_progress(worker, report_arguments)
+
+    def _export_asset_inventory(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        asset_type = _normalize_asset_type(arguments.get("asset_type"))
+        keyword = str(arguments.get("keyword") or "").strip()
+        rows: list[dict] = []
+        downstream_total = 0
+        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // 100) + 1):
+            payload = self._asset_page(
+                worker,
+                context,
+                asset_type=asset_type,
+                keyword=keyword,
+                page=page,
+                size=100,
+            )
+            items = _page_items(payload)
+            if page == 1:
+                downstream_total = _page_total(payload)
+            rows.extend(_normalize_asset_summary(asset_type, item) for item in items)
+            if (
+                not items
+                or len(rows) >= downstream_total
+                or len(rows) >= _SMARTLIGHT_ANALYSIS_LIMIT
+            ):
+                break
+        labels = {"cabinet": "控制柜", "rtu": "RTU", "lamppost": "灯杆"}
+        columns = {
+            "cabinet": (
+                ("id", "设施ID"),
+                ("code", "编号"),
+                ("name", "名称"),
+                ("state", "状态"),
+                ("road", "道路"),
+                ("side", "道路侧"),
+                ("workArea", "工区"),
+                ("address", "地址"),
+                ("capacity", "容量"),
+                ("electricalType", "供电类型"),
+            ),
+            "rtu": (
+                ("id", "设施ID"),
+                ("code", "编号"),
+                ("name", "名称"),
+                ("model", "型号"),
+                ("type", "类型"),
+                ("cabinet", "控制柜"),
+                ("group", "分组"),
+                ("workArea", "工区"),
+                ("state", "状态"),
+            ),
+            "lamppost": (
+                ("id", "设施ID"),
+                ("code", "编号"),
+                ("name", "名称"),
+                ("road", "道路"),
+                ("cabinet", "控制柜"),
+                ("workArea", "工区"),
+                ("lampCount", "灯具数量"),
+                ("state", "状态"),
+            ),
+        }[asset_type]
+        return _smartlight_report_result(
+            report_type="asset_inventory",
+            title=f"照明{labels[asset_type]}清单",
+            columns=columns,
+            rows=rows,
+            metadata={
+                "assetType": asset_type,
+                "keyword": keyword or None,
+                "downstreamTotal": downstream_total,
+                "retrievedCount": len(rows),
+                "truncated": downstream_total > len(rows),
+            },
+        )
+
+    def _export_inspection_progress(self, worker, arguments: dict) -> dict:
+        task_id = str(arguments.get("task_id") or "").strip()
+        if not task_id:
+            raise ValueError("task_id is required for inspection_progress")
+        detail_arguments = {
+            key: value
+            for key, value in arguments.items()
+            if key
+            in {
+                "task_id",
+                "start_date",
+                "end_date",
+                "detail_date",
+                "clockin_user",
+                "has_issues",
+            }
+        }
+        detail = self.inspection_task_detail(
+            worker,
+            {**detail_arguments, "page": 1, "size": 100},
+        )
+        detail_date = detail["filters"].get("detailDate")
+        if not detail_date:
+            return _smartlight_report_result(
+                report_type="inspection_progress",
+                title="照明巡检进度",
+                columns=(
+                    ("date", "日期"),
+                    ("plannedDeviceCount", "计划设备数"),
+                    ("completedDeviceCount", "完成设备数"),
+                    ("completionRate", "下游完成率"),
+                ),
+                rows=detail["days"],
+                metadata={
+                    "taskId": task_id,
+                    "task": detail.get("task"),
+                    "filters": detail["filters"],
+                    "downstreamTotal": detail["dailyTotal"],
+                    "retrievedCount": detail["dailyCount"],
+                    "truncated": detail["dailyTruncated"],
+                },
+            )
+
+        rows = list(detail.get("clockins") or [])
+        downstream_total = int(detail.get("clockinTotal") or 0)
+        for page in range(2, (_SMARTLIGHT_ANALYSIS_LIMIT // 100) + 1):
+            if len(rows) >= downstream_total or len(rows) >= _SMARTLIGHT_ANALYSIS_LIMIT:
+                break
+            page_detail = self.inspection_task_detail(
+                worker,
+                {**detail_arguments, "page": page, "size": 100},
+            )
+            page_rows = page_detail.get("clockins") or []
+            rows.extend(page_rows)
+            if not page_rows:
+                break
+        rows = rows[:_SMARTLIGHT_ANALYSIS_LIMIT]
+        return _smartlight_report_result(
+            report_type="inspection_progress",
+            title=f"照明巡检打卡明细_{detail_date}",
+            columns=(
+                ("id", "打卡ID"),
+                ("recordedAt", "打卡时间"),
+                ("recorder", "打卡人"),
+                ("deviceId", "设施ID"),
+                ("deviceCode", "设施编号"),
+                ("deviceName", "设施名称"),
+                ("deviceType", "设施类型"),
+                ("position", "位置"),
+                ("hasIssues", "是否发现问题"),
+                ("issueDescription", "问题描述"),
+            ),
+            rows=rows,
+            metadata={
+                "taskId": task_id,
+                "task": detail.get("task"),
+                "filters": detail["filters"],
+                "downstreamTotal": downstream_total,
+                "retrievedCount": len(rows),
+                "truncated": downstream_total > len(rows),
+            },
+        )
 
     def _follow_login_redirects(
         self,
@@ -1523,6 +1770,56 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
             adapter=SMARTLIGHT_ADAPTER_ID,
             workflow="smartlight-leakage-analysis-v1",
         ),
+        CapabilitySpec(
+            name=SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Export a bounded Smartlight alarm, leakage, asset, or inspection "
+                "report through the generic AgentBridge file-delivery contract."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "report_type": {
+                        "type": "string",
+                        "enum": [
+                            "alarm_analysis",
+                            "leakage_analysis",
+                            "asset_inventory",
+                            "inspection_progress",
+                        ],
+                    },
+                    "asset_type": {
+                        "type": "string",
+                        "enum": ["cabinet", "rtu", "lamppost"],
+                    },
+                    "keyword": {"type": "string"},
+                    "alarm_type": {"type": "string"},
+                    "alarm_state": {
+                        "type": "string",
+                        "enum": ["all", "current", "cleared"],
+                    },
+                    "time_field": {
+                        "type": "string",
+                        "enum": ["last_activity", "occurred"],
+                    },
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 3660},
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "task_id": {"type": "string"},
+                    "detail_date": {"type": "string"},
+                    "clockin_user": {"type": "string"},
+                    "has_issues": {"type": ["boolean", "null"]},
+                },
+                "required": ["report_type"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-report-export-v1",
+        ),
     )
     for spec in specs:
         registry.register(spec)
@@ -1601,6 +1898,34 @@ def _paged_schema(properties: dict) -> dict:
             "size": {"type": "integer"},
         },
         "additionalProperties": False,
+    }
+
+
+def _smartlight_report_result(
+    *,
+    report_type: str,
+    title: str,
+    columns: tuple[tuple[str, str], ...],
+    rows: list[dict],
+    metadata: dict,
+) -> dict:
+    bounded_rows = rows[:_SMARTLIGHT_ANALYSIS_LIMIT]
+    selected_metadata = dict(metadata)
+    selected_metadata["exportedCount"] = len(bounded_rows)
+    selected_metadata["analysisLimit"] = _SMARTLIGHT_ANALYSIS_LIMIT
+    selected_metadata["truncated"] = bool(
+        selected_metadata.get("truncated") or len(rows) > len(bounded_rows)
+    )
+    return {
+        "reportType": report_type,
+        "reportTitle": title,
+        "filenameStem": title,
+        "columns": [
+            {"key": key, "label": label}
+            for key, label in columns
+        ],
+        "rows": bounded_rows,
+        "metadata": selected_metadata,
     }
 
 

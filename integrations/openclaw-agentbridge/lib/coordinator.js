@@ -118,6 +118,10 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电分析" },
   ],
   [
+    "smartlight_report_export",
+    { kind: "smartlight_report", system: "照明实验室测试系统", label: "CSV 报告" },
+  ],
+  [
     "yuque_public_books_list",
     { kind: "yuque_book", system: "部门信息库", label: "公共区知识库" },
   ],
@@ -1473,7 +1477,13 @@ export class InteractionCoordinator {
         .trim()
         .toLowerCase() || file.contentType;
     if (
-      !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(
+      ![
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/csv",
+      ].includes(
         contentType,
       )
     ) {
@@ -1543,7 +1553,7 @@ export class InteractionCoordinator {
         null,
       );
     }
-    const text = `OA 证书已准备完成：${file.filename}`;
+    const text = `AgentBridge 文件已准备完成：${file.filename}`;
     let localMediaPath = null;
     let errorCode = "ATTACHMENT_DELIVERY_FAILED";
     try {
@@ -2113,17 +2123,18 @@ async function saveOpenClawMediaBuffer(
   const stateDir = resolveOpenClawStateDir();
   const inboundDir = path.join(stateDir, "media", "inbound");
   await mkdir(inboundDir, { recursive: true, mode: 0o700 });
-  const rawStem = path.basename(String(originalFilename || "certificate"), path.extname(String(originalFilename || "")));
+  const rawStem = path.basename(String(originalFilename || "agentbridge-file"), path.extname(String(originalFilename || "")));
   const stem = rawStem
     .replace(/[^\p{L}\p{N}._-]+/gu, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "")
-    .slice(0, 60) || "certificate";
+    .slice(0, 60) || "agentbridge-file";
   const extension = {
     "application/pdf": ".pdf",
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+    "text/csv": ".csv",
   }[contentType];
   if (!extension) {
     throw new Error("prepared document content type is unsupported");
@@ -2252,7 +2263,11 @@ function normalizePreparedDocumentFile(file, allowedOrigins) {
     return null;
   }
   const contentType = String(file.contentType || "").trim().toLowerCase();
-  if (!["application/pdf", "image/jpeg", "image/png"].includes(contentType)) {
+  if (
+    !["application/pdf", "image/jpeg", "image/png", "text/csv"].includes(
+      contentType,
+    )
+  ) {
     return null;
   }
   return {
