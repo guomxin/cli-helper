@@ -23,6 +23,7 @@ param(
         "YuqueLoginReuse",
         "CrossEndpointContext",
         "TaskContinuation",
+        "ToolCatalog",
         "Release",
         "WorkflowCollections"
     )]

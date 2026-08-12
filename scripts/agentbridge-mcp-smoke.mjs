@@ -249,7 +249,10 @@ try {
   const serverName = argument("--server-name", "agentbridge");
   const identityLabel = argument("--identity-label", null);
   const check = CHECKS.get(checkName);
-  if (!check && !["Release", "WorkflowCollections"].includes(checkName)) {
+  if (
+    !check &&
+    !["Release", "ToolCatalog", "WorkflowCollections"].includes(checkName)
+  ) {
     throw Object.assign(new Error("Unsupported smoke check"), { code: "INVALID_CHECK" });
   }
   if (checkName === "CertificateSearch") {
@@ -374,7 +377,70 @@ try {
     });
   }
 
-  if (checkName === "WorkflowCollections") {
+  if (checkName === "ToolCatalog") {
+    const tools = await client.listTools();
+    const rawNames = tools
+      .map((tool) => String(tool?.name ?? ""))
+      .filter(Boolean)
+      .sort();
+    const profilePayload = await client.callTool(
+      "agentbridge_host_identity_profile",
+      { agent_host: "openclaw" },
+      {
+        meta: {
+          "io.agentbridge/host": {
+            version: "1",
+            agentHost: "openclaw",
+          },
+        },
+      },
+    );
+    if (profilePayload?.isError || profilePayload?.error) {
+      throw Object.assign(new Error("Host identity profile read failed"), {
+        code:
+          profilePayload?.error?.code || "HOST_IDENTITY_PROFILE_FAILED",
+      });
+    }
+    const profile = profilePayload?.result ?? profilePayload;
+    const allowedNames = Array.isArray(
+      profile?.agentToolAccess?.allowedToolNames,
+    )
+      ? profile.agentToolAccess.allowedToolNames
+          .map((name) => String(name))
+          .filter(Boolean)
+          .sort()
+      : null;
+    if (!allowedNames) {
+      throw Object.assign(new Error("Host identity profile omitted tool access"), {
+        code: "HOST_IDENTITY_PROFILE_CONTRACT_MISMATCH",
+      });
+    }
+    const smartlightTools = allowedNames.filter((name) =>
+      name.startsWith("smartlight_"),
+    );
+    const expectedSmartlightTools = new Set([
+      "smartlight_system_overview",
+      "smartlight_lamppost_list",
+      "smartlight_alarm_list",
+      "smartlight_inspection_task_list",
+      "smartlight_leakage_summary",
+      "smartlight_session_status",
+      "smartlight_session_login",
+    ]);
+    process.stdout.write(
+      JSON.stringify({
+        status: "succeeded",
+        check: checkName,
+        identityLabel,
+        rawToolCount: rawNames.length,
+        allowedToolCount: allowedNames.length,
+        smartlightTools,
+        smartlightUnexpectedTools: smartlightTools.filter(
+          (name) => !expectedSmartlightTools.has(name),
+        ),
+      }) + "\n",
+    );
+  } else if (checkName === "WorkflowCollections") {
     const definitions = [
       ["pending", "oa_workflow_pending_list", "section_api"],
       ["sent", "oa_workflow_sent_list", "history_page_grid"],
@@ -463,8 +529,18 @@ try {
       effectiveCheck.arguments,
       requestMeta ? { meta: requestMeta } : undefined,
     );
+    if (payload?.isError) {
+      throw Object.assign(new Error("AgentBridge MCP tool returned an error"), {
+        code: "MCP_TOOL_ERROR",
+      });
+    }
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
     let result = payload?.result ?? payload;
+    if (effectiveCheck.kind === "session" && (payload?.error || errorCode)) {
+      throw Object.assign(new Error("Session status check failed"), {
+        code: errorCode || "SESSION_STATUS_CHECK_FAILED",
+      });
+    }
     const expectedText = argument("--expected-text", "");
     if (effectiveCheck.kind === "pendingInspect") {
       const items = Array.isArray(result?.items) ? result.items : [];

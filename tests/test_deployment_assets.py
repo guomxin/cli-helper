@@ -234,7 +234,11 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(tool, smoke)
 
-        for check in ("SmartlightSessionStatus", "SmartlightOverview"):
+        for check in (
+            "SmartlightSessionStatus",
+            "SmartlightOverview",
+            "ToolCatalog",
+        ):
             self.assertIn(check, smoke)
             self.assertIn(check, (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(
                 encoding="utf-8"
@@ -278,6 +282,9 @@ class DeploymentAssetTests(unittest.TestCase):
             "OaPendingRead",
             "TaihuaMyLogs",
             "downstreamPrincipalRef",
+            "smartlightUnexpectedTools",
+            'effectiveCheck.kind === "session"',
+            "payload?.isError",
         ):
             self.assertIn(marker, node_smoke)
         self.assertNotIn("Token =", isolation)
