@@ -43,8 +43,7 @@ const CHECKS = new Map([
     {
       tool: "smartlight_leakage_summary",
       arguments: {
-        start_date: isoDateDaysAgo(30),
-        end_date: isoDateDaysAgo(0),
+        last_days: 30,
         page: 1,
         size: 5,
       },
@@ -218,12 +217,6 @@ const REQUIRED_RELEASE_TOOLS = [
 function argument(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
-}
-
-function isoDateDaysAgo(days) {
-  const value = new Date();
-  value.setUTCDate(value.getUTCDate() - days);
-  return value.toISOString().slice(0, 10);
 }
 
 function safeCode(value, fallback = "MCP_SMOKE_FAILED") {
@@ -611,7 +604,11 @@ function smartlightListSummary({
     itemCount: Number(result.count ?? result.items.length),
     total: Number(result.total ?? result.count ?? result.items.length),
     summary: result.summary ?? null,
+    dateRange: result.dateRange ?? null,
+    rangeSummary: result.rangeSummary ?? null,
+    summaryScope: result.summaryScope ?? null,
     filters: result.filters ?? null,
+    firstItem: result.items[0] ?? null,
     errorCode: null,
   };
 }
@@ -639,6 +636,7 @@ function smartlightOverviewSummary({
     identityLabel,
     cabinetTotal: Number(result.cabinetTotal),
     lampPostTotal: Number(result.lampPostTotal),
+    lampPostCounts: result.lampPostCounts ?? null,
     observedPrincipal: result.principal.name ?? null,
     errorCode: null,
   };
