@@ -1449,6 +1449,62 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def fail_task(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        error_code: str,
+        message: str,
+        causation_ref: str | None = None,
+    ) -> dict:
+        code = _required_text(error_code, "error_code", 120)
+        failure_message = _required_text(message, "message", 500)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["status"] == "failed":
+                return _task_from_row(task)
+            if task["status"] not in ACTIVE_TASK_STATUSES:
+                raise TaskIntegrityError(
+                    f"terminal task cannot be failed: {task['status']}"
+                )
+            summary = json.loads(task["summary_json"])
+            summary["failure"] = {
+                "code": code,
+                "message": failure_message,
+            }
+            connection.execute(
+                "UPDATE agent_tasks SET summary_json = ? WHERE task_id = ?",
+                (_canonical_json(summary), task_id),
+            )
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
+            self._update_task_state(
+                connection,
+                task_id=task_id,
+                status="failed",
+                current_operation_id=task["current_operation_id"],
+                current_interaction_id=task["current_interaction_id"],
+                now=now,
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.failed",
+                payload={"status": "failed", "errorCode": code},
+                causation_ref=causation_ref,
+                created_at=now,
+            )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
+
     def list_artifacts(
         self,
         *,
@@ -2933,6 +2989,7 @@ class TaskHubStore:
                             "task.completed",
                             "task.operation.succeeded",
                             "task.operation.failed",
+                            "task.failed",
                             "task.operation.outcome_unknown",
                         ]
                     ),

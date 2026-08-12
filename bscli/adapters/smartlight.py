@@ -431,7 +431,10 @@ class SmartlightCentralAdapter:
         items = _page_items(page_payload)
         normalized_items = [_normalize_alarm(item) for item in items]
         normalized_items.sort(
-            key=lambda item: str(item.get("lastTime") or item.get("time") or ""),
+            key=lambda item: (
+                str(item.get("lastActivityAt") or ""),
+                str(item.get("occurredAt") or ""),
+            ),
             reverse=True,
         )
         return {
@@ -450,9 +453,14 @@ class SmartlightCentralAdapter:
                 "checkedAt": datetime.now(timezone.utc).isoformat(),
             },
             "sort": {
-                "field": "lastTime",
+                "field": "lastActivityAt",
                 "direction": "desc",
                 "scope": "returned_page",
+            },
+            "timeSemantics": {
+                "recentField": "lastActivityAt",
+                "occurredAt": "Time when the alarm first occurred.",
+                "lastActivityAt": "Most recent alarm activity; use this for recent ordering.",
             },
             "items": normalized_items,
         }
@@ -491,6 +499,16 @@ class SmartlightCentralAdapter:
             "size": size,
             "total": _page_total(payload),
             "count": len(items),
+            "fieldSemantics": {
+                "progress": (
+                    "Downstream-reported task progress. Display it exactly and do not "
+                    "derive another percentage from device counts."
+                ),
+                "deviceCounts": (
+                    "Independent confirmed, lamp-post and RTU counts. Do not present "
+                    "confirmed/(lampPosts+rtus) as completed/total."
+                ),
+            },
             "items": [_normalize_inspection_task(item) for item in items],
         }
 
@@ -1041,16 +1059,20 @@ def _normalize_lamppost(item: dict) -> dict:
 
 
 def _normalize_alarm(item: dict) -> dict:
+    occurred_at = _first(
+        item,
+        "occurDate",
+        "alarmTime",
+        "hitchTime",
+        "createTime",
+    )
+    last_activity_at = _first(item, "lastDate", "lastTime") or occurred_at
     return {
         "id": _first(item, "hitchAlarmId", "alarmId", "id"),
-        "time": _first(
-            item,
-            "occurDate",
-            "alarmTime",
-            "hitchTime",
-            "createTime",
-        ),
-        "lastTime": _first(item, "lastDate", "lastTime"),
+        "occurredAt": occurred_at,
+        "lastActivityAt": last_activity_at,
+        "time": occurred_at,
+        "lastTime": last_activity_at,
         "device": _first(
             item,
             "controlCabinetName",
@@ -1086,11 +1108,17 @@ def _normalize_alarm(item: dict) -> dict:
 
 
 def _normalize_inspection_task(item: dict) -> dict:
+    state_code, state_label = _inspection_state(item)
+    confirmed_device_count = _first(item, "confirmDeviceNum")
+    lamp_post_count = _first(item, "lampostQty", "lampPostQty")
+    rtu_count = _first(item, "rtuQty")
     return {
         "id": _first(item, "inspectionTaskId", "taskId", "id"),
         "taskName": _first(item, "taskName", "inspectionTaskName"),
         "planName": _first(item, "planName", "inspectionPlanName"),
-        "state": _first(item, "taskStateName", "taskState", "state"),
+        "state": state_label or state_code,
+        "stateCode": state_code,
+        "stateLabel": state_label,
         "assignee": _first(item, "inspectionUserName", "taskUserName", "userName"),
         "inspectionGroup": _first(item, "groupName", "inspectionGroupName"),
         "startTime": _first(
@@ -1111,14 +1139,33 @@ def _normalize_inspection_task(item: dict) -> dict:
             "yesterdayTaskProgress",
             "yesterdayProgress",
         ),
-        "confirmedDeviceCount": _first(item, "confirmDeviceNum"),
-        "lampPostCount": _first(item, "lampostQty", "lampPostQty"),
-        "rtuCount": _first(item, "rtuQty"),
+        "confirmedDeviceCount": confirmed_device_count,
+        "lampPostCount": lamp_post_count,
+        "rtuCount": rtu_count,
+        "deviceCounts": {
+            "confirmed": confirmed_device_count,
+            "lampPosts": lamp_post_count,
+            "rtus": rtu_count,
+        },
+        "progressScope": "downstream_reported_independent_metric",
         "cycle": _first(item, "planCycleName"),
         "batch": _first(item, "planBatch"),
         "createdAt": _first(item, "addTime", "createdAt"),
         "createdBy": _first(item, "addUser", "createdBy"),
     }
+
+
+def _inspection_state(item: dict) -> tuple[object, object]:
+    raw_code = _first(item, "taskState", "state")
+    raw_label = _first(item, "taskStateName")
+    state_code = raw_code
+    if isinstance(raw_code, str) and raw_code.strip().isdigit():
+        state_code = int(raw_code.strip())
+    state_labels = {
+        1: "待执行",
+        2: "执行中",
+    }
+    return state_code, raw_label or state_labels.get(state_code)
 
 
 def _normalize_leakage(item: dict) -> dict:

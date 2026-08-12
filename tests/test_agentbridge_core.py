@@ -143,6 +143,50 @@ class AgentBridgeCoreTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(store.get(first["operationId"])["status"], "succeeded")
 
+    def test_capability_engine_accepts_json_schema_union_types(self):
+        with TemporaryDirectory() as tmp:
+            registry = CapabilityRegistry()
+            registry.register(
+                CapabilitySpec(
+                    name="smartlight.inspection_task.list",
+                    version="0.1.0",
+                    description="List inspection tasks.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "state": {"type": ["string", "integer", "null"]},
+                        },
+                        "additionalProperties": False,
+                    },
+                    output_schema={"type": "object"},
+                    effect="read",
+                    adapter="smartlight-central",
+                    workflow="inspection-list-v1",
+                )
+            )
+            store = OperationStore(Path(tmp) / "agentbridge.db")
+            engine = CapabilityEngine(registry=registry, operation_store=store)
+            engine.register_handler(
+                "smartlight.inspection_task.list",
+                lambda _context, arguments: {"state": arguments.get("state")},
+            )
+
+            for state in (2, "2", None):
+                response = engine.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.inspection_task.list",
+                    arguments={"state": state},
+                )
+                self.assertEqual(response["status"], "succeeded")
+                self.assertEqual(response["result"]["state"], state)
+
+            with self.assertRaisesRegex(ValueError, "must be"):
+                engine.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.inspection_task.list",
+                    arguments={"state": []},
+                )
+
     def test_capability_engine_records_requires_user_action(self):
         with TemporaryDirectory() as tmp:
             registry = CapabilityRegistry()

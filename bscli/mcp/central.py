@@ -566,14 +566,31 @@ def create_central_mcp_server(
                 operation_ids=[],
                 interaction_ids=[],
             )
-        response = await asyncio.to_thread(
-            service.invoke,
-            user_subject=identity["user_subject"],
-            capability_name=capability_name,
-            arguments=arguments,
-            idempotency_key=idempotency_key,
-            request_id=str(ctx.request_id),
-        )
+        try:
+            response = await asyncio.to_thread(
+                service.invoke,
+                user_subject=identity["user_subject"],
+                capability_name=capability_name,
+                arguments=arguments,
+                idempotency_key=idempotency_key,
+                request_id=str(ctx.request_id),
+            )
+        except Exception as exc:
+            if task_id:
+                try:
+                    await asyncio.to_thread(
+                        service.fail_host_task,
+                        user_subject=identity["user_subject"],
+                        task_id=task_id,
+                        error_code="MCP_TOOL_EXECUTION_FAILED",
+                        message=str(exc) or exc.__class__.__name__,
+                        causation_ref=str(ctx.request_id),
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "AgentBridge could not close a failed host task"
+                    )
+            raise
         if task_id:
             operation_id = response.get("operationId")
             interaction = response.get("interaction")
@@ -2129,7 +2146,9 @@ def create_central_mcp_server(
         name="smartlight_alarm_list",
         title="查询照明 RTU 告警",
         description=(
-            "按关键词查询 RTU 告警；列表按最近活动时间返回，汇总值是当前系统快照。"
+            "按关键词查询 RTU 告警；列表按 lastActivityAt 最近活动时间返回，"
+            "occurredAt 是首次发生时间。回答最近告警时优先展示最近活动时间，"
+            "需要时再补充首次发生时间；汇总值是当前系统快照。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2155,7 +2174,12 @@ def create_central_mcp_server(
     @mcp.tool(
         name="smartlight_inspection_task_list",
         title="查询照明巡检任务",
-        description="List inspection tasks, optionally filtered by task, plan, or state.",
+        description=(
+            "查询巡检任务，可按任务名、计划名或状态筛选。状态码 1 表示待执行，"
+            "2 表示执行中。progress 是下游系统独立给出的进度，必须原样展示；"
+            "confirmedDeviceCount、lampPostCount 和 rtuCount 是独立设备计数，"
+            "不得自行组合为完成数/总数或推导完成率。"
+        ),
         annotations=read_annotations,
         structured_output=True,
     )

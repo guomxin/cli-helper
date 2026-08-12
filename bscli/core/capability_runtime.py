@@ -168,7 +168,13 @@ def _validate_json_object(value: Any, schema: dict) -> None:
             raise ValueError(f"capability input {name!r} must be {expected}")
 
 
-def _matches_json_type(value: Any, expected: str) -> bool:
+def _matches_json_type(value: Any, expected: str | list[str]) -> bool:
+    if isinstance(expected, list):
+        return any(
+            _matches_json_type(value, candidate)
+            for candidate in expected
+            if isinstance(candidate, str)
+        )
     types = {
         "string": str,
         "object": dict,

@@ -195,6 +195,17 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("smartlight_leakage_summary", names)
         self.assertIn("smartlight_session_status", names)
         self.assertIn("smartlight_session_login", names)
+        smartlight_alarm_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_alarm_list"
+        )
+        self.assertIn("lastActivityAt", smartlight_alarm_tool["description"])
+        smartlight_inspection_tool = next(
+            tool
+            for tool in tools
+            if tool["name"] == "smartlight_inspection_task_list"
+        )
+        self.assertIn("状态码 1", smartlight_inspection_tool["description"])
+        self.assertIn("不得自行组合", smartlight_inspection_tool["description"])
         smartlight_leakage_tool = next(
             tool for tool in tools if tool["name"] == "smartlight_leakage_summary"
         )
@@ -962,6 +973,48 @@ class CentralMcpTests(unittest.TestCase):
                 "operation_ids": ["operation-1"],
                 "interaction_ids": [],
             },
+        )
+
+    def test_pre_operation_exception_closes_private_host_task_as_failed(self):
+        with self._server() as (service, _store, token, client):
+            service.observe_host_task.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "task": {"taskId": "task-1234567890-abcdef"},
+            }
+            service.fail_host_task.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "task": {
+                    "taskId": "task-1234567890-abcdef",
+                    "status": "failed",
+                },
+            }
+            service.invoke.side_effect = ValueError("invalid capability input")
+
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=22,
+                token=token,
+                params={
+                    "name": "oa_workflow_pending_list",
+                    "arguments": {"limit": 5},
+                    "_meta": {
+                        "io.agentbridge/task": {
+                            "taskId": "task-1234567890-abcdef",
+                        }
+                    },
+                },
+            )
+
+        self.assertTrue(response.json()["result"]["isError"])
+        service.fail_host_task.assert_called_once_with(
+            user_subject="user-a",
+            task_id="task-1234567890-abcdef",
+            error_code="MCP_TOOL_EXECUTION_FAILED",
+            message="invalid capability input",
+            causation_ref=ANY,
         )
 
     def test_login_card_defers_principal_resolution_to_system_session(self):

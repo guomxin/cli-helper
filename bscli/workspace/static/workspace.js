@@ -2054,6 +2054,7 @@ function eventLabel(type) {
       "task.operation.running": "操作执行中",
       "task.operation.succeeded": "操作成功",
       "task.operation.failed": "操作失败",
+      "task.failed": "任务失败",
       "task.operation.outcome_unknown": "操作结果待核对",
       "task.canceled": "任务已取消",
       "task.artifact.ready": "任务文件已就绪",

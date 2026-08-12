@@ -120,7 +120,7 @@ class SmartlightAdapterTests(unittest.TestCase):
         tasks = self.adapter.invoke_capability(
             SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
             worker,
-            {"task_name": "夜巡", "page": 1, "size": 10},
+            {"task_name": "夜巡", "state": 2, "page": 1, "size": 10},
         )
         leakage = self.adapter.invoke_capability(
             SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
@@ -136,9 +136,14 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
-        self.assertEqual(alarms["sort"]["field"], "lastTime")
+        self.assertEqual(alarms["sort"]["field"], "lastActivityAt")
         self.assertEqual(alarms["summaryScope"]["type"], "current_system_snapshot")
         self.assertEqual(alarms["items"][0]["id"], "alarm-1")
+        self.assertEqual(alarms["items"][0]["occurredAt"], "2026-08-10 10:05:38")
+        self.assertEqual(
+            alarms["items"][0]["lastActivityAt"],
+            "2026-08-12 10:30:02",
+        )
         self.assertEqual(alarms["items"][0]["type"], "电源缺相")
         self.assertEqual(alarms["items"][0]["message"], "电源缺相(B,C)")
         self.assertEqual(tasks["items"][0]["taskName"], "夜巡一组")
@@ -146,6 +151,16 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(tasks["items"][0]["startTime"], "2026-08-01")
         self.assertEqual(tasks["items"][0]["endTime"], "2026-08-31")
         self.assertEqual(tasks["items"][0]["progress"], "25.00%")
+        self.assertEqual(tasks["items"][0]["stateCode"], 2)
+        self.assertEqual(tasks["items"][0]["stateLabel"], "执行中")
+        self.assertEqual(
+            tasks["items"][0]["deviceCounts"],
+            {"confirmed": 4, "lampPosts": 12, "rtus": 2},
+        )
+        self.assertEqual(
+            tasks["items"][0]["progressScope"],
+            "downstream_reported_independent_metric",
+        )
         self.assertEqual(leakage["summary"]["untreated"], 1)
         self.assertEqual(leakage["rangeSummary"], {"recordTotal": 1})
         self.assertFalse(leakage["summaryScope"]["dateRangeApplied"])
@@ -162,6 +177,13 @@ class SmartlightAdapterTests(unittest.TestCase):
         count_query = json.loads(parse_qs(count_request["body"])["json"][0])
         self.assertEqual(count_query["_timebegin_lastDate"], "")
         self.assertEqual(count_query["_timeend_lastDate"], "")
+        task_request = next(
+            item
+            for item in worker.api_requests
+            if item["path"].endswith("/inspectionTask/getDataByCondition")
+        )
+        task_query = json.loads(parse_qs(task_request["body"])["json"][0])
+        self.assertEqual(task_query["_taskState"], 2)
 
     def test_relative_date_range_is_computed_in_business_timezone(self):
         start, end, source, last_days = _resolve_date_range(
@@ -391,6 +413,7 @@ class FakeSmartlightWorker:
                             "groupName": "一号巡检组",
                             "taskStartDate": "2026-08-01",
                             "taskDeadline": "2026-08-31",
+                            "taskState": 2,
                             "taskProgress": "25.00%",
                             "confirmDeviceNum": 4,
                             "lampostQty": 12,

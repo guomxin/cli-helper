@@ -4012,7 +4012,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "按关键词查询 RTU 告警；列表按最近活动时间返回，汇总值是当前系统快照。",
+      "description": "按关键词查询 RTU 告警；列表按 lastActivityAt 最近活动时间返回，occurredAt 是首次发生时间。回答最近告警时优先展示最近活动时间，需要时再补充首次发生时间；汇总值是当前系统快照。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -4074,7 +4074,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List inspection tasks, optionally filtered by task, plan, or state.",
+      "description": "查询巡检任务，可按任务名、计划名或状态筛选。状态码 1 表示待执行，2 表示执行中。progress 是下游系统独立给出的进度，必须原样展示；confirmedDeviceCount、lampPostCount 和 rtuCount 是独立设备计数，不得自行组合为完成数/总数或推导完成率。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {

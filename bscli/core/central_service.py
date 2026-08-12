@@ -1473,6 +1473,28 @@ class CentralCapabilityService:
             },
         }
 
+    def fail_host_task(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        error_code: str,
+        message: str,
+        causation_ref: str | None = None,
+    ) -> dict:
+        task = self.tasks.fail_task(
+            task_id=task_id,
+            user_subject=user_subject,
+            error_code=error_code,
+            message=message,
+            causation_ref=causation_ref,
+        )
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "task": task_response(task),
+        }
+
     def recover_host_tasks(
         self,
         *,
@@ -4037,6 +4059,7 @@ def _task_notification_message(task: dict, event: dict) -> str:
     if event_type in {
         "task.interaction.failed",
         "task.operation.failed",
+        "task.failed",
     }:
         return f"{title}：执行失败，请查看任务详情。"
     if event_type == "task.operation.outcome_unknown":

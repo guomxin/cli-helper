@@ -496,6 +496,64 @@ class TaskHubStoreTests(unittest.TestCase):
             1,
         )
 
+    def test_fails_unlinked_host_task_once_and_notifies_companion(self):
+        origin, _ = self._endpoint()
+        companion, _ = self.store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:2002",
+            client_type="telegram",
+            external_subject="2002",
+            conversation_ref="agent:main:telegram:direct:2002",
+            capabilities=["direct_status"],
+        )
+        task, _ = self._task(origin["endpoint_id"])
+
+        failed = self.store.fail_task(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            error_code="MCP_TOOL_EXECUTION_FAILED",
+            message="Capability input validation failed.",
+            causation_ref="request-a",
+        )
+        failed_again = self.store.fail_task(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            error_code="MCP_TOOL_EXECUTION_FAILED",
+            message="Capability input validation failed.",
+            causation_ref="request-a",
+        )
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed_again["version"], failed["version"])
+        self.assertEqual(
+            failed["summary"]["failure"]["code"],
+            "MCP_TOOL_EXECUTION_FAILED",
+        )
+        events = self.store.list_events(
+            task_id=task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertEqual(
+            [event["event_type"] for event in events].count("task.failed"),
+            1,
+        )
+        companion_outbox = self.store.list_outbox(
+            user_subject="user-a",
+            endpoint_id=companion["endpoint_id"],
+        )
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in companion_outbox
+                    if item["payload"].get("eventType") == "task.failed"
+                ]
+            ),
+            1,
+        )
+
     def test_cross_endpoint_continuation_choices_persist_and_select_owned_task(self):
         workspace, _ = self.store.ensure_endpoint(
             user_subject="user-a",
