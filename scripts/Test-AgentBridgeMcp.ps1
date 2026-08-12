@@ -16,6 +16,7 @@ param(
         "SmartlightInspectionDetail",
         "SmartlightAlarmAnalysis",
         "SmartlightLeakageAnalysis",
+        "SmartlightReport",
         "OaPendingRead",
         "OaPendingInspect",
         "CertificateSearch",
@@ -57,6 +58,8 @@ param(
     [string]$YuqueDocument = "",
     [ValidateSet("cabinet", "rtu", "lamppost")]
     [string]$SmartlightAssetType = "rtu",
+    [ValidateSet("alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress")]
+    [string]$SmartlightReportType = "alarm_analysis",
     [string]$SmartlightAssetId = "",
     [string]$SmartlightTaskId = "",
     [string]$SmartlightDetailDate = "",
@@ -287,6 +290,18 @@ try {
             throw "SmartlightTaskId is required for the selected check"
         }
         $nodeArguments += @("--smartlight-task-id", $SmartlightTaskId)
+        if ($SmartlightDetailDate) {
+            $nodeArguments += @("--smartlight-detail-date", $SmartlightDetailDate)
+        }
+    }
+    if ($Check -eq "SmartlightReport") {
+        $nodeArguments += @(
+            "--smartlight-report-type", $SmartlightReportType,
+            "--smartlight-asset-type", $SmartlightAssetType
+        )
+        if ($SmartlightTaskId) {
+            $nodeArguments += @("--smartlight-task-id", $SmartlightTaskId)
+        }
         if ($SmartlightDetailDate) {
             $nodeArguments += @("--smartlight-detail-date", $SmartlightDetailDate)
         }

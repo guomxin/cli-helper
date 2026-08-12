@@ -107,6 +107,14 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightReport",
+    {
+      tool: "smartlight_report_export",
+      arguments: { report_type: "alarm_analysis", last_days: 30, top_n: 5 },
+      kind: "smartlightReport",
+    },
+  ],
+  [
     "OaPendingRead",
     { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
   ],
@@ -265,6 +273,7 @@ const REQUIRED_RELEASE_TOOLS = [
   "smartlight_alarm_analysis",
   "smartlight_inspection_task_detail",
   "smartlight_leakage_analysis",
+  "smartlight_report_export",
   "smartlight_session_status",
   "smartlight_session_login",
   "yuque_public_books_list",
@@ -349,6 +358,47 @@ try {
     }
     check.arguments = { task_id: taskId };
     if (detailDate) check.arguments.detail_date = detailDate;
+  }
+  if (checkName === "SmartlightReport") {
+    const reportType = argument(
+      "--smartlight-report-type",
+      "alarm_analysis",
+    ).trim();
+    const assetType = argument("--smartlight-asset-type", "rtu").trim();
+    const taskId = argument("--smartlight-task-id", "").trim();
+    const detailDate = argument("--smartlight-detail-date", "").trim();
+    if (
+      ![
+        "alarm_analysis",
+        "leakage_analysis",
+        "asset_inventory",
+        "inspection_progress",
+      ].includes(reportType)
+    ) {
+      throw Object.assign(new Error("Smartlight report type is invalid"), {
+        code: "SMARTLIGHT_REPORT_TYPE_INVALID",
+      });
+    }
+    check.arguments = { report_type: reportType };
+    if (["alarm_analysis", "leakage_analysis"].includes(reportType)) {
+      check.arguments.last_days = 30;
+      check.arguments.top_n = 5;
+    } else if (reportType === "asset_inventory") {
+      if (!["cabinet", "rtu", "lamppost"].includes(assetType)) {
+        throw Object.assign(new Error("Smartlight asset type is invalid"), {
+          code: "SMARTLIGHT_ASSET_ARGUMENTS_INVALID",
+        });
+      }
+      check.arguments.asset_type = assetType;
+    } else {
+      if (!taskId) {
+        throw Object.assign(new Error("Smartlight task ID is required"), {
+          code: "SMARTLIGHT_TASK_ID_REQUIRED",
+        });
+      }
+      check.arguments.task_id = taskId;
+      if (detailDate) check.arguments.detail_date = detailDate;
+    }
   }
   if (
     ["YuqueDocumentCatalog", "YuqueDocumentSearch", "YuqueDocumentRead"].includes(
@@ -503,6 +553,7 @@ try {
       "smartlight_alarm_analysis",
       "smartlight_inspection_task_detail",
       "smartlight_leakage_analysis",
+      "smartlight_report_export",
       "smartlight_session_status",
       "smartlight_session_login",
     ]);
@@ -718,6 +769,14 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "smartlightReport"
+          ? await smartlightReportSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "pendingInspect"
           ? {
               status: "succeeded",
@@ -924,6 +983,83 @@ function smartlightInspectionDetailSummary({
     detailDateFound: result.detailDateFound ?? null,
     clockinCount: result.clockinCount ?? null,
     errorCode: null,
+  };
+}
+
+async function smartlightReportSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode || result?.status !== "succeeded") {
+    throw Object.assign(new Error("Smartlight report export failed"), {
+      code: errorCode || "SMARTLIGHT_REPORT_EXPORT_FAILED",
+    });
+  }
+  const file = result?.file;
+  const report = result?.report;
+  if (
+    result?.schemaVersion !== "agentbridge.document_delivery.v1" ||
+    file?.contentType !== "text/csv" ||
+    typeof file?.mediaUrl !== "string" ||
+    !file.mediaUrl.startsWith("https://") ||
+    !String(file?.filename || "").toLowerCase().endsWith(".csv") ||
+    !report?.reportType
+  ) {
+    throw Object.assign(new Error("Smartlight report contract mismatch"), {
+      code: "SMARTLIGHT_REPORT_CONTRACT_MISMATCH",
+    });
+  }
+  const response = await fetch(file.mediaUrl, {
+    headers: { Accept: "text/csv" },
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!response.ok) {
+    throw Object.assign(new Error("Smartlight report download failed"), {
+      code: `SMARTLIGHT_REPORT_DOWNLOAD_HTTP_${response.status}`,
+    });
+  }
+  const contentType = String(response.headers.get("content-type") || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  const body = Buffer.from(await response.arrayBuffer());
+  if (
+    contentType !== "text/csv" ||
+    body.length < 3 ||
+    body[0] !== 0xef ||
+    body[1] !== 0xbb ||
+    body[2] !== 0xbf
+  ) {
+    throw Object.assign(new Error("Smartlight report file is invalid"), {
+      code: "SMARTLIGHT_REPORT_FILE_INVALID",
+    });
+  }
+  const expiresAt = Date.parse(String(file.expiresAt || ""));
+  const remainingSeconds = Math.round((expiresAt - Date.now()) / 1000);
+  if (!Number.isFinite(expiresAt) || remainingSeconds < 1_680 || remainingSeconds > 1_800) {
+    throw Object.assign(new Error("Smartlight report TTL is invalid"), {
+      code: "SMARTLIGHT_REPORT_TTL_INVALID",
+    });
+  }
+  const text = body.subarray(3).toString("utf8");
+  const lineCount = text ? text.split(/\r?\n/).filter(Boolean).length : 0;
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    reportType: report.reportType,
+    rowCount: Number(report.rowCount ?? 0),
+    truncated: Boolean(report?.metadata?.truncated),
+    filename: file.filename,
+    contentType,
+    byteSize: body.length,
+    csvLineCount: lineCount,
+    hasUtf8Bom: true,
+    remainingSeconds,
+    errorCode,
   };
 }
 
