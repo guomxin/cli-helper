@@ -129,6 +129,9 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(overview["lampPostTotal"], 116)
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
+        self.assertEqual(alarms["items"][0]["id"], "alarm-1")
+        self.assertEqual(alarms["items"][0]["type"], "电源缺相")
+        self.assertEqual(alarms["items"][0]["message"], "电源缺相(B,C)")
         self.assertEqual(tasks["items"][0]["taskName"], "夜巡一组")
         self.assertEqual(leakage["summary"]["untreated"], 1)
         self.assertEqual(leakage["items"][0]["value"], 12)
@@ -303,7 +306,21 @@ class FakeSmartlightWorker:
             return _response(
                 {
                     "RtuHisHitchAlarm": {
-                        "list": [{"alarmId": "alarm-1", "alarmContent": "掉线"}],
+                    "list": [
+                        {
+                            "hitchAlarmId": "alarm-1",
+                            "hitchName": "电源缺相",
+                            "hitchIntro": "电源缺相(B,C)",
+                            "occurDate": "2026-08-10 10:05:38",
+                            "lastDate": "2026-08-12 10:30:02",
+                            "rtuCode": "05312222",
+                            "rtuName": "实验室控制柜",
+                            "weightFacto": 1,
+                            "conductStatue": 0,
+                            "workAreaName": "实验室工区",
+                            "groupName": "RTU分组测试",
+                        }
+                    ],
                         "totalCount": 1,
                     },
                     "todayAlarm": 3,

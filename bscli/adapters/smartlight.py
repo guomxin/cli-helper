@@ -925,18 +925,46 @@ def _normalize_lamppost(item: dict) -> dict:
 
 def _normalize_alarm(item: dict) -> dict:
     return {
-        "id": _first(item, "alarmId", "id"),
-        "time": _first(item, "alarmTime", "hitchTime", "createTime"),
+        "id": _first(item, "hitchAlarmId", "alarmId", "id"),
+        "time": _first(
+            item,
+            "occurDate",
+            "alarmTime",
+            "hitchTime",
+            "createTime",
+        ),
+        "lastTime": _first(item, "lastDate", "lastTime"),
         "device": _first(
             item,
             "controlCabinetName",
             "rtuName",
             "deviceName",
         ),
-        "type": _first(item, "alarmTypeName", "hitchTypeName", "alarmName"),
-        "level": _first(item, "alarmLevelName", "alarmLevel"),
-        "state": _first(item, "alarmStateName", "alarmState", "dealState"),
-        "message": _first(item, "alarmContent", "hitchContent", "description"),
+        "deviceCode": _first(item, "rtuCode", "controlCabinetCode", "deviceCode"),
+        "type": _first(
+            item,
+            "hitchName",
+            "alarmTypeName",
+            "hitchTypeName",
+            "alarmName",
+        ),
+        "level": _first(item, "alarmLevelName", "alarmLevel", "weightFacto"),
+        "state": _first(
+            item,
+            "alarmStateName",
+            "alarmState",
+            "dealState",
+            "conductStatue",
+        ),
+        "message": _first(
+            item,
+            "hitchIntro",
+            "alarmContent",
+            "hitchContent",
+            "description",
+        ),
+        "workArea": _first(item, "workAreaName"),
+        "group": _first(item, "groupName"),
     }
 
 
