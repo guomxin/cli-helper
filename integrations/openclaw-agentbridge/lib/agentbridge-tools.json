@@ -3915,7 +3915,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Summarize visible lighting cabinets and lamp posts.",
+      "description": "汇总可见控制柜，并分别返回可检索灯杆数和地图明细灯杆数。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -3941,7 +3941,7 @@
         "title": "smartlight_system_overviewDictOutput",
         "type": "object"
       },
-      "title": "Summarize Smartlight System"
+      "title": "照明系统概览"
     },
     {
       "annotations": {
@@ -4003,7 +4003,7 @@
         "title": "smartlight_lamppost_listDictOutput",
         "type": "object"
       },
-      "title": "List Smartlight Lamp Posts"
+      "title": "查询照明灯杆"
     },
     {
       "annotations": {
@@ -4012,7 +4012,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List RTU alarms visible to the authenticated lighting-system user.",
+      "description": "按关键词查询 RTU 告警；列表按最近活动时间返回，汇总值是当前系统快照。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -4065,7 +4065,7 @@
         "title": "smartlight_alarm_listDictOutput",
         "type": "object"
       },
-      "title": "List Smartlight RTU Alarms"
+      "title": "查询照明 RTU 告警"
     },
     {
       "annotations": {
@@ -4155,7 +4155,7 @@
         "title": "smartlight_inspection_task_listDictOutput",
         "type": "object"
       },
-      "title": "List Smartlight Inspection Tasks"
+      "title": "查询照明巡检任务"
     },
     {
       "annotations": {
@@ -4164,7 +4164,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Summarize lamp leakage records in an optional date range.",
+      "description": "查询指定日期或最近 N 天的漏电记录。相对时间请直接传 last_days，不要调用其他时间或会话工具。summary 是不受日期范围限制的当前系统快照，日期范围内记录数见 rangeSummary。",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -4192,6 +4192,20 @@
             ],
             "default": null,
             "title": "Idempotency Key"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
           },
           "page": {
             "default": 1,
@@ -4230,7 +4244,7 @@
         "title": "smartlight_leakage_summaryDictOutput",
         "type": "object"
       },
-      "title": "Summarize Smartlight Leakage Records"
+      "title": "查询照明漏电记录"
     },
     {
       "annotations": {
@@ -4251,7 +4265,7 @@
         "title": "smartlight_session_statusDictOutput",
         "type": "object"
       },
-      "title": "Verify Smartlight Session Status"
+      "title": "检查照明系统登录状态"
     },
     {
       "_meta": {
@@ -4290,7 +4304,7 @@
         "title": "smartlight_session_loginDictOutput",
         "type": "object"
       },
-      "title": "Ensure Smartlight Session Login"
+      "title": "登录照明实验室测试系统"
     },
     {
       "annotations": {

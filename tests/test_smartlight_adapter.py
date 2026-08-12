@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
 from urllib.parse import parse_qs, urlparse
 import unittest
 
@@ -12,6 +14,7 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
+    _resolve_date_range,
     build_smartlight_capability_registry,
 )
 
@@ -126,18 +129,63 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(overview["cabinetTotal"], 1)
-        self.assertEqual(overview["lampPostTotal"], 116)
+        self.assertEqual(overview["lampPostTotal"], 131)
+        self.assertEqual(
+            overview["lampPostCounts"],
+            {"searchable": 131, "mapDetail": 116},
+        )
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
+        self.assertEqual(alarms["sort"]["field"], "lastTime")
+        self.assertEqual(alarms["summaryScope"]["type"], "current_system_snapshot")
         self.assertEqual(alarms["items"][0]["id"], "alarm-1")
         self.assertEqual(alarms["items"][0]["type"], "电源缺相")
         self.assertEqual(alarms["items"][0]["message"], "电源缺相(B,C)")
         self.assertEqual(tasks["items"][0]["taskName"], "夜巡一组")
+        self.assertEqual(tasks["items"][0]["inspectionGroup"], "一号巡检组")
+        self.assertEqual(tasks["items"][0]["startTime"], "2026-08-01")
+        self.assertEqual(tasks["items"][0]["endTime"], "2026-08-31")
+        self.assertEqual(tasks["items"][0]["progress"], "25.00%")
         self.assertEqual(leakage["summary"]["untreated"], 1)
+        self.assertEqual(leakage["rangeSummary"], {"recordTotal": 1})
+        self.assertFalse(leakage["summaryScope"]["dateRangeApplied"])
+        self.assertEqual(leakage["dateRange"]["source"], "explicit")
         self.assertEqual(leakage["items"][0]["value"], 12)
         self.assertTrue(
             all("x-Authentication-Token" in headers for headers in worker.api_headers)
         )
+        count_request = next(
+            item
+            for item in worker.api_requests
+            if item["path"].endswith("/lHisHitchAlarm/getCountDataByCondition")
+        )
+        count_query = json.loads(parse_qs(count_request["body"])["json"][0])
+        self.assertEqual(count_query["_timebegin_lastDate"], "")
+        self.assertEqual(count_query["_timeend_lastDate"], "")
+
+    def test_relative_date_range_is_computed_in_business_timezone(self):
+        start, end, source, last_days = _resolve_date_range(
+            {"last_days": 30},
+            now=datetime(
+                2026,
+                8,
+                12,
+                1,
+                30,
+                tzinfo=timezone(timedelta(hours=8)),
+            ),
+        )
+
+        self.assertEqual(start, "2026-07-14")
+        self.assertEqual(end, "2026-08-12")
+        self.assertEqual(source, "last_days")
+        self.assertEqual(last_days, 30)
+
+    def test_relative_and_explicit_date_ranges_cannot_be_mixed(self):
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            _resolve_date_range(
+                {"last_days": 30, "start_date": "2026-08-01"}
+            )
 
     def test_registry_contains_five_read_only_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
@@ -171,6 +219,7 @@ class FakeSmartlightWorker:
         self.cas_headers: dict = {}
         self.captcha_headers: dict = {}
         self.api_headers: list[dict] = []
+        self.api_requests: list[dict] = []
         self.login_rejection = login_rejection
         self.login_completed = authenticated
         if authenticated:
@@ -276,6 +325,9 @@ class FakeSmartlightWorker:
                 }
             )
         self.api_headers.append(dict(kwargs.get("headers") or {}))
+        self.api_requests.append(
+            {"path": path, "body": str(kwargs.get("body") or "")}
+        )
         if path.endswith("/map/getIntegratedRControlCabinetDataByCondition"):
             return _response(
                 [
@@ -299,7 +351,7 @@ class FakeSmartlightWorker:
                             "StreetName": "测试路",
                         }
                     ],
-                    "totalCount": 1,
+                    "totalCount": 131,
                 }
             )
         if path.endswith("/rHisHitchAlarm/getDataByRtuAlarm"):
@@ -331,7 +383,20 @@ class FakeSmartlightWorker:
         if path.endswith("/inspectionTask/getDataByCondition"):
             return _response(
                 {
-                    "list": [{"taskId": "task-1", "taskName": "夜巡一组"}],
+                    "list": [
+                        {
+                            "taskId": "task-1",
+                            "taskName": "夜巡一组",
+                            "planName": "夜巡计划",
+                            "groupName": "一号巡检组",
+                            "taskStartDate": "2026-08-01",
+                            "taskDeadline": "2026-08-31",
+                            "taskProgress": "25.00%",
+                            "confirmDeviceNum": 4,
+                            "lampostQty": 12,
+                            "rtuQty": 2,
+                        }
+                    ],
                     "totalCount": 1,
                 }
             )

@@ -1116,6 +1116,110 @@ class TaskHubStoreTests(unittest.TestCase):
             [],
         )
 
+    def test_reused_task_keeps_its_original_title(self):
+        endpoint, _ = self._endpoint()
+        first, reused = self.store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="shared-smartlight-turn",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref="agent:main:telegram:direct:1001",
+            title="照明系统概览",
+        )
+        second, reused_again = self.store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="shared-smartlight-turn",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref="agent:main:telegram:direct:1001",
+            title="查询照明漏电记录",
+        )
+
+        self.assertFalse(reused)
+        self.assertTrue(reused_again)
+        self.assertEqual(first["task_id"], second["task_id"])
+        self.assertEqual(second["title"], "照明系统概览")
+
+    def test_completed_standalone_credential_interaction_finishes_task_once(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        pending = self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "credential-standalone",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "credential-standalone",
+                "type": "credential",
+                "state": "pending",
+            },
+        )
+        completed = self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "credential-standalone",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "credential-standalone",
+                "type": "credential",
+                "state": "completed",
+            },
+        )
+        completed_again = self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "credential-standalone",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "credential-standalone",
+                "type": "credential",
+                "state": "completed",
+            },
+        )
+
+        self.assertEqual(pending["status"], "waiting_user")
+        self.assertEqual(completed["status"], "succeeded")
+        self.assertIsNotNone(completed["finished_at"])
+        self.assertEqual(completed_again["version"], completed["version"])
+
+    def test_completed_credential_with_business_operation_stays_resumable(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        task = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-needs-login",
+                "user_subject": "user-a",
+                "capability_name": "smartlight.system.overview",
+                "status": "requires_user_action",
+                "error": {"code": "LOGIN_REQUIRED"},
+            },
+        )
+        for state in ("pending", "completed"):
+            task = self.store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record={
+                    "interaction_id": "credential-for-operation",
+                    "user_subject": "user-a",
+                },
+                interaction={
+                    "interactionId": "credential-for-operation",
+                    "type": "credential",
+                    "state": state,
+                },
+            )
+
+        self.assertEqual(task["status"], "active")
+        self.assertIsNone(task["finished_at"])
+
     def test_superseded_interaction_finishes_task_and_new_operation_reopens_it(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])
@@ -1585,6 +1689,70 @@ class TaskHubStoreTests(unittest.TestCase):
                 "expires_at": "2099-07-30T00:30:00+00:00",
             },
         )
+
+        repaired_store = TaskHubStore(db_path)
+        repaired = repaired_store.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+
+        self.assertEqual(repaired["status"], "succeeded")
+        self.assertIsNotNone(repaired["finished_at"])
+
+    def test_initialization_repairs_legacy_completed_standalone_login_task(self):
+        db_path = Path(self.temp.name) / "repair-login-task.db"
+        interactions = InteractionStore(db_path)
+        task_store = TaskHubStore(db_path)
+        endpoint, _ = task_store.ensure_endpoint(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref="agent:main:workspace:direct:account-a",
+        )
+        task, _ = task_store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="workspace|smartlight-login",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref=endpoint["conversation_ref"],
+            title="登录照明实验室测试系统",
+        )
+        record = interactions.register(
+            interaction_type="credential",
+            user_subject="user-a",
+            system_id="smartlight",
+            session_id="session-a",
+            resource_id="challenge-a",
+            title="登录照明实验室测试系统",
+            message="请完成登录",
+            display={},
+            resume_spec={"kind": "session_ready", "systemId": "smartlight"},
+            created_at="2026-08-12T01:00:00+00:00",
+            expires_at="2026-08-12T01:10:00+00:00",
+        )
+        for state in ("pending", "completed"):
+            task_store.link_interaction(
+                task_id=task["task_id"],
+                user_subject="user-a",
+                interaction_record=record,
+                interaction={
+                    "interactionId": record["interaction_id"],
+                    "type": "credential",
+                    "state": state,
+                },
+            )
+        with task_store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = 'active', finished_at = NULL
+                WHERE task_id = ?
+                """,
+                (task["task_id"],),
+            )
 
         repaired_store = TaskHubStore(db_path)
         repaired = repaired_store.get_task(

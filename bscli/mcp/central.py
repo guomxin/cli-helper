@@ -2083,8 +2083,8 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_system_overview",
-        title="Summarize Smartlight System",
-        description="Summarize visible lighting cabinets and lamp posts.",
+        title="照明系统概览",
+        description="汇总可见控制柜，并分别返回可检索灯杆数和地图明细灯杆数。",
         annotations=read_annotations,
         structured_output=True,
     )
@@ -2102,7 +2102,7 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_lamppost_list",
-        title="List Smartlight Lamp Posts",
+        title="查询照明灯杆",
         description="List lamp posts visible to the authenticated lighting-system user.",
         annotations=read_annotations,
         structured_output=True,
@@ -2127,8 +2127,10 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_alarm_list",
-        title="List Smartlight RTU Alarms",
-        description="List RTU alarms visible to the authenticated lighting-system user.",
+        title="查询照明 RTU 告警",
+        description=(
+            "按关键词查询 RTU 告警；列表按最近活动时间返回，汇总值是当前系统快照。"
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
@@ -2152,7 +2154,7 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_inspection_task_list",
-        title="List Smartlight Inspection Tasks",
+        title="查询照明巡检任务",
         description="List inspection tasks, optionally filtered by task, plan, or state.",
         annotations=read_annotations,
         structured_output=True,
@@ -2184,8 +2186,12 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_leakage_summary",
-        title="Summarize Smartlight Leakage Records",
-        description="Summarize lamp leakage records in an optional date range.",
+        title="查询照明漏电记录",
+        description=(
+            "查询指定日期或最近 N 天的漏电记录。相对时间请直接传 last_days，"
+            "不要调用其他时间或会话工具。summary 是不受日期范围限制的当前系统"
+            "快照，日期范围内记录数见 rangeSummary。"
+        ),
         annotations=read_annotations,
         structured_output=True,
     )
@@ -2193,6 +2199,7 @@ def create_central_mcp_server(
         ctx: Context,
         start_date: Annotated[str | None, Field(max_length=10)] = None,
         end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=3660)] = None,
         page: Annotated[int, Field(ge=1, le=10000)] = 1,
         size: Annotated[int, Field(ge=1, le=100)] = 20,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -2202,6 +2209,8 @@ def create_central_mcp_server(
             arguments["start_date"] = start_date
         if end_date is not None:
             arguments["end_date"] = end_date
+        if last_days is not None:
+            arguments["last_days"] = last_days
         return await invoke(
             ctx,
             SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
@@ -2212,7 +2221,7 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_session_status",
-        title="Verify Smartlight Session Status",
+        title="检查照明系统登录状态",
         description="Verify the authenticated caller's central Smartlight CAS/JWT session.",
         annotations=read_annotations,
         structured_output=True,
@@ -2230,7 +2239,7 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="smartlight_session_login",
-        title="Ensure Smartlight Session Login",
+        title="登录照明实验室测试系统",
         meta=interaction_tool_meta(),
         description=(
             "Reuse a valid Smartlight session or open a trusted CAPTCHA login card. "

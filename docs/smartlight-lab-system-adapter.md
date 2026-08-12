@@ -11,15 +11,28 @@
 
 | MCP 工具 | 业务含义 | AgentBridge capability |
 | --- | --- | --- |
-| `smartlight_system_overview` | 控制柜、灯杆总量与状态概览 | `smartlight.system.overview` |
+| `smartlight_system_overview` | 控制柜、可检索灯杆与地图明细灯杆概览 | `smartlight.system.overview` |
 | `smartlight_lamppost_list` | 按关键词分页查询灯杆 | `smartlight.lamppost.list` |
-| `smartlight_alarm_list` | 查询 RTU 告警 | `smartlight.alarm.list` |
-| `smartlight_inspection_task_list` | 按任务、计划和状态查询巡检任务 | `smartlight.inspection_task.list` |
-| `smartlight_leakage_summary` | 按日期查询漏电记录与汇总 | `smartlight.leakage.summary` |
+| `smartlight_alarm_list` | 查询 RTU 告警和当前系统快照 | `smartlight.alarm.list` |
+| `smartlight_inspection_task_list` | 按任务、计划和状态查询巡检组、进度及设备数 | `smartlight.inspection_task.list` |
+| `smartlight_leakage_summary` | 按日期或最近 N 天查询漏电记录 | `smartlight.leakage.summary` |
 | `smartlight_session_status` | 检查当前用户登录会话 | - |
 | `smartlight_session_login` | 发起可信登录卡 | - |
 
 本期不开放开关灯、远程控制、参数配置、告警处理、删除、新增或修改业务数据。
+
+### 读取口径
+
+- 概览中的 `lampPostTotal` 与灯杆列表使用同一“可检索灯杆”口径；原地图明细接口的
+  数量保留在 `lampPostCounts.mapDetail`，避免把两个页面的 131 和 116 误认为同一
+  指标。
+- RTU 告警的 `summary` 是查询时刻的系统看板快照，不是当前分页的统计结果；列表按
+  `lastTime` 在返回页内倒序排列。
+- 漏电查询支持 `last_days`，AgentBridge 按 `Asia/Shanghai` 在服务端计算闭区间，
+  智能体无需先调用通用时间工具。`rangeSummary.recordTotal` 是日期范围内记录数；
+  `summary` 来自目标系统的全局实时看板，明确标记为不应用日期范围。
+- 巡检任务返回巡检组、任务开始日、截止日、进度、已确认设备数、灯杆数和 RTU 数；
+  目标接口没有人员字段时不会把巡检组冒充为个人负责人。
 
 ## 二、登录路线
 

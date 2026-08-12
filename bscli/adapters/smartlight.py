@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from html.parser import HTMLParser
 import json
@@ -41,6 +41,12 @@ _CAS_HTML_HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     ),
 }
+
+_SMARTLIGHT_BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
+_SMARTLIGHT_BUSINESS_TIMEZONE = timezone(
+    timedelta(hours=8),
+    name=_SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+)
 
 
 class SmartlightLoginRequired(AdapterLoginRequired):
@@ -336,12 +342,32 @@ class SmartlightCentralAdapter:
                 "organroleId": context["organroleId"],
             },
         )
+        searchable_lampposts = self._authorized_post_json(
+            worker,
+            "/lLamppost/getDataByConditionForFacilityEx",
+            {
+                "json": _json_text(_lamppost_filters(context, "")),
+                "orderBy": "lamp_post_code",
+                "pageNum": 1,
+                "pageSize": 1,
+                "organroleId": context["organroleId"],
+            },
+        )
         cabinet_items = cabinets if isinstance(cabinets, list) else []
-        lamp_total = _page_total(lampposts)
+        map_lamp_total = _page_total(lampposts)
+        searchable_lamp_total = _page_total(searchable_lampposts)
         return {
             "principal": context,
             "cabinetTotal": len(cabinet_items),
-            "lampPostTotal": lamp_total,
+            "lampPostTotal": searchable_lamp_total,
+            "lampPostCounts": {
+                "searchable": searchable_lamp_total,
+                "mapDetail": map_lamp_total,
+            },
+            "countSemantics": {
+                "lampPostTotal": "searchable_lamppost_list",
+                "lampPostCounts.mapDetail": "map_detail_inventory",
+            },
             "cabinetStates": _count_values(
                 cabinet_items,
                 ("onlineState", "state", "rtuState", "alarmState"),
@@ -363,22 +389,7 @@ class SmartlightCentralAdapter:
             "/lLamppost/getDataByConditionForFacilityEx",
             {
                 "json": _json_text(
-                    {
-                        "labels": [],
-                        "_like_params": keyword,
-                        "_like_cabinet": "",
-                        "_like_imei": "",
-                        "_include_streetId": [],
-                        "_include_controlCabinetId": [],
-                        "_include_lampPostTypeId": None,
-                        "_include_materialTypeId": [],
-                        "_include_workAreaId": [],
-                        "_include_streetSideId": [],
-                        "_timebegin_addDate": "",
-                        "_timeend_addDate": "",
-                        "oddEvenNumber": None,
-                        "userId": context["userId"],
-                    }
+                    _lamppost_filters(context, keyword)
                 ),
                 "orderBy": "lamp_post_code",
                 "pageNum": page,
@@ -418,6 +429,11 @@ class SmartlightCentralAdapter:
         )
         page_payload = payload.get("RtuHisHitchAlarm") if isinstance(payload, dict) else payload
         items = _page_items(page_payload)
+        normalized_items = [_normalize_alarm(item) for item in items]
+        normalized_items.sort(
+            key=lambda item: str(item.get("lastTime") or item.get("time") or ""),
+            reverse=True,
+        )
         return {
             "keyword": keyword or None,
             "page": page,
@@ -428,7 +444,17 @@ class SmartlightCentralAdapter:
                 payload,
                 ("todayAlarm", "untreated", "yesterdayAlarm"),
             ),
-            "items": [_normalize_alarm(item) for item in items],
+            "summaryScope": {
+                "type": "current_system_snapshot",
+                "pageFiltered": False,
+                "checkedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            "sort": {
+                "field": "lastTime",
+                "direction": "desc",
+                "scope": "returned_page",
+            },
+            "items": normalized_items,
         }
 
     def list_inspection_tasks(self, worker, arguments: dict) -> dict:
@@ -472,8 +498,7 @@ class SmartlightCentralAdapter:
         context = self._principal_context(worker)
         page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
         size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
-        start_date = str(arguments.get("start_date") or "").strip()
-        end_date = str(arguments.get("end_date") or "").strip()
+        start_date, end_date, range_source, last_days = _resolve_date_range(arguments)
         query = {
             "dateType": "",
             "_include_controlCabinetId": [],
@@ -508,19 +533,40 @@ class SmartlightCentralAdapter:
             worker,
             "/lHisHitchAlarm/getCountDataByCondition",
             {
-                "json": _json_text(query),
+                "json": _json_text(
+                    {
+                        **query,
+                        "_timebegin_lastDate": "",
+                        "_timeend_lastDate": "",
+                    }
+                ),
                 "organroleId": context["organroleId"],
             },
         )
         items = _page_items(records)
+        record_total = _page_total(records)
         return {
             "startDate": start_date or None,
             "endDate": end_date or None,
+            "dateRange": {
+                "source": range_source,
+                "lastDays": last_days,
+                "startDate": start_date or None,
+                "endDate": end_date or None,
+                "inclusive": True,
+                "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            },
             "page": page,
             "size": size,
-            "total": _page_total(records),
+            "total": record_total,
             "count": len(items),
+            "rangeSummary": {"recordTotal": record_total},
             "summary": _bounded_json(counts),
+            "summaryScope": {
+                "type": "current_system_snapshot",
+                "dateRangeApplied": False,
+                "checkedAt": datetime.now(timezone.utc).isoformat(),
+            },
             "items": [_normalize_leakage(item) for item in items],
         }
 
@@ -688,8 +734,11 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
     specs = (
         CapabilitySpec(
             name=SMARTLIGHT_OVERVIEW_CAPABILITY,
-            version="0.1.0",
-            description="Summarize visible Smartlight cabinets and lamp posts.",
+            version="0.2.0",
+            description=(
+                "Summarize visible Smartlight cabinets and report both searchable "
+                "and map-detail lamp-post counts."
+            ),
             input_schema={"type": "object", "properties": {}, "additionalProperties": False},
             output_schema={"type": "object"},
             effect="read",
@@ -708,8 +757,11 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_ALARM_LIST_CAPABILITY,
-            version="0.1.0",
-            description="List RTU alarms visible to the authenticated Smartlight user.",
+            version="0.2.0",
+            description=(
+                "List RTU alarms visible to the authenticated Smartlight user, "
+                "ordered by latest activity within the returned page."
+            ),
             input_schema=_paged_schema({"keyword": {"type": "string"}}),
             output_schema={"type": "object"},
             effect="read",
@@ -718,8 +770,11 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
-            version="0.1.0",
-            description="List Smartlight inspection tasks with task and plan filters.",
+            version="0.2.0",
+            description=(
+                "List Smartlight inspection tasks with task, plan and state filters, "
+                "including group, schedule, progress and device counts."
+            ),
             input_schema=_paged_schema(
                 {
                     "task_name": {"type": "string"},
@@ -734,12 +789,20 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
-            version="0.1.0",
-            description="Summarize Smartlight lamp leakage records in a date range.",
+            version="0.2.0",
+            description=(
+                "List date-filtered Smartlight leakage records and separately expose "
+                "the unfiltered current-system dashboard counters."
+            ),
             input_schema=_paged_schema(
                 {
                     "start_date": {"type": "string"},
                     "end_date": {"type": "string"},
+                    "last_days": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3660,
+                    },
                 }
             ),
             output_schema={"type": "object"},
@@ -830,6 +893,60 @@ def _paged_schema(properties: dict) -> dict:
 
 def _json_text(value: dict) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _lamppost_filters(context: dict, keyword: str) -> dict:
+    return {
+        "labels": [],
+        "_like_params": keyword,
+        "_like_cabinet": "",
+        "_like_imei": "",
+        "_include_streetId": [],
+        "_include_controlCabinetId": [],
+        "_include_lampPostTypeId": None,
+        "_include_materialTypeId": [],
+        "_include_workAreaId": [],
+        "_include_streetSideId": [],
+        "_timebegin_addDate": "",
+        "_timeend_addDate": "",
+        "oddEvenNumber": None,
+        "userId": context["userId"],
+    }
+
+
+def _resolve_date_range(
+    arguments: dict,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str, str, int | None]:
+    start_date = str(arguments.get("start_date") or "").strip()
+    end_date = str(arguments.get("end_date") or "").strip()
+    raw_last_days = arguments.get("last_days")
+    if raw_last_days is not None and (start_date or end_date):
+        raise ValueError("last_days cannot be combined with start_date or end_date")
+    if raw_last_days is not None:
+        last_days = _bounded_int(
+            raw_last_days,
+            default=30,
+            minimum=1,
+            maximum=3660,
+        )
+        business_now = (now or datetime.now(_SMARTLIGHT_BUSINESS_TIMEZONE)).astimezone(
+            _SMARTLIGHT_BUSINESS_TIMEZONE
+        )
+        end = business_now.date()
+        start = end - timedelta(days=last_days - 1)
+        return start.isoformat(), end.isoformat(), "last_days", last_days
+    for name, value in (("start_date", start_date), ("end_date", end_date)):
+        if not value:
+            continue
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(f"{name} must use YYYY-MM-DD") from exc
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("start_date cannot be after end_date")
+    return start_date, end_date, "explicit" if (start_date or end_date) else "none", None
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
@@ -975,8 +1092,32 @@ def _normalize_inspection_task(item: dict) -> dict:
         "planName": _first(item, "planName", "inspectionPlanName"),
         "state": _first(item, "taskStateName", "taskState", "state"),
         "assignee": _first(item, "inspectionUserName", "taskUserName", "userName"),
-        "startTime": _first(item, "startTime", "planStartTime"),
-        "endTime": _first(item, "endTime", "planEndTime"),
+        "inspectionGroup": _first(item, "groupName", "inspectionGroupName"),
+        "startTime": _first(
+            item,
+            "startTime",
+            "planStartTime",
+            "taskStartDate",
+        ),
+        "endTime": _first(
+            item,
+            "endTime",
+            "planEndTime",
+            "taskDeadline",
+        ),
+        "progress": _first(item, "taskProgress", "progress"),
+        "yesterdayProgress": _first(
+            item,
+            "yesterdayTaskProgress",
+            "yesterdayProgress",
+        ),
+        "confirmedDeviceCount": _first(item, "confirmDeviceNum"),
+        "lampPostCount": _first(item, "lampostQty", "lampPostQty"),
+        "rtuCount": _first(item, "rtuQty"),
+        "cycle": _first(item, "planCycleName"),
+        "batch": _first(item, "planBatch"),
+        "createdAt": _first(item, "addTime", "createdAt"),
+        "createdBy": _first(item, "addUser", "createdBy"),
     }
 
 

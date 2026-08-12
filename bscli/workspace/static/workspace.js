@@ -744,27 +744,11 @@ async function consumeChatStream({ message, idempotencyKey, attachments = [] }) 
   let streamFailure = null;
   let reader = null;
   try {
-    const response = await fetch("/api/chat/send-stream", {
-      method: "POST",
-      headers: {
-        Accept: "text/event-stream",
-        "Content-Type": "application/json",
-        "X-AgentBridge-CSRF": cookieValue(
-          "agentbridge_workspace_csrf",
-        ),
-      },
-      credentials: "same-origin",
-      signal: activeStream.controller.signal,
-      body: JSON.stringify({
-        message,
-        idempotencyKey,
-        attachments: attachments.map((item) => ({
-          type: "image",
-          mimeType: item.mimeType,
-          fileName: item.fileName,
-          content: item.content,
-        })),
-      }),
+    const response = await fetchChatStreamResponse({
+      message,
+      idempotencyKey,
+      attachments,
+      activeStream,
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -863,6 +847,52 @@ async function consumeChatStream({ message, idempotencyKey, attachments = [] }) 
   } finally {
     unregisterActiveStream(activeStream);
   }
+}
+
+async function fetchChatStreamResponse({
+  message,
+  idempotencyKey,
+  attachments,
+  activeStream,
+}) {
+  const request = {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-AgentBridge-CSRF": cookieValue("agentbridge_workspace_csrf"),
+    },
+    credentials: "same-origin",
+    signal: activeStream.controller.signal,
+    body: JSON.stringify({
+      message,
+      idempotencyKey,
+      attachments: attachments.map((item) => ({
+        type: "image",
+        mimeType: item.mimeType,
+        fileName: item.fileName,
+        content: item.content,
+      })),
+    }),
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fetch("/api/chat/send-stream", request);
+    } catch (error) {
+      const canRetry =
+        attempt === 0 &&
+        error instanceof TypeError &&
+        !activeStream.controller.signal.aborted;
+      if (!canRetry) throw error;
+      addLiveProgress(
+        idempotencyKey,
+        "\u7f51\u7edc\u8fde\u63a5\u77ed\u6682\u4e2d\u65ad\uff0c\u6b63\u5728\u6062\u590d",
+        "active",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+  }
+  throw new TypeError("chat stream connection failed");
 }
 
 function registerActiveStream(activeStream, runId) {

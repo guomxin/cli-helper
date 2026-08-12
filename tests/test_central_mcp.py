@@ -195,6 +195,14 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("smartlight_leakage_summary", names)
         self.assertIn("smartlight_session_status", names)
         self.assertIn("smartlight_session_login", names)
+        smartlight_leakage_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_leakage_summary"
+        )
+        self.assertIn(
+            "last_days",
+            smartlight_leakage_tool["inputSchema"]["properties"],
+        )
+        self.assertEqual(smartlight_leakage_tool["title"], "查询照明漏电记录")
         self.assertIn("agentbridge_operation_list", names)
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)
@@ -707,12 +715,27 @@ class CentralMcpTests(unittest.TestCase):
                 token=smartlight_reader["token"],
                 params={"name": "smartlight_system_overview", "arguments": {}},
             )
+            relative_range = self._request(
+                client,
+                "tools/call",
+                request_id=27,
+                token=smartlight_reader["token"],
+                params={
+                    "name": "smartlight_leakage_summary",
+                    "arguments": {"last_days": 30},
+                },
+            )
 
         self.assertTrue(denied.json()["result"]["isError"])
         self.assertFalse(allowed.json()["result"]["isError"])
+        self.assertFalse(relative_range.json()["result"]["isError"])
         self.assertEqual(
             service.invoke.call_args.kwargs["capability_name"],
-            "smartlight.system.overview",
+            "smartlight.leakage.summary",
+        )
+        self.assertEqual(
+            service.invoke.call_args.kwargs["arguments"]["last_days"],
+            30,
         )
 
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):

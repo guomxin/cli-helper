@@ -339,6 +339,52 @@ class TaskHubStore:
               )
             """
         )
+        interactions_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'interactions'
+            """
+        ).fetchone()
+        if interactions_table is not None:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = 'succeeded',
+                    version = version + 1,
+                    updated_at = COALESCE(
+                        (
+                            SELECT task_interactions.last_observed_at
+                            FROM task_interactions
+                            WHERE task_interactions.interaction_id =
+                                agent_tasks.current_interaction_id
+                        ),
+                        updated_at
+                    ),
+                    finished_at = COALESCE(
+                        (
+                            SELECT task_interactions.last_observed_at
+                            FROM task_interactions
+                            WHERE task_interactions.interaction_id =
+                                agent_tasks.current_interaction_id
+                        ),
+                        updated_at
+                    )
+                WHERE status IN ('active', 'waiting_user', 'running')
+                  AND current_operation_id IS NULL
+                  AND current_interaction_id IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM task_interactions
+                      JOIN interactions
+                        ON interactions.interaction_id =
+                           task_interactions.interaction_id
+                      WHERE task_interactions.interaction_id =
+                            agent_tasks.current_interaction_id
+                        AND task_interactions.last_state = 'completed'
+                        AND interactions.interaction_type = 'credential'
+                  )
+                """
+            )
         operations_table = connection.execute(
             """
             SELECT 1 FROM sqlite_master
@@ -651,12 +697,11 @@ class TaskHubStore:
                 connection.execute(
                     """
                     UPDATE agent_tasks
-                    SET active_conversation_ref = ?, title = ?, updated_at = ?
+                    SET active_conversation_ref = ?, updated_at = ?
                     WHERE task_id = ?
                     """,
                     (
                         active_conversation_ref,
-                        title,
                         now,
                         existing["task_id"],
                     ),
@@ -840,7 +885,6 @@ class TaskHubStore:
         if interaction_record.get("user_subject") != user_subject:
             raise TaskIntegrityError("interaction belongs to another user")
         state = str(interaction.get("state") or "")
-        task_status = _task_status_for_interaction(state)
         event_type = _event_type_for_interaction(state)
         now = _utc_now()
 
@@ -853,6 +897,11 @@ class TaskHubStore:
             ).fetchone()
             if linked is not None and linked["task_id"] != task_id:
                 raise TaskIntegrityError("interaction is already linked to another task")
+            task_status = _task_status_for_interaction(
+                state,
+                interaction_type=str(interaction.get("type") or ""),
+                has_current_operation=bool(task["current_operation_id"]),
+            )
             if linked is None:
                 connection.execute(
                     """
@@ -892,7 +941,7 @@ class TaskHubStore:
                 interaction_id=interaction_id,
                 newly_linked=linked is None,
             )
-            if may_update_task:
+            if may_update_task and state_changed:
                 self._update_task_state(
                     connection,
                     task_id=task_id,
@@ -3153,7 +3202,18 @@ def _event_type_for_operation(status: str) -> str:
     }.get(status, "task.operation.updated")
 
 
-def _task_status_for_interaction(state: str) -> str:
+def _task_status_for_interaction(
+    state: str,
+    *,
+    interaction_type: str = "",
+    has_current_operation: bool = False,
+) -> str:
+    if (
+        state == "completed"
+        and interaction_type == "credential"
+        and not has_current_operation
+    ):
+        return "succeeded"
     return {
         "pending": "waiting_user",
         "processing": "waiting_user",
