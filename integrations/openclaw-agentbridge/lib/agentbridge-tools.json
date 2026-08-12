@@ -4253,6 +4253,465 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "统一查询控制柜、RTU 或灯杆。asset_type 使用 cabinet、rtu 或 lamppost；读取详情前先用本工具取得精确 asset_id。",
+      "inputSchema": {
+        "properties": {
+          "asset_type": {
+            "enum": [
+              "cabinet",
+              "rtu",
+              "lamppost"
+            ],
+            "title": "Asset Type",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "asset_type"
+        ],
+        "title": "smartlight_asset_searchArguments",
+        "type": "object"
+      },
+      "name": "smartlight_asset_search",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_asset_searchDictOutput",
+        "type": "object"
+      },
+      "title": "查询照明设施"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "按精确 asset_id 读取控制柜、RTU 或灯杆详情。asset_id 应来自 smartlight_asset_search；RTU 详情同时返回继电器和回路结构。",
+      "inputSchema": {
+        "properties": {
+          "asset_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "asset_type": {
+            "enum": [
+              "cabinet",
+              "rtu",
+              "lamppost"
+            ],
+            "title": "Asset Type",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "asset_type",
+          "asset_id"
+        ],
+        "title": "smartlight_asset_detailArguments",
+        "type": "object"
+      },
+      "name": "smartlight_asset_detail",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_asset_detailDictOutput",
+        "type": "object"
+      },
+      "title": "读取照明设施详情"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "分析指定日期或最近 N 天的 RTU 告警，返回状态、类型、设备排行和日期趋势。未传日期时默认最近 30 天；最多分析 500 条，truncated 表示结果只是有界样本。time_field 可选 last_activity 或 occurred。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "cleared"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "alarm_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alarm Type"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "time_field": {
+            "default": "last_activity",
+            "enum": [
+              "last_activity",
+              "occurred"
+            ],
+            "title": "Time Field",
+            "type": "string"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_alarm_analysisArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_analysis",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_analysisDictOutput",
+        "type": "object"
+      },
+      "title": "分析照明 RTU 告警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "读取指定巡检任务的每日计划数、完成数和下游完成率；传 detail_date 时再读取该日实际打卡记录。系统未提供未巡设备明细，不得根据数量差推断具体未巡设备。",
+      "inputSchema": {
+        "properties": {
+          "clockin_user": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Clockin User"
+          },
+          "detail_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detail Date"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "has_issues": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Has Issues"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "task_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "smartlight_inspection_task_detailArguments",
+        "type": "object"
+      },
+      "name": "smartlight_inspection_task_detail",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_inspection_task_detailDictOutput",
+        "type": "object"
+      },
+      "title": "读取照明巡检任务详情"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "分析指定日期或最近 N 天的漏电记录，返回日期趋势以及灯杆、道路、告警类型和状态排行。未传日期时默认最近 30 天；最多分析 500 条，不混入系统首页的全局实时计数。",
+      "inputSchema": {
+        "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_leakage_analysisArguments",
+        "type": "object"
+      },
+      "name": "smartlight_leakage_analysis",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_leakage_analysisDictOutput",
+        "type": "object"
+      },
+      "title": "分析照明漏电记录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "Verify the authenticated caller's central Smartlight CAS/JWT session.",
       "inputSchema": {
         "properties": {},

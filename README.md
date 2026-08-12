@@ -130,12 +130,19 @@ Published Smartlight capabilities:
 - `smartlight.alarm.list`
 - `smartlight.inspection_task.list`
 - `smartlight.leakage.summary`
+- `smartlight.asset.search`
+- `smartlight.asset.detail`
+- `smartlight.alarm.analysis`
+- `smartlight.inspection_task.detail`
+- `smartlight.leakage.analysis`
 
 Smartlight uses a trusted username/password/image-captcha card only for login.
 After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
 normal reads do not open a remote browser. The current integration deliberately
 does not expose device control, configuration, alarm handling, or CRUD operations.
 See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
+The phase-two contracts and staged report-export plan are documented in the
+[Smartlight phase-two capability package](docs/smartlight-phase2-capability-package.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden

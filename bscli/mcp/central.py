@@ -75,9 +75,14 @@ from bscli.adapters.taihua import (
     TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
 )
 from bscli.adapters.smartlight import (
+    SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
+    SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+    SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
+    SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
 )
@@ -184,6 +189,11 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_alarm_list": frozenset({"smartlight:read"}),
     "smartlight_inspection_task_list": frozenset({"smartlight:read"}),
     "smartlight_leakage_summary": frozenset({"smartlight:read"}),
+    "smartlight_asset_search": frozenset({"smartlight:read"}),
+    "smartlight_asset_detail": frozenset({"smartlight:read"}),
+    "smartlight_alarm_analysis": frozenset({"smartlight:read"}),
+    "smartlight_inspection_task_detail": frozenset({"smartlight:read"}),
+    "smartlight_leakage_analysis": frozenset({"smartlight:read"}),
     "smartlight_session_status": frozenset({"smartlight:read"}),
     "smartlight_session_login": frozenset({"smartlight:read"}),
     "yuque_public_books_list": frozenset({"yuque:read"}),
@@ -2238,6 +2248,191 @@ def create_central_mcp_server(
         return await invoke(
             ctx,
             SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_asset_search",
+        title="查询照明设施",
+        description=(
+            "统一查询控制柜、RTU 或灯杆。asset_type 使用 cabinet、rtu 或 "
+            "lamppost；读取详情前先用本工具取得精确 asset_id。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_asset_search(
+        ctx: Context,
+        asset_type: Annotated[Literal["cabinet", "rtu", "lamppost"], Field()],
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "asset_type": asset_type,
+            "page": page,
+            "size": size,
+        }
+        if keyword is not None:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_asset_detail",
+        title="读取照明设施详情",
+        description=(
+            "按精确 asset_id 读取控制柜、RTU 或灯杆详情。asset_id 应来自 "
+            "smartlight_asset_search；RTU 详情同时返回继电器和回路结构。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_asset_detail(
+        ctx: Context,
+        asset_type: Annotated[Literal["cabinet", "rtu", "lamppost"], Field()],
+        asset_id: Annotated[str, Field(min_length=1, max_length=200)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
+            {"asset_type": asset_type, "asset_id": asset_id},
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_analysis",
+        title="分析照明 RTU 告警",
+        description=(
+            "分析指定日期或最近 N 天的 RTU 告警，返回状态、类型、设备排行和"
+            "日期趋势。未传日期时默认最近 30 天；最多分析 500 条，truncated "
+            "表示结果只是有界样本。time_field 可选 last_activity 或 occurred。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_alarm_analysis(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_type: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_state: Annotated[
+            Literal["all", "current", "cleared"], Field()
+        ] = "all",
+        time_field: Annotated[
+            Literal["last_activity", "occurred"], Field()
+        ] = "last_activity",
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=3660)] = None,
+        top_n: Annotated[int, Field(ge=1, le=20)] = 10,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "alarm_state": alarm_state,
+            "time_field": time_field,
+            "top_n": top_n,
+        }
+        for name, value in (
+            ("keyword", keyword),
+            ("alarm_type", alarm_type),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_inspection_task_detail",
+        title="读取照明巡检任务详情",
+        description=(
+            "读取指定巡检任务的每日计划数、完成数和下游完成率；传 detail_date "
+            "时再读取该日实际打卡记录。系统未提供未巡设备明细，不得根据数量差"
+            "推断具体未巡设备。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_inspection_task_detail(
+        ctx: Context,
+        task_id: Annotated[str, Field(min_length=1, max_length=200)],
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        detail_date: Annotated[str | None, Field(max_length=10)] = None,
+        clockin_user: Annotated[str | None, Field(max_length=200)] = None,
+        has_issues: Annotated[bool | None, Field()] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "task_id": task_id,
+            "page": page,
+            "size": size,
+        }
+        for name, value in (
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("detail_date", detail_date),
+            ("clockin_user", clockin_user),
+            ("has_issues", has_issues),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_leakage_analysis",
+        title="分析照明漏电记录",
+        description=(
+            "分析指定日期或最近 N 天的漏电记录，返回日期趋势以及灯杆、道路、"
+            "告警类型和状态排行。未传日期时默认最近 30 天；最多分析 500 条，"
+            "不混入系统首页的全局实时计数。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_leakage_analysis(
+        ctx: Context,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=3660)] = None,
+        top_n: Annotated[int, Field(ge=1, le=20)] = 10,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"top_n": top_n}
+        if start_date is not None:
+            arguments["start_date"] = start_date
+        if end_date is not None:
+            arguments["end_date"] = end_date
+        if last_days is not None:
+            arguments["last_days"] = last_days
+        return await invoke(
+            ctx,
+            SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
             arguments,
             idempotency_key,
             {"smartlight:read"},

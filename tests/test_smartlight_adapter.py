@@ -7,9 +7,14 @@ from urllib.parse import parse_qs, urlparse
 import unittest
 
 from bscli.adapters.smartlight import (
+    SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
+    SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+    SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
+    SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SmartlightAuthenticationRejected,
@@ -221,16 +226,83 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(task_query["_taskState"], 2)
         self.assertEqual(result["filters"]["state"], 2)
 
+    def test_phase_two_asset_detail_and_bounded_analysis_contracts(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        cabinets = self.adapter.invoke_capability(
+            SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+            worker,
+            {"asset_type": "cabinet", "keyword": "一号", "page": 1, "size": 20},
+        )
+        rtu = self.adapter.invoke_capability(
+            SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
+            worker,
+            {"asset_type": "rtu", "asset_id": "rtu-1"},
+        )
+        lamp_post = self.adapter.invoke_capability(
+            SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
+            worker,
+            {"asset_type": "lamppost", "asset_id": "lp-1"},
+        )
+        alarms = self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
+            worker,
+            {"alarm_state": "current", "top_n": 5},
+        )
+        inspection = self.adapter.invoke_capability(
+            SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
+            worker,
+            {"task_id": "task-1", "detail_date": "2026-08-12"},
+        )
+        leakage = self.adapter.invoke_capability(
+            SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
+            worker,
+            {"last_days": 30, "top_n": 5},
+        )
+
+        self.assertEqual(cabinets["items"][0]["code"], "CAB-001")
+        self.assertTrue(rtu["found"])
+        self.assertEqual(rtu["detail"]["code"], "RTU-001")
+        self.assertEqual(rtu["relayTotal"], 1)
+        self.assertEqual(rtu["relays"][0]["circuitCount"], 3)
+        self.assertTrue(lamp_post["found"])
+        self.assertEqual(lamp_post["detail"]["height"], 12)
+        self.assertEqual(alarms["dateRange"]["source"], "default_last_days")
+        self.assertEqual(alarms["analyzedCount"], 1)
+        self.assertFalse(alarms["truncated"])
+        self.assertEqual(
+            alarms["stateCounts"],
+            [{"value": "当前告警", "count": 1}],
+        )
+        self.assertEqual(inspection["dailyCount"], 1)
+        self.assertEqual(inspection["days"][0]["plannedDeviceCount"], 10)
+        self.assertTrue(inspection["detailDateFound"])
+        self.assertEqual(inspection["clockins"][0]["deviceCode"], "LP-001")
+        self.assertEqual(leakage["analyzedCount"], 1)
+        self.assertEqual(
+            leakage["topLampPosts"],
+            [{"value": "LP-001", "count": 1}],
+        )
+        alarm_request = next(
+            item
+            for item in worker.api_requests
+            if item["path"].endswith("/rHisHitchAlarm/getDataByRtuAlarm")
+            and "_timebegin_begin" in item["body"]
+        )
+        alarm_query = json.loads(parse_qs(alarm_request["body"])["json"][0])
+        self.assertEqual(alarm_query["dateType"], "1")
+        self.assertEqual(alarm_query["_include_conductStatue"], ["131"])
+
     def test_relative_and_explicit_date_ranges_cannot_be_mixed(self):
         with self.assertRaisesRegex(ValueError, "cannot be combined"):
             _resolve_date_range(
                 {"last_days": 30, "start_date": "2026-08-01"}
             )
 
-    def test_registry_contains_five_read_only_capabilities(self):
+    def test_registry_contains_ten_read_only_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 5)
+        self.assertEqual(len(capabilities), 10)
         self.assertTrue(all(spec.effect == "read" for spec in capabilities))
         inspection = next(
             spec
@@ -404,6 +476,80 @@ class FakeSmartlightWorker:
                     "totalCount": 131,
                 }
             )
+        if path.endswith("/lLamppost/getLampPostDetail"):
+            return _response(
+                {
+                    "code": "200",
+                    "result": {
+                        "lampPostId": "lp-1",
+                        "lampPostCode": "LP-001",
+                        "lampPostTypeName": "十二米杆",
+                        "lampPostHeight": 12,
+                        "streetName": "测试路",
+                        "controlCabinetName": "一号箱变",
+                        "rtuName": "一号 RTU",
+                        "workAreaName": "实验室工区",
+                    },
+                }
+            )
+        if path.endswith("/rControlCabinet/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "controlCabinetId": "cab-1",
+                            "controlCabinetCode": "CAB-001",
+                            "controlCabinetName": "一号箱变",
+                            "capacityStr": "100kVA",
+                            "workAreaName": "实验室工区",
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/rRtu/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "rtuId": "rtu-1",
+                            "rtuCode": "RTU-001",
+                            "rtuName": "一号 RTU",
+                            "productModel": "RTU-X",
+                            "controlCabinetName": "一号箱变",
+                            "groupName": "测试组",
+                            "runningStateName": "在线",
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/rRturelay/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "rturelayId": "relay-1",
+                            "rturelayNumber": 1,
+                            "rturelayName": "1",
+                            "workModelName": "全夜灯",
+                            "isEnabled": 1,
+                            "roadSwitchList": [
+                                {
+                                    "roadSwitchId": "switch-1",
+                                    "roadSwitchNumber": 1,
+                                    "rRturoadList": [
+                                        {"rturoadId": "road-a", "rturoadNumber": 1, "powerType": "A"},
+                                        {"rturoadId": "road-b", "rturoadNumber": 2, "powerType": "B"},
+                                        {"rturoadId": "road-c", "rturoadNumber": 3, "powerType": "C"},
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
         if path.endswith("/rHisHitchAlarm/getDataByRtuAlarm"):
             return _response(
                 {
@@ -449,6 +595,38 @@ class FakeSmartlightWorker:
                         }
                     ],
                     "totalCount": 1,
+                }
+            )
+        if path.endswith("/InspectionDeviceGroup/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "taskId": "task-1",
+                            "groupId": "group-day-1",
+                            "dateTimeStr": "2026-08-12",
+                            "deviceNum": 10,
+                            "realityNum": 4,
+                            "rate": "40.00%",
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/inspectionTask/getClockinDataByTaskId"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "clockinId": "clock-1",
+                            "clockinTime": "2026-08-12 20:00:00",
+                            "clockinUserName": "巡检员",
+                            "deviceCode": "LP-001",
+                            "deviceTypeName": "灯杆",
+                            "hasIssues": 0,
+                        }
+                    ],
+                    "total": 1,
                 }
             )
         if path.endswith("/lHisHitchAlarm/getDataByCondition"):

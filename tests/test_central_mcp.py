@@ -193,6 +193,11 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("smartlight_alarm_list", names)
         self.assertIn("smartlight_inspection_task_list", names)
         self.assertIn("smartlight_leakage_summary", names)
+        self.assertIn("smartlight_asset_search", names)
+        self.assertIn("smartlight_asset_detail", names)
+        self.assertIn("smartlight_alarm_analysis", names)
+        self.assertIn("smartlight_inspection_task_detail", names)
+        self.assertIn("smartlight_leakage_analysis", names)
         self.assertIn("smartlight_session_status", names)
         self.assertIn("smartlight_session_login", names)
         smartlight_alarm_tool = next(
@@ -214,6 +219,23 @@ class CentralMcpTests(unittest.TestCase):
             smartlight_leakage_tool["inputSchema"]["properties"],
         )
         self.assertEqual(smartlight_leakage_tool["title"], "查询照明漏电记录")
+        smartlight_asset_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_asset_search"
+        )
+        self.assertEqual(
+            smartlight_asset_tool["inputSchema"]["properties"]["asset_type"]["enum"],
+            ["cabinet", "rtu", "lamppost"],
+        )
+        smartlight_alarm_analysis_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_alarm_analysis"
+        )
+        self.assertIn("最多分析 500 条", smartlight_alarm_analysis_tool["description"])
+        smartlight_inspection_detail_tool = next(
+            tool
+            for tool in tools
+            if tool["name"] == "smartlight_inspection_task_detail"
+        )
+        self.assertIn("不得根据数量差", smartlight_inspection_detail_tool["description"])
         self.assertIn("agentbridge_operation_list", names)
         self.assertIn("agentbridge_interaction_get", names)
         self.assertIn("agentbridge_interaction_resume", names)

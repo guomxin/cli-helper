@@ -98,6 +98,26 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电统计" },
   ],
   [
+    "smartlight_asset_search",
+    { kind: "smartlight_asset", system: "照明实验室测试系统", label: "设施查询" },
+  ],
+  [
+    "smartlight_asset_detail",
+    { kind: "smartlight_asset", system: "照明实验室测试系统", label: "设施详情" },
+  ],
+  [
+    "smartlight_alarm_analysis",
+    { kind: "smartlight_alarm", system: "照明实验室测试系统", label: "RTU 告警分析" },
+  ],
+  [
+    "smartlight_inspection_task_detail",
+    { kind: "smartlight_inspection", system: "照明实验室测试系统", label: "巡检任务详情" },
+  ],
+  [
+    "smartlight_leakage_analysis",
+    { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电分析" },
+  ],
+  [
     "yuque_public_books_list",
     { kind: "yuque_book", system: "部门信息库", label: "公共区知识库" },
   ],

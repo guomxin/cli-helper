@@ -1,10 +1,10 @@
 # 照明实验室测试系统适配说明
 
-## 一、一期范围
+## 一、当前范围
 
 目标系统：`http://123.232.113.241:4101/smartlight`。
 
-一期只开放读取能力，并且只给 AgentBridge 第一用户 `guomao` 授权。第二用户及其他
+当前只开放读取能力，并且只给 AgentBridge 第一用户 `guomao` 授权。第二用户及其他
 客户端身份不会因为能力部署而自动获得权限。
 
 已发布能力：
@@ -16,10 +16,18 @@
 | `smartlight_alarm_list` | 查询 RTU 告警和当前系统快照 | `smartlight.alarm.list` |
 | `smartlight_inspection_task_list` | 按任务、计划和状态查询巡检组、进度及设备数 | `smartlight.inspection_task.list` |
 | `smartlight_leakage_summary` | 按日期或最近 N 天查询漏电记录 | `smartlight.leakage.summary` |
+| `smartlight_asset_search` | 统一查询控制柜、RTU 和灯杆 | `smartlight.asset.search` |
+| `smartlight_asset_detail` | 读取设施详情；RTU 同时返回继电器和回路 | `smartlight.asset.detail` |
+| `smartlight_alarm_analysis` | 有界分析 RTU 告警趋势和集中设备 | `smartlight.alarm.analysis` |
+| `smartlight_inspection_task_detail` | 查询巡检每日进度和实际打卡记录 | `smartlight.inspection_task.detail` |
+| `smartlight_leakage_analysis` | 有界分析漏电趋势和集中位置 | `smartlight.leakage.analysis` |
 | `smartlight_session_status` | 检查当前用户登录会话 | - |
 | `smartlight_session_login` | 发起可信登录卡 | - |
 
 本期不开放开关灯、远程控制、参数配置、告警处理、删除、新增或修改业务数据。
+
+二期工具的详细契约、接口证据和验收标准见
+[照明实验室测试系统二期能力包](smartlight-phase2-capability-package.md)。
 
 ### 读取口径
 
@@ -94,5 +102,5 @@ Cookie、JWT、密码摘要和隐藏登录字段不会进入模型上下文。�
 2. 第二用户的工具目录不出现 Smartlight 工具。
 3. 未登录读取时生成含验证码的可信登录卡，登录后自动续办原查询。
 4. 登录主体显示为 `无为`，并与已验证主体绑定一致。
-5. 五项读取能力返回结构化、分页且有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
+5. 十项读取能力返回结构化、分页或有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
 6. 工具目录中不存在 Smartlight 写入或设备控制能力。

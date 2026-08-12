@@ -59,6 +59,30 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightCabinets",
+    {
+      tool: "smartlight_asset_search",
+      arguments: { asset_type: "cabinet", page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightAlarmAnalysis",
+    {
+      tool: "smartlight_alarm_analysis",
+      arguments: { last_days: 30, top_n: 5 },
+      kind: "smartlightAnalysis",
+    },
+  ],
+  [
+    "SmartlightLeakageAnalysis",
+    {
+      tool: "smartlight_leakage_analysis",
+      arguments: { last_days: 30, top_n: 5 },
+      kind: "smartlightAnalysis",
+    },
+  ],
+  [
     "OaPendingRead",
     { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
   ],
@@ -212,6 +236,11 @@ const REQUIRED_RELEASE_TOOLS = [
   "smartlight_alarm_list",
   "smartlight_inspection_task_list",
   "smartlight_leakage_summary",
+  "smartlight_asset_search",
+  "smartlight_asset_detail",
+  "smartlight_alarm_analysis",
+  "smartlight_inspection_task_detail",
+  "smartlight_leakage_analysis",
   "smartlight_session_status",
   "smartlight_session_login",
   "yuque_public_books_list",
@@ -424,6 +453,11 @@ try {
       "smartlight_alarm_list",
       "smartlight_inspection_task_list",
       "smartlight_leakage_summary",
+      "smartlight_asset_search",
+      "smartlight_asset_detail",
+      "smartlight_alarm_analysis",
+      "smartlight_inspection_task_detail",
+      "smartlight_leakage_analysis",
       "smartlight_session_status",
       "smartlight_session_login",
     ]);
@@ -615,6 +649,14 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "smartlightAnalysis"
+          ? smartlightAnalysisSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "pendingInspect"
           ? {
               status: "succeeded",
@@ -733,6 +775,41 @@ function smartlightOverviewSummary({
     lampPostTotal: Number(result.lampPostTotal),
     lampPostCounts: result.lampPostCounts ?? null,
     observedPrincipal: result.principal.name ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightAnalysisSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Smartlight analysis failed"), {
+      code: errorCode || "SMARTLIGHT_ANALYSIS_FAILED",
+    });
+  }
+  if (
+    !result ||
+    result.analyzedCount == null ||
+    result.downstreamTotal == null ||
+    result.truncated == null
+  ) {
+    throw Object.assign(new Error("Smartlight analysis contract mismatch"), {
+      code: "SMARTLIGHT_ANALYSIS_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    analyzedCount: Number(result.analyzedCount),
+    downstreamTotal: Number(result.downstreamTotal),
+    truncated: Boolean(result.truncated),
+    dateRange: result.dateRange ?? null,
+    dailyTrend: result.dailyTrend ?? null,
     errorCode: null,
   };
 }
