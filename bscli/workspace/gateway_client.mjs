@@ -114,7 +114,9 @@ const connectId = `connect-${randomUUID()}`;
 const preflightAbortRequestId = `preflight-abort-${randomUUID()}`;
 const preflightAbortFallbackRequestId =
   `preflight-abort-fallback-${randomUUID()}`;
-const bindRequestId = `bind-${randomUUID()}`;
+let bindRequestId = `bind-${randomUUID()}`;
+let bindRetryCount = 0;
+let bindRetryTimer = null;
 let requestId = `rpc-${randomUUID()}`;
 let abortRequestId = `abort-${randomUUID()}`;
 const socket = new WebSocket(gatewayUrl);
@@ -263,8 +265,21 @@ socket.addEventListener("message", (event) => {
   }
   if (frame.id === bindRequestId && mode === "send-stream") {
     if (!frame.ok) {
+      const code = safeCode(
+        frame?.error?.details?.code || frame?.error?.code,
+      );
+      if (code === "FORBIDDEN" && bindRetryCount < 1) {
+        bindRetryCount += 1;
+        requestStage = "bind_retry_wait";
+        bindRetryTimer = setTimeout(() => {
+          bindRetryTimer = null;
+          bindRequestId = `bind-${randomUUID()}`;
+          requestWorkspaceBind();
+        }, 250);
+        return;
+      }
       finishError(
-        safeCode(frame?.error?.details?.code || frame?.error?.code),
+        code,
         safeMessage(frame?.error?.message),
         {
           ...(isRecord(frame?.error?.details) ? frame.error.details : {}),
@@ -360,6 +375,7 @@ function requestPreflightAbort(preserveSideRuns) {
 }
 
 function requestWorkspaceBind() {
+  if (settled) return;
   requestStage = "bind";
   socket.send(
     JSON.stringify({
@@ -937,6 +953,10 @@ function finish(payload) {
   clearStartupTimer();
   clearSessionStateTimer();
   clearRecoveryEvidenceTimer();
+  if (bindRetryTimer) {
+    clearTimeout(bindRetryTimer);
+    bindRetryTimer = null;
+  }
   if (streamingMode) {
     process.stdout.write(`${JSON.stringify({ type: "eof" })}\n`);
   } else {

@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.41";
+export const PLUGIN_VERSION = "0.4.42";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -478,7 +478,11 @@ async function taskContinuityPromptContext({
       contexts.push(crossEndpoint.prependContext);
     }
   }
-  if (isTaskContinuationIntent(prompt)) {
+  const sessionKey = safeText(context.sessionKey, 1_024);
+  const hasPendingHostChoice = Boolean(
+    coordinator.taskContinuationChoiceForSession(sessionKey),
+  );
+  if (isTaskContinuationIntent(prompt, { hasPendingHostChoice })) {
     const taskContinuation = await resolveTaskContinuationContext({
       prompt,
       context,
@@ -489,6 +493,8 @@ async function taskContinuityPromptContext({
     if (taskContinuation) {
       contexts.push(taskContinuation);
     }
+  } else if (hasPendingHostChoice) {
+    coordinator.clearTaskContinuationChoice(sessionKey);
   }
   return contexts.length > 0
     ? { prependContext: contexts.join("\n\n") }
@@ -569,8 +575,14 @@ async function resolveTaskContinuationContext({
       return null;
     }
     if (payload?.status !== "selected") {
+      if (payload?.status === "ambiguous") {
+        coordinator.bindTaskContinuationChoice(sessionKey);
+      } else {
+        coordinator.clearTaskContinuationChoice(sessionKey);
+      }
       return formatTaskContinuationChoice(payload);
     }
+    coordinator.clearTaskContinuationChoice(sessionKey);
     const task = payload.task || {};
     const continuation = payload.continuation || {};
     coordinator.bindTaskContinuation({
@@ -683,13 +695,17 @@ function isCrossEndpointReference(prompt) {
   );
 }
 
-function isTaskContinuationIntent(prompt) {
+function isTaskContinuationIntent(
+  prompt,
+  { hasPendingHostChoice = false } = {},
+) {
   const text = safeText(prompt, 20_000) || "";
   const ordinal = taskContinuationOrdinal(text);
   return (
     TASK_ID_PATTERN.test(text) ||
     TASK_CONTINUATION_HINT_PATTERN.test(text) ||
-    (ordinal !== null &&
+    (hasPendingHostChoice &&
+      ordinal !== null &&
       (TASK_ORDINAL_SELECTION_PATTERN.test(text) ||
         TASK_ORDINAL_REPLY_PATTERN.test(text))) ||
     /\b(?:continue|resume)\b.{0,24}\btask\b/iu.test(text)

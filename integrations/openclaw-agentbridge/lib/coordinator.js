@@ -152,6 +152,7 @@ export function createInteractionSharedState() {
     documentDeliveries: new Map(),
     documentDeliveryReceipts: new Map(),
     taskContinuations: new Map(),
+    taskContinuationChoices: new Map(),
     independentTaskBindings: new Map(),
     identitySessionBindings: new Map(),
     identitySessionEndpoints: new Map(),
@@ -202,6 +203,9 @@ export class InteractionCoordinator {
       (sharedState.documentDeliveryReceipts = new Map());
     this.taskContinuations =
       sharedState.taskContinuations || (sharedState.taskContinuations = new Map());
+    this.taskContinuationChoices =
+      sharedState.taskContinuationChoices ||
+      (sharedState.taskContinuationChoices = new Map());
     this.independentTaskBindings =
       sharedState.independentTaskBindings ||
       (sharedState.independentTaskBindings = new Map());
@@ -677,6 +681,28 @@ export class InteractionCoordinator {
     return record && record.expiresAt > this.now() ? record : null;
   }
 
+  bindTaskContinuationChoice(sessionKey, { ttlMs = 10 * 60 * 1000 } = {}) {
+    if (!isPrivateSessionKey(sessionKey)) {
+      return null;
+    }
+    const record = {
+      capturedAt: this.now(),
+      expiresAt: this.now() + ttlMs,
+    };
+    this.taskContinuationChoices.set(sessionKey, record);
+    return record;
+  }
+
+  taskContinuationChoiceForSession(sessionKey) {
+    this.prune();
+    const record = this.taskContinuationChoices.get(sessionKey) || null;
+    return record && record.expiresAt > this.now() ? record : null;
+  }
+
+  clearTaskContinuationChoice(sessionKey) {
+    this.taskContinuationChoices.delete(sessionKey);
+  }
+
   taskIdForBusinessCall(sessionKey, toolName = null) {
     if (INDEPENDENT_TASK_ENTRY_TOOLS.has(toolName)) {
       // Revoke is a new user-visible job even when it references the workflow
@@ -822,6 +848,7 @@ export class InteractionCoordinator {
     this.loginContinuations.delete(sessionKey);
     this.recentUserMessages.delete(sessionKey);
     this.taskContinuations.delete(sessionKey);
+    this.taskContinuationChoices.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
     this.sessionRoutes.delete(sessionKey);
     this.directDeliveries.delete(sessionKey);
@@ -846,6 +873,7 @@ export class InteractionCoordinator {
     this.loginContinuations.clear();
     this.recentUserMessages.clear();
     this.taskContinuations.clear();
+    this.taskContinuationChoices.clear();
     this.independentTaskBindings.clear();
     this.sessionRoutes.clear();
     this.directDeliveries.clear();
@@ -2007,6 +2035,11 @@ export class InteractionCoordinator {
     for (const [sessionKey, continuation] of this.taskContinuations) {
       if (continuation.expiresAt <= this.now()) {
         this.taskContinuations.delete(sessionKey);
+      }
+    }
+    for (const [sessionKey, choice] of this.taskContinuationChoices) {
+      if (choice.expiresAt <= this.now()) {
+        this.taskContinuationChoices.delete(sessionKey);
       }
     }
     for (const [interactionId, record] of this.records) {

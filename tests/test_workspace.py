@@ -1233,6 +1233,8 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
         self.assertIn('method: "chat.abort"', source)
         self.assertIn("preflightAbortRequestId", source)
         self.assertIn("requestWorkspaceBind", source)
+        self.assertIn('code === "FORBIDDEN" && bindRetryCount < 1', source)
+        self.assertIn('requestStage = "bind_retry_wait"', source)
         self.assertIn('method: "sessions.list"', source)
         self.assertIn('requestStreamAbort(recover ? "startup_recovery"', source)
         self.assertIn("startRecoveryAttempt", source)
