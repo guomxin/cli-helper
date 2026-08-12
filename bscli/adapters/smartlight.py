@@ -471,7 +471,7 @@ class SmartlightCentralAdapter:
         size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
         task_name = str(arguments.get("task_name") or "").strip()
         plan_name = str(arguments.get("plan_name") or "").strip()
-        state = arguments.get("state")
+        state = _normalize_inspection_state_filter(arguments.get("state"))
         payload = self._authorized_post_json(
             worker,
             "/inspectionTask/getDataByCondition",
@@ -788,7 +788,7 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
-            version="0.2.0",
+            version="0.2.1",
             description=(
                 "List Smartlight inspection tasks with task, plan and state filters, "
                 "including group, schedule, progress and device counts."
@@ -797,7 +797,7 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
                 {
                     "task_name": {"type": "string"},
                     "plan_name": {"type": "string"},
-                    "state": {"type": ["string", "integer", "null"]},
+                    "state": {"type": ["integer", "string", "null"]},
                 }
             ),
             output_schema={"type": "object"},
@@ -1166,6 +1166,30 @@ def _inspection_state(item: dict) -> tuple[object, object]:
         2: "执行中",
     }
     return state_code, raw_label or state_labels.get(state_code)
+
+
+def _normalize_inspection_state_filter(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Smartlight inspection state must be a numeric state code")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        labels = {
+            "待执行": 1,
+            "执行中": 2,
+        }
+        if normalized in labels:
+            return labels[normalized]
+        if normalized.isdigit():
+            return int(normalized)
+    raise ValueError(
+        "Smartlight inspection state must be a numeric state code, 待执行, or 执行中"
+    )
 
 
 def _normalize_leakage(item: dict) -> dict:

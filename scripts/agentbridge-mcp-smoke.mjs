@@ -39,6 +39,14 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightInspectionRunning",
+    {
+      tool: "smartlight_inspection_task_list",
+      arguments: { state: 2, page: 1, size: 3 },
+      kind: "smartlightList",
+    },
+  ],
+  [
     "SmartlightLeakage",
     {
       tool: "smartlight_leakage_summary",
@@ -428,21 +436,32 @@ try {
     }
 
     const effectiveCheck = check ?? CHECKS.get("SessionStatus");
+    const hostTaskId = argument("--host-task-id", "").trim();
+    if (hostTaskId && (hostTaskId.length < 16 || hostTaskId.length > 128)) {
+      throw Object.assign(new Error("Host task ID is invalid"), {
+        code: "HOST_TASK_ID_INVALID",
+      });
+    }
+    const requestMeta = hostTaskId
+      ? {
+          "io.agentbridge/task": {
+            taskId: hostTaskId,
+          },
+        }
+      : ["crossEndpointContext", "taskContinuation"].includes(
+            effectiveCheck.kind,
+          )
+        ? {
+            "io.agentbridge/host": {
+              version: "1",
+              agentHost: "openclaw",
+            },
+          }
+        : null;
     const payload = await client.callTool(
       effectiveCheck.tool,
       effectiveCheck.arguments,
-      ["crossEndpointContext", "taskContinuation"].includes(
-        effectiveCheck.kind,
-      )
-        ? {
-            meta: {
-              "io.agentbridge/host": {
-                version: "1",
-                agentHost: "openclaw",
-              },
-            },
-          }
-        : undefined,
+      requestMeta ? { meta: requestMeta } : undefined,
     );
     const errorCode = payload?.error?.code ? safeCode(payload.error.code) : null;
     let result = payload?.result ?? payload;

@@ -8,6 +8,7 @@ param(
         "SmartlightLampPosts",
         "SmartlightAlarms",
         "SmartlightInspectionTasks",
+        "SmartlightInspectionRunning",
         "SmartlightLeakage",
         "OaPendingRead",
         "OaPendingInspect",
@@ -34,6 +35,7 @@ param(
     [string]$IdentityChannel = "",
     [string]$IdentitySenderId = "",
     [string]$EndpointKey = "",
+    [string]$HostTaskId = "",
     [ValidateRange(0, 20)]
     [int]$TaskOrdinal = 0,
     [ValidateSet("", "web", "webchat", "telegram", "openclaw-weixin")]
@@ -295,6 +297,9 @@ try {
         if ($ExpectedText) {
             $nodeArguments += @("--expected-text", $ExpectedText)
         }
+    }
+    if ($HostTaskId) {
+        $nodeArguments += @("--host-task-id", $HostTaskId)
     }
     $serverJson | & $node.Source @nodeArguments
     if ($LASTEXITCODE -ne 0) {

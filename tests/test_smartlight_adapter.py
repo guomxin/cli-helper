@@ -203,6 +203,24 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(source, "last_days")
         self.assertEqual(last_days, 30)
 
+    def test_inspection_state_string_is_normalized_before_downstream_request(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        result = self.adapter.invoke_capability(
+            SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
+            worker,
+            {"state": "2", "page": 1, "size": 3},
+        )
+
+        task_request = next(
+            item
+            for item in worker.api_requests
+            if item["path"].endswith("/inspectionTask/getDataByCondition")
+        )
+        task_query = json.loads(parse_qs(task_request["body"])["json"][0])
+        self.assertEqual(task_query["_taskState"], 2)
+        self.assertEqual(result["filters"]["state"], 2)
+
     def test_relative_and_explicit_date_ranges_cannot_be_mixed(self):
         with self.assertRaisesRegex(ValueError, "cannot be combined"):
             _resolve_date_range(
@@ -214,6 +232,16 @@ class SmartlightAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(capabilities), 5)
         self.assertTrue(all(spec.effect == "read" for spec in capabilities))
+        inspection = next(
+            spec
+            for spec in capabilities
+            if spec.name == SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY
+        )
+        self.assertEqual(inspection.version, "0.2.1")
+        self.assertEqual(
+            inspection.input_schema["properties"]["state"]["type"],
+            ["integer", "string", "null"],
+        )
 
 
 class FakePage:

@@ -2187,7 +2187,7 @@ def create_central_mcp_server(
         ctx: Context,
         task_name: Annotated[str | None, Field(max_length=200)] = None,
         plan_name: Annotated[str | None, Field(max_length=200)] = None,
-        state: Annotated[str | int | None, Field()] = None,
+        state: Annotated[int | str | None, Field()] = None,
         page: Annotated[int, Field(ge=1, le=10000)] = 1,
         size: Annotated[int, Field(ge=1, le=100)] = 20,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,

@@ -3630,7 +3630,7 @@ def _session_runtime_next_action(
 ) -> dict:
     return {
         "type": action_type,
-        "system": "oa",
+        "system": session["system_id"],
         "userSubject": user_subject,
         "sessionId": session["session_id"],
         "sessionState": session["state"],
