@@ -472,16 +472,33 @@ class SmartlightCentralAdapter:
         context = self._principal_context(worker)
         page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
         size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_date = str(arguments.get("start_date") or "").strip()
+        end_date = str(arguments.get("end_date") or "").strip()
         query = {
-            "_timebegin_alarmTime": str(arguments.get("start_date") or "").strip(),
-            "_timeend_alarmTime": str(arguments.get("end_date") or "").strip(),
-            "organroleId": context["organroleId"],
+            "dateType": "",
+            "_include_controlCabinetId": [],
+            "_like_lampPostCode": "",
+            "_timebegin_alarmAddDate": "",
+            "_timeend_alarmAddDate": "",
+            "_include_alarmState": [0, 1],
+            "_include_duration": [0],
+            "_include_hitchDicId": [],
+            "_include_streetId": [],
+            "_include_workId": [],
+            "_timebegin_lastDate": f"{start_date} 00:00:00" if start_date else "",
+            "_timeend_lastDate": f"{end_date} 23:59:59" if end_date else "",
+            "_show_newData": True,
+            "_leakage_threshold": 0,
+            "_leakage_current": 0,
+            "_duration": 0,
+            "userId": context["userId"],
         }
         records = self._authorized_post_json(
             worker,
-            "/lHisCoplog/getDataByLampElectricLeakage",
+            "/lHisHitchAlarm/getDataByCondition",
             {
                 "json": _json_text(query),
+                "orderBy": "l_his_coplog.cop_date",
                 "pageNum": page,
                 "pageSize": size,
                 "organroleId": context["organroleId"],
@@ -489,7 +506,7 @@ class SmartlightCentralAdapter:
         )
         counts = self._authorized_post_json(
             worker,
-            "/lHisCoplog/queryLampElectricLeakageCount",
+            "/lHisHitchAlarm/getCountDataByCondition",
             {
                 "json": _json_text(query),
                 "organroleId": context["organroleId"],
@@ -497,8 +514,8 @@ class SmartlightCentralAdapter:
         )
         items = _page_items(records)
         return {
-            "startDate": query["_timebegin_alarmTime"] or None,
-            "endDate": query["_timeend_alarmTime"] or None,
+            "startDate": start_date or None,
+            "endDate": end_date or None,
             "page": page,
             "size": size,
             "total": _page_total(records),
@@ -937,12 +954,27 @@ def _normalize_inspection_task(item: dict) -> dict:
 
 def _normalize_leakage(item: dict) -> dict:
     return {
-        "id": _first(item, "coplogId", "alarmId", "id"),
-        "time": _first(item, "alarmTime", "operationTime", "createTime"),
+        "id": _first(item, "hisHitchAlarmId", "coplogId", "alarmId", "id"),
+        "time": _first(
+            item,
+            "alarmAddDate",
+            "lastDate",
+            "alarmTime",
+            "operationTime",
+            "createTime",
+        ),
         "lampPost": _first(item, "lampPostName", "lampPostCode"),
-        "lamp": _first(item, "aloneLampName", "lampName"),
+        "lamp": _first(item, "aloneLampName", "lampName", "lampEffectName"),
         "road": _first(item, "streetName", "roadName"),
-        "value": _first(item, "electricLeakage", "leakageValue", "currentValue"),
+        "value": _first(
+            item,
+            "leakageCurrent",
+            "electricLeakage",
+            "leakageValue",
+            "currentValue",
+        ),
+        "voltage": _first(item, "leakageVoltage", "voltage"),
+        "alarmType": _first(item, "hitchDicName", "alarmTypeName"),
         "state": _first(item, "alarmStateName", "alarmState", "state"),
     }
 

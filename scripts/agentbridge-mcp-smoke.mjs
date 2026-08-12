@@ -15,6 +15,43 @@ const CHECKS = new Map([
     { tool: "smartlight_system_overview", arguments: {}, kind: "smartlightOverview" },
   ],
   [
+    "SmartlightLampPosts",
+    {
+      tool: "smartlight_lamppost_list",
+      arguments: { page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightAlarms",
+    {
+      tool: "smartlight_alarm_list",
+      arguments: { page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightInspectionTasks",
+    {
+      tool: "smartlight_inspection_task_list",
+      arguments: { page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightLeakage",
+    {
+      tool: "smartlight_leakage_summary",
+      arguments: {
+        start_date: isoDateDaysAgo(30),
+        end_date: isoDateDaysAgo(0),
+        page: 1,
+        size: 5,
+      },
+      kind: "smartlightList",
+    },
+  ],
+  [
     "OaPendingRead",
     { tool: "oa_workflow_pending_list", arguments: { limit: 1 }, kind: "list" },
   ],
@@ -181,6 +218,12 @@ const REQUIRED_RELEASE_TOOLS = [
 function argument(name, fallback) {
   const index = process.argv.indexOf(name);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+}
+
+function isoDateDaysAgo(days) {
+  const value = new Date();
+  value.setUTCDate(value.getUTCDate() - days);
+  return value.toISOString().slice(0, 10);
 }
 
 function safeCode(value, fallback = "MCP_SMOKE_FAILED") {
@@ -469,15 +512,21 @@ try {
               errorCode,
             }
           : effectiveCheck.kind === "smartlightOverview"
-          ? {
-              status: "succeeded",
-              check: checkName,
+          ? smartlightOverviewSummary({
+              payload,
+              result,
+              checkName,
               identityLabel,
-              cabinetTotal: Number(result?.cabinetTotal ?? 0),
-              lampPostTotal: Number(result?.lampPostTotal ?? 0),
-              observedPrincipal: result?.principal?.name ?? null,
               errorCode,
-            }
+            })
+          : effectiveCheck.kind === "smartlightList"
+          ? smartlightListSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "pendingInspect"
           ? {
               status: "succeeded",
@@ -536,6 +585,63 @@ try {
     JSON.stringify({ status: "failed", errorCode: safeCode(error?.code) }) + "\n",
   );
   process.exitCode = 1;
+}
+
+function smartlightListSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Smartlight read failed"), {
+      code: errorCode || "SMARTLIGHT_READ_FAILED",
+    });
+  }
+  if (!result || !Array.isArray(result.items)) {
+    throw Object.assign(new Error("Smartlight list contract mismatch"), {
+      code: "SMARTLIGHT_LIST_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    itemCount: Number(result.count ?? result.items.length),
+    total: Number(result.total ?? result.count ?? result.items.length),
+    summary: result.summary ?? null,
+    filters: result.filters ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightOverviewSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Smartlight overview failed"), {
+      code: errorCode || "SMARTLIGHT_OVERVIEW_FAILED",
+    });
+  }
+  if (!result?.principal || result?.cabinetTotal == null || result?.lampPostTotal == null) {
+    throw Object.assign(new Error("Smartlight overview contract mismatch"), {
+      code: "SMARTLIGHT_OVERVIEW_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    cabinetTotal: Number(result.cabinetTotal),
+    lampPostTotal: Number(result.lampPostTotal),
+    observedPrincipal: result.principal.name ?? null,
+    errorCode: null,
+  };
 }
 
 function taskContinuationSummary({

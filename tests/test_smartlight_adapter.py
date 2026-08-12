@@ -130,7 +130,8 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
         self.assertEqual(tasks["items"][0]["taskName"], "夜巡一组")
-        self.assertEqual(leakage["summary"]["alarmCount"], 1)
+        self.assertEqual(leakage["summary"]["untreated"], 1)
+        self.assertEqual(leakage["items"][0]["value"], 12)
         self.assertTrue(
             all("x-Authentication-Token" in headers for headers in worker.api_headers)
         )
@@ -317,12 +318,25 @@ class FakeSmartlightWorker:
                     "totalCount": 1,
                 }
             )
-        if path.endswith("/lHisCoplog/getDataByLampElectricLeakage"):
+        if path.endswith("/lHisHitchAlarm/getDataByCondition"):
             return _response(
-                {"list": [{"id": "leak-1", "electricLeakage": 12}], "totalCount": 1}
+                {
+                    "list": [
+                        {
+                            "hisHitchAlarmId": "leak-1",
+                            "alarmAddDate": "2026-08-10 10:00:00",
+                            "lampPostCode": "LP-001",
+                            "leakageCurrent": 12,
+                            "leakageVoltage": 220,
+                            "hitchDicName": "漏电告警",
+                            "alarmState": 0,
+                        }
+                    ],
+                    "total": 1,
+                }
             )
-        if path.endswith("/lHisCoplog/queryLampElectricLeakageCount"):
-            return _response({"alarmCount": 1, "deviceCount": 1})
+        if path.endswith("/lHisHitchAlarm/getCountDataByCondition"):
+            return _response({"todayAlarm": 1, "untreated": 1, "yesterdayAlarm": 0})
         raise AssertionError(f"unexpected API request: {method} {url}")
 
     def get_http_state(self) -> dict:

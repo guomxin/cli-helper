@@ -3552,10 +3552,16 @@ def _session_check_unavailable_action(
     diagnostics: str | None = None,
 ) -> RequiresUserAction:
     detail = f" Diagnostic: {diagnostics}" if diagnostics else ""
+    system_label = {
+        "oa": "OA",
+        "taihua": "Taihua",
+        "smartlight": "Smartlight",
+        "yuque": "Yuque",
+    }.get(str(session.get("system_id") or ""), "Downstream system")
     return RequiresUserAction(
         "SESSION_CHECK_UNAVAILABLE",
         (
-            "OA session validity could not be checked. Retry later through the "
+            f"{system_label} session validity could not be checked. Retry later through the "
             f"same central runtime; credentials are not required yet.{detail}"
         ),
         next_action=_session_runtime_next_action(
