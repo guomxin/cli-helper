@@ -288,7 +288,7 @@ def _render_confirmation(
             </header>
             <dl class="detail-list">
               <div><dt>执行身份</dt><dd>{escape(str(summary.get('principal') or '当前用户'))}</dd></div>
-              <div><dt>目标系统</dt><dd>{escape(str(summary.get('system') or '致远 OA'))}</dd></div>
+              <div><dt>目标系统</dt><dd>{escape(str(summary.get('system') or '未标明'))}</dd></div>
               <div><dt>执行效果</dt><dd>{escape(effect)}</dd></div>
               {''.join(rows)}
               <div><dt>计划指纹</dt><dd class="hash">{escape(str(authorization.get('plan_hash') or ''))}</dd></div>

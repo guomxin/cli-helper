@@ -143,6 +143,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "WRITE_AUTHORIZATION_REQUIRED",
             )
             authorization_id = prepared["nextAction"]["authorizationId"]
+            authorization = service.write_authorizations.get(authorization_id)
+            self.assertEqual(
+                authorization["summary"]["system"],
+                "照明实验室测试系统",
+            )
             csrf = service.write_authorizations.issue_csrf(authorization_id)
             service.write_authorizations.decide(
                 authorization_id,

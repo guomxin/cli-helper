@@ -376,6 +376,7 @@ class SmartlightAdapterTests(unittest.TestCase):
             worker,
             {"alarm_id": "alarm-1", "remark": "现场已复核"},
         )
+        self.assertEqual(prepared["summary"]["system"], "照明实验室测试系统")
         result = commit_smartlight_alarm_remark_update(
             self.adapter,
             worker,

@@ -3193,6 +3193,9 @@ class CentralCapabilityService:
         }
         summary = {
             **prepared["summary"],
+            "system": definition["field_schema"].get("system")
+            or prepared["summary"].get("system")
+            or session["system_id"],
             "principal": session.get("downstream_principal_ref")
             or session.get("expected_principal_ref")
             or session["user_subject"],

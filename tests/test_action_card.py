@@ -58,6 +58,31 @@ class TrustedActionCardTests(unittest.TestCase):
             self.assertIn("授权创建并发送", html)
             self.assertNotIn("授权保存草稿", html)
 
+    def test_card_never_mislabels_missing_system_as_oa(self):
+        with TemporaryDirectory() as tmp:
+            store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")
+            authorization = store.create(
+                user_subject="user-a",
+                system_id="smartlight",
+                session_id="session-a",
+                capability_name="smartlight.alarm.remark.update",
+                capability_version="0.1.0",
+                prepare_operation_id="prepare-smartlight-1",
+                plan={"business_intent": "update_alarm_remark"},
+                summary={"title": "修改照明 RTU 告警备注", "fields": []},
+                card_base_url="http://127.0.0.1:8780",
+            )
+            app = TrustedActionApplication(authorization_store=store)
+
+            response = app.get_card(
+                authorization["authorization_id"],
+                secure_cookie=False,
+            )
+
+            html = response.body.decode("utf-8")
+            self.assertIn("未标明", html)
+            self.assertNotIn("致远 OA", html)
+
     def test_card_does_not_disable_submitter_before_form_serialization(self):
         with TemporaryDirectory() as tmp:
             store = WriteAuthorizationStore(Path(tmp) / "agentbridge.db")

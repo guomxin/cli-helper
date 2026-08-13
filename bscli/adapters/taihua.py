@@ -651,6 +651,7 @@ def prepare_taihua_work_log_create(adapter, worker, arguments: dict) -> dict:
         },
         "summary": {
             "title": "提交泰华工作日志",
+            "system": TAIHUA_SYSTEM_NAME,
             "effect": "正式创建一条个人工作日志",
             "fields": [
                 {"label": "日志日期", "value": inputs["log_date"]},

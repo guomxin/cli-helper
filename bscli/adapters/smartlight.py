@@ -1774,6 +1774,7 @@ def prepare_smartlight_alarm_remark_update(
         },
         "summary": {
             "title": "修改照明 RTU 告警备注",
+            "system": SMARTLIGHT_SYSTEM_NAME,
             "effect": "修改一条 RTU 告警备注，可通过再次写入原值恢复",
             "fields": [
                 {

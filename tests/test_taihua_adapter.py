@@ -646,6 +646,7 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
         )
         boundary_calls: list[str] = []
 
+        self.assertEqual(prepared["summary"]["system"], "泰华日志系统")
         result = commit_taihua_work_log_create(
             adapter,
             object(),
