@@ -4644,6 +4644,54 @@ test("reports verified Taihua work-log success and business rejection", async ()
     true,
   );
 });
+test("reports verified Smartlight alarm remark update and business rejection", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:smartlight-user";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "smartlight-user",
+  });
+
+  await coordinator.deliverStatusDirect(sessionKey, "succeeded", null, {
+    result: {
+      status: "updated",
+      alarm: { alarmId: "alarm-1", remark: "现场已复核" },
+      verification: { matched: true },
+    },
+  });
+  await coordinator.deliverStatusDirect(
+    sessionKey,
+    "failed",
+    "SMARTLIGHT_BUSINESS_RULE_REJECTED",
+    {
+      error: {
+        code: "SMARTLIGHT_BUSINESS_RULE_REJECTED",
+        message: "授权后目标告警备注已被其他操作修改。",
+      },
+    },
+  );
+
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "照明 RTU 告警备注已修改并回读确认。",
+  );
+  assert.equal(
+    harness.sentPayloads[1].payload.text.includes("其他操作修改"),
+    true,
+  );
+  assert.equal(
+    harness.sentPayloads[1].payload.text.includes(
+      "SMARTLIGHT_BUSINESS_RULE_REJECTED",
+    ),
+    true,
+  );
+});
 test("reports a sanitized OA business-rule rejection and hides generic failures", async () => {
   const harness = fakeApi({
     autoPoll: false,

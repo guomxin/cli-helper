@@ -9,6 +9,8 @@ import unittest
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
     SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
@@ -18,11 +20,15 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SmartlightBusinessRuleRejected,
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     _resolve_date_range,
     build_smartlight_capability_registry,
+    commit_smartlight_alarm_remark_update,
+    prepare_smartlight_alarm_remark_update,
 )
+from bscli.core.central_service import capability_required_scopes
 
 
 class SmartlightAdapterTests(unittest.TestCase):
@@ -331,11 +337,25 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(inspection_report["metadata"]["exportedCount"], 1)
         self.assertEqual(inspection_report["rows"][0]["deviceCode"], "LP-001")
 
-    def test_registry_contains_eleven_read_only_capabilities(self):
+    def test_registry_contains_read_and_reversible_write_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 11)
-        self.assertTrue(all(spec.effect == "read" for spec in capabilities))
+        self.assertEqual(len(capabilities), 13)
+        self.assertEqual(
+            sum(spec.effect == "read" for spec in capabilities),
+            11,
+        )
+        self.assertEqual(
+            {
+                spec.name
+                for spec in capabilities
+                if spec.effect == "reversible_write"
+            },
+            {
+                SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
+                SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+            },
+        )
         inspection = next(
             spec
             for spec in capabilities
@@ -346,6 +366,67 @@ class SmartlightAdapterTests(unittest.TestCase):
             inspection.input_schema["properties"]["state"]["type"],
             ["integer", "string", "null"],
         )
+
+    def test_alarm_remark_update_freezes_commits_verifies_and_exposes_rollback(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        entered = []
+
+        prepared = prepare_smartlight_alarm_remark_update(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1", "remark": "现场已复核"},
+        )
+        result = commit_smartlight_alarm_remark_update(
+            self.adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: entered.append(True),
+        )
+
+        self.assertEqual(entered, [True])
+        self.assertEqual(worker.alarm_remark["remark"], "现场已复核")
+        self.assertEqual(result["status"], "updated")
+        self.assertTrue(result["verification"]["matched"])
+        self.assertEqual(
+            result["rollback"]["arguments"],
+            {"alarm_id": "alarm-1", "remark": ""},
+        )
+        self.assertEqual(
+            capability_required_scopes(
+                SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY
+            ),
+            frozenset({"smartlight:write:alarm_remark"}),
+        )
+        self.assertEqual(
+            capability_required_scopes(SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY),
+            frozenset({"smartlight:write:alarm_remark"}),
+        )
+
+    def test_alarm_remark_update_stops_when_remark_changed_after_prepare(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        prepared = prepare_smartlight_alarm_remark_update(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1", "remark": "拟写入备注"},
+        )
+        worker.alarm_remark = {
+            "hitchAlarmId": "alarm-1",
+            "rtuId": "rtu-1",
+            "remark": "其他用户已修改",
+        }
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "其他操作修改",
+        ):
+            commit_smartlight_alarm_remark_update(
+                self.adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: self.fail(
+                    "commit boundary must not be entered"
+                ),
+            )
 
 
 class FakePage:
@@ -376,6 +457,8 @@ class FakeSmartlightWorker:
         self.api_requests: list[dict] = []
         self.login_rejection = login_rejection
         self.login_completed = authenticated
+        self.alarm_remark: dict | None = None
+        self.saved_alarm_payloads: list[dict] = []
         if authenticated:
             self.state = {
                 "access_token": "jwt-access",
@@ -594,6 +677,7 @@ class FakeSmartlightWorker:
                             "occurDate": "2026-08-10 10:05:38",
                             "lastDate": "2026-08-12 10:30:02",
                             "rtuCode": "05312222",
+                            "rtuId": "rtu-1",
                             "rtuName": "实验室控制柜",
                             "weightFacto": 1,
                             "conductStatue": 0,
@@ -608,6 +692,13 @@ class FakeSmartlightWorker:
                     "yesterdayAlarm": 1,
                 }
             )
+        if path.endswith("/rHisHitchAlarm/getRtuAlarmRemark"):
+            return _response(deepcopy(self.alarm_remark))
+        if path.endswith("/rHisHitchAlarm/saveRtuAlarmRemark"):
+            payload = json.loads(parse_qs(str(kwargs.get("body") or ""))["json"][0])
+            self.saved_alarm_payloads.append(deepcopy(payload))
+            self.alarm_remark = deepcopy(payload)
+            return _response({"code": 200, "message": "保存成功"})
         if path.endswith("/inspectionTask/getDataByCondition"):
             return _response(
                 {

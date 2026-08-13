@@ -326,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
             "taihua:write:worklog",
             "yuque:read",
             "smartlight:read",
+            "smartlight:write:alarm_remark",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")

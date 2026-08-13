@@ -2807,6 +2807,13 @@ function safeSucceededMessage(response) {
   ) {
     return "泰华工作日志已提交。";
   }
+  if (
+    result.status === "updated" &&
+    result.alarm &&
+    typeof result.alarm === "object"
+  ) {
+    return "照明 RTU 告警备注已修改并回读确认。";
+  }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return "OA 待发草稿已保存，未提交审批。";
   }
@@ -2844,14 +2851,20 @@ function safeStatusMessage(status, errorCode, response = null) {
       return "AgentBridge 无法确认本次安全操作的最终状态" + code + "。";
     case "failed":
       if (
-        ["OA_BUSINESS_RULE_REJECTED", "TAIHUA_BUSINESS_RULE_REJECTED"].includes(
+        [
+          "OA_BUSINESS_RULE_REJECTED",
+          "TAIHUA_BUSINESS_RULE_REJECTED",
+          "SMARTLIGHT_BUSINESS_RULE_REJECTED",
+        ].includes(
           safeCode(errorCode),
         )
       ) {
         const reason = safeBusinessRuleMessage(response);
-        const taihua = safeCode(errorCode) === "TAIHUA_BUSINESS_RULE_REJECTED";
-        const system = taihua ? "泰华日志系统" : "OA";
-        const action = taihua ? "工作日志" : "申请";
+        const normalizedCode = safeCode(errorCode);
+        const taihua = normalizedCode === "TAIHUA_BUSINESS_RULE_REJECTED";
+        const smartlight = normalizedCode === "SMARTLIGHT_BUSINESS_RULE_REJECTED";
+        const system = smartlight ? "照明系统" : taihua ? "泰华日志系统" : "OA";
+        const action = smartlight ? "告警备注修改" : taihua ? "工作日志" : "申请";
         return reason
           ? `${system} 未提交本次${action}：${reason}${code}。`
           : `${system} 根据业务规则拒绝了本次${action}${code}。`;

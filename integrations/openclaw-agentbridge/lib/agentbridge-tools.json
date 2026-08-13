@@ -4914,6 +4914,141 @@
       "title": "导出照明系统 CSV 报告"
     },
     {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "为一条精确的 RTU 告警打开预填可信字段卡，读取当前备注并冻结修改计划；随后还需用户在独立授权卡中确认。本工具本身不修改照明系统。",
+      "inputSchema": {
+        "properties": {
+          "alarm_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Alarm Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "remark": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remark"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ],
+        "title": "smartlight_alarm_remark_update_prepareArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_remark_update_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_remark_update_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "准备修改照明告警备注"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "消费一份已批准的授权，修改冻结的 RTU 告警备注，并通过权威回读确认结果。该提交工具不应在授权前直接调用。",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "smartlight_alarm_remark_updateArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_remark_update",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_remark_updateDictOutput",
+        "type": "object"
+      },
+      "title": "执行已授权的照明告警备注修改"
+    },
+    {
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,

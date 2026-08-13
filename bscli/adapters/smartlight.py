@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 from html.parser import HTMLParser
@@ -11,6 +12,7 @@ from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from bscli.adapters.base import (
     AdapterAuthenticationRejected,
+    AdapterBusinessRuleRejected,
     AdapterLoginContractMismatch,
     AdapterLoginRequired,
     AdapterSessionCheckUnavailable,
@@ -33,6 +35,47 @@ SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY = "smartlight.alarm.analysis"
 SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY = "smartlight.inspection_task.detail"
 SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY = "smartlight.leakage.analysis"
 SMARTLIGHT_REPORT_EXPORT_CAPABILITY = "smartlight.report.export"
+SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY = (
+    "smartlight.alarm.remark.update.prepare"
+)
+SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY = "smartlight.alarm.remark.update"
+
+SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "alarm_id": {"type": "string"},
+        "remark": {"type": "string"},
+        "input_submission_id": {"type": "string"},
+    },
+    "required": ["alarm_id"],
+    "additionalProperties": False,
+}
+
+SMARTLIGHT_ALARM_REMARK_UPDATE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"authorization_id": {"type": "string"}},
+    "required": ["authorization_id"],
+    "additionalProperties": False,
+}
+
+SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA = {
+    "schema_version": "agentbridge.smartlight_alarm_remark_fields.v1",
+    "title": "修改 RTU 告警备注",
+    "system": SMARTLIGHT_SYSTEM_NAME,
+    "effect": "修改一条 RTU 告警的备注；留空表示清除备注",
+    "submit_label": "提交字段",
+    "notice": "字段提交后还需单独授权；授权前不会修改照明系统。",
+    "fields": [
+        {
+            "name": "remark",
+            "label": "告警备注（留空表示清除）",
+            "control": "textarea",
+            "required": False,
+            "max_length": 500,
+            "rows": 5,
+        }
+    ],
+}
 
 _SMARTLIGHT_ANALYSIS_LIMIT = 500
 _SMARTLIGHT_ANALYSIS_PAGE_SIZE = 100
@@ -79,6 +122,18 @@ class SmartlightLoginContractMismatch(AdapterLoginContractMismatch):
 
 
 class SmartlightSessionCheckUnavailable(AdapterSessionCheckUnavailable):
+    pass
+
+
+class SmartlightBusinessRuleRejected(AdapterBusinessRuleRejected):
+    error_code = "SMARTLIGHT_BUSINESS_RULE_REJECTED"
+
+
+class SmartlightAlarmRemarkContractMismatch(ValueError):
+    pass
+
+
+class SmartlightAlarmRemarkOutcomeUnknown(RuntimeError):
     pass
 
 
@@ -1403,6 +1458,102 @@ class SmartlightCentralAdapter:
             },
         )
 
+    def alarm_remark_snapshot(self, worker, alarm_id: str) -> dict:
+        record = self._find_alarm_record(worker, alarm_id)
+        rtu_id = str(record.get("rtuId") or "").strip()
+        if not rtu_id:
+            raise SmartlightAlarmRemarkContractMismatch(
+                "目标告警缺少 RTU 标识，不能安全修改备注。"
+            )
+        remark_record = self.get_alarm_remark(worker, alarm_id)
+        return {
+            "alarmId": alarm_id,
+            "rtuId": rtu_id,
+            "deviceCode": str(record.get("rtuCode") or "").strip() or None,
+            "deviceName": str(record.get("rtuName") or "").strip() or None,
+            "alarmType": str(record.get("hitchName") or "").strip() or None,
+            "alarmMessage": str(record.get("hitchIntro") or "").strip() or None,
+            "alarmState": record.get("conductStatue"),
+            "remark": _smartlight_remark_text(remark_record),
+            "remarkRecord": deepcopy(remark_record),
+        }
+
+    def get_alarm_remark(self, worker, alarm_id: str) -> dict | None:
+        response = self._authorized_post_response(
+            worker,
+            "/rHisHitchAlarm/getRtuAlarmRemark",
+            {"hitchAlarmId": alarm_id},
+        )
+        if response["status"] != 200:
+            raise SmartlightSessionCheckUnavailable(
+                f"照明告警备注读取失败（HTTP {response['status']}）。"
+            )
+        payload = response.get("json")
+        if isinstance(payload, dict):
+            return payload
+        if payload is None and not str(response.get("text") or "").strip():
+            return None
+        raise SmartlightAlarmRemarkContractMismatch(
+            "照明告警备注接口返回了无法识别的数据。"
+        )
+
+    def save_alarm_remark(self, worker, payload: dict) -> dict:
+        response = self._authorized_post_response(
+            worker,
+            "/rHisHitchAlarm/saveRtuAlarmRemark",
+            {"json": _json_text(payload)},
+        )
+        if response["status"] in {400, 409, 422}:
+            raise SmartlightBusinessRuleRejected(_smartlight_response_message(response))
+        if response["status"] != 200:
+            raise SmartlightAlarmRemarkOutcomeUnknown(
+                "照明系统未能确认告警备注是否保存"
+                f"（HTTP {response['status']}）：{_smartlight_response_message(response)}"
+            )
+        result = response.get("json")
+        if not isinstance(result, dict):
+            raise SmartlightAlarmRemarkOutcomeUnknown(
+                "照明告警备注保存接口没有返回可确认的 JSON 结果。"
+            )
+        if str(result.get("code") or "") != "200":
+            raise SmartlightBusinessRuleRejected(
+                _smartlight_response_message(response)
+            )
+        return result
+
+    def _find_alarm_record(self, worker, alarm_id: str) -> dict:
+        context = self._principal_context(worker)
+        for page in range(1, 6):
+            payload = self._authorized_post_json(
+                worker,
+                "/rHisHitchAlarm/getDataByRtuAlarm",
+                {
+                    "json": _json_text(
+                        {
+                            "_like_params": "",
+                            "organroleId": context["organroleId"],
+                        }
+                    ),
+                    "pageNum": page,
+                    "pageSize": 100,
+                    "organroleId": context["organroleId"],
+                },
+            )
+            page_payload = (
+                payload.get("RtuHisHitchAlarm")
+                if isinstance(payload, dict)
+                else payload
+            )
+            items = _page_items(page_payload)
+            for item in items:
+                if str(item.get("hitchAlarmId") or "") == alarm_id:
+                    return item
+            if not items or page * 100 >= _page_total(page_payload):
+                break
+        raise SmartlightBusinessRuleRejected(
+            "未在当前账号最近 500 条可见 RTU 告警中找到指定告警，已停止修改。"
+        )
+
     def _follow_login_redirects(
         self,
         worker,
@@ -1522,6 +1673,19 @@ class SmartlightCentralAdapter:
         return dict(principal)
 
     def _authorized_post_json(self, worker, path: str, fields: dict) -> Any:
+        response = self._authorized_post_response(worker, path, fields)
+        if response["status"] != 200:
+            raise SmartlightSessionCheckUnavailable(
+                f"Smartlight API failed with HTTP {response['status']}."
+            )
+        payload = response.get("json")
+        if payload is None:
+            raise SmartlightSessionCheckUnavailable(
+                "Smartlight API did not return JSON."
+            )
+        return payload
+
+    def _authorized_post_response(self, worker, path: str, fields: dict) -> dict:
         state = worker.get_http_state()
         token = str(state.get("access_token") or "")
         if not token:
@@ -1547,19 +1711,170 @@ class SmartlightCentralAdapter:
             )
         if response["status"] in {301, 302, 303, 307, 308, 401, 403}:
             raise SmartlightLoginRequired("Smartlight session is no longer authenticated.")
-        if response["status"] != 200:
-            raise SmartlightSessionCheckUnavailable(
-                f"Smartlight API failed with HTTP {response['status']}."
-            )
-        payload = response.get("json")
-        if payload is None:
-            raise SmartlightSessionCheckUnavailable(
-                "Smartlight API did not return JSON."
-            )
-        return payload
+        return response
 
     def _url(self, path: str) -> str:
         return urljoin(self.base_url, path.lstrip("/"))
+
+
+def prepare_smartlight_alarm_remark_update(
+    adapter,
+    worker,
+    arguments: dict,
+) -> dict:
+    inputs = normalize_smartlight_alarm_remark_inputs(arguments)
+    snapshot = adapter.alarm_remark_snapshot(worker, inputs["alarm_id"])
+    if snapshot["remark"] == inputs["remark"]:
+        raise SmartlightBusinessRuleRejected(
+            "目标告警的当前备注已经与拟写入内容一致，已停止重复修改。"
+        )
+    principal = adapter._principal_context(worker)  # noqa: SLF001
+    payload = deepcopy(snapshot.get("remarkRecord"))
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.update(
+        {
+            "hitchAlarmId": snapshot["alarmId"],
+            "rtuId": snapshot["rtuId"],
+            "remark": inputs["remark"],
+        }
+    )
+    payload.setdefault("createUser", str(principal.get("name") or ""))
+    payload.setdefault(
+        "createTime",
+        datetime.now(_SMARTLIGHT_BUSINESS_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    return {
+        "plan": {
+            "schema_version": "agentbridge.smartlight_alarm_remark_update_plan.v1",
+            "business_intent": "update_alarm_remark",
+            "target": {
+                key: snapshot.get(key)
+                for key in (
+                    "alarmId",
+                    "rtuId",
+                    "deviceCode",
+                    "deviceName",
+                    "alarmType",
+                    "alarmMessage",
+                    "alarmState",
+                )
+            },
+            "exact_input": inputs,
+            "exact_payload": payload,
+            "preconditions": {
+                "previous_remark": snapshot["remark"],
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "expected_effect": {
+                "kind": "update_alarm_remark",
+                "alarm_id": snapshot["alarmId"],
+                "remark": inputs["remark"],
+            },
+        },
+        "summary": {
+            "title": "修改照明 RTU 告警备注",
+            "effect": "修改一条 RTU 告警备注，可通过再次写入原值恢复",
+            "fields": [
+                {
+                    "label": "告警设备",
+                    "value": snapshot.get("deviceName")
+                    or snapshot.get("deviceCode")
+                    or "未知设备",
+                },
+                {"label": "告警类型", "value": snapshot.get("alarmType") or "未知"},
+                {"label": "告警 ID", "value": snapshot["alarmId"]},
+                {
+                    "label": "原备注",
+                    "value": snapshot["remark"] or "（无）",
+                },
+                {
+                    "label": "新备注",
+                    "value": inputs["remark"] or "（清除备注）",
+                },
+            ],
+        },
+    }
+
+
+def commit_smartlight_alarm_remark_update(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary,
+) -> dict:
+    if plan.get("schema_version") != "agentbridge.smartlight_alarm_remark_update_plan.v1":
+        raise SmartlightAlarmRemarkContractMismatch(
+            "照明告警备注写入计划版本不受支持。"
+        )
+    inputs = deepcopy(plan.get("exact_input"))
+    payload = deepcopy(plan.get("exact_payload"))
+    target = deepcopy(plan.get("target"))
+    preconditions = deepcopy(plan.get("preconditions"))
+    if not all(isinstance(value, dict) for value in (inputs, payload, target, preconditions)):
+        raise SmartlightAlarmRemarkContractMismatch(
+            "照明告警备注写入计划缺少冻结字段。"
+        )
+    current = adapter.alarm_remark_snapshot(worker, inputs["alarm_id"])
+    if str(current.get("rtuId") or "") != str(target.get("rtuId") or ""):
+        raise SmartlightBusinessRuleRejected(
+            "授权后目标告警关联的 RTU 已变化，已停止写入。"
+        )
+    if current["remark"] != str(preconditions.get("previous_remark") or ""):
+        raise SmartlightBusinessRuleRejected(
+            "授权后目标告警备注已被其他操作修改，已停止覆盖。"
+        )
+    enter_commit_boundary()
+    downstream = adapter.save_alarm_remark(worker, payload)
+    readback = adapter.alarm_remark_snapshot(worker, inputs["alarm_id"])
+    if readback["remark"] != inputs["remark"]:
+        raise SmartlightAlarmRemarkOutcomeUnknown(
+            "照明系统接受了备注保存请求，但权威回读未得到预期内容。"
+        )
+    previous_remark = str(preconditions.get("previous_remark") or "")
+    return {
+        "status": "updated",
+        "alarm": {
+            key: readback.get(key)
+            for key in (
+                "alarmId",
+                "deviceCode",
+                "deviceName",
+                "alarmType",
+                "alarmMessage",
+                "alarmState",
+                "remark",
+            )
+        },
+        "verification": {
+            "method": "POST /rHisHitchAlarm/getRtuAlarmRemark",
+            "matched": True,
+        },
+        "rollback": {
+            "available": True,
+            "capability": SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
+            "arguments": {
+                "alarm_id": inputs["alarm_id"],
+                "remark": previous_remark,
+            },
+        },
+        "downstream": {"code": downstream.get("code")},
+    }
+
+
+def normalize_smartlight_alarm_remark_inputs(arguments: dict) -> dict:
+    alarm_id = str(arguments.get("alarm_id") or "").strip()
+    if not alarm_id or len(alarm_id) > 200:
+        raise SmartlightAlarmRemarkContractMismatch(
+            "alarm_id 不能为空且不能超过 200 个字符。"
+        )
+    remark = str(arguments.get("remark") or "").strip()
+    if len(remark) > 500:
+        raise SmartlightAlarmRemarkContractMismatch(
+            "告警备注不能超过 500 个字符。"
+        )
+    return {"alarm_id": alarm_id, "remark": remark}
 
 
 def build_smartlight_capability_registry() -> CapabilityRegistry:
@@ -1820,6 +2135,33 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
             adapter=SMARTLIGHT_ADAPTER_ID,
             workflow="smartlight-report-export-v1",
         ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Open a trusted field card for one exact RTU alarm, freeze the "
+                "current remark and requested replacement, then require separate "
+                "authorization. This step does not modify Smartlight."
+            ),
+            input_schema=SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-remark-update-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume an approved authorization, update the exact RTU alarm "
+                "remark, and verify the result by authoritative readback."
+            ),
+            input_schema=SMARTLIGHT_ALARM_REMARK_UPDATE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-remark-update-commit-v1",
+        ),
     )
     for spec in specs:
         registry.register(spec)
@@ -1878,6 +2220,25 @@ def _login_rejection_code(message: str) -> str:
     if any(token in normalized for token in ("用户名", "账号", "密码", "凭证")):
         return "CREDENTIALS_REJECTED"
     return "AUTHENTICATION_REJECTED"
+
+
+def _smartlight_remark_text(payload: dict | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("remark") or "").strip()
+
+
+def _smartlight_response_message(response: dict) -> str:
+    payload = response.get("json")
+    if isinstance(payload, dict):
+        for key in ("message", "msg", "error", "error_description"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value[:500]
+    text = str(response.get("text") or "").strip()
+    if text:
+        return text[:500]
+    return "照明系统未返回具体原因。"
 
 
 def _same_origin_url(origin: str, value: Any) -> str:

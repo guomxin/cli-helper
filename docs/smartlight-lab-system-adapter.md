@@ -4,8 +4,9 @@
 
 目标系统：`http://123.232.113.241:4101/smartlight`。
 
-当前只开放读取能力，并且只给 AgentBridge 第一用户 `guomao` 授权。第二用户及其他
-客户端身份不会因为能力部署而自动获得权限。
+当前开放十一项读取能力和一项受控、可逆的告警备注修改能力。Smartlight 能力目前只
+面向 AgentBridge 第一用户 `guomao` 配置；第二用户及其他客户端身份不会因为代码部署
+而自动获得权限，写权限还必须单独授予。
 
 已发布能力：
 
@@ -21,13 +22,19 @@
 | `smartlight_alarm_analysis` | 有界分析 RTU 告警趋势和集中设备 | `smartlight.alarm.analysis` |
 | `smartlight_inspection_task_detail` | 查询巡检每日进度和实际打卡记录 | `smartlight.inspection_task.detail` |
 | `smartlight_leakage_analysis` | 有界分析漏电趋势和集中位置 | `smartlight.leakage.analysis` |
+| `smartlight_report_export` | 导出有界 CSV 报告 | `smartlight.report.export` |
+| `smartlight_alarm_remark_update_prepare` | 为精确 RTU 告警填写、授权并修改备注 | `smartlight.alarm.remark.update.prepare` |
 | `smartlight_session_status` | 检查当前用户登录会话 | - |
 | `smartlight_session_login` | 发起可信登录卡 | - |
 
-本期不开放开关灯、远程控制、参数配置、告警处理、删除、新增或修改业务数据。
+真正执行修改的 `smartlight.alarm.remark.update` 是内部 commit 能力，不进入智能体工具
+目录。当前不开放开关灯、远程控制、参数配置、告警处置状态、巡检打卡、删除或其他
+业务数据修改。
 
 二期工具的详细契约、接口证据和验收标准见
 [照明实验室测试系统二期能力包](smartlight-phase2-capability-package.md)。
+首项写能力的风险矩阵、可信交互和恢复方法见
+[照明系统写能力一期](smartlight-write-phase1.md)。
 
 ### 读取口径
 
@@ -98,9 +105,13 @@ Cookie、JWT、密码摘要和隐藏登录字段不会进入模型上下文。�
 
 ## 五、验收标准
 
-1. 只有第一用户的有效 MCP Token 包含 `smartlight:read`。
+1. 只有明确开通的第一用户 Token 包含 `smartlight:read`；写入还必须单独包含
+   `smartlight:write:alarm_remark`。
 2. 第二用户的工具目录不出现 Smartlight 工具。
 3. 未登录读取时生成含验证码的可信登录卡，登录后自动续办原查询。
 4. 登录主体显示为 `无为`，并与已验证主体绑定一致。
-5. 十项读取能力返回结构化、分页或有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
-6. 工具目录中不存在 Smartlight 写入或设备控制能力。
+5. 十一项读取能力返回结构化、分页或有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
+6. 告警备注必须经过字段卡和授权卡；授权后若原备注变化则停止覆盖，保存后必须权威
+   回读，新值不匹配时报告结果未知且不自动重试。
+7. 测试修改后可通过同一可信流程写回原备注；智能体目录不出现内部 commit 或任何
+   设备控制能力。

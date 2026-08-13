@@ -30,6 +30,7 @@ MCP_SCOPES = (
     "taihua:write:worklog",
     "yuque:read",
     "smartlight:read",
+    "smartlight:write:alarm_remark",
 )
 SYSTEM_LABELS = {
     "oa": "致远 OA",

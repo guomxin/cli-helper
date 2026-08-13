@@ -714,12 +714,18 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(write_denied.json()["result"]["isError"])
         self.assertFalse(write_allowed.json()["result"]["isError"])
 
-    def test_smartlight_tools_require_smartlight_read_scope(self):
+    def test_smartlight_tools_separate_read_and_alarm_remark_write_scopes(self):
         with self._server() as (service, store, oa_read_token, client):
             smartlight_reader = store.issue(
                 user_subject="user-a",
                 expected_principal_ref="无为",
                 scopes=["smartlight:read"],
+                ttl_seconds=3600,
+            )
+            smartlight_writer = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="无为",
+                scopes=["smartlight:read", "smartlight:write:alarm_remark"],
                 ttl_seconds=3600,
             )
             service.invoke.return_value = {
@@ -771,18 +777,40 @@ class CentralMcpTests(unittest.TestCase):
                     },
                 },
             )
+            write_denied = self._request(
+                client,
+                "tools/call",
+                request_id=29,
+                token=smartlight_reader["token"],
+                params={
+                    "name": "smartlight_alarm_remark_update_prepare",
+                    "arguments": {"alarm_id": "alarm-1", "remark": "复核完成"},
+                },
+            )
+            write_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=30,
+                token=smartlight_writer["token"],
+                params={
+                    "name": "smartlight_alarm_remark_update_prepare",
+                    "arguments": {"alarm_id": "alarm-1", "remark": "复核完成"},
+                },
+            )
 
         self.assertTrue(denied.json()["result"]["isError"])
         self.assertFalse(allowed.json()["result"]["isError"])
         self.assertFalse(relative_range.json()["result"]["isError"])
         self.assertFalse(report.json()["result"]["isError"])
+        self.assertTrue(write_denied.json()["result"]["isError"])
+        self.assertFalse(write_allowed.json()["result"]["isError"])
         self.assertEqual(
             service.invoke.call_args.kwargs["capability_name"],
-            "smartlight.report.export",
+            "smartlight.alarm.remark.update.prepare",
         )
         self.assertEqual(
-            service.invoke.call_args.kwargs["arguments"]["asset_type"],
-            "rtu",
+            service.invoke.call_args.kwargs["arguments"],
+            {"alarm_id": "alarm-1", "remark": "复核完成"},
         )
 
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):

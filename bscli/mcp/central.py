@@ -77,6 +77,8 @@ from bscli.adapters.taihua import (
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
     SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
@@ -196,6 +198,9 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_inspection_task_detail": frozenset({"smartlight:read"}),
     "smartlight_leakage_analysis": frozenset({"smartlight:read"}),
     "smartlight_report_export": frozenset({"smartlight:read"}),
+    "smartlight_alarm_remark_update_prepare": frozenset(
+        {"smartlight:write:alarm_remark"}
+    ),
     "smartlight_session_status": frozenset({"smartlight:read"}),
     "smartlight_session_login": frozenset({"smartlight:read"}),
     "yuque_public_books_list": frozenset({"yuque:read"}),
@@ -2515,6 +2520,74 @@ def create_central_mcp_server(
             arguments,
             idempotency_key,
             {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_remark_update_prepare",
+        title="准备修改照明告警备注",
+        meta=interaction_tool_meta(),
+        description=(
+            "为一条精确的 RTU 告警打开预填可信字段卡，读取当前备注并冻结修改"
+            "计划；随后还需用户在独立授权卡中确认。本工具本身不修改照明系统。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_remark_update_prepare(
+        ctx: Context,
+        alarm_id: Annotated[str, Field(min_length=1, max_length=200)],
+        remark: Annotated[str | None, Field(max_length=500)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"alarm_id": alarm_id}
+        if remark is not None:
+            arguments["remark"] = remark
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:write:alarm_remark"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_remark_update",
+        title="执行已授权的照明告警备注修改",
+        meta=interaction_tool_meta(),
+        description=(
+            "消费一份已批准的授权，修改冻结的 RTU 告警备注，并通过权威回读"
+            "确认结果。该提交工具不应在授权前直接调用。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_remark_update(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"smartlight:write:alarm_remark"},
         )
 
     @mcp.tool(

@@ -25,6 +25,7 @@ export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
   "yuque_session_login",
   "taihua_work_log_create_prepare",
   "taihua_session_login",
+  "smartlight_alarm_remark_update_prepare",
   "smartlight_session_login",
   "oa_session_login",
 ]);

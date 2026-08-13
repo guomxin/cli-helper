@@ -13,7 +13,8 @@ The active runtime is central AgentBridge:
 - A persistent Task Hub that links host tasks, operations, trusted interactions,
   client endpoints, subscriptions, and notification outbox records
 - Seeyon OA, API-first Taihua work logs, trusted-browser Yuque knowledge access,
-  and read-only Smartlight laboratory monitoring under one multi-system runtime
+  and Smartlight laboratory monitoring with one governed reversible write sample
+  under one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
@@ -135,14 +136,23 @@ Published Smartlight capabilities:
 - `smartlight.alarm.analysis`
 - `smartlight.inspection_task.detail`
 - `smartlight.leakage.analysis`
+- `smartlight.report.export`
+- `smartlight.alarm.remark.update.prepare`
+- `smartlight.alarm.remark.update`
 
 Smartlight uses a trusted username/password/image-captcha card only for login.
 After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
 normal reads do not open a remote browser. The current integration deliberately
-does not expose device control, configuration, alarm handling, or CRUD operations.
+does not expose device control, configuration, alarm disposition, or general CRUD.
+Its first write sample changes one exact RTU alarm remark through a field card,
+separate authorization, pre-commit concurrency check, authoritative readback, and
+an explicit restore-original-value path. The commit capability is internal and is
+not exposed to agents.
 See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
 The phase-two contracts and staged report-export plan are documented in the
 [Smartlight phase-two capability package](docs/smartlight-phase2-capability-package.md).
+The write risk matrix and acceptance path are documented in
+[Smartlight write phase one](docs/smartlight-write-phase1.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden

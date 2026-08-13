@@ -8,6 +8,10 @@ import time
 from unittest.mock import MagicMock, patch
 
 from bscli.adapters.seeyon_business_trip import BusinessTripOutcomeUnknown
+from bscli.adapters.smartlight import (
+    SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
+    SmartlightBusinessRuleRejected,
+)
 from bscli.adapters.seeyon_business_trip_submit import (
     BusinessTripBusinessValidationRequired,
     BusinessTripSubmissionBlocked,
@@ -44,6 +48,196 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_unmapped_write_scope_policy_fails_closed(self):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
             capability_required_scopes("oa.future.unmapped_write")
+
+    def test_smartlight_alarm_remark_uses_field_authorization_and_commit_chain(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = CentralCapabilityService(
+                home=Path(tmp),
+                base_url=BASE_URL,
+                smartlight_base_url=(
+                    "http://123.232.113.241:4101/smartlight"
+                ),
+                smartlight_allow_insecure_http=True,
+            )
+            service._worker_factories_by_system["smartlight"] = (  # noqa: SLF001
+                lambda _session, _adapter: worker
+            )
+            session = service.sessions.get_or_create(
+                user_subject="user-a",
+                system_id="smartlight",
+                expected_principal_ref="无为",
+            )
+            session = service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="无为",
+            )
+            service.session_states.save(session["session_id"], {"cookies": []})
+
+            started = service.invoke(
+                user_subject="user-a",
+                capability_name="smartlight.alarm.remark.update.prepare",
+                arguments={"alarm_id": "alarm-1", "remark": "现场已复核"},
+            )
+            self.assertEqual(started["error"]["code"], "FIELD_INPUT_REQUIRED")
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            submission = service.field_submissions.get(submission_id)
+            self.assertEqual(
+                submission["form_schema"]["fields"][0]["value"],
+                "现场已复核",
+            )
+            self.assertEqual(
+                submission["form_schema"]["_agentbridge_resume_arguments"],
+                {"alarm_id": "alarm-1"},
+            )
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=started["interaction"]["interactionId"],
+                ),
+                frozenset({"smartlight:write:alarm_remark"}),
+            )
+
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values={"remark": "现场已复核"},
+            )
+            prepared_payload = {
+                "plan": {
+                    "schema_version": (
+                        "agentbridge.smartlight_alarm_remark_update_plan.v1"
+                    ),
+                    "business_intent": "update_alarm_remark",
+                    "exact_input": {
+                        "alarm_id": "alarm-1",
+                        "remark": "现场已复核",
+                    },
+                },
+                "summary": {
+                    "title": "修改照明 RTU 告警备注",
+                    "fields": [],
+                },
+            }
+            with patch(
+                "bscli.core.central_service.prepare_smartlight_alarm_remark_update",
+                return_value=prepared_payload,
+            ) as prepare:
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.alarm.remark.update.prepare",
+                    arguments={
+                        "alarm_id": "alarm-1",
+                        "input_submission_id": submission_id,
+                    },
+                )
+            prepare.assert_called_once()
+            self.assertEqual(
+                prepare.call_args.args[2],
+                {"alarm_id": "alarm-1", "remark": "现场已复核"},
+            )
+            self.assertEqual(
+                prepared["error"]["code"],
+                "WRITE_AUTHORIZATION_REQUIRED",
+            )
+            authorization_id = prepared["nextAction"]["authorizationId"]
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def commit(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {
+                    "status": "updated",
+                    "alarm": {"alarmId": "alarm-1", "remark": "现场已复核"},
+                    "verification": {"matched": True},
+                }
+
+            with patch(
+                "bscli.core.central_service.commit_smartlight_alarm_remark_update",
+                side_effect=commit,
+            ):
+                committed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.alarm.remark.update",
+                    arguments={"authorization_id": authorization_id},
+                )
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertEqual(
+                service.write_authorizations.get(authorization_id)["state"],
+                "consumed",
+            )
+
+    def test_smartlight_prepare_preserves_business_rule_rejection(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = CentralCapabilityService(
+                home=Path(tmp),
+                base_url=BASE_URL,
+                smartlight_base_url=(
+                    "http://123.232.113.241:4101/smartlight"
+                ),
+                smartlight_allow_insecure_http=True,
+            )
+            service._worker_factories_by_system["smartlight"] = (  # noqa: SLF001
+                lambda _session, _adapter: worker
+            )
+            session = service.sessions.get_or_create(
+                user_subject="user-a",
+                system_id="smartlight",
+                expected_principal_ref="无为",
+            )
+            session = service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="无为",
+            )
+            service.session_states.save(session["session_id"], {"cookies": []})
+            submission = service.field_submissions.create(
+                user_subject="user-a",
+                system_id="smartlight",
+                session_id=session["session_id"],
+                capability_name="smartlight.alarm.remark.update.prepare",
+                capability_version="0.1.0",
+                create_operation_id="prepare-1",
+                supersession_key="alarm-1",
+                form_schema={
+                    **SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
+                    "_agentbridge_resume_arguments": {"alarm_id": "alarm-1"},
+                },
+                card_base_url="http://127.0.0.1:8780",
+                ttl_seconds=300,
+            )
+            csrf = service.field_submissions.issue_csrf(submission["submission_id"])
+            service.field_submissions.submit(
+                submission["submission_id"],
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values={"remark": "相同备注"},
+            )
+            with patch(
+                "bscli.core.central_service.prepare_smartlight_alarm_remark_update",
+                side_effect=SmartlightBusinessRuleRejected("备注没有变化。"),
+            ):
+                response = service.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.alarm.remark.update.prepare",
+                    arguments={
+                        "alarm_id": "alarm-1",
+                        "input_submission_id": submission["submission_id"],
+                    },
+                )
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(
+                response["error"]["code"],
+                "SMARTLIGHT_BUSINESS_RULE_REJECTED",
+            )
+            self.assertEqual(response["error"]["message"], "备注没有变化。")
 
     def test_submit_and_leave_capabilities_have_separate_scope_policies(self):
         self.assertEqual(

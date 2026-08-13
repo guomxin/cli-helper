@@ -34,10 +34,17 @@ from bscli.adapters.taihua import (
 )
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ADAPTER_ID,
+    SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
     SMARTLIGHT_SYSTEM_ID,
+    SmartlightAlarmRemarkContractMismatch,
+    SmartlightAlarmRemarkOutcomeUnknown,
     SmartlightCentralAdapter,
     build_smartlight_capability_registry,
+    commit_smartlight_alarm_remark_update,
+    prepare_smartlight_alarm_remark_update,
 )
 from bscli.adapters.yuque import (
     YUQUE_ADAPTER_ID,
@@ -436,6 +443,17 @@ _TRUSTED_WRITE_DEFINITIONS.update(
             "outcome_error": TaihuaWorkLogOutcomeUnknown,
             "field_message": "工作日志字段必须在可信字段卡中核对。",
             "authorization_message": "泰华工作日志提交计划需要在可信授权卡中确认。",
+        },
+        SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY: {
+            "commit_capability": SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+            "field_schema": SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
+            "context_fields": ("alarm_id",),
+            "prepare_function": "prepare_smartlight_alarm_remark_update",
+            "commit_function": "commit_smartlight_alarm_remark_update",
+            "contract_error": SmartlightAlarmRemarkContractMismatch,
+            "outcome_error": SmartlightAlarmRemarkOutcomeUnknown,
+            "field_message": "请在可信字段卡中核对告警备注。",
+            "authorization_message": "照明告警备注修改计划需要在可信授权卡中确认。",
         }
     }
 )
@@ -483,6 +501,12 @@ _CAPABILITY_SCOPES = {
     WORKFLOW_REVOKE_CAPABILITY: frozenset({"oa:write:revoke"}),
     TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY: frozenset({"taihua:write:worklog"}),
     TAIHUA_WORK_LOG_CREATE_CAPABILITY: frozenset({"taihua:write:worklog"}),
+    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_remark"}
+    ),
+    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_remark"}
+    ),
 }
 
 
@@ -2560,6 +2584,11 @@ class CentralCapabilityService:
                     user_subject,
                     session,
                     diagnostics=str(exc),
+                ) from exc
+            except AdapterBusinessRuleRejected as exc:
+                raise CapabilityRejected(
+                    exc.error_code,
+                    str(exc),
                 ) from exc
 
     def fetch_document_download(self, record: dict) -> dict:
