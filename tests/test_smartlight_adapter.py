@@ -219,6 +219,19 @@ class SmartlightAdapterTests(unittest.TestCase):
         task_query = json.loads(parse_qs(task_request["body"])["json"][0])
         self.assertEqual(task_query["_taskState"], 2)
 
+    def test_alarm_list_normalizes_blank_work_area_state_as_not_submitted(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_record["isSubmitWorkArea"] = ""
+
+        alarms = self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_LIST_CAPABILITY,
+            worker,
+            {"page": 1, "size": 10},
+        )
+
+        self.assertFalse(alarms["items"][0]["workAreaSubmitted"])
+        self.assertEqual(alarms["items"][0]["workAreaSubmitState"], 0)
+
     def test_relative_date_range_is_computed_in_business_timezone(self):
         start, end, source, last_days = _resolve_date_range(
             {"last_days": 30},

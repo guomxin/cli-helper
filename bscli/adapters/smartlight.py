@@ -3230,6 +3230,8 @@ def _normalize_alarm(item: dict) -> dict:
     if not state_label:
         state_label = {0: "当前告警", 1: "已消除"}.get(state_code, state_code)
     work_area_submit_state = _smartlight_int(item.get("isSubmitWorkArea"))
+    if work_area_submit_state is None and item.get("isSubmitWorkArea") in (None, ""):
+        work_area_submit_state = 0
     return {
         "id": _first(item, "hitchAlarmId", "alarmId", "id"),
         "occurredAt": occurred_at,
