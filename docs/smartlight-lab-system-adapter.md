@@ -35,6 +35,8 @@
 [照明实验室测试系统二期能力包](smartlight-phase2-capability-package.md)。
 首项写能力的风险矩阵、可信交互和恢复方法见
 [照明系统写能力一期](smartlight-write-phase1.md)。
+工区提交/撤回的接口证据、治理边界和实施计划见
+[照明系统写能力二期研究与设计](smartlight-write-phase2-design.md)。
 
 ### 读取口径
 
