@@ -150,9 +150,12 @@ an explicit restore-original-value path. The commit capability is internal and i
 not exposed to agents.
 See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
 The phase-two contracts and staged report-export plan are documented in the
-[Smartlight phase-two capability package](docs/smartlight-phase2-capability-package.md).
+[published Smartlight read phase-two capability package](docs/smartlight-phase2-capability-package.md).
 The write risk matrix and acceptance path are documented in
 [Smartlight write phase one](docs/smartlight-write-phase1.md).
+The unimplemented A-D rollout for RTU alarms, lamp alarms, and inspection reviews is
+documented in the
+[Smartlight controlled-write phase-two design](docs/smartlight-write-phase2-design.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden

@@ -42,7 +42,9 @@
 - [泰华日志系统适配](./taihua-log-system-adapter.md)：API、会话和日志能力说明。
 - [部门信息库（语雀）适配](./yuque-department-knowledge-adapter.md)：交互式登录、跨库检索、Doc/Sheet/Table 结构化读取与敏感内容脱敏。
 - [照明实验室测试系统适配](./smartlight-lab-system-adapter.md)：CAS 验证码登录、结构化读取、报告导出和身份边界。
+- [照明读取二期能力包（已发布）](./smartlight-phase2-capability-package.md)：设施详情、告警分析、巡检详情、漏电分析和 CSV 报告。
 - [照明系统写能力一期](./smartlight-write-phase1.md)：首项可逆告警备注写入、风险矩阵、可信授权和恢复验收。
+- [照明受控写二期设计（未实施）](./smartlight-write-phase2-design.md)：RTU 告警、单灯告警和巡检审核的分波能力包、可信治理与系统验收方案。
 
 ## 退役与归档
 

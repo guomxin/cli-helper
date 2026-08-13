@@ -31,12 +31,12 @@
 目录。当前不开放开关灯、远程控制、参数配置、告警处置状态、巡检打卡、删除或其他
 业务数据修改。
 
-二期工具的详细契约、接口证据和验收标准见
-[照明实验室测试系统二期能力包](smartlight-phase2-capability-package.md)。
+已发布读取二期工具的详细契约、接口证据和验收标准见
+[照明读取二期能力包](smartlight-phase2-capability-package.md)。
 首项写能力的风险矩阵、可信交互和恢复方法见
 [照明系统写能力一期](smartlight-write-phase1.md)。
-工区提交/撤回的接口证据、治理边界和实施计划见
-[照明系统写能力二期研究与设计](smartlight-write-phase2-design.md)。
+尚未实施的 RTU 告警流转与处置、单灯告警处理、巡检审核分波计划见
+[照明受控写二期设计](smartlight-write-phase2-design.md)。
 
 ### 读取口径
 
