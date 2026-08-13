@@ -1791,34 +1791,6 @@
             ],
             "default": null,
             "title": "Travel Mode"
-          },
-          "trip_days": {
-            "anyOf": [
-              {
-                "maximum": 366,
-                "minimum": 0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trip Days"
-          },
-          "trip_hours": {
-            "anyOf": [
-              {
-                "maximum": 8784,
-                "minimum": 0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trip Hours"
           }
         },
         "title": "oa_business_trip_prepareArguments",
@@ -2028,34 +2000,6 @@
             ],
             "default": null,
             "title": "Travel Mode"
-          },
-          "trip_days": {
-            "anyOf": [
-              {
-                "maximum": 366,
-                "minimum": 0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trip Days"
-          },
-          "trip_hours": {
-            "anyOf": [
-              {
-                "maximum": 8784,
-                "minimum": 0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trip Hours"
           }
         },
         "title": "oa_business_trip_submit_prepareArguments",

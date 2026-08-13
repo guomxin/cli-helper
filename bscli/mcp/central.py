@@ -1157,8 +1157,6 @@ def create_central_mcp_server(
         destination: Annotated[str | None, Field(max_length=255)] = None,
         reason: Annotated[str | None, Field(max_length=4000)] = None,
         has_direct_supervisor: bool | None = None,
-        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
-        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -1174,8 +1172,6 @@ def create_central_mcp_server(
             ("destination", destination),
             ("reason", reason),
             ("has_direct_supervisor", has_direct_supervisor),
-            ("trip_days", trip_days),
-            ("trip_hours", trip_hours),
             ("input_submission_id", input_submission_id),
         ):
             if value is not None:
@@ -1243,8 +1239,6 @@ def create_central_mcp_server(
         destination: Annotated[str | None, Field(max_length=255)] = None,
         reason: Annotated[str | None, Field(max_length=4000)] = None,
         has_direct_supervisor: bool | None = None,
-        trip_days: Annotated[float | None, Field(ge=0, le=366)] = None,
-        trip_hours: Annotated[float | None, Field(ge=0, le=8784)] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
@@ -1260,8 +1254,6 @@ def create_central_mcp_server(
             ("destination", destination),
             ("reason", reason),
             ("has_direct_supervisor", has_direct_supervisor),
-            ("trip_days", trip_days),
-            ("trip_hours", trip_hours),
             ("input_submission_id", input_submission_id),
         ):
             if value is not None:

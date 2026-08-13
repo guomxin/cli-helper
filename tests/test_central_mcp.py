@@ -348,11 +348,11 @@ class CentralMcpTests(unittest.TestCase):
             "destination",
             "reason",
             "has_direct_supervisor",
-            "trip_days",
-            "trip_hours",
             "input_submission_id",
         ):
             self.assertIn(field_name, prepare_schema)
+        self.assertNotIn("trip_days", prepare_schema)
+        self.assertNotIn("trip_hours", prepare_schema)
         leave_prepare_schema = leave_prepare["inputSchema"]["properties"]
         for field_name in (
             "leave_type",
