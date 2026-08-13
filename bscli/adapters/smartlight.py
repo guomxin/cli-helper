@@ -2138,7 +2138,7 @@ def _prepare_smartlight_alarm_action(
             raise SmartlightBusinessRuleRejected(
                 "该告警等级不是工区接收范围，照明系统不允许提交。"
             )
-        if not snapshot.get("workAreaId"):
+        if not snapshot.get("workAreaId") or not snapshot.get("workAreaName"):
             raise SmartlightBusinessRuleRejected(
                 "该告警没有有效所属工区，不能提交工区。"
             )
@@ -2377,6 +2377,7 @@ def _smartlight_alarm_preconditions(snapshot: dict) -> dict:
             "alarmState",
             "alarmWeight",
             "workAreaId",
+            "workAreaName",
             "workAreaSubmitState",
         )
     }

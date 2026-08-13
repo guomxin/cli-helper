@@ -559,6 +559,34 @@ class SmartlightAdapterTests(unittest.TestCase):
                 {"alarm_id": "alarm-1"},
             )
 
+    def test_work_area_submit_rejects_blank_work_area_name(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_record["workAreaName"] = ""
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "没有有效所属工区",
+        ):
+            prepare_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                {"alarm_id": "alarm-1"},
+            )
+
+    def test_work_area_revoke_allows_blank_work_area_name_for_recovery(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_record["isSubmitWorkArea"] = 1
+        worker.alarm_record["workAreaName"] = ""
+
+        prepared = prepare_smartlight_alarm_work_area_revoke(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+
+        self.assertEqual(prepared["plan"]["business_intent"], "revoke_work_area")
+        self.assertIsNone(prepared["plan"]["preconditions"]["workAreaName"])
+
     def test_work_area_submit_stops_when_snapshot_changes_after_prepare(self):
         worker = FakeSmartlightWorker(authenticated=True)
         prepared = prepare_smartlight_alarm_work_area_submit(
