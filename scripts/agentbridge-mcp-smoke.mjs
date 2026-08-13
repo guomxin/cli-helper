@@ -274,6 +274,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "smartlight_inspection_task_detail",
   "smartlight_leakage_analysis",
   "smartlight_report_export",
+  "smartlight_alarm_remark_update_prepare",
+  "smartlight_alarm_remark_update",
   "smartlight_session_status",
   "smartlight_session_login",
   "yuque_public_books_list",
@@ -554,6 +556,7 @@ try {
       "smartlight_inspection_task_detail",
       "smartlight_leakage_analysis",
       "smartlight_report_export",
+      "smartlight_alarm_remark_update_prepare",
       "smartlight_session_status",
       "smartlight_session_login",
     ]);

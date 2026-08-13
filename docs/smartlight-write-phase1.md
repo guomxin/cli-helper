@@ -88,3 +88,21 @@ sequenceDiagram
 5. 正式授权后保存成功且回读一致。
 6. 修改成功后再走一次可信授权恢复原备注，最终回读与测试前一致。
 7. OpenClaw、Workspace 和聊天端只公开 prepare，不公开 commit 或实体控制工具。
+
+## 七、真实验收结果
+
+2026-08-13 在第一用户的 Agent Workspace 中完成了可逆真实验收：
+
+1. 选择告警 `rha1201963386217304064`，设备为 `05312222--牛测试1030`，
+   告警类型为“电源缺相”，测试前备注为空。
+2. 字段卡正确预填 `AgentBridge可逆验收-20260813-1142`；最终授权卡明确显示
+   执行身份“无为”和目标系统“照明实验室测试系统”。
+3. 写入操作 `870d1cef-33ad-4d27-95f2-45367c7c070a` 成功，权威回读
+   `verification.matched=true`，结果备注与测试值一致。
+4. 通过第二套独立字段卡和授权卡清除备注；恢复操作
+   `dfa085fb-f83a-407f-84bb-a12183bdad34` 成功，权威回读
+   `verification.matched=true`，最终备注为空。
+5. OpenClaw Token 已轮换；旧的纯读照明 Token 被撤销，第一用户仅保留一个有效
+   Token，包含 `smartlight:read` 和 `smartlight:write:alarm_remark` 等 11 项权限。
+6. MCP 原始目录包含 prepare 与内部 commit；按第一用户身份裁剪后的智能体目录只暴露
+   `smartlight_alarm_remark_update_prepare`，不暴露 commit。
