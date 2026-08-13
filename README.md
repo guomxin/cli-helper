@@ -139,22 +139,31 @@ Published Smartlight capabilities:
 - `smartlight.report.export`
 - `smartlight.alarm.remark.update.prepare`
 - `smartlight.alarm.remark.update`
+- `smartlight.alarm.work_area.submit.prepare`
+- `smartlight.alarm.work_area.submit`
+- `smartlight.alarm.work_area.revoke.prepare`
+- `smartlight.alarm.work_area.revoke`
+- `smartlight.alarm.dispose.prepare`
+- `smartlight.alarm.dispose`
 
 Smartlight uses a trusted username/password/image-captcha card only for login.
 After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
 normal reads do not open a remote browser. The current integration deliberately
 does not expose device control, configuration, alarm disposition, or general CRUD.
-Its first write sample changes one exact RTU alarm remark through a field card,
-separate authorization, pre-commit concurrency check, authoritative readback, and
-an explicit restore-original-value path. The commit capability is internal and is
-not exposed to agents.
+Its write package can change one exact RTU alarm remark, submit or revoke an RTU
+alarm's work-area routing, and dispose one RTU alarm. Every action uses a frozen
+target snapshot, separate authorization, pre-commit concurrency check, and
+authoritative readback. Remark changes and work-area routing expose explicit
+compensation paths; alarm disposition is marked irreversible. Commit capabilities
+remain internal and are not exposed to agents. Deployment does not automatically
+grant the new write scopes to an existing identity token.
 See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
 The phase-two contracts and staged report-export plan are documented in the
 [published Smartlight read phase-two capability package](docs/smartlight-phase2-capability-package.md).
 The write risk matrix and acceptance path are documented in
 [Smartlight write phase one](docs/smartlight-write-phase1.md).
-The unimplemented A-D rollout for RTU alarms, lamp alarms, and inspection reviews is
-documented in the
+The A-B implementation and the remaining C-D rollout for RTU alarms, lamp alarms,
+and inspection reviews are documented in the
 [Smartlight controlled-write phase-two design](docs/smartlight-write-phase2-design.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not

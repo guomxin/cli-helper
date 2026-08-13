@@ -4,7 +4,7 @@
 
 目标系统：`http://123.232.113.241:4101/smartlight`。
 
-当前开放十一项读取能力和一项受控、可逆的告警备注修改能力。Smartlight 能力目前只
+当前开放十一项读取能力、三组 RTU 受控写能力。Smartlight 能力目前只
 面向 AgentBridge 第一用户 `guomao` 配置；第二用户及其他客户端身份不会因为代码部署
 而自动获得权限，写权限还必须单独授予。
 
@@ -24,18 +24,23 @@
 | `smartlight_leakage_analysis` | 有界分析漏电趋势和集中位置 | `smartlight.leakage.analysis` |
 | `smartlight_report_export` | 导出有界 CSV 报告 | `smartlight.report.export` |
 | `smartlight_alarm_remark_update_prepare` | 为精确 RTU 告警填写、授权并修改备注 | `smartlight.alarm.remark.update.prepare` |
+| `smartlight_alarm_work_area_submit_prepare` | 核对精确 RTU 告警并授权提交所属工区 | `smartlight.alarm.work_area.submit.prepare` |
+| `smartlight_alarm_work_area_revoke_prepare` | 核对已提交 RTU 告警并授权撤回工区提交 | `smartlight.alarm.work_area.revoke.prepare` |
+| `smartlight_rtu_alarm_dispose_prepare` | 核对精确 RTU 告警并强制授权标记已处置 | `smartlight.alarm.dispose.prepare` |
 | `smartlight_session_status` | 检查当前用户登录会话 | - |
 | `smartlight_session_login` | 发起可信登录卡 | - |
 
-真正执行修改的 `smartlight.alarm.remark.update` 是内部 commit 能力，不进入智能体工具
-目录。当前不开放开关灯、远程控制、参数配置、告警处置状态、巡检打卡、删除或其他
-业务数据修改。
+真正执行修改的 `smartlight.alarm.remark.update`、`smartlight.alarm.work_area.submit`、
+`smartlight.alarm.work_area.revoke` 和 `smartlight.alarm.dispose` 是内部 commit 能力，
+不进入智能体可自主选择的工具目录。当前不开放开关灯、远程控制、参数配置、巡检
+打卡、删除或其他业务数据修改。RTU 告警处置没有发现恢复接口，因此单独划为不可逆
+权限，必须在授权卡明确确认；代码上线不代表现有 Token 已获得该权限。
 
 已发布读取二期工具的详细契约、接口证据和验收标准见
 [照明读取二期能力包](smartlight-phase2-capability-package.md)。
 首项写能力的风险矩阵、可信交互和恢复方法见
 [照明系统写能力一期](smartlight-write-phase1.md)。
-尚未实施的 RTU 告警流转与处置、单灯告警处理、巡检审核分波计划见
+RTU 告警流转与处置的实现状态，以及单灯告警处理、巡检审核分波计划见
 [照明受控写二期设计](smartlight-write-phase2-design.md)。
 
 ### 读取口径
@@ -107,8 +112,9 @@ Cookie、JWT、密码摘要和隐藏登录字段不会进入模型上下文。�
 
 ## 五、验收标准
 
-1. 只有明确开通的第一用户 Token 包含 `smartlight:read`；写入还必须单独包含
-   `smartlight:write:alarm_remark`。
+1. 只有明确开通的第一用户 Token 包含 `smartlight:read`；各项写入还必须分别包含
+   `smartlight:write:alarm_remark`、`smartlight:write:alarm_work_area_submit`、
+   `smartlight:write:alarm_work_area_revoke` 或 `smartlight:write:alarm_disposition`。
 2. 第二用户的工具目录不出现 Smartlight 工具。
 3. 未登录读取时生成含验证码的可信登录卡，登录后自动续办原查询。
 4. 登录主体显示为 `无为`，并与已验证主体绑定一致。
@@ -117,3 +123,7 @@ Cookie、JWT、密码摘要和隐藏登录字段不会进入模型上下文。�
    回读，新值不匹配时报告结果未知且不自动重试。
 7. 测试修改后可通过同一可信流程写回原备注；智能体目录不出现内部 commit 或任何
    设备控制能力。
+8. 工区提交和撤回不生成空白字段卡，直接核对授权；提交前冻结 RTU、状态、等级、工区
+   与提交状态，提交后回读 `isSubmitWorkArea`。
+9. 告警处置授权卡明确显示不可逆，只有状态 `0` 或 `1` 可进入授权；提交后必须回读
+   `conductStatue=3`，结果未知时不得自动重试。

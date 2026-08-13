@@ -327,6 +327,9 @@ def build_parser() -> argparse.ArgumentParser:
             "yuque:read",
             "smartlight:read",
             "smartlight:write:alarm_remark",
+            "smartlight:write:alarm_work_area_submit",
+            "smartlight:write:alarm_work_area_revoke",
+            "smartlight:write:alarm_disposition",
         ],
     )
     mcp_token_list = mcp_token_sub.add_parser("list")

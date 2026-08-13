@@ -4692,6 +4692,40 @@ test("reports verified Smartlight alarm remark update and business rejection", a
     true,
   );
 });
+test("reports each verified Smartlight RTU action with exact business wording", async () => {
+  const harness = fakeApi({
+    autoPoll: false,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:smartlight-rtu-user";
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "smartlight-rtu-user",
+  });
+
+  for (const action of ["submit_work_area", "revoke_work_area", "dispose"]) {
+    await coordinator.deliverStatusDirect(sessionKey, "succeeded", null, {
+      result: {
+        status: "succeeded",
+        action,
+        alarm: { alarmId: `alarm-${action}` },
+        verification: { matched: true },
+      },
+    });
+  }
+
+  assert.deepEqual(
+    harness.sentPayloads.map((item) => item.payload.text),
+    [
+      "照明 RTU 告警已提交工区并回读确认。",
+      "照明 RTU 告警工区提交已撤回并回读确认。",
+      "照明 RTU 告警已标记为已处置并回读确认。",
+    ],
+  );
+});
 test("reports a sanitized OA business-rule rejection and hides generic failures", async () => {
   const harness = fakeApi({
     autoPoll: false,

@@ -39,6 +39,22 @@ SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY = (
     "smartlight.alarm.remark.update.prepare"
 )
 SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY = "smartlight.alarm.remark.update"
+SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY = (
+    "smartlight.alarm.work_area.submit.prepare"
+)
+SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY = (
+    "smartlight.alarm.work_area.submit"
+)
+SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY = (
+    "smartlight.alarm.work_area.revoke.prepare"
+)
+SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY = (
+    "smartlight.alarm.work_area.revoke"
+)
+SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY = (
+    "smartlight.alarm.dispose.prepare"
+)
+SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY = "smartlight.alarm.dispose"
 
 SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_INPUT_SCHEMA = {
     "type": "object",
@@ -52,6 +68,20 @@ SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_INPUT_SCHEMA = {
 }
 
 SMARTLIGHT_ALARM_REMARK_UPDATE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"authorization_id": {"type": "string"}},
+    "required": ["authorization_id"],
+    "additionalProperties": False,
+}
+
+SMARTLIGHT_ALARM_ACTION_PREPARE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"alarm_id": {"type": "string"}},
+    "required": ["alarm_id"],
+    "additionalProperties": False,
+}
+
+SMARTLIGHT_ALARM_ACTION_INPUT_SCHEMA = {
     "type": "object",
     "properties": {"authorization_id": {"type": "string"}},
     "required": ["authorization_id"],
@@ -134,6 +164,14 @@ class SmartlightAlarmRemarkContractMismatch(ValueError):
 
 
 class SmartlightAlarmRemarkOutcomeUnknown(RuntimeError):
+    pass
+
+
+class SmartlightAlarmActionContractMismatch(ValueError):
+    pass
+
+
+class SmartlightAlarmActionOutcomeUnknown(RuntimeError):
     pass
 
 
@@ -1478,6 +1516,99 @@ class SmartlightCentralAdapter:
             "remarkRecord": deepcopy(remark_record),
         }
 
+    def alarm_action_snapshot(self, worker, alarm_id: str) -> dict:
+        record = self._find_alarm_record(worker, alarm_id)
+        state = _smartlight_int(record.get("conductStatue"))
+        submit_state = _smartlight_int(record.get("isSubmitWorkArea"))
+        if submit_state is None and record.get("isSubmitWorkArea") in (None, ""):
+            submit_state = 0
+        weight = _smartlight_int(record.get("weightFacto"))
+        return {
+            "alarmId": alarm_id,
+            "rtuId": str(record.get("rtuId") or "").strip() or None,
+            "deviceCode": str(record.get("rtuCode") or "").strip() or None,
+            "deviceName": str(record.get("rtuName") or "").strip() or None,
+            "alarmType": str(record.get("hitchName") or "").strip() or None,
+            "alarmMessage": str(record.get("hitchIntro") or "").strip() or None,
+            "occurredAt": record.get("occurDate"),
+            "lastActivityAt": record.get("lastDate"),
+            "alarmState": state,
+            "alarmStateLabel": _smartlight_alarm_state_label(state),
+            "alarmWeight": weight,
+            "workAreaId": str(record.get("workAreaId") or "").strip() or None,
+            "workAreaName": str(record.get("workAreaName") or "").strip() or None,
+            "workAreaSubmitted": submit_state == 1,
+            "workAreaSubmitState": submit_state,
+            "workAreaSubmitStateLabel": _smartlight_work_area_state_label(
+                submit_state
+            ),
+        }
+
+    def submit_alarm_to_work_area(self, worker, alarm_id: str) -> int:
+        return self._execute_alarm_count_action(
+            worker,
+            "/rHisHitchAlarm/updateIsSubmitWorkArea",
+            {"hitchAlarmIds": alarm_id},
+            action_label="提交工区",
+        )
+
+    def revoke_alarm_from_work_area(self, worker, alarm_id: str) -> int:
+        return self._execute_alarm_count_action(
+            worker,
+            "/rHisHitchAlarm/cancleSubmitWorkArea",
+            {"hitchAlarmIds": alarm_id},
+            action_label="撤回工区提交",
+        )
+
+    def dispose_rtu_alarm(self, worker, alarm_id: str) -> int:
+        return self._execute_alarm_count_action(
+            worker,
+            "/rHisHitchAlarm/setRtuConductStatusDisposed",
+            {"json": alarm_id},
+            action_label="处置 RTU 告警",
+        )
+
+    def _execute_alarm_count_action(
+        self,
+        worker,
+        path: str,
+        fields: dict,
+        *,
+        action_label: str,
+    ) -> int:
+        try:
+            response = self._authorized_post_response(
+                worker,
+                path,
+                fields,
+                retry_after_auth_failure=False,
+            )
+        except (ConnectionError, TimeoutError) as exc:
+            raise SmartlightAlarmActionOutcomeUnknown(
+                f"照明系统{action_label}请求的最终结果无法确认。"
+            ) from exc
+        if response["status"] in {400, 409, 422}:
+            raise SmartlightBusinessRuleRejected(
+                _smartlight_response_message(response)
+            )
+        if response["status"] != 200:
+            raise SmartlightAlarmActionOutcomeUnknown(
+                f"照明系统未能确认{action_label}是否成功"
+                f"（HTTP {response['status']}）：{_smartlight_response_message(response)}"
+            )
+        result = response.get("json")
+        try:
+            affected = int(result)
+        except (TypeError, ValueError) as exc:
+            raise SmartlightAlarmActionOutcomeUnknown(
+                f"照明系统{action_label}接口没有返回可确认的结果。"
+            ) from exc
+        if affected < 1:
+            raise SmartlightBusinessRuleRejected(
+                f"照明系统未执行{action_label}，请重新查看告警状态。"
+            )
+        return affected
+
     def get_alarm_remark(self, worker, alarm_id: str) -> dict | None:
         response = self._authorized_post_response(
             worker,
@@ -1531,6 +1662,7 @@ class SmartlightCentralAdapter:
                     "json": _json_text(
                         {
                             "_like_params": "",
+                            "_include_conductStatue": ["131", "132", "133", "161"],
                             "organroleId": context["organroleId"],
                         }
                     ),
@@ -1685,7 +1817,14 @@ class SmartlightCentralAdapter:
             )
         return payload
 
-    def _authorized_post_response(self, worker, path: str, fields: dict) -> dict:
+    def _authorized_post_response(
+        self,
+        worker,
+        path: str,
+        fields: dict,
+        *,
+        retry_after_auth_failure: bool = True,
+    ) -> dict:
         state = worker.get_http_state()
         token = str(state.get("access_token") or "")
         if not token:
@@ -1699,7 +1838,7 @@ class SmartlightCentralAdapter:
             body=urlencode(fields),
             timeout_seconds=30,
         )
-        if response["status"] in {401, 403}:
+        if retry_after_auth_failure and response["status"] in {401, 403}:
             self.probe_session(worker)
             token = str(worker.get_http_state().get("access_token") or "")
             response = worker.request(
@@ -1864,6 +2003,339 @@ def commit_smartlight_alarm_remark_update(
     }
 
 
+def prepare_smartlight_alarm_work_area_submit(
+    adapter,
+    worker,
+    arguments: dict,
+) -> dict:
+    return _prepare_smartlight_alarm_action(
+        adapter,
+        worker,
+        arguments,
+        action="submit_work_area",
+    )
+
+
+def prepare_smartlight_alarm_work_area_revoke(
+    adapter,
+    worker,
+    arguments: dict,
+) -> dict:
+    return _prepare_smartlight_alarm_action(
+        adapter,
+        worker,
+        arguments,
+        action="revoke_work_area",
+    )
+
+
+def prepare_smartlight_rtu_alarm_dispose(
+    adapter,
+    worker,
+    arguments: dict,
+) -> dict:
+    return _prepare_smartlight_alarm_action(
+        adapter,
+        worker,
+        arguments,
+        action="dispose",
+    )
+
+
+def _prepare_smartlight_alarm_action(
+    adapter,
+    worker,
+    arguments: dict,
+    *,
+    action: str,
+) -> dict:
+    alarm_id = _normalize_smartlight_alarm_id(arguments)
+    snapshot = adapter.alarm_action_snapshot(worker, alarm_id)
+    if not snapshot.get("rtuId"):
+        raise SmartlightAlarmActionContractMismatch(
+            "目标告警缺少 RTU 标识，不能安全执行写操作。"
+        )
+    state = snapshot.get("alarmState")
+    submit_state = snapshot.get("workAreaSubmitState")
+    if action in {"submit_work_area", "revoke_work_area"} and submit_state not in {
+        0,
+        1,
+    }:
+        raise SmartlightBusinessRuleRejected(
+            "该告警的工区提交状态无法识别，已停止执行。"
+        )
+    if action == "submit_work_area":
+        if state not in {0, 1}:
+            raise SmartlightBusinessRuleRejected(
+                "该告警已经解除或处置，不能提交工区。"
+            )
+        if snapshot.get("alarmWeight") != 3:
+            raise SmartlightBusinessRuleRejected(
+                "该告警等级不是工区接收范围，照明系统不允许提交。"
+            )
+        if not snapshot.get("workAreaId"):
+            raise SmartlightBusinessRuleRejected(
+                "该告警没有有效所属工区，不能提交工区。"
+            )
+        if snapshot.get("workAreaSubmitted"):
+            raise SmartlightBusinessRuleRejected(
+                "该告警已经提交到工区，本次没有重复写入。"
+            )
+        schema_version = "agentbridge.smartlight_alarm_work_area_submit_plan.v1"
+        title = "提交照明 RTU 告警到工区"
+        effect = "把一条 RTU 告警提交给所属工区处理"
+        expected_effect = {"work_area_submitted": True}
+        risk_notice = "提交成功后可另行发起撤回授权，但不会后台自动撤回。"
+    elif action == "revoke_work_area":
+        if not snapshot.get("workAreaSubmitted"):
+            raise SmartlightBusinessRuleRejected(
+                "该告警当前未提交工区，无需撤回。"
+            )
+        schema_version = "agentbridge.smartlight_alarm_work_area_revoke_plan.v1"
+        title = "撤回照明 RTU 告警的工区提交"
+        effect = "撤回一条已经提交给工区处理的 RTU 告警"
+        expected_effect = {"work_area_submitted": False}
+        risk_notice = "撤回后如需重新提交，必须重新生成并确认授权卡。"
+    elif action == "dispose":
+        if state == 2:
+            raise SmartlightBusinessRuleRejected(
+                "该告警已经解除，不能再标记为已处置。"
+            )
+        if state == 3:
+            raise SmartlightBusinessRuleRejected(
+                "该告警已经处置，本次没有重复写入。"
+            )
+        if state not in {0, 1}:
+            raise SmartlightBusinessRuleRejected(
+                "该告警当前状态不允许处置。"
+            )
+        schema_version = "agentbridge.smartlight_rtu_alarm_dispose_plan.v1"
+        title = "处置照明 RTU 告警"
+        effect = "把一条 RTU 告警永久标记为已处置"
+        expected_effect = {"alarm_state": 3}
+        risk_notice = "目标系统未发现撤销处置接口；确认后不能由 AgentBridge 恢复。"
+    else:
+        raise SmartlightAlarmActionContractMismatch("不支持的 RTU 告警动作。")
+
+    target = deepcopy(snapshot)
+    return {
+        "plan": {
+            "schema_version": schema_version,
+            "business_intent": action,
+            "target": target,
+            "exact_input": {"alarm_id": alarm_id},
+            "preconditions": _smartlight_alarm_preconditions(target),
+            "expected_effect": expected_effect,
+        },
+        "summary": {
+            "title": title,
+            "system": SMARTLIGHT_SYSTEM_NAME,
+            "effect": effect,
+            "authorization_notice": risk_notice,
+            "authorize_label": "确认并执行",
+            "fields": _smartlight_alarm_summary_fields(target),
+        },
+    }
+
+
+def commit_smartlight_alarm_work_area_submit(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary,
+) -> dict:
+    return _commit_smartlight_alarm_action(
+        adapter,
+        worker,
+        plan,
+        action="submit_work_area",
+        schema_version="agentbridge.smartlight_alarm_work_area_submit_plan.v1",
+        execute=adapter.submit_alarm_to_work_area,
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def commit_smartlight_alarm_work_area_revoke(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary,
+) -> dict:
+    return _commit_smartlight_alarm_action(
+        adapter,
+        worker,
+        plan,
+        action="revoke_work_area",
+        schema_version="agentbridge.smartlight_alarm_work_area_revoke_plan.v1",
+        execute=adapter.revoke_alarm_from_work_area,
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def commit_smartlight_rtu_alarm_dispose(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary,
+) -> dict:
+    return _commit_smartlight_alarm_action(
+        adapter,
+        worker,
+        plan,
+        action="dispose",
+        schema_version="agentbridge.smartlight_rtu_alarm_dispose_plan.v1",
+        execute=adapter.dispose_rtu_alarm,
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def _commit_smartlight_alarm_action(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    action: str,
+    schema_version: str,
+    execute,
+    enter_commit_boundary,
+) -> dict:
+    if plan.get("schema_version") != schema_version:
+        raise SmartlightAlarmActionContractMismatch(
+            "照明 RTU 告警写入计划版本不受支持。"
+        )
+    inputs = plan.get("exact_input")
+    target = plan.get("target")
+    preconditions = plan.get("preconditions")
+    if not all(isinstance(value, dict) for value in (inputs, target, preconditions)):
+        raise SmartlightAlarmActionContractMismatch(
+            "照明 RTU 告警写入计划缺少冻结字段。"
+        )
+    alarm_id = _normalize_smartlight_alarm_id(inputs)
+    current = adapter.alarm_action_snapshot(worker, alarm_id)
+    if str(current.get("rtuId") or "") != str(target.get("rtuId") or ""):
+        raise SmartlightBusinessRuleRejected(
+            "授权后目标告警关联的 RTU 已变化，已停止执行，请重新查看。"
+        )
+    if _smartlight_alarm_preconditions(current) != preconditions:
+        if _smartlight_alarm_action_reached(current, action):
+            enter_commit_boundary()
+            return _smartlight_alarm_action_result(
+                current,
+                action=action,
+                status="already_completed",
+                affected=0,
+            )
+        raise SmartlightBusinessRuleRejected(
+            "授权后告警状态、所属工区或提交状态已经变化，已停止执行，请重新查看。"
+        )
+    enter_commit_boundary()
+    affected = execute(worker, alarm_id)
+    try:
+        readback = adapter.alarm_action_snapshot(worker, alarm_id)
+    except Exception as exc:
+        raise SmartlightAlarmActionOutcomeUnknown(
+            "照明系统接受了写入请求，但权威回读失败，最终结果无法确认。"
+        ) from exc
+    if not _smartlight_alarm_action_reached(readback, action):
+        raise SmartlightAlarmActionOutcomeUnknown(
+            "照明系统接受了写入请求，但权威回读未得到预期状态。"
+        )
+    return _smartlight_alarm_action_result(
+        readback,
+        action=action,
+        status="succeeded",
+        affected=affected,
+    )
+
+
+def _smartlight_alarm_action_result(
+    snapshot: dict,
+    *,
+    action: str,
+    status: str,
+    affected: int,
+) -> dict:
+    rollback = {"available": False}
+    if action == "submit_work_area":
+        rollback = {
+            "available": True,
+            "capability": SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+            "arguments": {"alarm_id": snapshot["alarmId"]},
+        }
+    elif action == "revoke_work_area":
+        rollback = {
+            "available": True,
+            "capability": SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
+            "arguments": {"alarm_id": snapshot["alarmId"]},
+        }
+    return {
+        "status": status,
+        "action": action,
+        "alarm": snapshot,
+        "verification": {
+            "method": "POST /rHisHitchAlarm/getDataByRtuAlarm",
+            "matched": True,
+        },
+        "rollback": rollback,
+        "downstream": {"affected": affected},
+    }
+
+
+def _smartlight_alarm_action_reached(snapshot: dict, action: str) -> bool:
+    if action == "submit_work_area":
+        return snapshot.get("workAreaSubmitState") == 1
+    if action == "revoke_work_area":
+        return snapshot.get("workAreaSubmitState") == 0
+    if action == "dispose":
+        return snapshot.get("alarmState") == 3
+    return False
+
+
+def _smartlight_alarm_preconditions(snapshot: dict) -> dict:
+    return {
+        key: snapshot.get(key)
+        for key in (
+            "alarmId",
+            "rtuId",
+            "alarmState",
+            "alarmWeight",
+            "workAreaId",
+            "workAreaSubmitState",
+        )
+    }
+
+
+def _smartlight_alarm_summary_fields(snapshot: dict) -> list[dict]:
+    return [
+        {
+            "label": "RTU",
+            "value": snapshot.get("deviceName")
+            or snapshot.get("deviceCode")
+            or "未知 RTU",
+        },
+        {"label": "RTU 编号", "value": snapshot.get("deviceCode") or "未知"},
+        {"label": "告警类型", "value": snapshot.get("alarmType") or "未知"},
+        {"label": "告警内容", "value": snapshot.get("alarmMessage") or "未知"},
+        {"label": "告警 ID", "value": snapshot["alarmId"]},
+        {"label": "当前状态", "value": snapshot.get("alarmStateLabel") or "未知"},
+        {
+            "label": "所属工区",
+            "value": snapshot.get("workAreaName")
+            or snapshot.get("workAreaId")
+            or "未配置",
+        },
+        {
+            "label": "工区提交状态",
+            "value": snapshot.get("workAreaSubmitStateLabel") or "未知",
+        },
+        {"label": "首次发生", "value": snapshot.get("occurredAt") or "未知"},
+        {"label": "最近发生", "value": snapshot.get("lastActivityAt") or "未知"},
+    ]
+
+
 def normalize_smartlight_alarm_remark_inputs(arguments: dict) -> dict:
     alarm_id = str(arguments.get("alarm_id") or "").strip()
     if not alarm_id or len(alarm_id) > 200:
@@ -1876,6 +2348,15 @@ def normalize_smartlight_alarm_remark_inputs(arguments: dict) -> dict:
             "告警备注不能超过 500 个字符。"
         )
     return {"alarm_id": alarm_id, "remark": remark}
+
+
+def _normalize_smartlight_alarm_id(arguments: dict) -> str:
+    alarm_id = str(arguments.get("alarm_id") or "").strip()
+    if not alarm_id or len(alarm_id) > 200:
+        raise SmartlightAlarmActionContractMismatch(
+            "alarm_id 不能为空且不能超过 200 个字符。"
+        )
+    return alarm_id
 
 
 def build_smartlight_capability_registry() -> CapabilityRegistry:
@@ -2163,6 +2644,85 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
             adapter=SMARTLIGHT_ADAPTER_ID,
             workflow="smartlight-alarm-remark-update-commit-v1",
         ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Read one exact RTU alarm, validate work-area eligibility, freeze "
+                "the target state, and require trusted authorization without a "
+                "field card. This step does not modify Smartlight."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-work-area-submit-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one approved authorization, submit the exact RTU alarm "
+                "to its work area, and verify isSubmitWorkArea by readback."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-work-area-submit-commit-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Read one exact submitted RTU alarm, freeze its work-area state, "
+                "and require trusted authorization without a field card."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-work-area-revoke-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one approved authorization, revoke the exact RTU "
+                "alarm's work-area submission, and verify the result by readback."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="reversible_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-work-area-revoke-commit-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Read one exact RTU alarm, validate that it is disposable, freeze "
+                "the target state, and require explicit irreversible authorization."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-alarm-dispose-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Consume one approved authorization, mark the exact RTU alarm "
+                "as disposed, and require authoritative state-3 readback."
+            ),
+            input_schema=SMARTLIGHT_ALARM_ACTION_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-alarm-dispose-commit-v1",
+        ),
     )
     for spec in specs:
         registry.register(spec)
@@ -2227,6 +2787,28 @@ def _smartlight_remark_text(payload: dict | None) -> str:
     if not isinstance(payload, dict):
         return ""
     return str(payload.get("remark") or "").strip()
+
+
+def _smartlight_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _smartlight_alarm_state_label(value: int | None) -> str:
+    return {
+        0: "当前告警",
+        1: "非当前告警",
+        2: "已解除报警",
+        3: "已处置",
+    }.get(value, "未知状态")
+
+
+def _smartlight_work_area_state_label(value: int | None) -> str:
+    return {0: "未提交", 1: "已提交"}.get(value, "未知状态")
 
 
 def _smartlight_response_message(response: dict) -> str:

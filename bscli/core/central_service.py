@@ -34,17 +34,31 @@ from bscli.adapters.taihua import (
 )
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ADAPTER_ID,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
     SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
     SMARTLIGHT_SYSTEM_ID,
+    SmartlightAlarmActionContractMismatch,
+    SmartlightAlarmActionOutcomeUnknown,
     SmartlightAlarmRemarkContractMismatch,
     SmartlightAlarmRemarkOutcomeUnknown,
     SmartlightCentralAdapter,
     build_smartlight_capability_registry,
+    commit_smartlight_alarm_work_area_revoke,
+    commit_smartlight_alarm_work_area_submit,
     commit_smartlight_alarm_remark_update,
+    commit_smartlight_rtu_alarm_dispose,
+    prepare_smartlight_alarm_work_area_revoke,
+    prepare_smartlight_alarm_work_area_submit,
     prepare_smartlight_alarm_remark_update,
+    prepare_smartlight_rtu_alarm_dispose,
 )
 from bscli.adapters.yuque import (
     YUQUE_ADAPTER_ID,
@@ -454,7 +468,37 @@ _TRUSTED_WRITE_DEFINITIONS.update(
             "outcome_error": SmartlightAlarmRemarkOutcomeUnknown,
             "field_message": "请在可信字段卡中核对告警备注。",
             "authorization_message": "照明告警备注修改计划需要在可信授权卡中确认。",
-        }
+        },
+        SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY: {
+            "commit_capability": SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+            "field_schema": None,
+            "context_fields": ("alarm_id",),
+            "prepare_function": "prepare_smartlight_alarm_work_area_submit",
+            "commit_function": "commit_smartlight_alarm_work_area_submit",
+            "contract_error": SmartlightAlarmActionContractMismatch,
+            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
+            "authorization_message": "请在可信授权卡中确认把该 RTU 告警提交工区。",
+        },
+        SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY: {
+            "commit_capability": SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+            "field_schema": None,
+            "context_fields": ("alarm_id",),
+            "prepare_function": "prepare_smartlight_alarm_work_area_revoke",
+            "commit_function": "commit_smartlight_alarm_work_area_revoke",
+            "contract_error": SmartlightAlarmActionContractMismatch,
+            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
+            "authorization_message": "请在可信授权卡中确认撤回该 RTU 告警的工区提交。",
+        },
+        SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY: {
+            "commit_capability": SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+            "field_schema": None,
+            "context_fields": ("alarm_id",),
+            "prepare_function": "prepare_smartlight_rtu_alarm_dispose",
+            "commit_function": "commit_smartlight_rtu_alarm_dispose",
+            "contract_error": SmartlightAlarmActionContractMismatch,
+            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
+            "authorization_message": "该 RTU 告警处置不可撤销，请在可信授权卡中明确确认。",
+        },
     }
 )
 
@@ -506,6 +550,24 @@ _CAPABILITY_SCOPES = {
     ),
     SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY: frozenset(
         {"smartlight:write:alarm_remark"}
+    ),
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_work_area_submit"}
+    ),
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_work_area_submit"}
+    ),
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_work_area_revoke"}
+    ),
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_work_area_revoke"}
+    ),
+    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_disposition"}
+    ),
+    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY: frozenset(
+        {"smartlight:write:alarm_disposition"}
     ),
 }
 
@@ -2520,13 +2582,16 @@ class CentralCapabilityService:
                             state,
                         )
                 if prepare_definition is not None:
-                    field_submission, effective_arguments = self._resolve_trusted_field_input(
-                        context=context,
-                        session=session,
-                        arguments=arguments,
-                        definition=prepare_definition,
-                        form_schema=dynamic_field_schema,
-                    )
+                    if prepare_definition.get("field_schema") is None:
+                        effective_arguments = dict(arguments)
+                    else:
+                        field_submission, effective_arguments = self._resolve_trusted_field_input(
+                            context=context,
+                            session=session,
+                            arguments=arguments,
+                            definition=prepare_definition,
+                            form_schema=dynamic_field_schema,
+                        )
                 with worker_factory(session, adapter) as worker:
                     worker.restore_session_state(state)
                     if prepare_definition is not None:
@@ -3167,7 +3232,7 @@ class CentralCapabilityService:
         adapter: object,
         worker: object,
         arguments: dict,
-        field_submission: dict,
+        field_submission: dict | None,
         definition: dict,
     ) -> dict:
         prepare_function = globals().get(str(definition["prepare_function"]))
@@ -3175,10 +3240,21 @@ class CentralCapabilityService:
             raise RuntimeError("trusted write prepare function is unavailable")
         self._assert_write_allowed(context=context, system_id=session["system_id"])
         prepared = prepare_function(adapter, worker, arguments)
-        resume_arguments = dict(
-            field_submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
-            or {}
-        )
+        if field_submission is None:
+            resume_arguments = {
+                name: arguments[name]
+                for name in definition.get("context_fields") or ()
+                if name in arguments
+            }
+            if len(resume_arguments) != len(definition.get("context_fields") or ()):
+                raise ValueError("trusted write is missing its target context")
+        else:
+            resume_arguments = dict(
+                field_submission.get("form_schema", {}).get(
+                    "_agentbridge_resume_arguments"
+                )
+                or {}
+            )
         plan = {
             **prepared["plan"],
             "user_subject": session["user_subject"],
@@ -3193,7 +3269,7 @@ class CentralCapabilityService:
         }
         summary = {
             **prepared["summary"],
-            "system": definition["field_schema"].get("system")
+            "system": (definition.get("field_schema") or {}).get("system")
             or prepared["summary"].get("system")
             or session["system_id"],
             "principal": session.get("downstream_principal_ref")
@@ -3215,22 +3291,23 @@ class CentralCapabilityService:
             ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
         )
         interaction = self._execution_authorization_interaction(authorization)
-        try:
-            self.field_submissions.consume(
-                field_submission["submission_id"],
-                user_subject=session["user_subject"],
-                system_id=session["system_id"],
-                session_id=session["session_id"],
-                capability_name=context.spec.name,
-                capability_version=context.spec.version,
-                consume_operation_id=context.operation_id,
-            )
-        except (
-            FieldSubmissionAccessDenied,
-            FieldSubmissionIntegrityError,
-            FieldSubmissionStateError,
-        ) as exc:
-            raise ValueError(str(exc)) from exc
+        if field_submission is not None:
+            try:
+                self.field_submissions.consume(
+                    field_submission["submission_id"],
+                    user_subject=session["user_subject"],
+                    system_id=session["system_id"],
+                    session_id=session["session_id"],
+                    capability_name=context.spec.name,
+                    capability_version=context.spec.version,
+                    consume_operation_id=context.operation_id,
+                )
+            except (
+                FieldSubmissionAccessDenied,
+                FieldSubmissionIntegrityError,
+                FieldSubmissionStateError,
+            ) as exc:
+                raise ValueError(str(exc)) from exc
         raise RequiresUserAction(
             "WRITE_AUTHORIZATION_REQUIRED",
             str(definition["authorization_message"]),

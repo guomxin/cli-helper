@@ -77,6 +77,10 @@ from bscli.adapters.taihua import (
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
@@ -88,6 +92,8 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
 )
 from bscli.adapters.yuque import (
     YUQUE_DOCUMENT_CATALOG_CAPABILITY,
@@ -200,6 +206,15 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_report_export": frozenset({"smartlight:read"}),
     "smartlight_alarm_remark_update_prepare": frozenset(
         {"smartlight:write:alarm_remark"}
+    ),
+    "smartlight_alarm_work_area_submit_prepare": frozenset(
+        {"smartlight:write:alarm_work_area_submit"}
+    ),
+    "smartlight_alarm_work_area_revoke_prepare": frozenset(
+        {"smartlight:write:alarm_work_area_revoke"}
+    ),
+    "smartlight_rtu_alarm_dispose_prepare": frozenset(
+        {"smartlight:write:alarm_disposition"}
     ),
     "smartlight_session_status": frozenset({"smartlight:read"}),
     "smartlight_session_login": frozenset({"smartlight:read"}),
@@ -2580,6 +2595,180 @@ def create_central_mcp_server(
             {"authorization_id": authorization_id},
             idempotency_key,
             {"smartlight:write:alarm_remark"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_work_area_submit_prepare",
+        title="准备提交 RTU 告警到工区",
+        meta=interaction_tool_meta(),
+        description=(
+            "读取一条精确 RTU 告警并校验等级、状态和所属工区，随后直接打开"
+            "可信授权卡。没有字段填写步骤；本工具本身不修改照明系统。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_work_area_submit_prepare(
+        ctx: Context,
+        alarm_id: Annotated[str, Field(min_length=1, max_length=200)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
+            {"alarm_id": alarm_id},
+            idempotency_key,
+            {"smartlight:write:alarm_work_area_submit"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_work_area_submit",
+        title="执行已授权的 RTU 告警工区提交",
+        meta=interaction_tool_meta(),
+        description=(
+            "消费已批准的单次授权，把冻结的 RTU 告警提交到所属工区，并回读"
+            "isSubmitWorkArea=1。提交前不得直接调用。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_work_area_submit(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"smartlight:write:alarm_work_area_submit"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_work_area_revoke_prepare",
+        title="准备撤回 RTU 告警工区提交",
+        meta=interaction_tool_meta(),
+        description=(
+            "读取一条已提交工区的精确 RTU 告警，冻结当前状态并直接打开可信"
+            "授权卡。没有字段填写步骤；本工具本身不修改照明系统。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_work_area_revoke_prepare(
+        ctx: Context,
+        alarm_id: Annotated[str, Field(min_length=1, max_length=200)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+            {"alarm_id": alarm_id},
+            idempotency_key,
+            {"smartlight:write:alarm_work_area_revoke"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_work_area_revoke",
+        title="执行已授权的 RTU 告警工区撤回",
+        meta=interaction_tool_meta(),
+        description=(
+            "消费已批准的单次授权，撤回冻结的 RTU 告警工区提交，并回读"
+            "isSubmitWorkArea=0。授权前不得直接调用。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_alarm_work_area_revoke(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"smartlight:write:alarm_work_area_revoke"},
+        )
+
+    @mcp.tool(
+        name="smartlight_rtu_alarm_dispose_prepare",
+        title="准备处置 RTU 告警",
+        meta=interaction_tool_meta(),
+        description=(
+            "读取一条精确 RTU 告警，确认状态可处置并直接打开不可逆授权卡。"
+            "没有字段填写步骤；模糊的“处理”意图不应直接调用本工具。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_rtu_alarm_dispose_prepare(
+        ctx: Context,
+        alarm_id: Annotated[str, Field(min_length=1, max_length=200)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
+            {"alarm_id": alarm_id},
+            idempotency_key,
+            {"smartlight:write:alarm_disposition"},
+        )
+
+    @mcp.tool(
+        name="smartlight_rtu_alarm_dispose",
+        title="执行已授权的 RTU 告警处置",
+        meta=interaction_tool_meta(),
+        description=(
+            "消费已批准的单次授权，把冻结的 RTU 告警标记为已处置并回读"
+            "conductStatue=3。目标系统没有已发现的撤销接口。"
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def smartlight_rtu_alarm_dispose(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"smartlight:write:alarm_disposition"},
         )
 
     @mcp.tool(

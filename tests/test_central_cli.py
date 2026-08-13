@@ -48,7 +48,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 60)
+        self.assertEqual(len(payload["capabilities"]), 66)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -74,10 +74,22 @@ class CentralCliTests(unittest.TestCase):
         for capability_name in (
             "smartlight.alarm.remark.update.prepare",
             "smartlight.alarm.remark.update",
+            "smartlight.alarm.work_area.submit.prepare",
+            "smartlight.alarm.work_area.submit",
+            "smartlight.alarm.work_area.revoke.prepare",
+            "smartlight.alarm.work_area.revoke",
         ):
             self.assertEqual(
                 capabilities[capability_name]["effect"],
                 "reversible_write",
+            )
+        for capability_name in (
+            "smartlight.alarm.dispose.prepare",
+            "smartlight.alarm.dispose",
+        ):
+            self.assertEqual(
+                capabilities[capability_name]["effect"],
+                "controlled_write",
             )
         for capability_name in (
             "yuque.public_books.list",

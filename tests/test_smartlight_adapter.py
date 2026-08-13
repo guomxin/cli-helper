@@ -11,6 +11,10 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
     SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
@@ -20,13 +24,22 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
+    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
+    SmartlightAlarmActionOutcomeUnknown,
     SmartlightBusinessRuleRejected,
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     _resolve_date_range,
     build_smartlight_capability_registry,
     commit_smartlight_alarm_remark_update,
+    commit_smartlight_alarm_work_area_revoke,
+    commit_smartlight_alarm_work_area_submit,
+    commit_smartlight_rtu_alarm_dispose,
+    prepare_smartlight_alarm_work_area_revoke,
+    prepare_smartlight_alarm_work_area_submit,
     prepare_smartlight_alarm_remark_update,
+    prepare_smartlight_rtu_alarm_dispose,
 )
 from bscli.core.central_service import capability_required_scopes
 
@@ -340,7 +353,7 @@ class SmartlightAdapterTests(unittest.TestCase):
     def test_registry_contains_read_and_reversible_write_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 13)
+        self.assertEqual(len(capabilities), 19)
         self.assertEqual(
             sum(spec.effect == "read" for spec in capabilities),
             11,
@@ -354,6 +367,21 @@ class SmartlightAdapterTests(unittest.TestCase):
             {
                 SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
                 SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
+                SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
+                SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
+                SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+                SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
+            },
+        )
+        self.assertEqual(
+            {
+                spec.name
+                for spec in capabilities
+                if spec.effect == "controlled_write"
+            },
+            {
+                SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
+                SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
             },
         )
         inspection = next(
@@ -429,6 +457,184 @@ class SmartlightAdapterTests(unittest.TestCase):
                 ),
             )
 
+    def test_work_area_submit_and_revoke_are_frozen_verified_action_pair(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        entered = []
+
+        prepared_submit = prepare_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        submitted = commit_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            prepared_submit["plan"],
+            enter_commit_boundary=lambda: entered.append("submit"),
+        )
+        prepared_revoke = prepare_smartlight_alarm_work_area_revoke(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        revoked = commit_smartlight_alarm_work_area_revoke(
+            self.adapter,
+            worker,
+            prepared_revoke["plan"],
+            enter_commit_boundary=lambda: entered.append("revoke"),
+        )
+
+        self.assertEqual(entered, ["submit", "revoke"])
+        self.assertTrue(submitted["verification"]["matched"])
+        self.assertEqual(
+            submitted["rollback"]["capability"],
+            SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
+        )
+        self.assertFalse(revoked["alarm"]["workAreaSubmitted"])
+        self.assertEqual(worker.alarm_record["isSubmitWorkArea"], 0)
+
+    def test_work_area_submit_rejects_non_work_area_alarm(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_record["weightFacto"] = 2
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "等级不是工区接收范围",
+        ):
+            prepare_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                {"alarm_id": "alarm-1"},
+            )
+
+    def test_work_area_submit_stops_when_snapshot_changes_after_prepare(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        prepared = prepare_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        worker.alarm_record["workAreaId"] = "work-area-2"
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "已经变化",
+        ):
+            commit_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: self.fail(
+                    "commit boundary must not be entered"
+                ),
+            )
+
+    def test_work_area_submit_rejects_unknown_submission_state(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_record["isSubmitWorkArea"] = 9
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "工区提交状态无法识别",
+        ):
+            prepare_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                {"alarm_id": "alarm-1"},
+            )
+
+    def test_work_area_submit_stops_when_rtu_binding_changes_after_prepare(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        prepared = prepare_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        worker.alarm_record["rtuId"] = "rtu-2"
+        worker.alarm_record["isSubmitWorkArea"] = 1
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "RTU 已变化",
+        ):
+            commit_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: self.fail(
+                    "commit boundary must not be entered"
+                ),
+            )
+
+    def test_rtu_alarm_dispose_is_irreversible_and_verified(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        entered = []
+
+        prepared = prepare_smartlight_rtu_alarm_dispose(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        result = commit_smartlight_rtu_alarm_dispose(
+            self.adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: entered.append(True),
+        )
+
+        self.assertEqual(entered, [True])
+        self.assertEqual(result["alarm"]["alarmState"], 3)
+        self.assertFalse(result["rollback"]["available"])
+        self.assertEqual(worker.alarm_record["conductStatue"], 3)
+        self.assertEqual(
+            capability_required_scopes(SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY),
+            frozenset({"smartlight:write:alarm_disposition"}),
+        )
+
+    def test_alarm_action_timeout_after_commit_boundary_is_outcome_unknown(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        prepared = prepare_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        worker.alarm_action_request_error = ConnectionError("timed out")
+        entered = []
+
+        with self.assertRaisesRegex(
+            SmartlightAlarmActionOutcomeUnknown,
+            "最终结果无法确认",
+        ):
+            commit_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: entered.append(True),
+            )
+        self.assertEqual(entered, [True])
+
+    def test_alarm_action_readback_failure_is_outcome_unknown(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        prepared = prepare_smartlight_alarm_work_area_submit(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+        worker.fail_alarm_readback_after_action = True
+        entered = []
+
+        with self.assertRaisesRegex(
+            SmartlightAlarmActionOutcomeUnknown,
+            "权威回读失败",
+        ):
+            commit_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: entered.append(True),
+            )
+        self.assertEqual(entered, [True])
+
 
 class FakePage:
     def content(self) -> str:
@@ -460,6 +666,25 @@ class FakeSmartlightWorker:
         self.login_completed = authenticated
         self.alarm_remark: dict | None = None
         self.saved_alarm_payloads: list[dict] = []
+        self.alarm_action_request_error: Exception | None = None
+        self.fail_alarm_readback_after_action = False
+        self.alarm_action_performed = False
+        self.alarm_record = {
+            "hitchAlarmId": "alarm-1",
+            "hitchName": "电源缺相",
+            "hitchIntro": "电源缺相(B,C)",
+            "occurDate": "2026-08-10 10:05:38",
+            "lastDate": "2026-08-12 10:30:02",
+            "rtuCode": "05312222",
+            "rtuId": "rtu-1",
+            "rtuName": "实验室控制柜",
+            "weightFacto": 3,
+            "conductStatue": 0,
+            "workAreaId": "work-area-1",
+            "workAreaName": "实验室工区",
+            "isSubmitWorkArea": 0,
+            "groupName": "RTU分组测试",
+        }
         if authenticated:
             self.state = {
                 "access_token": "jwt-access",
@@ -667,25 +892,12 @@ class FakeSmartlightWorker:
                 }
             )
         if path.endswith("/rHisHitchAlarm/getDataByRtuAlarm"):
+            if self.fail_alarm_readback_after_action and self.alarm_action_performed:
+                raise ConnectionError("readback failed")
             return _response(
                 {
                     "RtuHisHitchAlarm": {
-                    "list": [
-                        {
-                            "hitchAlarmId": "alarm-1",
-                            "hitchName": "电源缺相",
-                            "hitchIntro": "电源缺相(B,C)",
-                            "occurDate": "2026-08-10 10:05:38",
-                            "lastDate": "2026-08-12 10:30:02",
-                            "rtuCode": "05312222",
-                            "rtuId": "rtu-1",
-                            "rtuName": "实验室控制柜",
-                            "weightFacto": 1,
-                            "conductStatue": 0,
-                            "workAreaName": "实验室工区",
-                            "groupName": "RTU分组测试",
-                        }
-                    ],
+                    "list": [deepcopy(self.alarm_record)],
                         "totalCount": 1,
                     },
                     "todayAlarm": 3,
@@ -700,6 +912,24 @@ class FakeSmartlightWorker:
             self.saved_alarm_payloads.append(deepcopy(payload))
             self.alarm_remark = deepcopy(payload)
             return _response({"code": 200, "message": "保存成功"})
+        if path.endswith("/rHisHitchAlarm/updateIsSubmitWorkArea"):
+            if self.alarm_action_request_error is not None:
+                raise self.alarm_action_request_error
+            self.alarm_record["isSubmitWorkArea"] = 1
+            self.alarm_action_performed = True
+            return _response(1)
+        if path.endswith("/rHisHitchAlarm/cancleSubmitWorkArea"):
+            if self.alarm_action_request_error is not None:
+                raise self.alarm_action_request_error
+            self.alarm_record["isSubmitWorkArea"] = 0
+            self.alarm_action_performed = True
+            return _response(1)
+        if path.endswith("/rHisHitchAlarm/setRtuConductStatusDisposed"):
+            if self.alarm_action_request_error is not None:
+                raise self.alarm_action_request_error
+            self.alarm_record["conductStatue"] = 3
+            self.alarm_action_performed = True
+            return _response(1)
         if path.endswith("/inspectionTask/getDataByCondition"):
             return _response(
                 {

@@ -24,6 +24,9 @@ _ALLOWED_SCOPES = frozenset(
         "yuque:read",
         "smartlight:read",
         "smartlight:write:alarm_remark",
+        "smartlight:write:alarm_work_area_submit",
+        "smartlight:write:alarm_work_area_revoke",
+        "smartlight:write:alarm_disposition",
     }
 )
 

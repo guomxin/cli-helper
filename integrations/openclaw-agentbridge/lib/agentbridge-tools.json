@@ -4993,6 +4993,330 @@
       "title": "执行已授权的照明告警备注修改"
     },
     {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "读取一条精确 RTU 告警并校验等级、状态和所属工区，随后直接打开可信授权卡。没有字段填写步骤；本工具本身不修改照明系统。",
+      "inputSchema": {
+        "properties": {
+          "alarm_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Alarm Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ],
+        "title": "smartlight_alarm_work_area_submit_prepareArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_work_area_submit_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_work_area_submit_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "准备提交 RTU 告警到工区"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "消费已批准的单次授权，把冻结的 RTU 告警提交到所属工区，并回读isSubmitWorkArea=1。提交前不得直接调用。",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "smartlight_alarm_work_area_submitArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_work_area_submit",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_work_area_submitDictOutput",
+        "type": "object"
+      },
+      "title": "执行已授权的 RTU 告警工区提交"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "读取一条已提交工区的精确 RTU 告警，冻结当前状态并直接打开可信授权卡。没有字段填写步骤；本工具本身不修改照明系统。",
+      "inputSchema": {
+        "properties": {
+          "alarm_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Alarm Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ],
+        "title": "smartlight_alarm_work_area_revoke_prepareArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_work_area_revoke_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_work_area_revoke_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "准备撤回 RTU 告警工区提交"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "消费已批准的单次授权，撤回冻结的 RTU 告警工区提交，并回读isSubmitWorkArea=0。授权前不得直接调用。",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "smartlight_alarm_work_area_revokeArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_work_area_revoke",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_work_area_revokeDictOutput",
+        "type": "object"
+      },
+      "title": "执行已授权的 RTU 告警工区撤回"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "读取一条精确 RTU 告警，确认状态可处置并直接打开不可逆授权卡。没有字段填写步骤；模糊的“处理”意图不应直接调用本工具。",
+      "inputSchema": {
+        "properties": {
+          "alarm_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Alarm Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ],
+        "title": "smartlight_rtu_alarm_dispose_prepareArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_alarm_dispose_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_alarm_dispose_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "准备处置 RTU 告警"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "消费已批准的单次授权，把冻结的 RTU 告警标记为已处置并回读conductStatue=3。目标系统没有已发现的撤销接口。",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "smartlight_rtu_alarm_disposeArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_alarm_dispose",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_alarm_disposeDictOutput",
+        "type": "object"
+      },
+      "title": "执行已授权的 RTU 告警处置"
+    },
+    {
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,

@@ -143,7 +143,10 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "WRITE_AUTHORIZATION_REQUIRED",
             )
             authorization_id = prepared["nextAction"]["authorizationId"]
-            authorization = service.write_authorizations.get(authorization_id)
+            authorization = service.write_authorizations.get(
+                authorization_id,
+                include_plan=True,
+            )
             self.assertEqual(
                 authorization["summary"]["system"],
                 "照明实验室测试系统",
@@ -243,6 +246,111 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "SMARTLIGHT_BUSINESS_RULE_REJECTED",
             )
             self.assertEqual(response["error"]["message"], "备注没有变化。")
+
+    def test_smartlight_rtu_action_skips_field_card_and_uses_authorization(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = CentralCapabilityService(
+                home=Path(tmp),
+                base_url=BASE_URL,
+                smartlight_base_url="http://123.232.113.241:4101/smartlight",
+                smartlight_allow_insecure_http=True,
+            )
+            service._worker_factories_by_system["smartlight"] = (  # noqa: SLF001
+                lambda _session, _adapter: worker
+            )
+            session = service.sessions.get_or_create(
+                user_subject="user-a",
+                system_id="smartlight",
+                expected_principal_ref="Demo",
+            )
+            session = service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Demo",
+            )
+            service.session_states.save(session["session_id"], {"cookies": []})
+            prepared_payload = {
+                "plan": {
+                    "schema_version": (
+                        "agentbridge.smartlight_alarm_work_area_submit_plan.v1"
+                    ),
+                    "business_intent": "submit_work_area",
+                    "target": {"alarmId": "alarm-1", "rtuId": "rtu-1"},
+                    "exact_input": {"alarm_id": "alarm-1"},
+                    "preconditions": {"alarmId": "alarm-1", "rtuId": "rtu-1"},
+                    "expected_effect": {"work_area_submitted": True},
+                },
+                "summary": {
+                    "title": "Submit RTU alarm to work area",
+                    "system": "Smartlight",
+                    "effect": "Submit one RTU alarm",
+                    "fields": [],
+                },
+            }
+            with patch(
+                "bscli.core.central_service.prepare_smartlight_alarm_work_area_submit",
+                return_value=prepared_payload,
+            ) as prepare:
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.alarm.work_area.submit.prepare",
+                    arguments={"alarm_id": "alarm-1"},
+                )
+
+            prepare.assert_called_once()
+            self.assertEqual(prepare.call_args.args[2], {"alarm_id": "alarm-1"})
+            self.assertEqual(
+                started["error"]["code"],
+                "WRITE_AUTHORIZATION_REQUIRED",
+            )
+            self.assertNotIn("inputSubmissionId", started["nextAction"])
+            authorization_id = started["nextAction"]["authorizationId"]
+            authorization = service.write_authorizations.get(
+                authorization_id,
+                include_plan=True,
+            )
+            self.assertEqual(
+                authorization["plan"]["resume_arguments"],
+                {"alarm_id": "alarm-1"},
+            )
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=started["interaction"]["interactionId"],
+                ),
+                frozenset({"smartlight:write:alarm_work_area_submit"}),
+            )
+
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def commit(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {
+                    "status": "succeeded",
+                    "action": "submit_work_area",
+                    "verification": {"matched": True},
+                }
+
+            with patch(
+                "bscli.core.central_service.commit_smartlight_alarm_work_area_submit",
+                side_effect=commit,
+            ):
+                committed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="smartlight.alarm.work_area.submit",
+                    arguments={"authorization_id": authorization_id},
+                )
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertEqual(
+                service.write_authorizations.get(authorization_id)["state"],
+                "consumed",
+            )
 
     def test_submit_and_leave_capabilities_have_separate_scope_policies(self):
         self.assertEqual(

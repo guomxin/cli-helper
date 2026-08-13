@@ -198,6 +198,12 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("smartlight_alarm_analysis", names)
         self.assertIn("smartlight_inspection_task_detail", names)
         self.assertIn("smartlight_leakage_analysis", names)
+        self.assertIn("smartlight_alarm_work_area_submit_prepare", names)
+        self.assertIn("smartlight_alarm_work_area_submit", names)
+        self.assertIn("smartlight_alarm_work_area_revoke_prepare", names)
+        self.assertIn("smartlight_alarm_work_area_revoke", names)
+        self.assertIn("smartlight_rtu_alarm_dispose_prepare", names)
+        self.assertIn("smartlight_rtu_alarm_dispose", names)
         self.assertIn("smartlight_session_status", names)
         self.assertIn("smartlight_session_login", names)
         smartlight_alarm_tool = next(
@@ -725,7 +731,13 @@ class CentralMcpTests(unittest.TestCase):
             smartlight_writer = store.issue(
                 user_subject="user-a",
                 expected_principal_ref="无为",
-                scopes=["smartlight:read", "smartlight:write:alarm_remark"],
+                scopes=[
+                    "smartlight:read",
+                    "smartlight:write:alarm_remark",
+                    "smartlight:write:alarm_work_area_submit",
+                    "smartlight:write:alarm_work_area_revoke",
+                    "smartlight:write:alarm_disposition",
+                ],
                 ttl_seconds=3600,
             )
             service.invoke.return_value = {
@@ -797,6 +809,36 @@ class CentralMcpTests(unittest.TestCase):
                     "arguments": {"alarm_id": "alarm-1", "remark": "复核完成"},
                 },
             )
+            submit_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=31,
+                token=smartlight_writer["token"],
+                params={
+                    "name": "smartlight_alarm_work_area_submit_prepare",
+                    "arguments": {"alarm_id": "alarm-1"},
+                },
+            )
+            revoke_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=32,
+                token=smartlight_writer["token"],
+                params={
+                    "name": "smartlight_alarm_work_area_revoke_prepare",
+                    "arguments": {"alarm_id": "alarm-1"},
+                },
+            )
+            dispose_allowed = self._request(
+                client,
+                "tools/call",
+                request_id=33,
+                token=smartlight_writer["token"],
+                params={
+                    "name": "smartlight_rtu_alarm_dispose_prepare",
+                    "arguments": {"alarm_id": "alarm-1"},
+                },
+            )
 
         self.assertTrue(denied.json()["result"]["isError"])
         self.assertFalse(allowed.json()["result"]["isError"])
@@ -804,13 +846,16 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(report.json()["result"]["isError"])
         self.assertTrue(write_denied.json()["result"]["isError"])
         self.assertFalse(write_allowed.json()["result"]["isError"])
+        self.assertFalse(submit_allowed.json()["result"]["isError"])
+        self.assertFalse(revoke_allowed.json()["result"]["isError"])
+        self.assertFalse(dispose_allowed.json()["result"]["isError"])
         self.assertEqual(
             service.invoke.call_args.kwargs["capability_name"],
-            "smartlight.alarm.remark.update.prepare",
+            "smartlight.alarm.dispose.prepare",
         )
         self.assertEqual(
             service.invoke.call_args.kwargs["arguments"],
-            {"alarm_id": "alarm-1", "remark": "复核完成"},
+            {"alarm_id": "alarm-1"},
         )
 
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):

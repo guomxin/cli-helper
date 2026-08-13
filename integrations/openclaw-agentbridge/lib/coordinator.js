@@ -2814,6 +2814,21 @@ function safeSucceededMessage(response) {
   ) {
     return "照明 RTU 告警备注已修改并回读确认。";
   }
+  if (result.action === "submit_work_area") {
+    return result.status === "already_completed"
+      ? "照明 RTU 告警已经提交工区，本次未重复写入。"
+      : "照明 RTU 告警已提交工区并回读确认。";
+  }
+  if (result.action === "revoke_work_area") {
+    return result.status === "already_completed"
+      ? "照明 RTU 告警当前未提交工区，本次未重复写入。"
+      : "照明 RTU 告警工区提交已撤回并回读确认。";
+  }
+  if (result.action === "dispose") {
+    return result.status === "already_completed"
+      ? "照明 RTU 告警已经处置，本次未重复写入。"
+      : "照明 RTU 告警已标记为已处置并回读确认。";
+  }
   if (result.draft_saved === true && result.workflow_submitted === false) {
     return "OA 待发草稿已保存，未提交审批。";
   }
@@ -2864,7 +2879,7 @@ function safeStatusMessage(status, errorCode, response = null) {
         const taihua = normalizedCode === "TAIHUA_BUSINESS_RULE_REJECTED";
         const smartlight = normalizedCode === "SMARTLIGHT_BUSINESS_RULE_REJECTED";
         const system = smartlight ? "照明系统" : taihua ? "泰华日志系统" : "OA";
-        const action = smartlight ? "告警备注修改" : taihua ? "工作日志" : "申请";
+        const action = smartlight ? "RTU 告警操作" : taihua ? "工作日志" : "申请";
         return reason
           ? `${system} 未提交本次${action}：${reason}${code}。`
           : `${system} 根据业务规则拒绝了本次${action}${code}。`;

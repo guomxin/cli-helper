@@ -233,6 +233,12 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_meeting_create",
             "smartlight_alarm_remark_update_prepare",
             "smartlight_alarm_remark_update",
+            "smartlight_alarm_work_area_submit_prepare",
+            "smartlight_alarm_work_area_submit",
+            "smartlight_alarm_work_area_revoke_prepare",
+            "smartlight_alarm_work_area_revoke",
+            "smartlight_rtu_alarm_dispose_prepare",
+            "smartlight_rtu_alarm_dispose",
         ):
             self.assertIn(tool, smoke)
 
