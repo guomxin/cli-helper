@@ -563,6 +563,8 @@ try {
       "smartlight_leakage_analysis",
       "smartlight_report_export",
       "smartlight_alarm_remark_update_prepare",
+      "smartlight_alarm_work_area_submit_prepare",
+      "smartlight_alarm_work_area_revoke_prepare",
       "smartlight_session_status",
       "smartlight_session_login",
     ]);

@@ -2173,7 +2173,8 @@ def create_central_mcp_server(
         description=(
             "按关键词查询 RTU 告警；列表按 lastActivityAt 最近活动时间返回，"
             "occurredAt 是首次发生时间。回答最近告警时优先展示最近活动时间，"
-            "需要时再补充首次发生时间；汇总值是当前系统快照。"
+            "需要时再补充首次发生时间；列表同时返回告警权重、所属工区和工区"
+            "提交状态，供受控工区流转前筛选；汇总值是当前系统快照。"
         ),
         annotations=read_annotations,
         structured_output=True,

@@ -171,6 +171,15 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         self.assertEqual(alarms["items"][0]["type"], "电源缺相")
         self.assertEqual(alarms["items"][0]["message"], "电源缺相(B,C)")
+        self.assertEqual(alarms["items"][0]["alarmWeight"], 3)
+        self.assertEqual(alarms["items"][0]["workAreaId"], "work-area-1")
+        self.assertEqual(alarms["items"][0]["workArea"], "实验室工区")
+        self.assertFalse(alarms["items"][0]["workAreaSubmitted"])
+        self.assertEqual(alarms["items"][0]["workAreaSubmitState"], 0)
+        self.assertEqual(
+            alarms["items"][0]["workAreaSubmitStateLabel"],
+            "未提交",
+        )
         self.assertEqual(tasks["items"][0]["taskName"], "夜巡一组")
         self.assertEqual(tasks["items"][0]["inspectionGroup"], "一号巡检组")
         self.assertEqual(tasks["items"][0]["startTime"], "2026-08-01")
