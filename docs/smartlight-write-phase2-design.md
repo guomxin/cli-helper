@@ -539,6 +539,12 @@ RTU 写 prepare 不接受模糊检索参数：
 | `revoke_work_area` | `/rHisHitchAlarm/cancleSubmitWorkArea` | `isSubmitWorkArea` | 可重新提交，但仍需新授权 |
 | `dispose` | `/rHisHitchAlarm/setRtuConductStatusDisposed` | `conductStatue` | 未发现恢复接口 |
 
+工区提交和撤回的 prepare、提交前复核、提交后回读必须使用照明页面自身的可操作告警
+视图（`usageType=1`、`showData=true` 及页面完整筛选结构），不能从宽泛历史列表中直接
+挑选目标。历史列表中的记录即使接口返回受影响条数，也可能不属于当前可流转集合；此时
+应在 commit boundary 之前拒绝，避免产生 `RESULT_UNKNOWN`。备注修改和最终处置仍按各自
+业务边界查询，不复用这一限制。
+
 ### 8.2 单灯告警处理族
 
 #### 字段模型

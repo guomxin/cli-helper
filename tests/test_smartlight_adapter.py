@@ -515,6 +515,36 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertFalse(revoked["alarm"]["workAreaSubmitted"])
         self.assertEqual(worker.alarm_record["isSubmitWorkArea"], 0)
 
+        action_reads = [
+            request
+            for request in worker.api_requests
+            if request["path"].endswith("/rHisHitchAlarm/getDataByRtuAlarm")
+        ]
+        self.assertGreaterEqual(len(action_reads), 6)
+        for request in action_reads:
+            query = parse_qs(request["body"])
+            filters = json.loads(query["json"][0])
+            self.assertEqual(filters["usageType"], 1)
+            self.assertEqual(filters["_include_conductStatue"], ["131", "132"])
+            self.assertEqual(filters["_include_isSubmitWorkArea"], [])
+            self.assertEqual(filters["weightFacto"], [1, 2, 3, 4, 5, 6])
+            self.assertTrue(filters["showData"])
+            self.assertEqual(filters["userId"], "user-1")
+
+    def test_work_area_prepare_rejects_alarm_outside_actionable_view(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.hide_alarm_from_actionable_view = True
+
+        with self.assertRaisesRegex(
+            SmartlightBusinessRuleRejected,
+            "actionable RTU alarm view",
+        ):
+            prepare_smartlight_alarm_work_area_submit(
+                self.adapter,
+                worker,
+                {"alarm_id": "alarm-1"},
+            )
+
     def test_work_area_submit_rejects_non_work_area_alarm(self):
         worker = FakeSmartlightWorker(authenticated=True)
         worker.alarm_record["weightFacto"] = 2
@@ -691,6 +721,7 @@ class FakeSmartlightWorker:
         self.alarm_action_request_error: Exception | None = None
         self.fail_alarm_readback_after_action = False
         self.alarm_action_performed = False
+        self.hide_alarm_from_actionable_view = False
         self.alarm_record = {
             "hitchAlarmId": "alarm-1",
             "hitchName": "电源缺相",
@@ -916,6 +947,21 @@ class FakeSmartlightWorker:
         if path.endswith("/rHisHitchAlarm/getDataByRtuAlarm"):
             if self.fail_alarm_readback_after_action and self.alarm_action_performed:
                 raise ConnectionError("readback failed")
+            query = parse_qs(str(kwargs.get("body") or ""))
+            filters_json = query.get("json", ["{}"])[0]
+            filters = json.loads(filters_json)
+            if (
+                self.hide_alarm_from_actionable_view
+                and filters.get("showData") is True
+            ):
+                return _response(
+                    {
+                        "RtuHisHitchAlarm": {"list": [], "totalCount": 0},
+                        "todayAlarm": 0,
+                        "untreated": 0,
+                        "yesterdayAlarm": 0,
+                    }
+                )
             return _response(
                 {
                     "RtuHisHitchAlarm": {

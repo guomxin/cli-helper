@@ -1516,8 +1516,18 @@ class SmartlightCentralAdapter:
             "remarkRecord": deepcopy(remark_record),
         }
 
-    def alarm_action_snapshot(self, worker, alarm_id: str) -> dict:
-        record = self._find_alarm_record(worker, alarm_id)
+    def alarm_action_snapshot(
+        self,
+        worker,
+        alarm_id: str,
+        *,
+        actionable_view: bool = False,
+    ) -> dict:
+        record = (
+            self._find_actionable_alarm_record(worker, alarm_id)
+            if actionable_view
+            else self._find_alarm_record(worker, alarm_id)
+        )
         state = _smartlight_int(record.get("conductStatue"))
         submit_state = _smartlight_int(record.get("isSubmitWorkArea"))
         if submit_state is None and record.get("isSubmitWorkArea") in (None, ""):
@@ -1684,6 +1694,57 @@ class SmartlightCentralAdapter:
                 break
         raise SmartlightBusinessRuleRejected(
             "未在当前账号最近 500 条可见 RTU 告警中找到指定告警，已停止修改。"
+        )
+
+    def _find_actionable_alarm_record(self, worker, alarm_id: str) -> dict:
+        context = self._principal_context(worker)
+        filters = {
+            "category": None,
+            "categoryList": None,
+            "usageType": 1,
+            "codeOrName": "",
+            "_include_conductStatue": ["131", "132"],
+            "_include_hitchDicIds": [],
+            "_include_isSubmitWorkArea": [],
+            "_include_weightFacto": [],
+            "conductStatue": [],
+            "weightFacto": [1, 2, 3, 4, 5, 6],
+            "hitchDicId": "",
+            "_timebegin_begin": "",
+            "_timeend_end": "",
+            "type": "0",
+            "_include_groupId": [],
+            "groupId": "",
+            "dateType": "",
+            "showData": True,
+            "userId": context["userId"],
+            "leakageCurrent": "",
+            "reporType": "",
+        }
+        for page in range(1, 6):
+            payload = self._authorized_post_json(
+                worker,
+                "/rHisHitchAlarm/getDataByRtuAlarm",
+                {
+                    "json": _json_text(filters),
+                    "pageNum": page,
+                    "pageSize": 100,
+                    "organroleId": context["organroleId"],
+                },
+            )
+            page_payload = (
+                payload.get("RtuHisHitchAlarm")
+                if isinstance(payload, dict)
+                else payload
+            )
+            items = _page_items(page_payload)
+            for item in items:
+                if str(item.get("hitchAlarmId") or "") == alarm_id:
+                    return item
+            if not items or page * 100 >= _page_total(page_payload):
+                break
+        raise SmartlightBusinessRuleRejected(
+            "Target alarm is not present in the Smartlight actionable RTU alarm view."
         )
 
     def _follow_login_redirects(
@@ -2050,7 +2111,11 @@ def _prepare_smartlight_alarm_action(
     action: str,
 ) -> dict:
     alarm_id = _normalize_smartlight_alarm_id(arguments)
-    snapshot = adapter.alarm_action_snapshot(worker, alarm_id)
+    snapshot = adapter.alarm_action_snapshot(
+        worker,
+        alarm_id,
+        actionable_view=action in {"submit_work_area", "revoke_work_area"},
+    )
     if not snapshot.get("rtuId"):
         raise SmartlightAlarmActionContractMismatch(
             "目标告警缺少 RTU 标识，不能安全执行写操作。"
@@ -2214,7 +2279,12 @@ def _commit_smartlight_alarm_action(
             "照明 RTU 告警写入计划缺少冻结字段。"
         )
     alarm_id = _normalize_smartlight_alarm_id(inputs)
-    current = adapter.alarm_action_snapshot(worker, alarm_id)
+    actionable_view = action in {"submit_work_area", "revoke_work_area"}
+    current = adapter.alarm_action_snapshot(
+        worker,
+        alarm_id,
+        actionable_view=actionable_view,
+    )
     if str(current.get("rtuId") or "") != str(target.get("rtuId") or ""):
         raise SmartlightBusinessRuleRejected(
             "授权后目标告警关联的 RTU 已变化，已停止执行，请重新查看。"
@@ -2234,7 +2304,11 @@ def _commit_smartlight_alarm_action(
     enter_commit_boundary()
     affected = execute(worker, alarm_id)
     try:
-        readback = adapter.alarm_action_snapshot(worker, alarm_id)
+        readback = adapter.alarm_action_snapshot(
+            worker,
+            alarm_id,
+            actionable_view=actionable_view,
+        )
     except Exception as exc:
         raise SmartlightAlarmActionOutcomeUnknown(
             "照明系统接受了写入请求，但权威回读失败，最终结果无法确认。"
