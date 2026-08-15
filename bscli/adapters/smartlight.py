@@ -27,6 +27,7 @@ SMARTLIGHT_SYSTEM_NAME = "照明实验室测试系统"
 SMARTLIGHT_OVERVIEW_CAPABILITY = "smartlight.system.overview"
 SMARTLIGHT_LAMPPOST_LIST_CAPABILITY = "smartlight.lamppost.list"
 SMARTLIGHT_ALARM_LIST_CAPABILITY = "smartlight.alarm.list"
+SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY = "smartlight.alarm.remark.get"
 SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY = "smartlight.inspection_task.list"
 SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY = "smartlight.leakage.summary"
 SMARTLIGHT_ASSET_SEARCH_CAPABILITY = "smartlight.asset.search"
@@ -109,6 +110,11 @@ SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA = {
 
 _SMARTLIGHT_ANALYSIS_LIMIT = 500
 _SMARTLIGHT_ANALYSIS_PAGE_SIZE = 100
+_SMARTLIGHT_ALARM_TIE_PROBE_SIZE = 20
+_SMARTLIGHT_ALARM_SORTS = {
+    "occurred_at": ("occurredAt", "0"),
+    "last_activity": ("lastActivityAt", "1"),
+}
 
 _FORM_HEADERS = {
     "Accept": "application/json, text/plain, */*",
@@ -474,6 +480,8 @@ class SmartlightCentralAdapter:
             return self.list_lampposts(worker, arguments)
         if capability_name == SMARTLIGHT_ALARM_LIST_CAPABILITY:
             return self.list_alarms(worker, arguments)
+        if capability_name == SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY:
+            return self.read_alarm_remark(worker, arguments)
         if capability_name == SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY:
             return self.list_inspection_tasks(worker, arguments)
         if capability_name == SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY:
@@ -776,33 +784,67 @@ class SmartlightCentralAdapter:
         page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
         size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
         keyword = str(arguments.get("keyword") or "").strip()
-        payload = self._authorized_post_json(
+        sort_by = _normalize_choice(
+            arguments.get("sort_by"),
+            default="occurred_at",
+            allowed=set(_SMARTLIGHT_ALARM_SORTS),
+            field_name="sort_by",
+        )
+        sort_field, date_type = _SMARTLIGHT_ALARM_SORTS[sort_by]
+        payload = self._alarm_list_page(
             worker,
-            "/rHisHitchAlarm/getDataByRtuAlarm",
-            {
-                "json": _json_text(
-                    {
-                        "_like_params": keyword,
-                        "organroleId": context["organroleId"],
-                    }
-                ),
-                "pageNum": page,
-                "pageSize": size,
-                "organroleId": context["organroleId"],
-            },
+            context,
+            keyword=keyword,
+            date_type=date_type,
+            page=page,
+            size=size,
         )
         page_payload = payload.get("RtuHisHitchAlarm") if isinstance(payload, dict) else payload
         items = _page_items(page_payload)
         normalized_items = [_normalize_alarm(item) for item in items]
-        normalized_items.sort(
-            key=lambda item: (
-                str(item.get("lastActivityAt") or ""),
-                str(item.get("occurredAt") or ""),
-            ),
-            reverse=True,
+        if not _smartlight_alarm_order_verified(normalized_items, sort_field):
+            raise SmartlightSessionCheckUnavailable(
+                "照明告警接口没有按请求的时间字段返回全局倒序结果。"
+            )
+        normalized_items = _smartlight_stabilize_alarm_order(
+            normalized_items,
+            sort_field,
         )
+        latest_group = None
+        if page == 1:
+            tie_items = normalized_items
+            if size < _SMARTLIGHT_ALARM_TIE_PROBE_SIZE and _page_total(page_payload) > size:
+                tie_payload = self._alarm_list_page(
+                    worker,
+                    context,
+                    keyword=keyword,
+                    date_type=date_type,
+                    page=1,
+                    size=_SMARTLIGHT_ALARM_TIE_PROBE_SIZE,
+                )
+                tie_page = (
+                    tie_payload.get("RtuHisHitchAlarm")
+                    if isinstance(tie_payload, dict)
+                    else tie_payload
+                )
+                tie_items = [_normalize_alarm(item) for item in _page_items(tie_page)]
+                if not _smartlight_alarm_order_verified(tie_items, sort_field):
+                    raise SmartlightSessionCheckUnavailable(
+                        "照明告警接口的并列时间探针未保持全局倒序。"
+                    )
+                tie_items = _smartlight_stabilize_alarm_order(
+                    tie_items,
+                    sort_field,
+                )
+            latest_group = _smartlight_latest_alarm_group(
+                tie_items,
+                total=_page_total(page_payload),
+                sort_field=sort_field,
+            )
+            normalized_items = tie_items[:size]
         return {
             "keyword": keyword or None,
+            "sortBy": sort_by,
             "page": page,
             "size": size,
             "total": _page_total(page_payload),
@@ -817,16 +859,74 @@ class SmartlightCentralAdapter:
                 "checkedAt": datetime.now(timezone.utc).isoformat(),
             },
             "sort": {
-                "field": "lastActivityAt",
+                "field": sort_field,
                 "direction": "desc",
-                "scope": "returned_page",
+                "scope": "downstream_global",
+                "verified": True,
+                "downstreamParameter": {"dateType": date_type},
+                "tieBreakers": [
+                    (
+                        "lastActivityAt"
+                        if sort_field == "occurredAt"
+                        else "occurredAt"
+                    ),
+                    "id",
+                ],
             },
             "timeSemantics": {
-                "recentField": "lastActivityAt",
+                "defaultRecentField": "occurredAt",
+                "selectedField": sort_field,
                 "occurredAt": "Time when the alarm first occurred.",
-                "lastActivityAt": "Most recent alarm activity; use this for recent ordering.",
+                "lastActivityAt": "Most recent alarm activity.",
             },
+            "latestGroup": latest_group,
             "items": normalized_items,
+        }
+
+    def _alarm_list_page(
+        self,
+        worker,
+        context: dict,
+        *,
+        keyword: str,
+        date_type: str,
+        page: int,
+        size: int,
+    ) -> Any:
+        return self._authorized_post_json(
+            worker,
+            "/rHisHitchAlarm/getDataByRtuAlarm",
+            {
+                "json": _json_text(
+                    {
+                        "_like_params": keyword,
+                        "dateType": date_type,
+                        "organroleId": context["organroleId"],
+                    }
+                ),
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+
+    def read_alarm_remark(self, worker, arguments: dict) -> dict:
+        alarm_id = _normalize_smartlight_alarm_read_id(arguments)
+        record = self.get_alarm_remark(worker, alarm_id)
+        remark = _smartlight_remark_text(record)
+        return {
+            "alarmId": alarm_id,
+            "remark": remark,
+            "hasRemark": bool(remark),
+            "createUser": (
+                str(record.get("createUser") or "").strip() or None
+                if isinstance(record, dict)
+                else None
+            ),
+            "createTime": (
+                record.get("createTime") if isinstance(record, dict) else None
+            ),
+            "checkedAt": datetime.now(timezone.utc).isoformat(),
         }
 
     def analyze_alarms(self, worker, arguments: dict) -> dict:
@@ -2531,16 +2631,39 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_ALARM_LIST_CAPABILITY,
-            version="0.2.0",
+            version="0.3.0",
             description=(
                 "List RTU alarms visible to the authenticated Smartlight user, "
-                "ordered by latest activity within the returned page."
+                "globally ordered by first occurrence or latest activity before paging."
             ),
-            input_schema=_paged_schema({"keyword": {"type": "string"}}),
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["occurred_at", "last_activity"],
+                    },
+                }
+            ),
             output_schema={"type": "object"},
             effect="read",
             adapter=SMARTLIGHT_ADAPTER_ID,
             workflow="smartlight-alarm-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY,
+            version="0.1.0",
+            description="Read the authoritative current remark for one RTU alarm.",
+            input_schema={
+                "type": "object",
+                "properties": {"alarm_id": {"type": "string"}},
+                "required": ["alarm_id"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-alarm-remark-get-v1",
         ),
         CapabilitySpec(
             name=SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
@@ -2931,6 +3054,94 @@ def _smartlight_remark_text(payload: dict | None) -> str:
     if not isinstance(payload, dict):
         return ""
     return str(payload.get("remark") or "").strip()
+
+
+def _normalize_smartlight_alarm_read_id(arguments: dict) -> str:
+    alarm_id = str(arguments.get("alarm_id") or "").strip()
+    if not alarm_id or len(alarm_id) > 200:
+        raise ValueError("alarm_id 不能为空且不能超过 200 个字符。")
+    return alarm_id
+
+
+def _smartlight_alarm_order_verified(items: list[dict], sort_field: str) -> bool:
+    previous: str | None = None
+    missing_seen = False
+    for item in items:
+        value = str(item.get(sort_field) or "").strip()
+        if not value:
+            missing_seen = True
+            continue
+        if missing_seen or (previous is not None and previous < value):
+            return False
+        previous = value
+    return True
+
+
+def _smartlight_stabilize_alarm_order(
+    items: list[dict],
+    sort_field: str,
+) -> list[dict]:
+    secondary_field = (
+        "lastActivityAt" if sort_field == "occurredAt" else "occurredAt"
+    )
+    ordered = list(items)
+    ordered.sort(key=lambda item: str(item.get("id") or ""))
+    ordered.sort(
+        key=lambda item: str(item.get(secondary_field) or ""),
+        reverse=True,
+    )
+    ordered.sort(
+        key=lambda item: str(item.get(sort_field) or ""),
+        reverse=True,
+    )
+    return ordered
+
+
+def _smartlight_latest_alarm_group(
+    items: list[dict],
+    *,
+    total: int,
+    sort_field: str,
+) -> dict:
+    if not items:
+        return {
+            "timestamp": None,
+            "sortField": sort_field,
+            "observedCount": 0,
+            "exactCount": 0,
+            "complete": True,
+            "candidates": [],
+        }
+    timestamp = str(items[0].get(sort_field) or "").strip() or None
+    tied: list[dict] = []
+    for item in items:
+        if (str(item.get(sort_field) or "").strip() or None) != timestamp:
+            break
+        tied.append(item)
+    complete = len(tied) < len(items) or len(items) >= total
+    return {
+        "timestamp": timestamp,
+        "sortField": sort_field,
+        "observedCount": len(tied),
+        "exactCount": len(tied) if complete else None,
+        "complete": complete,
+        "candidates": [
+            {
+                "id": item.get("id"),
+                "device": item.get("device"),
+                "deviceCode": item.get("deviceCode"),
+                "type": item.get("type"),
+                "message": item.get("message"),
+                "occurredAt": item.get("occurredAt"),
+                "lastActivityAt": item.get("lastActivityAt"),
+            }
+            for item in tied
+        ],
+        "selectionPolicy": (
+            "Read-only requests may select one candidate deterministically; "
+            "write requests must disambiguate tied alarms by business fields."
+        ),
+    }
 
 
 def _smartlight_int(value: Any) -> int | None:

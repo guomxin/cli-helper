@@ -260,6 +260,18 @@ Error executing tool smartlight_inspection_task_list: unhashable type: 'list'
 - 综合任务当前仍只显示一个首个工具风格的应用卡标题，但最终文本和任务终态正确；这是展示层 P2，不影响业务读能力验收。
 - Workspace 同一标签仍采用串行任务策略；并发能力不在本期 Smartlight 业务验收范围内。
 
+## 11. 2026-08-15 告警排序口径修正
+
+后续真实接口探测确认，`/rHisHitchAlarm/getDataByRtuAlarm` 支持通过查询 JSON 的
+`dateType` 在服务端排序后分页：`0` 为首次发生时间，`1` 为最近活动时间；通用
+`orderBy`、`orderType` 和 `sortField` 参数对该接口无效。因此本验收记录中“返回页内按
+`lastActivityAt` 排序”的旧描述已被替代：普通“最近告警”默认按 `occurredAt` 全局倒序，
+只有明确要求“最近活动”时才按 `lastActivityAt` 全局倒序。
+
+新契约还返回 `latestGroup` 描述最新时间上的并列告警，并提供
+`smartlight_alarm_remark_get` 精确只读备注。该修正避免为寻找最新告警扫描约 5700 条
+历史记录，也避免把“最近发生”和“最近有活动”混为同一个概念。
+
 ## 11. 深入轮补充验收
 
 补测时间：2026-08-12 18:18 至 18:32。补测继续使用第一用户 Workspace，只执行

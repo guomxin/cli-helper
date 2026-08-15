@@ -90,6 +90,10 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "smartlight_alarm", system: "照明实验室测试系统", label: "RTU 告警" },
   ],
   [
+    "smartlight_alarm_remark_get",
+    { kind: "smartlight_alarm", system: "照明实验室测试系统", label: "RTU 告警备注" },
+  ],
+  [
     "smartlight_inspection_task_list",
     { kind: "smartlight_inspection", system: "照明实验室测试系统", label: "巡检任务" },
   ],

@@ -191,6 +191,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("smartlight_system_overview", names)
         self.assertIn("smartlight_lamppost_list", names)
         self.assertIn("smartlight_alarm_list", names)
+        self.assertIn("smartlight_alarm_remark_get", names)
         self.assertIn("smartlight_inspection_task_list", names)
         self.assertIn("smartlight_leakage_summary", names)
         self.assertIn("smartlight_asset_search", names)
@@ -209,7 +210,17 @@ class CentralMcpTests(unittest.TestCase):
         smartlight_alarm_tool = next(
             tool for tool in tools if tool["name"] == "smartlight_alarm_list"
         )
-        self.assertIn("lastActivityAt", smartlight_alarm_tool["description"])
+        self.assertIn("sort_by=occurred_at", smartlight_alarm_tool["description"])
+        self.assertIn("latestGroup", smartlight_alarm_tool["description"])
+        self.assertEqual(
+            smartlight_alarm_tool["inputSchema"]["properties"]["sort_by"]["enum"],
+            ["occurred_at", "last_activity"],
+        )
+        smartlight_remark_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_alarm_remark_get"
+        )
+        self.assertEqual(smartlight_remark_tool["annotations"]["readOnlyHint"], True)
+        self.assertEqual(smartlight_remark_tool["inputSchema"]["required"], ["alarm_id"])
         smartlight_inspection_tool = next(
             tool
             for tool in tools

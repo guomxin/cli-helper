@@ -9,6 +9,7 @@ import unittest
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
     SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
@@ -196,7 +197,9 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
-        self.assertEqual(alarms["sort"]["field"], "lastActivityAt")
+        self.assertEqual(alarms["sort"]["field"], "occurredAt")
+        self.assertEqual(alarms["sort"]["scope"], "downstream_global")
+        self.assertTrue(alarms["sort"]["verified"])
         self.assertEqual(alarms["summaryScope"]["type"], "current_system_snapshot")
         self.assertEqual(alarms["items"][0]["id"], "alarm-1")
         self.assertEqual(alarms["items"][0]["occurredAt"], "2026-08-10 10:05:38")
@@ -253,6 +256,79 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         task_query = json.loads(parse_qs(task_request["body"])["json"][0])
         self.assertEqual(task_query["_taskState"], 2)
+
+    def test_alarm_list_uses_downstream_time_sort_and_reports_latest_ties(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_records = [
+            {
+                **deepcopy(worker.alarm_record),
+                "hitchAlarmId": "alarm-a",
+                "occurDate": "2026-08-15 10:00:00",
+                "lastDate": "2026-08-15 10:01:00",
+            },
+            {
+                **deepcopy(worker.alarm_record),
+                "hitchAlarmId": "alarm-b",
+                "occurDate": "2026-08-15 10:00:00",
+                "lastDate": "2026-08-15 10:02:00",
+            },
+            {
+                **deepcopy(worker.alarm_record),
+                "hitchAlarmId": "alarm-c",
+                "occurDate": "2026-08-14 09:00:00",
+                "lastDate": "2026-08-15 11:00:00",
+            },
+        ]
+
+        latest = self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_LIST_CAPABILITY,
+            worker,
+            {"page": 1, "size": 1},
+        )
+        active = self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_LIST_CAPABILITY,
+            worker,
+            {"sort_by": "last_activity", "page": 1, "size": 1},
+        )
+
+        self.assertEqual(latest["items"][0]["id"], "alarm-b")
+        self.assertEqual(latest["latestGroup"]["exactCount"], 2)
+        self.assertTrue(latest["latestGroup"]["complete"])
+        self.assertEqual(
+            [item["id"] for item in latest["latestGroup"]["candidates"]],
+            ["alarm-b", "alarm-a"],
+        )
+        self.assertEqual(active["items"][0]["id"], "alarm-c")
+        self.assertEqual(active["sort"]["field"], "lastActivityAt")
+        alarm_queries = [
+            json.loads(parse_qs(request["body"])["json"][0])
+            for request in worker.api_requests
+            if request["path"].endswith("/rHisHitchAlarm/getDataByRtuAlarm")
+        ]
+        self.assertEqual(
+            [query["dateType"] for query in alarm_queries],
+            ["0", "0", "1", "1"],
+        )
+
+    def test_alarm_remark_get_is_read_only_and_authoritative(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.alarm_remark = {
+            "remark": "现场已复核",
+            "createUser": "无为",
+            "createTime": "2026-08-15 11:00:00",
+        }
+
+        result = self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY,
+            worker,
+            {"alarm_id": "alarm-1"},
+        )
+
+        self.assertEqual(result["alarmId"], "alarm-1")
+        self.assertEqual(result["remark"], "现场已复核")
+        self.assertTrue(result["hasRemark"])
+        self.assertEqual(result["createUser"], "无为")
+        self.assertEqual(worker.saved_alarm_payloads, [])
 
     def test_alarm_list_normalizes_blank_work_area_state_as_not_submitted(self):
         worker = FakeSmartlightWorker(authenticated=True)
@@ -410,10 +486,10 @@ class SmartlightAdapterTests(unittest.TestCase):
     def test_registry_contains_read_and_reversible_write_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 19)
+        self.assertEqual(len(capabilities), 20)
         self.assertEqual(
             sum(spec.effect == "read" for spec in capabilities),
-            11,
+            12,
         )
         self.assertEqual(
             {
@@ -804,6 +880,7 @@ class FakeSmartlightWorker:
         self.fail_alarm_readback_after_action = False
         self.alarm_action_performed = False
         self.hide_alarm_from_actionable_view = False
+        self.alarm_records: list[dict] | None = None
         self.alarm_record = {
             "hitchAlarmId": "alarm-1",
             "hitchName": "电源缺相",
@@ -1071,11 +1148,25 @@ class FakeSmartlightWorker:
                         "yesterdayAlarm": 0,
                     }
                 )
+            records = deepcopy(
+                self.alarm_records
+                if self.alarm_records is not None
+                else [self.alarm_record]
+            )
+            sort_field = "lastDate" if filters.get("dateType") == "1" else "occurDate"
+            records.sort(
+                key=lambda item: str(item.get(sort_field) or ""),
+                reverse=True,
+            )
+            page_num = int(query.get("pageNum", [1])[0])
+            page_size = int(query.get("pageSize", [20])[0])
+            start = (page_num - 1) * page_size
+            page_records = records[start : start + page_size]
             return _response(
                 {
                     "RtuHisHitchAlarm": {
-                    "list": [deepcopy(self.alarm_record)],
-                        "totalCount": 1,
+                        "list": page_records,
+                        "totalCount": len(records),
                     },
                     "todayAlarm": 3,
                     "untreated": 2,

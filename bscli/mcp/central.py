@@ -78,6 +78,7 @@ from bscli.adapters.taihua import (
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY,
     SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
     SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
     SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
@@ -197,6 +198,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_system_overview": frozenset({"smartlight:read"}),
     "smartlight_lamppost_list": frozenset({"smartlight:read"}),
     "smartlight_alarm_list": frozenset({"smartlight:read"}),
+    "smartlight_alarm_remark_get": frozenset({"smartlight:read"}),
     "smartlight_inspection_task_list": frozenset({"smartlight:read"}),
     "smartlight_leakage_summary": frozenset({"smartlight:read"}),
     "smartlight_asset_search": frozenset({"smartlight:read"}),
@@ -2181,10 +2183,11 @@ def create_central_mcp_server(
         name="smartlight_alarm_list",
         title="查询照明 RTU 告警",
         description=(
-            "按关键词查询 RTU 告警；列表按 lastActivityAt 最近活动时间返回，"
-            "occurredAt 是首次发生时间。回答最近告警时优先展示最近活动时间，"
-            "需要时再补充首次发生时间；列表同时返回告警权重、所属工区和工区"
-            "提交状态，供受控工区流转前筛选；汇总值是当前系统快照。"
+            "按关键词查询 RTU 告警。sort_by=occurred_at 按首次发生时间全局倒序，"
+            "也是“最近告警”的默认口径；sort_by=last_activity 按最近活动时间全局"
+            "倒序。latestGroup 会说明最新时间点是否存在并列告警；写操作不得仅靠"
+            "并列记录的稳定顺序自动选目标。列表同时返回告警权重、所属工区和工区"
+            "提交状态；汇总值是当前系统快照。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2192,17 +2195,45 @@ def create_central_mcp_server(
     async def smartlight_alarm_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
+        sort_by: Literal["occurred_at", "last_activity"] = "occurred_at",
         page: Annotated[int, Field(ge=1, le=10000)] = 1,
         size: Annotated[int, Field(ge=1, le=100)] = 20,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {"page": page, "size": size}
+        arguments: dict[str, Any] = {
+            "sort_by": sort_by,
+            "page": page,
+            "size": size,
+        }
         if keyword is not None:
             arguments["keyword"] = keyword
         return await invoke(
             ctx,
             SMARTLIGHT_ALARM_LIST_CAPABILITY,
             arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_alarm_remark_get",
+        title="读取 RTU 告警备注",
+        description=(
+            "按精确 alarm_id 只读获取 RTU 告警的当前权威备注。不会打开字段卡或"
+            "授权卡，也不会修改照明系统。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_alarm_remark_get(
+        ctx: Context,
+        alarm_id: Annotated[str, Field(min_length=1, max_length=200)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ALARM_REMARK_GET_CAPABILITY,
+            {"alarm_id": alarm_id},
             idempotency_key,
             {"smartlight:read"},
         )

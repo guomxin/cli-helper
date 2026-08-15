@@ -14,7 +14,8 @@
 | --- | --- | --- |
 | `smartlight_system_overview` | 控制柜、可检索灯杆与地图明细灯杆概览 | `smartlight.system.overview` |
 | `smartlight_lamppost_list` | 按关键词分页查询灯杆 | `smartlight.lamppost.list` |
-| `smartlight_alarm_list` | 查询 RTU 告警和当前系统快照 | `smartlight.alarm.list` |
+| `smartlight_alarm_list` | 按发生时间或最近活动时间全局倒序查询 RTU 告警和当前系统快照 | `smartlight.alarm.list` |
+| `smartlight_alarm_remark_get` | 精确读取一条 RTU 告警的当前备注 | `smartlight.alarm.remark.get` |
 | `smartlight_inspection_task_list` | 按任务、计划和状态查询巡检组、进度及设备数 | `smartlight.inspection_task.list` |
 | `smartlight_leakage_summary` | 按日期或最近 N 天查询漏电记录 | `smartlight.leakage.summary` |
 | `smartlight_asset_search` | 统一查询控制柜、RTU 和灯杆 | `smartlight.asset.search` |
@@ -48,9 +49,14 @@ RTU 告警流转与处置的实现状态，以及单灯告警处理、巡检审�
 - 概览中的 `lampPostTotal` 与灯杆列表使用同一“可检索灯杆”口径；原地图明细接口的
   数量保留在 `lampPostCounts.mapDetail`，避免把两个页面的 131 和 116 误认为同一
   指标。
-- RTU 告警的 `summary` 是查询时刻的系统看板快照，不是当前分页的统计结果；
-  `occurredAt` 是首次发生时间，`lastActivityAt` 是最近活动时间，列表按
-  `lastActivityAt` 在返回页内倒序排列。“最近告警”应优先展示最近活动时间。
+- RTU 告警的 `summary` 是查询时刻的系统看板快照，不是当前分页的统计结果。
+  `occurredAt` 是首次发生时间，`lastActivityAt` 是最近活动时间。普通“最近告警”默认
+  使用 `sort_by=occurred_at`，目标系统通过 `dateType=0` 在分页前全局倒序；明确要求
+  “最近活动”时使用 `sort_by=last_activity`，通过 `dateType=1` 全局倒序。适配器校验
+  返回页的时间单调性，不再下载全量告警后本地排序。
+- 第一页返回 `latestGroup`。如果最新时间有多条告警，候选按另一时间字段倒序、告警 ID
+  升序稳定排列；只读回答可以完整列出或按该规则选一条，任何写操作仍必须根据设备、
+  类型等业务字段消歧。小分页最多额外读取前 20 条用于识别同一最新时刻的并列项。
 - 漏电查询支持 `last_days`，AgentBridge 按 `Asia/Shanghai` 在服务端计算闭区间，
   智能体无需先调用通用时间工具。`rangeSummary.recordTotal` 是日期范围内记录数；
   `summary` 来自目标系统的全局实时看板，明确标记为不应用日期范围。
@@ -118,7 +124,7 @@ Cookie、JWT、密码摘要和隐藏登录字段不会进入模型上下文。�
 2. 第二用户的工具目录不出现 Smartlight 工具。
 3. 未登录读取时生成含验证码的可信登录卡，登录后自动续办原查询。
 4. 登录主体显示为 `无为`，并与已验证主体绑定一致。
-5. 十一项读取能力返回结构化、分页或有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
+5. 十二项读取能力返回结构化、分页或有界的数据，不泄露 Cookie、JWT 或内部密码摘要。
 6. 告警备注必须经过字段卡和授权卡；授权后若原备注变化则停止覆盖，保存后必须权威
    回读，新值不匹配时报告结果未知且不自动重试。
 7. 测试修改后可通过同一可信流程写回原备注；智能体目录不出现内部 commit 或任何

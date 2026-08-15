@@ -3956,7 +3956,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "按关键词查询 RTU 告警；列表按 lastActivityAt 最近活动时间返回，occurredAt 是首次发生时间。回答最近告警时优先展示最近活动时间，需要时再补充首次发生时间；列表同时返回告警权重、所属工区和工区提交状态，供受控工区流转前筛选；汇总值是当前系统快照。",
+      "description": "按关键词查询 RTU 告警。sort_by=occurred_at 按首次发生时间全局倒序，也是“最近告警”的默认口径；sort_by=last_activity 按最近活动时间全局倒序。latestGroup 会说明最新时间点是否存在并列告警；写操作不得仅靠并列记录的稳定顺序自动选目标。列表同时返回告警权重、所属工区和工区提交状态；汇总值是当前系统快照。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -3998,6 +3998,15 @@
             "minimum": 1,
             "title": "Size",
             "type": "integer"
+          },
+          "sort_by": {
+            "default": "occurred_at",
+            "enum": [
+              "occurred_at",
+              "last_activity"
+            ],
+            "title": "Sort By",
+            "type": "string"
           }
         },
         "title": "smartlight_alarm_listArguments",
@@ -4010,6 +4019,50 @@
         "type": "object"
       },
       "title": "查询照明 RTU 告警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "按精确 alarm_id 只读获取 RTU 告警的当前权威备注。不会打开字段卡或授权卡，也不会修改照明系统。",
+      "inputSchema": {
+        "properties": {
+          "alarm_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Alarm Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ],
+        "title": "smartlight_alarm_remark_getArguments",
+        "type": "object"
+      },
+      "name": "smartlight_alarm_remark_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_alarm_remark_getDictOutput",
+        "type": "object"
+      },
+      "title": "读取 RTU 告警备注"
     },
     {
       "annotations": {
