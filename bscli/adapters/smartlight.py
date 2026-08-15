@@ -396,8 +396,28 @@ class SmartlightCentralAdapter:
         }
 
     def probe_session(self, worker) -> dict:
-        principal = self._cas_principal(worker)
-        token_state = self._exchange_token(worker, principal)
+        refresh_error: Exception | None = None
+        try:
+            token_state = self._refresh_token(worker)
+        except (
+            SmartlightLoginRequired,
+            SmartlightSessionCheckUnavailable,
+            SmartlightLoginContractMismatch,
+        ) as exc:
+            refresh_error = exc
+            token_state = None
+        if token_state is None:
+            try:
+                principal = self._cas_principal(worker)
+                token_state = self._exchange_token(worker, principal)
+            except SmartlightSessionCheckUnavailable as exc:
+                if refresh_error is not None:
+                    raise SmartlightSessionCheckUnavailable(
+                        "Smartlight token refresh and CAS fallback are temporarily "
+                        f"unavailable ({refresh_error.__class__.__name__}; "
+                        f"{exc.__class__.__name__})."
+                    ) from exc
+                raise
         worker.set_http_state(token_state)
         return {
             "authenticated": True,
@@ -405,6 +425,46 @@ class SmartlightCentralAdapter:
             "principal": token_state["principal"],
             "template_count": None,
             "transport": "central_cas_cookie_jwt",
+        }
+
+    def _refresh_token(self, worker) -> dict | None:
+        state = worker.get_http_state()
+        refresh_token = str(state.get("refresh_token") or "").strip()
+        principal = state.get("principal")
+        if not refresh_token or not isinstance(principal, dict):
+            return None
+        response = worker.request(
+            "POST",
+            f"{self.origin}/jwtcenter//JWTInfoController/refreshToken",
+            headers=_FORM_HEADERS,
+            body=urlencode({"refresh_token": refresh_token}),
+            timeout_seconds=20,
+        )
+        if response["status"] in {301, 302, 303, 307, 308, 401, 403}:
+            raise SmartlightLoginRequired(
+                "Smartlight refresh token is no longer accepted."
+            )
+        payload = response.get("json")
+        data = payload.get("resp_data") if isinstance(payload, dict) else None
+        if response["status"] != 200 or not isinstance(data, dict):
+            raise SmartlightSessionCheckUnavailable(
+                "Smartlight token refresh service is temporarily unavailable."
+            )
+        access_token = str(data.get("access_token") or "").strip()
+        if not access_token:
+            raise SmartlightLoginContractMismatch(
+                "Smartlight token refresh response has no access token."
+            )
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "access_token_duration": (
+                data.get("access_token_duration")
+                if data.get("access_token_duration") is not None
+                else state.get("access_token_duration")
+            ),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+            "principal": deepcopy(principal),
         }
 
     def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:
@@ -1801,6 +1861,10 @@ class SmartlightCentralAdapter:
         password_digest = str(payload.get("dlmm") or "").strip()
         organrole_id = str(payload.get("organroleId") or "").strip()
         user_id = str(payload.get("yhid") or "").strip()
+        if not any((account, password_digest, organrole_id, user_id)):
+            raise SmartlightLoginRequired(
+                "Smartlight CAS session is not authenticated."
+            )
         if not account or not name or not password_digest or not organrole_id or not user_id:
             raise SmartlightLoginContractMismatch(
                 "Smartlight principal response is missing required identity fields."
@@ -2036,6 +2100,11 @@ def commit_smartlight_alarm_remark_update(
     previous_remark = str(preconditions.get("previous_remark") or "")
     return {
         "status": "updated",
+        "effect": (
+            "告警备注已清除，并经照明系统权威接口回读确认。"
+            if not inputs["remark"]
+            else "告警备注已更新，并经照明系统权威接口回读确认。"
+        ),
         "alarm": {
             key: readback.get(key)
             for key in (

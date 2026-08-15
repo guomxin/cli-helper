@@ -953,10 +953,14 @@ class CentralCapabilityService:
                 return _session_runtime_mismatch_response(user_subject, session)
             except SessionSecretError:
                 return _session_state_unavailable_response(user_subject, session)
-            except Exception:
+            except Exception as exc:
                 if record_activity:
                     session = self.sessions.touch_activity(session["session_id"])
-                return _session_check_unavailable_response(user_subject, session)
+                return _session_check_unavailable_response(
+                    user_subject,
+                    session,
+                    diagnostics=f"{exc.__class__.__name__}: {exc}",
+                )
 
             if record_verification:
                 session = self.sessions.activate(
@@ -1002,6 +1006,7 @@ class CentralCapabilityService:
             "deferred": 0,
             "outsideLease": 0,
             "inactive": 0,
+            "issues": [],
             "expiredTimelineAttachments": self.timeline_attachments.prune_expired(
                 now=checked_at
             ),
@@ -1027,12 +1032,49 @@ class CentralCapabilityService:
                 current = self.sessions.get(session["session_id"])
                 if current["state"] == "expired":
                     summary["expired"] += 1
+                    summary["issues"].append(
+                        {
+                            "userSubject": session["user_subject"],
+                            "systemId": session["system_id"],
+                            "outcome": "expired",
+                            "diagnostics": current.get("last_error"),
+                        }
+                    )
                 else:
                     summary["inactive"] += 1
+                    summary["issues"].append(
+                        {
+                            "userSubject": session["user_subject"],
+                            "systemId": session["system_id"],
+                            "outcome": "inactive",
+                            "diagnostics": current.get("last_error"),
+                        }
+                    )
             elif response.get("status") == "succeeded":
                 summary["keptAlive"] += 1
             else:
                 summary["deferred"] += 1
+                error = response.get("error")
+                result = response.get("result")
+                summary["issues"].append(
+                    {
+                        "userSubject": session["user_subject"],
+                        "systemId": session["system_id"],
+                        "outcome": "deferred",
+                        "errorCode": (
+                            error.get("code") if isinstance(error, dict) else None
+                        ),
+                        "diagnostics": (
+                            result.get("diagnostics")
+                            if isinstance(result, dict)
+                            else (
+                                error.get("message")
+                                if isinstance(error, dict)
+                                else None
+                            )
+                        ),
+                    }
+                )
         return summary
 
     def _create_login_challenge(

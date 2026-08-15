@@ -30,6 +30,7 @@ from bscli.adapters.smartlight import (
     SmartlightBusinessRuleRejected,
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
+    SmartlightLoginRequired,
     _resolve_date_range,
     build_smartlight_capability_registry,
     commit_smartlight_alarm_remark_update,
@@ -99,6 +100,40 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertIn("/cas/login", worker.cas_headers["Referer"])
         self.assertIn("Mozilla/5.0", worker.cas_headers["User-Agent"])
         self.assertIn("/cas/login", worker.captcha_headers["Referer"])
+
+    def test_probe_session_prefers_refresh_token_without_requiring_cas(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        result = self.adapter.probe_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(result["observed_principal_ref"], "无为")
+        self.assertEqual(worker.state["access_token"], "jwt-access-refreshed")
+        self.assertEqual(worker.refresh_requests, 1)
+        self.assertEqual(worker.principal_requests, 0)
+        self.assertEqual(worker.token_exchange_requests, 0)
+
+    def test_probe_session_falls_back_to_cas_when_refresh_is_rejected(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.reject_refresh_token = True
+
+        result = self.adapter.probe_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(worker.state["access_token"], "jwt-access")
+        self.assertEqual(worker.refresh_requests, 1)
+        self.assertEqual(worker.principal_requests, 1)
+        self.assertEqual(worker.token_exchange_requests, 1)
+
+    def test_probe_session_classifies_empty_principal_as_logged_out(self):
+        worker = FakeSmartlightWorker()
+        worker.empty_principal = True
+
+        with self.assertRaises(SmartlightLoginRequired):
+            self.adapter.probe_session(worker)
+
+        self.assertEqual(worker.principal_requests, 1)
+        self.assertEqual(worker.token_exchange_requests, 0)
 
     def test_classifies_captcha_rejection_from_cas_error_page(self):
         worker = FakeSmartlightWorker(login_rejection="验证码错误，请重新输入")
@@ -442,6 +477,20 @@ class SmartlightAdapterTests(unittest.TestCase):
             result["rollback"]["arguments"],
             {"alarm_id": "alarm-1", "remark": ""},
         )
+        prepared_clear = prepare_smartlight_alarm_remark_update(
+            self.adapter,
+            worker,
+            {"alarm_id": "alarm-1", "remark": ""},
+        )
+        cleared = commit_smartlight_alarm_remark_update(
+            self.adapter,
+            worker,
+            prepared_clear["plan"],
+            enter_commit_boundary=lambda: entered.append("clear"),
+        )
+        self.assertEqual(cleared["alarm"]["remark"], "")
+        self.assertIn("已清除", cleared["effect"])
+        self.assertTrue(cleared["verification"]["matched"])
         self.assertEqual(
             capability_required_scopes(
                 SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY
@@ -744,6 +793,11 @@ class FakeSmartlightWorker:
         self.api_requests: list[dict] = []
         self.login_rejection = login_rejection
         self.login_completed = authenticated
+        self.reject_refresh_token = False
+        self.empty_principal = False
+        self.refresh_requests = 0
+        self.principal_requests = 0
+        self.token_exchange_requests = 0
         self.alarm_remark: dict | None = None
         self.saved_alarm_payloads: list[dict] = []
         self.alarm_action_request_error: Exception | None = None
@@ -845,6 +899,17 @@ class FakeSmartlightWorker:
         self.assert_post(method)
         path = urlparse(url).path
         if path == "/smartlight/userInfo/getCasLoginUser":
+            self.principal_requests += 1
+            if self.empty_principal:
+                return _response(
+                    {
+                        "dlzh": None,
+                        "userName": None,
+                        "dlmm": None,
+                        "organroleId": None,
+                        "yhid": None,
+                    }
+                )
             return _response(
                 {
                     "dlzh": "yanshi",
@@ -858,6 +923,7 @@ class FakeSmartlightWorker:
                 }
             )
         if path == "/jwtcenter//JWTInfoController/getToken":
+            self.token_exchange_requests += 1
             return _response(
                 {
                     "resp_code": 0,
@@ -865,6 +931,21 @@ class FakeSmartlightWorker:
                         "access_token": "jwt-access",
                         "refresh_token": "jwt-refresh",
                         "access_token_duration": 3600,
+                    },
+                }
+            )
+        if path == "/jwtcenter//JWTInfoController/refreshToken":
+            self.refresh_requests += 1
+            if self.reject_refresh_token:
+                response = _response({"resp_code": 1001, "resp_data": None})
+                response["status"] = 401
+                return response
+            return _response(
+                {
+                    "resp_code": 1000,
+                    "resp_data": {
+                        "access_token": "jwt-access-refreshed",
+                        "access_token_duration": 1800,
                     },
                 }
             )

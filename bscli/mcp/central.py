@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import ipaddress
+import json
 import logging
 from pathlib import Path
 import threading
@@ -348,6 +349,15 @@ class CentralSessionKeepalive:
                     summary["deferred"],
                     summary["outsideLease"],
                 )
+                if summary.get("issues"):
+                    _LOGGER.warning(
+                        "AgentBridge session keepalive issues: %s",
+                        json.dumps(
+                            summary["issues"],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
             except Exception as exc:
                 _LOGGER.warning(
                     "AgentBridge session keepalive cycle failed: error=%s",

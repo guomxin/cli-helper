@@ -718,6 +718,17 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(summary["expired"], 1)
+            self.assertEqual(
+                summary["issues"],
+                [
+                    {
+                        "userSubject": "user-a",
+                        "systemId": "oa",
+                        "outcome": "expired",
+                        "diagnostics": "OA expired",
+                    }
+                ],
+            )
             self.assertEqual(service.sessions.get(session["session_id"])["state"], "expired")
             self.assertIsNone(service.session_states.load(session["session_id"]))
 
@@ -734,6 +745,14 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(summary["deferred"], 1)
+            self.assertEqual(summary["issues"][0]["userSubject"], "user-a")
+            self.assertEqual(summary["issues"][0]["systemId"], "oa")
+            self.assertEqual(summary["issues"][0]["outcome"], "deferred")
+            self.assertEqual(
+                summary["issues"][0]["errorCode"],
+                "SESSION_CHECK_UNAVAILABLE",
+            )
+            self.assertIn("HTTP 503", summary["issues"][0]["diagnostics"])
             self.assertEqual(service.sessions.get(session["session_id"])["state"], "active")
             self.assertIsNotNone(service.session_states.load(session["session_id"]))
 
