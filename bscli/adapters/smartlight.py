@@ -416,12 +416,30 @@ class SmartlightCentralAdapter:
             try:
                 principal = self._cas_principal(worker)
                 token_state = self._exchange_token(worker, principal)
-            except SmartlightSessionCheckUnavailable as exc:
+            except SmartlightLoginRequired as exc:
+                if refresh_error is None:
+                    raise
+                if isinstance(refresh_error, SmartlightLoginRequired):
+                    raise SmartlightLoginRequired(
+                        "Smartlight refresh token and CAS session are no longer "
+                        f"authenticated ({_session_error_summary(refresh_error)}; "
+                        f"{_session_error_summary(exc)})."
+                    ) from exc
+                raise SmartlightSessionCheckUnavailable(
+                    "Smartlight token refresh could not be confirmed and the CAS "
+                    "fallback is not authenticated; the encrypted session was "
+                    f"preserved for retry ({_session_error_summary(refresh_error)}; "
+                    f"{_session_error_summary(exc)})."
+                ) from exc
+            except (
+                SmartlightSessionCheckUnavailable,
+                SmartlightLoginContractMismatch,
+            ) as exc:
                 if refresh_error is not None:
                     raise SmartlightSessionCheckUnavailable(
                         "Smartlight token refresh and CAS fallback are temporarily "
-                        f"unavailable ({refresh_error.__class__.__name__}; "
-                        f"{exc.__class__.__name__})."
+                        f"unavailable ({_session_error_summary(refresh_error)}; "
+                        f"{_session_error_summary(exc)})."
                     ) from exc
                 raise
         worker.set_http_state(token_state)
@@ -461,9 +479,10 @@ class SmartlightCentralAdapter:
             raise SmartlightLoginContractMismatch(
                 "Smartlight token refresh response has no access token."
             )
+        rotated_refresh_token = str(data.get("refresh_token") or "").strip()
         return {
             "access_token": access_token,
-            "refresh_token": refresh_token,
+            "refresh_token": rotated_refresh_token or refresh_token,
             "access_token_duration": (
                 data.get("access_token_duration")
                 if data.get("access_token_duration") is not None
@@ -3177,6 +3196,13 @@ def _smartlight_response_message(response: dict) -> str:
     if text:
         return text[:500]
     return "照明系统未返回具体原因。"
+
+
+def _session_error_summary(error: Exception) -> str:
+    message = " ".join(str(error).split())
+    if len(message) > 300:
+        message = f"{message[:297]}..."
+    return f"{error.__class__.__name__}: {message or 'no details'}"
 
 
 def _same_origin_url(origin: str, value: Any) -> str:

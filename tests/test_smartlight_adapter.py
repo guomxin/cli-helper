@@ -32,6 +32,7 @@ from bscli.adapters.smartlight import (
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     SmartlightLoginRequired,
+    SmartlightSessionCheckUnavailable,
     _normalize_alarm,
     _resolve_date_range,
     build_smartlight_capability_registry,
@@ -136,6 +137,15 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(worker.principal_requests, 0)
         self.assertEqual(worker.token_exchange_requests, 0)
 
+    def test_probe_session_persists_rotated_refresh_token(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.rotated_refresh_token = "jwt-refresh-rotated"
+
+        result = self.adapter.probe_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(worker.state["refresh_token"], "jwt-refresh-rotated")
+
     def test_probe_session_falls_back_to_cas_when_refresh_is_rejected(self):
         worker = FakeSmartlightWorker(authenticated=True)
         worker.reject_refresh_token = True
@@ -147,6 +157,29 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(worker.refresh_requests, 1)
         self.assertEqual(worker.principal_requests, 1)
         self.assertEqual(worker.token_exchange_requests, 1)
+
+    def test_probe_session_expires_when_refresh_and_cas_are_rejected(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.reject_refresh_token = True
+        worker.empty_principal = True
+
+        with self.assertRaises(SmartlightLoginRequired) as raised:
+            self.adapter.probe_session(worker)
+
+        self.assertIn("refresh token and CAS session", str(raised.exception))
+        self.assertIn("SmartlightLoginRequired", str(raised.exception))
+
+    def test_probe_session_preserves_session_when_refresh_is_temporarily_unavailable(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.refresh_temporarily_unavailable = True
+        worker.empty_principal = True
+
+        with self.assertRaises(SmartlightSessionCheckUnavailable) as raised:
+            self.adapter.probe_session(worker)
+
+        self.assertIn("preserved for retry", str(raised.exception))
+        self.assertIn("SmartlightSessionCheckUnavailable", str(raised.exception))
+        self.assertIn("SmartlightLoginRequired", str(raised.exception))
 
     def test_probe_session_classifies_empty_principal_as_logged_out(self):
         worker = FakeSmartlightWorker()
@@ -892,6 +925,8 @@ class FakeSmartlightWorker:
         self.login_rejection = login_rejection
         self.login_completed = authenticated
         self.reject_refresh_token = False
+        self.refresh_temporarily_unavailable = False
+        self.rotated_refresh_token = ""
         self.empty_principal = False
         self.refresh_requests = 0
         self.principal_requests = 0
@@ -1039,11 +1074,16 @@ class FakeSmartlightWorker:
                 response = _response({"resp_code": 1001, "resp_data": None})
                 response["status"] = 401
                 return response
+            if self.refresh_temporarily_unavailable:
+                response = _response({"message": "temporarily unavailable"})
+                response["status"] = 503
+                return response
             return _response(
                 {
                     "resp_code": 1000,
                     "resp_data": {
                         "access_token": "jwt-access-refreshed",
+                        "refresh_token": self.rotated_refresh_token or None,
                         "access_token_duration": 1800,
                     },
                 }
