@@ -211,10 +211,17 @@ class CentralMcpTests(unittest.TestCase):
             tool for tool in tools if tool["name"] == "smartlight_alarm_list"
         )
         self.assertIn("sort_by=occurred_at", smartlight_alarm_tool["description"])
+        self.assertIn("普通“最近”", smartlight_alarm_tool["description"])
         self.assertIn("latestGroup", smartlight_alarm_tool["description"])
         self.assertEqual(
             smartlight_alarm_tool["inputSchema"]["properties"]["sort_by"]["enum"],
             ["occurred_at", "last_activity"],
+        )
+        self.assertIn(
+            "普通“最近/最新告警”",
+            smartlight_alarm_tool["inputSchema"]["properties"]["sort_by"][
+                "description"
+            ],
         )
         smartlight_remark_tool = next(
             tool for tool in tools if tool["name"] == "smartlight_alarm_remark_get"

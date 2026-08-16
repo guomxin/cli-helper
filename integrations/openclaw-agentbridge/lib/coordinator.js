@@ -236,7 +236,7 @@ export class InteractionCoordinator {
     });
   }
 
-  bindWorkspaceTurn(sessionKey, turnRef) {
+  bindWorkspaceTurn(sessionKey, turnRef, message = null) {
     if (!isPrivateSessionKey(sessionKey)) {
       return false;
     }
@@ -246,12 +246,21 @@ export class InteractionCoordinator {
     }
     this.taskContinuations.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
+    const normalizedMessage = safeMessageText(message, 1000);
     this.recentUserMessages.set(sessionKey, {
-      text: null,
+      text: normalizedMessage || null,
       capturedAt: this.now(),
       taskRunRef: `workspace:${normalizedTurnRef}`,
     });
     return true;
+  }
+
+  normalizeBusinessToolArguments({ sessionKey, toolName, params }) {
+    if (toolName !== "smartlight_alarm_list") {
+      return params;
+    }
+    const message = this.recentUserMessages.get(sessionKey)?.text;
+    return normalizeSmartlightAlarmListArguments(params, message);
   }
 
   bindDeliveryRoute({ sessionKey, channel, to, accountId, threadId }) {
@@ -991,7 +1000,8 @@ export class InteractionCoordinator {
         delivered = true;
       } else if (
         notification?.deliveryMode === "status" &&
-        QUIET_COMPANION_TASK_EVENTS.has(notification?.event?.eventType)
+        (QUIET_COMPANION_TASK_EVENTS.has(notification?.event?.eventType) ||
+          isSimpleReadSuccessNotification(notification))
       ) {
         // Keep companion chats focused on actionable cards and terminal results.
         delivered = true;
@@ -2105,6 +2115,51 @@ export class InteractionCoordinator {
       this.toolBindings.delete(oldest);
     }
   }
+}
+
+function normalizeSmartlightAlarmListArguments(params, message) {
+  const normalized =
+    params && typeof params === "object" && !Array.isArray(params)
+      ? { ...params }
+      : {};
+  const text = safeMessageText(message, 1000);
+  if (!text) {
+    return normalized;
+  }
+  const explicitActivity =
+    /last_activity/iu.test(text) ||
+    /(?:最近|最新|最后|末次).{0,8}(?:活动|变化|更新|处理)/u.test(text) ||
+    /(?:活动|变化|更新|处理).{0,8}(?:时间|最近|最新|最后|末次)/u.test(text);
+  if (explicitActivity) {
+    normalized.sort_by = "last_activity";
+    return normalized;
+  }
+  const explicitOccurrence =
+    /occurred_at/iu.test(text) ||
+    /(?:首次|最近|最新).{0,6}发生/u.test(text) ||
+    /发生时间/u.test(text);
+  const genericLatest =
+    /(?:最近|最新).{0,8}(?:RTU)?告警/u.test(text) ||
+    /(?:最近|最新).{0,6}(?:一|1)条/u.test(text);
+  if (explicitOccurrence || genericLatest) {
+    normalized.sort_by = "occurred_at";
+  }
+  return normalized;
+}
+
+function isSimpleReadSuccessNotification(notification) {
+  return (
+    notification?.event?.eventType === "task.operation.succeeded" &&
+    notification?.event?.payload?.capabilityEffect === "read"
+  );
+}
+
+function safeMessageText(value, maximum) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, maximum) : null;
 }
 
 export function presentationForRecords(interactions, channel) {

@@ -908,19 +908,23 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
     removeSession() {},
   };
   const harness = fakeApi({ autoPoll: false });
-  registerAgentBridgeInteractions(harness.api, { identityRouter });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    identityRouter,
+  });
   const registered = harness.gatewayMethods.get(
     "agentbridge.workspace.bind",
   );
   const responses = [];
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:account-123";
 
   await registered.handler({
     params: {
-      sessionKey:
-        "agent:main:agentbridge-workspace:direct:account-123",
+      sessionKey: workspaceSessionKey,
       endpointKey: "workspace:account-123",
       grant: "abwg_1234567890123456789012345678901234567890",
       turnRef: "request-bind-123",
+      message: "查最近的一条RTU告警",
     },
     respond(ok, payload, error) {
       responses.push({ ok, payload, error });
@@ -944,8 +948,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
   });
   assert.deepEqual(restored, [
     {
-      sessionKey:
-        "agent:main:agentbridge-workspace:direct:account-123",
+      sessionKey: workspaceSessionKey,
       bindingKey: "openclaw-weixin:*:user-b",
     },
   ]);
@@ -954,12 +957,45 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
       ok: true,
       payload: {
         status: "bound",
-        sessionKey:
-          "agent:main:agentbridge-workspace:direct:account-123",
+        sessionKey: workspaceSessionKey,
       },
       error: undefined,
     },
   ]);
+  assert.equal(
+    coordinator.normalizeBusinessToolArguments({
+      sessionKey: workspaceSessionKey,
+      toolName: "smartlight_alarm_list",
+      params: { sort_by: "last_activity", size: 1 },
+    }).sort_by,
+    "occurred_at",
+  );
+  coordinator.bindWorkspaceTurn(
+    workspaceSessionKey,
+    "request-bind-generic",
+    "找最新一条",
+  );
+  assert.equal(
+    coordinator.normalizeBusinessToolArguments({
+      sessionKey: workspaceSessionKey,
+      toolName: "smartlight_alarm_list",
+      params: { sort_by: "last_activity", size: 1 },
+    }).sort_by,
+    "occurred_at",
+  );
+  coordinator.bindWorkspaceTurn(
+    workspaceSessionKey,
+    "request-bind-activity",
+    "查最近活动的RTU告警",
+  );
+  assert.equal(
+    coordinator.normalizeBusinessToolArguments({
+      sessionKey: workspaceSessionKey,
+      toolName: "smartlight_alarm_list",
+      params: { sort_by: "occurred_at", size: 1 },
+    }).sort_by,
+    "last_activity",
+  );
 });
 
 test("shares workspace identity and endpoint bindings with the agent runtime instance", async () => {
@@ -2058,6 +2094,72 @@ test("suppresses routine companion status chatter but retains acknowledgement", 
   );
 
   assert.equal(harness.sentPayloads.length, 0);
+  const acknowledgements = calls.filter(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgements.length, 2);
+  assert.equal(
+    acknowledgements.every((item) => item.params.succeeded === true),
+    true,
+  );
+});
+
+test("suppresses simple read success but delivers controlled write success", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: "agent:main:telegram:direct:1001",
+            route: { channel: "telegram", to: "1001" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-read-success-1234567890",
+              deliveryMode: "status",
+              event: {
+                eventType: "task.operation.succeeded",
+                payload: { capabilityEffect: "read" },
+              },
+              message: "Read completed.",
+            },
+            {
+              deliveryId: "delivery-write-success-1234567890",
+              deliveryMode: "status",
+              event: {
+                eventType: "task.operation.succeeded",
+                payload: { capabilityEffect: "controlled_write" },
+              },
+              message: "Write completed.",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:1001",
+      channel: "telegram",
+      senderId: "1001",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].payload.text, "Write completed.");
   const acknowledgements = calls.filter(
     (item) => item.name === "agentbridge_host_notification_ack",
   );

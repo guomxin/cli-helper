@@ -387,6 +387,7 @@ function requestWorkspaceBind() {
         endpointKey,
         grant,
         turnRef: idempotencyKey,
+        message,
       },
     }),
   );

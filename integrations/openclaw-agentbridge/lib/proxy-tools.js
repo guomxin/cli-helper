@@ -60,6 +60,7 @@ export function createAgentBridgeProxyTools({
   taskRunRefResolver = null,
   taskContinuationResolver = null,
   interactionGetGuard = null,
+  argumentNormalizer = null,
   logger = null,
 }) {
   const identity = identityRouter.resolveToolContext(context);
@@ -102,6 +103,7 @@ export function createAgentBridgeProxyTools({
         taskRunRefResolver,
         taskContinuationResolver,
         interactionGetGuard,
+        argumentNormalizer,
         logger,
       }),
     ),
@@ -152,6 +154,7 @@ function createProxyTool({
   taskRunRefResolver,
   taskContinuationResolver,
   interactionGetGuard,
+  argumentNormalizer,
   logger,
 }) {
   return {
@@ -173,7 +176,13 @@ function createProxyTool({
           },
         });
       }
-      const params = normalizeParams(rawParams);
+      const normalizedParams = normalizeParams(rawParams);
+      const params =
+        argumentNormalizer?.({
+          sessionKey: context.sessionKey,
+          toolName: descriptor.name,
+          params: normalizedParams,
+        }) || normalizedParams;
       if (descriptor.name === "agentbridge_interaction_get") {
         const guarded = interactionGetGuard?.({
           sessionKey: context.sessionKey,

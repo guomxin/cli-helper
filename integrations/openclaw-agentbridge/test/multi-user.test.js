@@ -926,6 +926,43 @@ test("exposes the governed catalog and proxies raw MCP metadata for a bound user
   });
 });
 
+test("normalizes business arguments before the MCP request", async () => {
+  const requests = [];
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseResult: {
+      structuredContent: { status: "succeeded", result: { items: [] } },
+    },
+  });
+  const tools = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+    argumentNormalizer({ toolName, params }) {
+      assert.equal(toolName, "smartlight_alarm_list");
+      return { ...params, sort_by: "occurred_at" };
+    },
+  });
+
+  const alarmList = tools.find(
+    (tool) => tool.name === "smartlight_alarm_list",
+  );
+  await alarmList.execute("alarm-list", {
+    sort_by: "last_activity",
+    size: 1,
+  });
+
+  const alarmRequest = requests.find(
+    (request) => request.body.params.name === "smartlight_alarm_list",
+  );
+  assert.ok(alarmRequest);
+  assert.equal(
+    alarmRequest.body.params.arguments.sort_by,
+    "occurred_at",
+  );
+});
+
 test("creates and observes one host-owned task without model task arguments", async () => {
   const requests = [];
   const router = createRouter({

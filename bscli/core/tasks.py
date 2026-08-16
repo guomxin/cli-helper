@@ -840,6 +840,11 @@ class TaskHubStore:
                     payload={
                         "operationId": operation_id,
                         "capability": operation.get("capability_name"),
+                        **(
+                            {"capabilityEffect": operation["capability_effect"]}
+                            if operation.get("capability_effect")
+                            else {}
+                        ),
                     },
                     causation_ref=operation_id,
                     created_at=now,
@@ -861,6 +866,12 @@ class TaskHubStore:
                     event_type=event_type,
                     payload={
                         "operationId": operation_id,
+                        "capability": operation.get("capability_name"),
+                        **(
+                            {"capabilityEffect": operation["capability_effect"]}
+                            if operation.get("capability_effect")
+                            else {}
+                        ),
                         "status": status,
                         "errorCode": (operation.get("error") or {}).get("code"),
                     },

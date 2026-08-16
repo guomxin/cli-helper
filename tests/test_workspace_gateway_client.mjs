@@ -91,6 +91,11 @@ test("waits for the previous run to become idle before sending", () => {
       ?.turnRef,
     "initial-run",
   );
+  assert.equal(
+    trace.find((item) => item.method === "agentbridge.workspace.bind")
+      ?.message,
+    "Read OA pending workflows",
+  );
 });
 
 test("forwards Workspace image attachments to chat.send", () => {

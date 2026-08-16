@@ -3583,7 +3583,10 @@ def _normalize_alarm(item: dict) -> dict:
         state_code = int(state_code.strip())
     state_label = _first(item, "alarmStateName")
     if not state_label:
-        state_label = {0: "当前告警", 1: "已消除"}.get(state_code, state_code)
+        normalized_state_code = _smartlight_int(state_code)
+        state_label = _smartlight_alarm_state_label(normalized_state_code)
+        if state_label == "未知状态" and state_code not in (None, ""):
+            state_label = f"未知状态（代码 {state_code}）"
     work_area_submit_state = _smartlight_int(item.get("isSubmitWorkArea"))
     if work_area_submit_state is None and item.get("isSubmitWorkArea") in (None, ""):
         work_area_submit_state = 0

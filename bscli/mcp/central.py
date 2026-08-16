@@ -2183,9 +2183,11 @@ def create_central_mcp_server(
         name="smartlight_alarm_list",
         title="查询照明 RTU 告警",
         description=(
-            "按关键词查询 RTU 告警。sort_by=occurred_at 按首次发生时间全局倒序，"
-            "也是“最近告警”的默认口径；sort_by=last_activity 按最近活动时间全局"
-            "倒序。latestGroup 会说明最新时间点是否存在并列告警；写操作不得仅靠"
+            "按关键词查询 RTU 告警。严格规则：用户只说“最近/最新告警”“最近/最新"
+            "一条”时必须使用 sort_by=occurred_at，按首次发生时间全局倒序；只有用户"
+            "明确说“最近活动/变化/更新/处理”时才使用 sort_by=last_activity，按最近"
+            "活动时间全局倒序，不得把普通“最近”自行解释为最近活动。latestGroup 会"
+            "说明最新时间点是否存在并列告警；写操作不得仅靠"
             "并列记录的稳定顺序自动选目标。列表同时返回告警权重、所属工区和工区"
             "提交状态；汇总值是当前系统快照。"
         ),
@@ -2195,7 +2197,15 @@ def create_central_mcp_server(
     async def smartlight_alarm_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
-        sort_by: Literal["occurred_at", "last_activity"] = "occurred_at",
+        sort_by: Annotated[
+            Literal["occurred_at", "last_activity"],
+            Field(
+                description=(
+                    "普通“最近/最新告警”必须使用 occurred_at；仅在用户明确要求"
+                    "最近活动、变化、更新或处理时间时使用 last_activity。"
+                )
+            ),
+        ] = "occurred_at",
         page: Annotated[int, Field(ge=1, le=10000)] = 1,
         size: Annotated[int, Field(ge=1, le=100)] = 20,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,

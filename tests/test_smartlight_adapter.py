@@ -32,6 +32,7 @@ from bscli.adapters.smartlight import (
     SmartlightAuthenticationRejected,
     SmartlightCentralAdapter,
     SmartlightLoginRequired,
+    _normalize_alarm,
     _resolve_date_range,
     build_smartlight_capability_registry,
     commit_smartlight_alarm_remark_update,
@@ -58,6 +59,27 @@ class SmartlightAdapterTests(unittest.TestCase):
             SmartlightCentralAdapter(
                 base_url="http://123.232.113.241:4101/smartlight"
             )
+
+    def test_alarm_state_codes_use_the_authoritative_labels(self):
+        expected = {
+            0: "当前告警",
+            1: "非当前告警",
+            2: "已解除报警",
+            3: "已处置",
+        }
+
+        for code, label in expected.items():
+            with self.subTest(code=code):
+                alarm = _normalize_alarm(
+                    {"hitchAlarmId": "alarm-1", "alarmState": code}
+                )
+                self.assertEqual(alarm["state"], label)
+                self.assertEqual(alarm["stateLabel"], label)
+
+        unknown = _normalize_alarm(
+            {"hitchAlarmId": "alarm-unknown", "alarmState": 99}
+        )
+        self.assertEqual(unknown["stateLabel"], "未知状态（代码 99）")
 
     def test_authentication_contract_uses_trusted_captcha_card(self):
         contract = self.adapter.authentication_contract()

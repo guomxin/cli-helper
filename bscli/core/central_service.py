@@ -1586,10 +1586,19 @@ class CentralCapabilityService:
             operation = self.operations.get(operation_id)
             if operation["user_subject"] != user_subject:
                 raise KeyError(f"operation not found: {operation_id}")
+            try:
+                capability_effect = self.registry.get(
+                    operation["capability_name"]
+                ).effect
+            except KeyError:
+                capability_effect = None
             task = self.tasks.link_operation(
                 task_id=task_id,
                 user_subject=user_subject,
-                operation=operation,
+                operation={
+                    **operation,
+                    "capability_effect": capability_effect,
+                },
             )
             linked_operations.append(operation_id)
         for interaction_id in dict.fromkeys(interaction_ids or []):

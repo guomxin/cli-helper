@@ -54,6 +54,7 @@ class TaskHubStoreTests(unittest.TestCase):
                 "operation_id": "operation-a",
                 "user_subject": "user-a",
                 "capability_name": "oa.leave.prepare",
+                "capability_effect": "controlled_write",
                 "status": "requires_user_action",
                 "error": {"code": "FIELDS_REQUIRED"},
             },
@@ -108,6 +109,8 @@ class TaskHubStoreTests(unittest.TestCase):
                 "task.interaction.waiting",
             ],
         )
+        self.assertEqual(events[1]["payload"]["capabilityEffect"], "controlled_write")
+        self.assertEqual(events[2]["payload"]["capabilityEffect"], "controlled_write")
         waiting = [
             event
             for event in events
@@ -121,6 +124,58 @@ class TaskHubStoreTests(unittest.TestCase):
             active_only=True,
         )
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
+
+    def test_central_service_adds_registry_effect_to_operation_events(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        task_response = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="session|read",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="Read OA pending workflows",
+            route={"channel": "telegram", "to": "1001"},
+        )
+        spec = service.registry.get("oa.workflow.pending.list")
+        operation, _ = service.operations.create(
+            user_subject="user-a",
+            capability_name=spec.name,
+            capability_version=spec.version,
+            input_summary={"limit": 20},
+        )
+        operation = service.operations.mark_succeeded(
+            operation["operation_id"],
+            {"count": 0},
+        )
+
+        service.observe_host_task(
+            user_subject="user-a",
+            task_id=task_response["task"]["taskId"],
+            operation_ids=[operation["operation_id"]],
+        )
+
+        events = service.tasks.list_events(
+            task_id=task_response["task"]["taskId"],
+            user_subject="user-a",
+        )
+        operation_events = [
+            event
+            for event in events
+            if event["event_type"].startswith("task.operation.")
+        ]
+        self.assertEqual(len(operation_events), 2)
+        self.assertTrue(
+            all(
+                event["payload"]["capabilityEffect"] == "read"
+                for event in operation_events
+            )
+        )
 
     def test_lists_every_interaction_linked_to_one_task_in_order(self):
         endpoint, _ = self._endpoint()
