@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import json
 import mimetypes
 from pathlib import Path
@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from bscli.admin.application import AdminControlPlane, MCP_SCOPES
 from bscli.auth.server import validate_auth_server_config
+from bscli.core.tls_http import ThreadedTLSHTTPServer
 
 
 MAX_ADMIN_BODY_BYTES = 64 * 1024
@@ -36,9 +37,8 @@ class AdminServerConfig:
         return self.public_base_url.startswith("https://")
 
 
-class AdminHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+class AdminHTTPServer(ThreadedTLSHTTPServer):
+    pass
 
 
 class LoginRateLimiter:
@@ -562,7 +562,7 @@ def create_admin_http_server(
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(config.tls_cert, config.tls_key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.enable_tls(context)
     return server
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import ipaddress
 from pathlib import Path
 import re
@@ -16,6 +16,7 @@ from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
 from bscli.auth.document_download import TrustedDocumentDownloadApplication
 from bscli.auth.timeline_attachment import TrustedTimelineAttachmentApplication
 from bscli.core.network_security import validate_insecure_private_http_endpoint
+from bscli.core.tls_http import ThreadedTLSHTTPServer
 
 
 @dataclass(frozen=True)
@@ -35,9 +36,8 @@ class AuthServerConfig:
         return self.tls_cert is None and not _is_loopback_host(self.host)
 
 
-class AuthHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+class AuthHTTPServer(ThreadedTLSHTTPServer):
+    pass
 
 
 def validate_auth_server_config(
@@ -304,7 +304,7 @@ def create_auth_http_server(
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(config.tls_cert, config.tls_key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.enable_tls(context)
     return server
 
 
