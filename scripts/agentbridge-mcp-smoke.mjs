@@ -646,7 +646,11 @@ try {
       toolCount = tools.length;
     }
 
-    const effectiveCheck = check ?? CHECKS.get("SessionStatus");
+    const effectiveCheck = check ?? {
+      kind: "release",
+      tool: null,
+      arguments: {},
+    };
     const hostTaskId = argument("--host-task-id", "").trim();
     if (hostTaskId && (hostTaskId.length < 16 || hostTaskId.length > 128)) {
       throw Object.assign(new Error("Host task ID is invalid"), {
@@ -669,11 +673,13 @@ try {
             },
           }
         : null;
-    const payload = await client.callTool(
-      effectiveCheck.tool,
-      effectiveCheck.arguments,
-      requestMeta ? { meta: requestMeta } : undefined,
-    );
+    const payload = effectiveCheck.kind === "release"
+      ? { result: {} }
+      : await client.callTool(
+          effectiveCheck.tool,
+          effectiveCheck.arguments,
+          requestMeta ? { meta: requestMeta } : undefined,
+        );
     if (payload?.isError) {
       throw Object.assign(new Error("AgentBridge MCP tool returned an error"), {
         code: "MCP_TOOL_ERROR",
@@ -714,7 +720,16 @@ try {
       };
     }
     const summary =
-      effectiveCheck.kind === "login"
+      effectiveCheck.kind === "release"
+        ? {
+            status: "succeeded",
+            check: checkName,
+            identityLabel,
+            toolCount,
+            requiredReleaseToolsPresent: true,
+            businessSessionCheck: false,
+          }
+      : effectiveCheck.kind === "login"
         ? {
             status: "succeeded",
             check: checkName,

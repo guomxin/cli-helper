@@ -253,6 +253,7 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn(check, (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(
                 encoding="utf-8"
             ))
+        self.assertIn('businessSessionCheck: false', smoke)
 
     def test_openclaw_config_is_read_as_utf8(self) -> None:
         script = (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(encoding="utf-8")
