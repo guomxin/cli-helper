@@ -390,6 +390,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             "oa.labor_contract_renewal.approve",
             "oa.intellectual_property_declaration.approval.prepare",
             "oa.intellectual_property_declaration.approve",
+            "oa.overtime.approval.prepare",
+            "oa.overtime.approve",
             "oa.attendance_confirmation.prepare",
             "oa.attendance_confirmation.confirm",
             "oa.weekly_report.acknowledgement.prepare",

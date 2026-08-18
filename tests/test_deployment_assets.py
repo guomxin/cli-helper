@@ -223,6 +223,8 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_labor_contract_renewal_approve",
             "oa_intellectual_property_declaration_approval_prepare",
             "oa_intellectual_property_declaration_approve",
+            "oa_overtime_approval_prepare",
+            "oa_overtime_approve",
             "oa_attendance_confirmation_prepare",
             "oa_attendance_confirm",
             "oa_weekly_report_acknowledgement_prepare",
@@ -307,6 +309,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "prepare_travel_expense_approval",
             "prepare_labor_contract_renewal_approval",
             "prepare_intellectual_property_declaration_approval",
+            "prepare_overtime_approval",
             "prepare_attendance_confirmation",
             "prepare_weekly_report_acknowledgement",
             "prepare_standard_collaboration_approval",
@@ -318,6 +321,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "approve_travel_expense",
             "approve_labor_contract_renewal",
             "approve_intellectual_property_declaration",
+            "approve_overtime",
             "confirm_attendance",
             "acknowledge_weekly_report",
             "approve_standard_collaboration",
@@ -327,6 +331,29 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn('"collaboration_write_requests": 0', script)
         self.assertIn('"authorizations_created": 0', script)
         self.assertNotIn("state_store.save", script)
+
+    def test_workspace_reverse_tunnel_is_loopback_only_and_persistent(self) -> None:
+        tunnel = (ROOT / "scripts/Start-AgentBridgeWorkspaceTunnel.ps1").read_text(
+            encoding="utf-8"
+        )
+        installer = (ROOT / "scripts/Install-AgentBridgeWorkspaceTunnel.ps1").read_text(
+            encoding="utf-8"
+        )
+        unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
+            encoding="utf-8"
+        )
+
+        for marker in (
+            "ExitOnForwardFailure=yes",
+            "ServerAliveInterval=30",
+            "ServerAliveCountMax=3",
+            '127.0.0.1:${RemotePort}:127.0.0.1:${LocalPort}',
+        ):
+            self.assertIn(marker, tunnel)
+        self.assertIn("New-ScheduledTaskTrigger -AtLogOn", installer)
+        self.assertIn("-WindowStyle Hidden", installer)
+        self.assertIn("--workspace-gateway-url ws://127.0.0.1:18789", unit)
+        self.assertNotIn("--workspace-gateway-url ws://10.90.20.210:18789", unit)
 
     def test_unit_document_probe_is_read_only_by_construction(self) -> None:
         script = (

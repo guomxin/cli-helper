@@ -6,6 +6,7 @@ from bscli.adapters.seeyon_pending_actions import (
     approve_efficiency_data,
     approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
+    approve_overtime,
     confirm_attendance,
     pending_action_contract_fingerprint,
     preflight_pending_action,
@@ -13,6 +14,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_efficiency_data_approval,
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
+    prepare_overtime_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -187,6 +189,32 @@ class PendingActionTests(unittest.TestCase):
         self.assertEqual(result["workflow_profile"], "attendance_confirmation")
         self.assertEqual(worker.page.commit_payload["attitude_code"], "agree")
 
+    def test_overtime_approval_freezes_exact_hr_contract_and_confirms(self):
+        fixture = _fixture("overtime")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_overtime_approval(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertIn("郑其荣", fields["姓名"])
+        self.assertIn("2026-08-17 18:30", fields["申请开始时间"])
+        self.assertIn("0.65", fields["实际开始时间"])
+        self.assertEqual(
+            prepared["plan"]["target"]["template_id"],
+            "-170938662527873499",
+        )
+
+        result = approve_overtime(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(result["workflow_profile"], "overtime")
+
     def test_pending_preflight_rejects_wrong_profile_before_field_input(self):
         worker = FakeWorker(_fixture("attendance_confirmation"))
         with self.assertRaisesRegex(PendingActionContractMismatch, "not a registered"):
@@ -276,12 +304,13 @@ class PendingActionTests(unittest.TestCase):
                 "travel_expense",
                 "labor_contract_renewal",
                 "intellectual_property_declaration",
+                "overtime",
                 "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 7)
+        self.assertEqual(len(fingerprints), 8)
 
 
 class FakeAdapter:
@@ -495,6 +524,33 @@ def _fixture(profile):
                 "selection_count": 1,
                 "decision": "无异议",
             },
+        },
+        "overtime": {
+            "title": "【HR】加班申请审核单-郑其荣-0.65",
+            "fields": [
+                {
+                    "name": "姓名",
+                    "value": "申请人 郑其荣 工号 TH809 部门 人工智能研发中心",
+                },
+                {
+                    "name": "申请开始时间",
+                    "value": "申请加班开始时间 2026-08-17 18:30 申请加班结束时间 2026-08-17 19:09",
+                },
+                {"name": "加班事由", "value": "日常加班"},
+                {
+                    "name": "是否存在有非部门经理的直接上级（组负责人）",
+                    "value": "是否有直接上级 否",
+                },
+                {
+                    "name": "实际开始时间",
+                    "value": "实际加班开始时间 2026-08-17 18:30 实际加班结束时间 2026-08-17 19:09 加班时长 0.65",
+                },
+            ],
+            "template_id": "-170938662527873499",
+            "form_app_id": "-213895278619572887",
+            "node_policy": "考勤审批",
+            "node_policy_name": "考勤审批",
+            "attitudes": ["agree", "disagree"],
         },
         "standard_collaboration": {
             "title": "关于征集专家入库工作的通知",

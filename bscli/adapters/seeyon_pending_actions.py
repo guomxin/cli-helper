@@ -25,6 +25,8 @@ INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY = (
 INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY = (
     "oa.intellectual_property_declaration.approve"
 )
+OVERTIME_APPROVAL_PREPARE_CAPABILITY = "oa.overtime.approval.prepare"
+OVERTIME_APPROVE_CAPABILITY = "oa.overtime.approve"
 ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
     "oa.attendance_confirmation.prepare"
 )
@@ -111,6 +113,12 @@ INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_intellectual_property_declaration_approval_fields.v1",
     title="填写知识产权申报审批意见",
     effect="审批通过一条知识产权申报审批单",
+    submit_label="提交审批意见",
+)
+OVERTIME_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_overtime_approval_fields.v1",
+    title="填写加班申请审批意见",
+    effect="审批通过一条加班申请审核单",
     submit_label="提交审批意见",
 )
 ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
@@ -256,6 +264,36 @@ _PROFILES = {
         "summary_effect": "审批通过后该知识产权申报事项将离开待办列表",
         "authorize_label": "授权审批通过",
         "business_snapshot_policy": "intellectual_property_declaration_v1",
+    },
+    "overtime": {
+        "prepare_capability": OVERTIME_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": OVERTIME_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-overtime-approval-v1",
+        "plan_schema": "agentbridge.oa_overtime_approval_plan.v1",
+        "result_schema": "agentbridge.oa_overtime_approval_result.v1",
+        "business_intent": "approve_overtime_request",
+        "title_rule": {
+            "kind": "prefix",
+            "value": "【HR】加班申请审核单-",
+        },
+        "required_fields": {
+            "姓名",
+            "申请开始时间",
+            "加班事由",
+            "是否存在有非部门经理的直接上级（组负责人）",
+            "实际开始时间",
+        },
+        "allowed_fields": None,
+        "template_id": "-170938662527873499",
+        "form_app_id": "-213895278619572887",
+        "node_policies": {"考勤审批"},
+        "node_policy_names": {"考勤审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批加班申请审核单",
+        "summary_effect": "审批通过后该加班申请将离开待办列表",
+        "authorize_label": "授权审批通过",
     },
     "attendance_confirmation": {
         "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
@@ -447,6 +485,26 @@ def approve_intellectual_property_declaration(
         worker,
         plan,
         profile_key="intellectual_property_declaration",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_overtime_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "overtime")
+
+
+def approve_overtime(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="overtime",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -1168,6 +1226,16 @@ def _summary(
         ):
             if snapshot.get(name):
                 fields.append({"label": label, "value": snapshot[name]})
+    elif profile_key == "overtime":
+        for name in (
+            "姓名",
+            "申请开始时间",
+            "加班事由",
+            "是否存在有非部门经理的直接上级（组负责人）",
+            "实际开始时间",
+        ):
+            if values.get(name):
+                fields.append({"label": name, "value": values[name]})
     elif profile_key == "weekly_report":
         for name in ("周报名称", "年度", "本周说明"):
             if values.get(name):

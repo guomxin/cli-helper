@@ -57,6 +57,8 @@ from bscli.adapters.seeyon_pending_actions import (
     INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
+    OVERTIME_APPROVAL_PREPARE_CAPABILITY,
+    OVERTIME_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
     TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
@@ -172,6 +174,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_intellectual_property_declaration_approval_prepare": frozenset(
         {"oa:write:approval"}
     ),
+    "oa_overtime_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_attendance_confirmation_prepare": frozenset(
         {"oa:write:approval"}
     ),
@@ -730,6 +733,23 @@ def create_central_mcp_server(
             "commit_capability": (
                 INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY
             ),
+        },
+        {
+            "prepare_tool_name": "oa_overtime_approval_prepare",
+            "prepare_title": "Prepare OA Overtime Approval",
+            "prepare_description": (
+                "Bind one exact pending overtime approval. AgentBridge freezes the "
+                "applicant, requested and actual time ranges, reason, supervisor field, "
+                "and duration; pass any opinion already supplied by the user."
+            ),
+            "prepare_capability": OVERTIME_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_overtime_approve",
+            "commit_title": "Approve Authorized OA Overtime Request",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "overtime request leaves the pending collection."
+            ),
+            "commit_capability": OVERTIME_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_attendance_confirmation_prepare",

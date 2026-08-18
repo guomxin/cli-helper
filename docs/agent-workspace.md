@@ -128,11 +128,12 @@ WebSocket 上依次完成一次性身份绑定、`chat.send` 和 `agent` / `chat
 | Agent Workspace | `https://10.10.50.213:8783` |
 | AgentBridge MCP | `https://10.10.50.213:8790/mcp` |
 | 可信卡片 | `https://10.10.50.213:8780` |
-| OpenClaw Gateway | `ws://10.90.20.210:18789` |
+| OpenClaw Gateway | `ws://127.0.0.1:18789`（服务器回环，经工作站反向 SSH 隧道） |
 
-OpenClaw Gateway 当前使用 `gateway.bind=lan`，这样本机
-`127.0.0.1:18789` 和内网 `10.90.20.210:18789` 同时可用。不要改成当前版本下会
-破坏回环访问的自定义单地址绑定。非回环连接必须保留 Gateway Token 认证和设备配对。
+OpenClaw Gateway 当前使用 `gateway.bind=lan`，但 AgentBridge 不再依赖工作站当前
+局域网 IP。Windows 工作站通过 `Start-AgentBridgeWorkspaceTunnel.ps1` 主动建立仅绑定
+服务器 `127.0.0.1` 的反向 SSH 隧道；切换有线、无线、家庭或度假网络后，脚本会自动
+重连。Gateway Token 认证和设备配对仍然保留。
 
 AgentBridge systemd 参数包括：
 
@@ -142,7 +143,7 @@ AgentBridge systemd 参数包括：
 --workspace-public-base-url https://10.10.50.213:8783
 --workspace-tls-cert /home/guomao/agentbridge/config/tls/server.crt
 --workspace-tls-key /home/guomao/agentbridge/config/tls/server.key
---workspace-gateway-url ws://10.90.20.210:18789
+--workspace-gateway-url ws://127.0.0.1:18789
 --workspace-gateway-token-file /home/guomao/agentbridge/config/openclaw-gateway.token
 ```
 
@@ -166,9 +167,18 @@ openclaw devices approve <requestId> --json
 重复配对；删除该文件、清除 OpenClaw 已配对设备或轮换相应设备 Token 后才需要重新
 批准。
 
-当前 PoC 已验证服务器可连接工作站 `10.90.20.210:18789`。生产化前仍应把 Windows
-入站规则限制到 AgentBridge 服务器源地址，并评估 TLS 或受控隧道，不能把该端口
-暴露到公司外网。
+当前链路不要求服务器入站访问工作站，也不需要为变化的工作站 IP 调整服务参数。
+运行 `Install-AgentBridgeWorkspaceTunnel.ps1` 后，当前 Windows 用户登录时会隐藏启动
+隧道，并在 SSH 断开后持续重连。反向端口只监听服务器回环地址，不对内网或公网开放。
+
+```powershell
+.\scripts\Install-AgentBridgeWorkspaceTunnel.ps1
+Get-ScheduledTask -TaskName "AgentBridge Workspace Tunnel"
+```
+
+隧道使用仓库内固定 Host Key 和工作站现有 AgentBridge SSH 私钥，不保存新密码。停止
+计划任务只会使网页端暂时无法新发起 OpenClaw 运行，不影响 Telegram、微信、中央会话
+保活或已落库的任务时间线。
 
 ## 5. 用户操作
 

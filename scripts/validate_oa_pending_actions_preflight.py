@@ -12,6 +12,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_efficiency_data_approval,
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
+    prepare_overtime_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -29,6 +30,7 @@ _PREPARE_FUNCTIONS = {
         prepare_intellectual_property_declaration_approval
     ),
     "labor_contract_renewal": prepare_labor_contract_renewal_approval,
+    "overtime": prepare_overtime_approval,
     "missed_punch_approval": prepare_missed_punch_approval,
     "travel_expense": prepare_travel_expense_approval,
     "weekly_report": prepare_weekly_report_acknowledgement,

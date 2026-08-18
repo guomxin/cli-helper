@@ -4377,6 +4377,73 @@ test("reports a verified monthly-attendance confirmation after authorization res
   );
 });
 
+test("reports a verified overtime approval after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-overtime-approval-123456",
+    type: "execution_authorization",
+    title: "Approve overtime request",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          pending_action_processed: true,
+          action_kind: "approval",
+          workflow_profile: "overtime",
+          workflow_approved: true,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-overtime-approval",
+    runId: "run-overtime-approval",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-overtime-approval",
+      toolName: "oa_overtime_approval_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA \u52a0\u73ed\u7533\u8bf7\u5ba1\u6838\u5355\u5df2\u5ba1\u6279\u901a\u8fc7\u3002",
+  );
+});
+
 
 test("reports a verified business-trip submission after authorization resumes", async () => {
   const harness = fakeApi({

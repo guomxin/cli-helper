@@ -49,6 +49,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.missed_punch.approve",
                 "oa.missed_punch.prepare",
                 "oa.missed_punch.save_draft",
+                "oa.overtime.approval.prepare",
+                "oa.overtime.approve",
                 "oa.standard_collaboration.approval.prepare",
                 "oa.standard_collaboration.approve",
                 "oa.template.list",
@@ -109,6 +111,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.missed_punch.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.missed_punch.approval.prepare"], "controlled_write")
         self.assertEqual(effects["oa.missed_punch.approve"], "controlled_write")
+        self.assertEqual(effects["oa.overtime.approval.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.overtime.approve"], "controlled_write")
         self.assertEqual(effects["oa.meeting.create.prepare"], "controlled_write")
         self.assertEqual(effects["oa.meeting.create"], "controlled_write")
         self.assertTrue(

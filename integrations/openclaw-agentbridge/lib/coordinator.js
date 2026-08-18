@@ -2846,6 +2846,7 @@ function safeSucceededMessage(response) {
       travel_expense: "OA \u5dee\u65c5\u8d39\u5ba1\u6279\u62a5\u9500\u5355",
       labor_contract_renewal: "OA \u52b3\u52a8\u5408\u540c\u7eed\u7b7e\u8868",
       intellectual_property_declaration: "OA \u77e5\u8bc6\u4ea7\u6743\u7533\u62a5\u5ba1\u6279\u5355",
+      overtime: "OA \u52a0\u73ed\u7533\u8bf7\u5ba1\u6838\u5355",
       attendance_confirmation: "OA \u6708\u5ea6\u8003\u52e4\u786e\u8ba4\u5355",
       weekly_report: "OA \u5468\u62a5\u53d1\u9001\u6d41\u7a0b",
       standard_collaboration: "OA \u666e\u901a\u534f\u540c\u4e8b\u9879",

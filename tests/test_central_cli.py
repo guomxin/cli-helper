@@ -48,7 +48,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 67)
+        self.assertEqual(len(payload["capabilities"]), 69)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -147,6 +147,7 @@ class CentralCliTests(unittest.TestCase):
             "oa.efficiency_data.approve",
             "oa.labor_contract_renewal.approve",
             "oa.intellectual_property_declaration.approve",
+            "oa.overtime.approve",
             "oa.attendance_confirmation.confirm",
             "oa.travel_expense.approve",
             "oa.weekly_report.acknowledge",
