@@ -2088,6 +2088,25 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - OpenClaw 插件升级为 `0.4.48`，Telegram、微信与 Workspace 共享加班准备能力；内部
   commit 工具仍对模型隐藏，只能由可信授权续办。
 
+### 15.63 2026-08-19 Workspace 反向隧道运行基线
+
+- 新增独立运行手册
+  [Agent Workspace 反向 SSH 隧道](./agent-workspace-reverse-ssh-tunnel.md)，固定记录
+  浏览器、AgentBridge、服务器 `sshd`、Windows `ssh.exe` 和 OpenClaw Gateway 的真实
+  数据方向与进程边界。浏览器不直接穿过隧道，隧道只承载中心端到本机 Gateway 的连接。
+- Windows 当前由登录任务 `AgentBridge Workspace Tunnel` 启动隐藏 PowerShell，后者
+  守护一个 `ssh.exe`；213 由该 SSH 会话对应的 `sshd` 子进程独占监听
+  `127.0.0.1:18789`。任务 PID 和 sshd PID 只作为诊断信息，不进入配置。
+- 当前 SSH 使用 30 秒保活、连续 3 次失败退出、退出后 5 秒重连；网络静默丢包时恢复
+  时间还包括最长约 90 秒的断线发现。服务器回环监听、SSH 加密、固定 Host Key、专用
+  私钥、Gateway Token 和设备配对共同构成现有 PoC 边界。
+- 真实运行核对确认计划任务、工作站 SSH、服务器回环监听和 AgentBridge 均正常；213
+  通过隧道访问本机 OpenClaw 返回 HTTP 200。另以 12 条不完成 TLS 的客户端连接验证
+  Workspace 仍返回 200，证明切网残留半开连接不会再次阻塞整个 HTTPS 入口。
+- 当前 Windows Terminal 可能为隐藏 PowerShell 创建可见控制台。该窗口是隧道守护进程，
+  不是第二个 OpenClaw；关闭后会使 Workspace 暂时失去 Gateway。真正无窗口的 Windows
+  服务化和受限 SSH 服务账号留到生产加固阶段。
+
 ## 16. 后续演进顺序
 
 1. Workspace 已改为工作站主动建立的回环反向 SSH 隧道；后续观察一次真实切网或短断重连，

@@ -133,7 +133,9 @@ WebSocket 上依次完成一次性身份绑定、`chat.send` 和 `agent` / `chat
 OpenClaw Gateway 当前使用 `gateway.bind=lan`，但 AgentBridge 不再依赖工作站当前
 局域网 IP。Windows 工作站通过 `Start-AgentBridgeWorkspaceTunnel.ps1` 主动建立仅绑定
 服务器 `127.0.0.1` 的反向 SSH 隧道；切换有线、无线、家庭或度假网络后，脚本会自动
-重连。Gateway Token 认证和设备配对仍然保留。
+重连。Gateway Token 认证和设备配对仍然保留。完整的数据流、两端进程、恢复时序、
+安全边界和排障命令见
+[Agent Workspace 反向 SSH 隧道](./agent-workspace-reverse-ssh-tunnel.md)。
 
 AgentBridge systemd 参数包括：
 
