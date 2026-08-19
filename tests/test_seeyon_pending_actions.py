@@ -279,6 +279,23 @@ class PendingActionTests(unittest.TestCase):
         self.assertTrue(result["workflow_approved"])
         self.assertEqual(result["workflow_profile"], "efficiency_data")
 
+    def test_commit_verifies_on_forked_page_after_submission(self):
+        fixture = _fixture("overtime")
+        worker = FakeForkingWorker(fixture)
+        adapter = FakeForkingAdapter(worker)
+        plan = prepare_overtime_approval(adapter, worker, _inputs())["plan"]
+
+        result = approve_overtime(
+            adapter,
+            worker,
+            plan,
+            enter_commit_boundary=lambda: None,
+        )
+
+        self.assertTrue(result["workflow_approved"])
+        self.assertIs(adapter.readback_worker, worker.readback_worker)
+        self.assertTrue(worker.readback_closed)
+
     def test_commit_rejects_changed_detail_before_boundary(self):
         fixture = _fixture("efficiency_data")
         worker = FakeWorker(fixture)
@@ -340,6 +357,41 @@ class FakeWorker:
     def __init__(self, fixture):
         self.fixture = fixture
         self.page = FakePage(fixture)
+
+
+class FakeForkingAdapter(FakeAdapter):
+    def __init__(self, worker):
+        super().__init__(worker)
+        self.readback_worker = None
+
+    def list_workflows(self, worker, *, collection, arguments):
+        if worker is not self.worker.readback_worker:
+            raise AssertionError("pending readback did not use the forked worker")
+        if collection != "pending" or arguments != {"limit": 100}:
+            raise AssertionError("unexpected pending readback")
+        self.readback_worker = worker
+        return {"items": []}
+
+
+class FakeForkingWorker(FakeWorker):
+    def __init__(self, fixture):
+        super().__init__(fixture)
+        self.readback_worker = object()
+        self.readback_closed = False
+
+    def fork_page(self):
+        return FakeForkedWorkerContext(self)
+
+
+class FakeForkedWorkerContext:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def __enter__(self):
+        return self.owner.readback_worker
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.owner.readback_closed = True
 
 
 class FakePage:

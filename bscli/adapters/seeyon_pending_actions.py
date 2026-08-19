@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import time
+from contextlib import contextmanager
 from typing import Any, Callable
 
 
@@ -728,41 +729,42 @@ def _commit_pending_action(
                 "OA did not schedule the pending action submission."
             )
         deadline = time.monotonic() + max(timeout_seconds, 5)
-        while time.monotonic() < deadline:
-            time.sleep(0.8)
-            pending = adapter.list_workflows(
-                worker,
-                collection="pending",
-                arguments={"limit": 100},
-            )
-            if not any(
-                str(item.get("affair_id") or "") == affair_id
-                for item in pending.get("items") or []
-            ):
-                result = {
-                    "schema_version": profile["result_schema"],
-                    "business_intent": profile["business_intent"],
-                    "pending_action_processed": True,
-                    "processed_count": 1,
-                    "action_kind": profile["action_kind"],
-                    "workflow_profile": profile_key,
-                    "target": {
-                        "affair_id": affair_id,
-                        "title": str(source.get("title") or ""),
-                    },
-                    "verification": {
-                        "confirmed": True,
-                        "method": "pending_disappearance",
-                    },
-                    "transport": "central_browser_session",
-                }
-                if profile["action_kind"] == "acknowledgement":
-                    result["workflow_acknowledged"] = True
-                elif profile["action_kind"] == "confirmation":
-                    result["workflow_confirmed"] = True
-                else:
-                    result["workflow_approved"] = True
-                return result
+        with _pending_readback_worker(worker) as readback_worker:
+            while time.monotonic() < deadline:
+                time.sleep(0.8)
+                pending = adapter.list_workflows(
+                    readback_worker,
+                    collection="pending",
+                    arguments={"limit": 100},
+                )
+                if not any(
+                    str(item.get("affair_id") or "") == affair_id
+                    for item in pending.get("items") or []
+                ):
+                    result = {
+                        "schema_version": profile["result_schema"],
+                        "business_intent": profile["business_intent"],
+                        "pending_action_processed": True,
+                        "processed_count": 1,
+                        "action_kind": profile["action_kind"],
+                        "workflow_profile": profile_key,
+                        "target": {
+                            "affair_id": affair_id,
+                            "title": str(source.get("title") or ""),
+                        },
+                        "verification": {
+                            "confirmed": True,
+                            "method": "pending_disappearance",
+                        },
+                        "transport": "central_browser_session",
+                    }
+                    if profile["action_kind"] == "acknowledgement":
+                        result["workflow_acknowledged"] = True
+                    elif profile["action_kind"] == "confirmation":
+                        result["workflow_confirmed"] = True
+                    else:
+                        result["workflow_approved"] = True
+                    return result
         raise PendingActionOutcomeUnknown(
             "The pending action was scheduled, but the affair remained in the pending list."
         )
@@ -774,6 +776,16 @@ def _commit_pending_action(
                 "The OA pending-action boundary was crossed, but verification failed."
             ) from exc
         raise
+
+
+@contextmanager
+def _pending_readback_worker(worker):
+    fork_page = getattr(worker, "fork_page", None)
+    if not callable(fork_page):
+        yield worker
+        return
+    with fork_page() as readback_worker:
+        yield readback_worker
 
 
 def _validate_target(
