@@ -412,6 +412,10 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertTrue(survey["resolved"])
         self.assertEqual(survey["items"][0]["phaseVoltage"]["a"], 220.1)
         self.assertEqual(survey["items"][0]["leakCurrents"], [0.02, 0.01])
+        self.assertEqual(survey["items"][0]["phaseCurrentRatio"]["a"], "1.1/20")
+        self.assertEqual(survey["items"][0]["circuitCurrents"], {"1": "1.1/3"})
+        self.assertEqual(survey["items"][0]["phaseCircuits"]["a"], "1,4")
+        self.assertEqual(survey["items"][0]["state"], "正常")
 
         request_by_path = {item["path"]: item for item in worker.api_requests}
         rtu_query = json.loads(
@@ -481,6 +485,42 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(
             [query["dateType"] for query in alarm_queries],
             ["0", "0", "1", "1"],
+        )
+
+    def test_runtime_name_filters_are_applied_without_sending_names_as_ids(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        rtus = self.adapter.invoke_capability(
+            SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
+            worker,
+            {"state": "offline", "work_area": "实验室", "size": 20},
+        )
+        lamps = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY,
+            worker,
+            {"controller_state": "offline", "street": "测试路", "size": 20},
+        )
+        alarms = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
+            worker,
+            {"last_days": 30, "cabinet": "一号箱变", "size": 20},
+        )
+
+        self.assertEqual(rtus["count"], 1)
+        self.assertEqual(lamps["count"], 1)
+        self.assertEqual(alarms["count"], 1)
+        request_queries = [
+            json.loads(parse_qs(request["body"])["json"][0])
+            for request in worker.api_requests
+            if "json=" in str(request.get("body") or "")
+        ]
+        self.assertTrue(
+            all(
+                "实验室" not in json.dumps(query, ensure_ascii=False)
+                and "测试路" not in json.dumps(query, ensure_ascii=False)
+                and "一号箱变" not in json.dumps(query, ensure_ascii=False)
+                for query in request_queries
+            )
         )
 
     def test_alarm_remark_get_is_read_only_and_authoritative(self):
@@ -1264,14 +1304,14 @@ class FakeSmartlightWorker:
         if path.endswith("/rRtu/getRtuStateCountDataByConditionNew"):
             return _response(
                 {
-                    "rAllCount": 29,
-                    "rOnlineCount": 0,
-                    "rNoOnlineWithNoHandleCount": 27,
-                    "rPowerOutageCount": 1,
-                    "rDisableCount": 1,
-                    "rOnlineWithEleCount": 0,
-                    "rOnlineWithOutEleCount": 0,
-                    "rOnlineNoCalCount": 0,
+                    "rAllCount": "29",
+                    "rOnlineCount": "0",
+                    "rNoOnlineWithNoHandleCount": "27",
+                    "rPowerOutageCount": "1",
+                    "rDisableCount": "1",
+                    "rOnlineWithEleCount": "0",
+                    "rOnlineWithOutEleCount": "0",
+                    "rOnlineNoCalCount": "0",
                 }
             )
         if path.endswith("/lLamppost/newGetTotalStatus"):
@@ -1586,20 +1626,28 @@ class FakeSmartlightWorker:
                             "rtuName": "一号 RTU",
                             "addDateTime": "2026-08-10 10:00:00",
                             "rtuTime": "2026-08-10 09:59:58",
-                            "strRtuScaleU1": 220.1,
-                            "strRtuScaleU2": 220.2,
-                            "strRtuScaleU3": 220.3,
+                            "rtuScaleU1": 220.1,
+                            "rtuScaleU2": 220.2,
+                            "rtuScaleU3": 220.3,
                             "strRtuScaleIsp1": 1.1,
                             "strRtuScaleIsp2": 1.2,
                             "strRtuScaleIsp3": 1.3,
+                            "iaIan": "1.1/20",
+                            "ibIbn": "1.2/20",
+                            "icIcn": "1.3/20",
                             "APowerFactor": 0.91,
                             "BPowerFactor": 0.92,
                             "CPowerFactor": 0.93,
                             "temperature": 25.5,
                             "humidity": 48,
                             "relayLeakCurrents": [0.02, 0.01],
+                            "jsonRoadIsp": {"1": "1.1/3"},
+                            "roadInA": "1,4",
+                            "roadInB": "2,5",
+                            "roadInC": "3,6",
                             "onRelayIds": [1],
                             "offRelayIds": [2],
+                            "isSucceeded": 1,
                         }
                     ],
                     "total": 1,

@@ -5,6 +5,12 @@ param(
         "TaihuaSessionStatus",
         "SmartlightSessionStatus",
         "SmartlightOverview",
+        "SmartlightRuntimeOverview",
+        "SmartlightRtuStatus",
+        "SmartlightLampStatus",
+        "SmartlightLampAlarms",
+        "SmartlightLampAlarmAnalysis",
+        "SmartlightRtuSurvey",
         "SmartlightLampPosts",
         "SmartlightAlarms",
         "SmartlightInspectionTasks",
@@ -58,9 +64,13 @@ param(
     [string]$YuqueDocument = "",
     [ValidateSet("cabinet", "rtu", "lamppost")]
     [string]$SmartlightAssetType = "rtu",
-    [ValidateSet("alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress")]
+    [ValidateSet("alarm_analysis", "lamp_alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress")]
     [string]$SmartlightReportType = "alarm_analysis",
     [string]$SmartlightAssetId = "",
+    [string]$SmartlightRtuId = "",
+    [string]$SmartlightRtuKeyword = "",
+    [string]$SmartlightStartTime = "",
+    [string]$SmartlightEndTime = "",
     [string]$SmartlightTaskId = "",
     [string]$SmartlightDetailDate = "",
     [ValidateRange(0, 100000)]
@@ -284,6 +294,32 @@ try {
             "--smartlight-asset-type", $SmartlightAssetType,
             "--smartlight-asset-id", $SmartlightAssetId
         )
+    }
+    if ($Check -eq "SmartlightRtuSurvey") {
+        if (
+            [string]::IsNullOrWhiteSpace($SmartlightRtuId) -and
+            [string]::IsNullOrWhiteSpace($SmartlightRtuKeyword)
+        ) {
+            throw "SmartlightRtuId or SmartlightRtuKeyword is required for the selected check"
+        }
+        if (
+            [string]::IsNullOrWhiteSpace($SmartlightStartTime) -ne
+            [string]::IsNullOrWhiteSpace($SmartlightEndTime)
+        ) {
+            throw "SmartlightStartTime and SmartlightEndTime must be provided together"
+        }
+        if ($SmartlightRtuId) {
+            $nodeArguments += @("--smartlight-rtu-id", $SmartlightRtuId)
+        }
+        if ($SmartlightRtuKeyword) {
+            $nodeArguments += @("--smartlight-rtu-keyword", $SmartlightRtuKeyword)
+        }
+        if ($SmartlightStartTime) {
+            $nodeArguments += @(
+                "--smartlight-start-time", $SmartlightStartTime,
+                "--smartlight-end-time", $SmartlightEndTime
+            )
+        }
     }
     if ($Check -eq "SmartlightInspectionDetail") {
         if ([string]::IsNullOrWhiteSpace($SmartlightTaskId)) {

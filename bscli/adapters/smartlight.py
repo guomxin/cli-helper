@@ -660,34 +660,58 @@ class SmartlightCentralAdapter:
             "observedAt": observed_at,
             "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
             "rtu": {
-                "total": _first(rtu_counts, "rAllCount"),
-                "online": _first(rtu_counts, "rOnlineCount"),
-                "offline": _first(rtu_counts, "rNoOnlineWithNoHandleCount"),
-                "powerOff": _first(rtu_counts, "rPowerOutageCount"),
-                "disabled": _first(rtu_counts, "rDisableCount"),
-                "onlineWithElectricity": _first(
-                    rtu_counts, "rOnlineWithEleCount"
+                "total": _smartlight_int(_first(rtu_counts, "rAllCount")),
+                "online": _smartlight_int(_first(rtu_counts, "rOnlineCount")),
+                "offline": _smartlight_int(
+                    _first(rtu_counts, "rNoOnlineWithNoHandleCount")
                 ),
-                "onlineWithoutElectricity": _first(
-                    rtu_counts, "rOnlineWithOutEleCount"
+                "powerOff": _smartlight_int(
+                    _first(rtu_counts, "rPowerOutageCount")
                 ),
-                "notCalculated": _first(rtu_counts, "rOnlineNoCalCount"),
+                "disabled": _smartlight_int(_first(rtu_counts, "rDisableCount")),
+                "onlineWithElectricity": _smartlight_int(
+                    _first(rtu_counts, "rOnlineWithEleCount")
+                ),
+                "onlineWithoutElectricity": _smartlight_int(
+                    _first(rtu_counts, "rOnlineWithOutEleCount")
+                ),
+                "notCalculated": _smartlight_int(
+                    _first(rtu_counts, "rOnlineNoCalCount")
+                ),
                 "source": "/rRtu/getRtuStateCountDataByConditionNew",
                 "scope": "lighting_runtime_rtu",
             },
             "singleLamp": {
-                "controllerTotal": _first(lamp_counts, "AllControlCount"),
-                "controllerOnline": _first(lamp_counts, "OnlineCount"),
-                "controllerOffline": _first(lamp_counts, "OfflineCount"),
-                "lampTotal": _first(lamp_counts, "AlonelampCount"),
-                "lampOn": _first(lamp_counts, "OpenLampCount"),
-                "lampOff": _first(lamp_counts, "CloseLampCount"),
-                "lampPostTotal": _first(lamp_counts, "LampPostCount"),
-                "singleLampPosts": _first(lamp_counts, "SingleLampPostCount"),
-                "doubleLampPosts": _first(lamp_counts, "DoubleLampPostCount"),
-                "tripleLampPosts": _first(lamp_counts, "TribleLampPostCount"),
-                "otherLampPosts": _first(lamp_counts, "OtherLampPostCount"),
-                "alarmLampPosts": _first(lamp_counts, "alarmLampPostCount"),
+                "controllerTotal": _smartlight_int(
+                    _first(lamp_counts, "AllControlCount")
+                ),
+                "controllerOnline": _smartlight_int(
+                    _first(lamp_counts, "OnlineCount")
+                ),
+                "controllerOffline": _smartlight_int(
+                    _first(lamp_counts, "OfflineCount")
+                ),
+                "lampTotal": _smartlight_int(_first(lamp_counts, "AlonelampCount")),
+                "lampOn": _smartlight_int(_first(lamp_counts, "OpenLampCount")),
+                "lampOff": _smartlight_int(_first(lamp_counts, "CloseLampCount")),
+                "lampPostTotal": _smartlight_int(
+                    _first(lamp_counts, "LampPostCount")
+                ),
+                "singleLampPosts": _smartlight_int(
+                    _first(lamp_counts, "SingleLampPostCount")
+                ),
+                "doubleLampPosts": _smartlight_int(
+                    _first(lamp_counts, "DoubleLampPostCount")
+                ),
+                "tripleLampPosts": _smartlight_int(
+                    _first(lamp_counts, "TribleLampPostCount")
+                ),
+                "otherLampPosts": _smartlight_int(
+                    _first(lamp_counts, "OtherLampPostCount")
+                ),
+                "alarmLampPosts": _smartlight_int(
+                    _first(lamp_counts, "alarmLampPostCount")
+                ),
                 "source": "/lLamppost/newGetTotalStatus",
                 "scope": "single_lamp_runtime",
             },
@@ -710,17 +734,20 @@ class SmartlightCentralAdapter:
             field_name="state",
         )
         alarm_only = bool(arguments.get("alarm_only"))
-        query = _rtu_status_query(
-            keyword=keyword,
-            work_area=str(arguments.get("work_area") or "").strip(),
-            group=str(arguments.get("group") or "").strip(),
-            model=str(arguments.get("model") or "").strip(),
+        work_area = str(arguments.get("work_area") or "").strip()
+        group = str(arguments.get("group") or "").strip()
+        model = str(arguments.get("model") or "").strip()
+        query = _rtu_status_query(keyword=keyword)
+        local_filter = alarm_only or state == "online" or any(
+            (work_area, group, model)
         )
-        local_filter = alarm_only or state == "online"
         if local_filter:
-            downstream_filters = (
-                ["OnlineWithElc", "OffLamppost"] if state == "online" else [None]
-            )
+            downstream_filters = {
+                "online": ["OnlineWithElc", "OffLamppost"],
+                "offline": ["NoOnlineWithNoHandle"],
+                "power_off": ["PowerOutage"],
+                "disabled": ["Disable"],
+            }.get(state, [None])
             records: list[dict] = []
             downstream_total = 0
             truncated = False
@@ -744,6 +771,13 @@ class SmartlightCentralAdapter:
             normalized = [_normalize_rtu_status(item, requested_state=state) for item in records]
             if alarm_only:
                 normalized = [item for item in normalized if item["hasAlarm"] is True]
+            normalized = [
+                item
+                for item in normalized
+                if _contains_text(item.get("workArea"), work_area)
+                and _contains_text(item.get("group"), group)
+                and _contains_text(item.get("model"), model)
+            ]
             start = (page - 1) * size
             selected = normalized[start : start + size]
             total = len(normalized)
@@ -772,9 +806,9 @@ class SmartlightCentralAdapter:
                 "keyword": keyword or None,
                 "state": state,
                 "alarmOnly": alarm_only,
-                "workArea": arguments.get("work_area") or None,
-                "group": arguments.get("group") or None,
-                "model": arguments.get("model") or None,
+                "workArea": work_area or None,
+                "group": group or None,
+                "model": model or None,
             },
             "page": page,
             "size": size,
@@ -827,12 +861,15 @@ class SmartlightCentralAdapter:
             field_name="lamp_state",
         )
         alarm_only = bool(arguments.get("alarm_only"))
+        street = str(arguments.get("street") or "").strip()
+        cabinet = str(arguments.get("cabinet") or "").strip()
+        work_area = str(arguments.get("work_area") or "").strip()
         query = {
             "_like_params": keyword,
             "_include_leffecteId": [],
-            "_include_streetId": _single_filter_list(arguments.get("street")),
-            "_include_controlCabinetId": _single_filter_list(arguments.get("cabinet")),
-            "_include_workAreaId": _single_filter_list(arguments.get("work_area")),
+            "_include_streetId": [],
+            "_include_controlCabinetId": [],
+            "_include_workAreaId": [],
             "lampTypeIds": [],
             "streetIds": [],
         }
@@ -841,13 +878,14 @@ class SmartlightCentralAdapter:
             alarm_only
             or lamp_state == "abnormal"
             or (controller_state != "all" and lamp_state != "all")
+            or any((street, cabinet, work_area))
         )
         if local_filter:
             payload = self._lamp_status_page(
                 worker,
                 context,
                 query=query,
-                status=None,
+                status=status,
                 page=1,
                 size=_SMARTLIGHT_RUNTIME_SCAN_LIMIT,
             )
@@ -861,6 +899,9 @@ class SmartlightCentralAdapter:
                     lamp_state=lamp_state,
                     alarm_only=alarm_only,
                 )
+                and _contains_text(item.get("road"), street)
+                and _contains_text(item.get("cabinet"), cabinet)
+                and _contains_text(item.get("workArea"), work_area)
             ]
             start = (page - 1) * size
             selected = normalized[start : start + size]
@@ -876,7 +917,9 @@ class SmartlightCentralAdapter:
                 page=page,
                 size=size,
             )
-            selected = [_normalize_lamp_status(item) for item in _page_items(payload)]
+            selected = [
+                _normalize_lamp_status(item) for item in _page_items(payload)[:size]
+            ]
             downstream_total = _page_total(payload)
             total = downstream_total
             truncated = False
@@ -889,9 +932,9 @@ class SmartlightCentralAdapter:
                 "controllerState": controller_state,
                 "lampState": lamp_state,
                 "alarmOnly": alarm_only,
-                "street": arguments.get("street") or None,
-                "cabinet": arguments.get("cabinet") or None,
-                "workArea": arguments.get("work_area") or None,
+                "street": street or None,
+                "cabinet": cabinet or None,
+                "workArea": work_area or None,
             },
             "page": page,
             "size": size,
@@ -971,7 +1014,7 @@ class SmartlightCentralAdapter:
             field_name="alarm_state",
         )
         query = {
-            "_include_controlCabinetId": _single_filter_list(arguments.get("cabinet")),
+            "_include_controlCabinetId": [],
             "_like_lampPostCode": str(arguments.get("keyword") or "").strip(),
             "_timebegin_alarmAddDate": "",
             "_timeend_alarmAddDate": "",
@@ -980,8 +1023,8 @@ class SmartlightCentralAdapter:
             ),
             "_include_duration": [0],
             "_include_hitchDicId": [],
-            "_include_streetId": _single_filter_list(arguments.get("road")),
-            "_include_workId": _single_filter_list(arguments.get("work_area")),
+            "_include_streetId": [],
+            "_include_workId": [],
             "_timebegin_lastDate": f"{start_date} 00:00:00",
             "_timeend_lastDate": f"{end_date} 23:59:59",
             "_show_newData": True,
@@ -1019,6 +1062,7 @@ class SmartlightCentralAdapter:
             ("alarm_type", "alarmType"),
             ("road", "road"),
             ("work_area", "workArea"),
+            ("cabinet", "cabinet"),
         ):
             needle = str(arguments.get(argument_name) or "").strip().casefold()
             if needle:
@@ -3833,6 +3877,10 @@ def _single_filter_list(value: Any) -> list[str]:
     return [normalized] if normalized else []
 
 
+def _contains_text(value: Any, expected: str) -> bool:
+    return not expected or expected.casefold() in str(value or "").casefold()
+
+
 def _rtu_status_query(
     *,
     keyword: str = "",
@@ -4119,9 +4167,9 @@ def _normalize_rtu_survey(item: dict) -> dict:
         "receivedAt": received_at,
         "rtuTime": _first(item, "rtuDateTime", "rtuTime", "deviceTime"),
         "phaseVoltage": {
-            "a": _first(item, "strRtuScaleU1", "Ua", "ua"),
-            "b": _first(item, "strRtuScaleU2", "Ub", "ub"),
-            "c": _first(item, "strRtuScaleU3", "Uc", "uc"),
+            "a": _first(item, "strRtuScaleU1", "rtuScaleU1", "Ua", "ua"),
+            "b": _first(item, "strRtuScaleU2", "rtuScaleU2", "Ub", "ub"),
+            "c": _first(item, "strRtuScaleU3", "rtuScaleU3", "Uc", "uc"),
         },
         "phaseCurrent": {
             "a": _first(item, "strRtuScaleIsp1", "Ia", "ia"),
@@ -4129,9 +4177,9 @@ def _normalize_rtu_survey(item: dict) -> dict:
             "c": _first(item, "strRtuScaleIsp3", "Ic", "ic"),
         },
         "phaseCurrentRatio": {
-            "a": _first(item, "strRtuScaleI1", "Ian", "ian"),
-            "b": _first(item, "strRtuScaleI2", "Ibn", "ibn"),
-            "c": _first(item, "strRtuScaleI3", "Icn", "icn"),
+            "a": _first(item, "iaIan", "strRtuScaleI1", "Ian", "ian"),
+            "b": _first(item, "ibIbn", "strRtuScaleI2", "Ibn", "ibn"),
+            "c": _first(item, "icIcn", "strRtuScaleI3", "Icn", "icn"),
         },
         "powerFactor": {
             "a": _first(item, "APowerFactor", "powerFactorA"),
@@ -4141,7 +4189,10 @@ def _normalize_rtu_survey(item: dict) -> dict:
         "temperature": _first(item, "temperature"),
         "humidity": _first(item, "humidity"),
         "relayCurrents": _bounded_json(
-            _first(item, "relayCurrents", "strRelayCurrentSum")
+            _first(item, "jsonRelayIsp", "relayCurrents", "relayIsps")
+        ),
+        "circuitCurrents": _bounded_json(
+            _first(item, "jsonRoadIsp", "roadIsps")
         ),
         "leakCurrents": _bounded_json(
             _first(item, "LeakCurrents", "relayLeakCurrents", "leakCurrents")
@@ -4149,9 +4200,28 @@ def _normalize_rtu_survey(item: dict) -> dict:
         "relayLeakIds": _bounded_json(item.get("relayLeakIds")),
         "openRelays": _bounded_json(_first(item, "onRelayIds", "openRelayIds")),
         "closedRelays": _bounded_json(_first(item, "offRelayIds", "closedRelayIds")),
-        "state": _first(item, "stateName", "state"),
-        "alarmContent": _first(item, "hitchIntro", "alarmContent", "hitchContent"),
+        "phaseCircuits": {
+            "a": _first(item, "roadInA"),
+            "b": _first(item, "roadInB"),
+            "c": _first(item, "roadInC"),
+        },
+        "state": _survey_state_label(item),
+        "stateCode": _smartlight_int(_first(item, "isSucceeded", "state")),
+        "alarmContent": _first(item, "hitchIntro", "alarmContent", "hitchContent")
+        or ("正常" if _smartlight_int(item.get("isSucceeded")) == 1 else None),
     }
+
+
+def _survey_state_label(item: dict) -> Any:
+    explicit = _first(item, "stateName", "workState", "AlarmStatus", "state")
+    if explicit not in (None, ""):
+        return explicit
+    succeeded = _smartlight_int(item.get("isSucceeded"))
+    if succeeded == 1:
+        return "正常"
+    if succeeded == 0:
+        return "异常"
+    return None
 
 
 def _smartlight_report_result(

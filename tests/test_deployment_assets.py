@@ -247,6 +247,12 @@ class DeploymentAssetTests(unittest.TestCase):
         for check in (
             "SmartlightSessionStatus",
             "SmartlightOverview",
+            "SmartlightRuntimeOverview",
+            "SmartlightRtuStatus",
+            "SmartlightLampStatus",
+            "SmartlightLampAlarms",
+            "SmartlightLampAlarmAnalysis",
+            "SmartlightRtuSurvey",
             "ToolCatalog",
         ):
             self.assertIn(check, smoke)

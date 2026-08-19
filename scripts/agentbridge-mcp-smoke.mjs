@@ -15,6 +15,54 @@ const CHECKS = new Map([
     { tool: "smartlight_system_overview", arguments: {}, kind: "smartlightOverview" },
   ],
   [
+    "SmartlightRuntimeOverview",
+    {
+      tool: "smartlight_runtime_overview",
+      arguments: {},
+      kind: "smartlightRuntimeOverview",
+    },
+  ],
+  [
+    "SmartlightRtuStatus",
+    {
+      tool: "smartlight_rtu_status_list",
+      arguments: { state: "offline", page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightLampStatus",
+    {
+      tool: "smartlight_lamp_status_list",
+      arguments: { controller_state: "offline", page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightLampAlarms",
+    {
+      tool: "smartlight_lamp_alarm_list",
+      arguments: { last_days: 30, page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightLampAlarmAnalysis",
+    {
+      tool: "smartlight_lamp_alarm_analysis",
+      arguments: { last_days: 30, top_n: 5 },
+      kind: "smartlightAnalysis",
+    },
+  ],
+  [
+    "SmartlightRtuSurvey",
+    {
+      tool: "smartlight_rtu_survey_records",
+      arguments: { rtu_id: "" },
+      kind: "smartlightSurvey",
+    },
+  ],
+  [
     "SmartlightLampPosts",
     {
       tool: "smartlight_lamppost_list",
@@ -266,6 +314,12 @@ const REQUIRED_RELEASE_TOOLS = [
   "taihua_session_status",
   "taihua_session_login",
   "smartlight_system_overview",
+  "smartlight_runtime_overview",
+  "smartlight_rtu_status_list",
+  "smartlight_lamp_status_list",
+  "smartlight_lamp_alarm_list",
+  "smartlight_lamp_alarm_analysis",
+  "smartlight_rtu_survey_records",
   "smartlight_lamppost_list",
   "smartlight_alarm_list",
   "smartlight_alarm_remark_get",
@@ -359,6 +413,29 @@ try {
     }
     check.arguments = { asset_type: assetType, asset_id: assetId };
   }
+  if (checkName === "SmartlightRtuSurvey") {
+    const rtuId = argument("--smartlight-rtu-id", "").trim();
+    const rtuKeyword = argument("--smartlight-rtu-keyword", "").trim();
+    const startTime = argument("--smartlight-start-time", "").trim();
+    const endTime = argument("--smartlight-end-time", "").trim();
+    if (!rtuId && !rtuKeyword) {
+      throw Object.assign(new Error("Smartlight RTU ID or keyword is required"), {
+        code: "SMARTLIGHT_RTU_ARGUMENTS_INVALID",
+      });
+    }
+    if (Boolean(startTime) !== Boolean(endTime)) {
+      throw Object.assign(new Error("Smartlight survey time range is incomplete"), {
+        code: "SMARTLIGHT_SURVEY_RANGE_INVALID",
+      });
+    }
+    check.arguments = {};
+    if (rtuId) check.arguments.rtu_id = rtuId;
+    if (rtuKeyword) check.arguments.rtu_keyword = rtuKeyword;
+    if (startTime) {
+      check.arguments.start_time = startTime;
+      check.arguments.end_time = endTime;
+    }
+  }
   if (checkName === "SmartlightInspectionDetail") {
     const taskId = argument("--smartlight-task-id", "").trim();
     const detailDate = argument("--smartlight-detail-date", "").trim();
@@ -381,6 +458,7 @@ try {
     if (
       ![
         "alarm_analysis",
+        "lamp_alarm_analysis",
         "leakage_analysis",
         "asset_inventory",
         "inspection_progress",
@@ -391,7 +469,11 @@ try {
       });
     }
     check.arguments = { report_type: reportType };
-    if (["alarm_analysis", "leakage_analysis"].includes(reportType)) {
+    if (
+      ["alarm_analysis", "lamp_alarm_analysis", "leakage_analysis"].includes(
+        reportType,
+      )
+    ) {
       check.arguments.last_days = 30;
       check.arguments.top_n = 5;
     } else if (reportType === "asset_inventory") {
@@ -555,6 +637,12 @@ try {
     );
     const expectedSmartlightTools = new Set([
       "smartlight_system_overview",
+      "smartlight_runtime_overview",
+      "smartlight_rtu_status_list",
+      "smartlight_lamp_status_list",
+      "smartlight_lamp_alarm_list",
+      "smartlight_lamp_alarm_analysis",
+      "smartlight_rtu_survey_records",
       "smartlight_lamppost_list",
       "smartlight_alarm_list",
       "smartlight_alarm_remark_get",
@@ -767,8 +855,24 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "smartlightRuntimeOverview"
+          ? smartlightRuntimeOverviewSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "smartlightList"
           ? smartlightListSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
+          : effectiveCheck.kind === "smartlightSurvey"
+          ? smartlightSurveySummary({
               payload,
               result,
               checkName,
@@ -927,6 +1031,74 @@ function smartlightOverviewSummary({
     lampPostTotal: Number(result.lampPostTotal),
     lampPostCounts: result.lampPostCounts ?? null,
     observedPrincipal: result.principal.name ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightRuntimeOverviewSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Smartlight runtime overview failed"), {
+      code: errorCode || "SMARTLIGHT_RUNTIME_OVERVIEW_FAILED",
+    });
+  }
+  if (
+    result?.scope !== "authenticated_user_runtime_pages" ||
+    result?.rtu?.total == null ||
+    result?.singleLamp?.controllerTotal == null ||
+    !result?.observedAt
+  ) {
+    throw Object.assign(new Error("Smartlight runtime overview contract mismatch"), {
+      code: "SMARTLIGHT_RUNTIME_OVERVIEW_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    observedAt: result.observedAt,
+    rtu: result.rtu,
+    singleLamp: result.singleLamp,
+    errorCode: null,
+  };
+}
+
+function smartlightSurveySummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("Smartlight RTU survey failed"), {
+      code: errorCode || "SMARTLIGHT_RTU_SURVEY_FAILED",
+    });
+  }
+  if (
+    result?.resolved !== true ||
+    !result?.rtuId ||
+    !Array.isArray(result?.items) ||
+    !result?.dateRange
+  ) {
+    throw Object.assign(new Error("Smartlight RTU survey contract mismatch"), {
+      code: "SMARTLIGHT_RTU_SURVEY_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    rtuId: result.rtuId,
+    itemCount: Number(result.count ?? result.items.length),
+    total: Number(result.total ?? result.items.length),
+    dateRange: result.dateRange,
+    firstItem: result.items[0] ?? null,
     errorCode: null,
   };
 }
