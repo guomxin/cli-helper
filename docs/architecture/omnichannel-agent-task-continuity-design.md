@@ -1,10 +1,10 @@
 # 多端智能体任务延续设计
 
-> 文档状态：Approved v0.16，双用户跨端任务选择、受控接续、拉取式网页交互、微信活动感知投递、任务文件与多模态消息附件一期已完成实现
+> 文档状态：Approved v1.0，双用户跨端任务选择、受控接续、拉取式网页交互、微信活动感知投递、任务文件与多模态消息附件已进入当前基线
 >
-> 更新日期：2026-08-10
+> 更新日期：2026-08-19
 >
-> 现实起点：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.32、中心
+> 当前基线：OpenClaw 2026.7.1、AgentBridge OpenClaw 插件 0.4.48、中心
 > AgentBridge MCP 与可信交互卡片
 >
 > 本文是分期实现依据。任务骨架、Agent Workspace、执行授权多端展示、展示层文本
@@ -56,7 +56,7 @@
 - 用户明确说出“刚才网页端”“继续另一个端的第 1 条”等跨端指代时，OpenClaw 通过
   宿主私有工具读取同一 `userSubject` 其他端点最近 6 小时、最多 12 条非敏感文本，
   以不可信数据块注入当前推理；普通消息不增加该读取。
-- OpenClaw `0.4.32` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
+- OpenClaw `0.4.48` 按 MCP Token scope 向同一用户的网页、Telegram 和微信会话注册同一套可用工具：
   1 个身份状态工具、读取工具和 17 个受治理入口；15 个底层 commit/续办工具保留在
   宿主内部，不向模型注册。
 - Agent Workspace 通过 SSE 和 Task Hub 拉取卡片、文本与任务状态，不再尝试按聊天通道
@@ -889,7 +889,7 @@ eventId + endpointId + payloadType
 当前实现采用本地网页账号加一次性可信聊天配对。网页 Session 为 30 天绝对期限、
 7 天空闲期限；普通退出只吊销浏览器会话，不删除与 `userSubject` 的永久关联。
 OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏览器不接触长期 Token。
-详细实现与运维基线见 [Agent Workspace 网页端](./agent-workspace.md)。
+详细实现与运维基线见 [Agent Workspace 网页端](../platform/agent-workspace.md)。
 
 验收：网页与 Telegram 使用同一用户的下游 Session，但凭据可分别撤销。
 
@@ -1030,4 +1030,4 @@ OpenClaw Gateway 使用服务端设备身份和一次性会话绑定凭证，浏
   权威回读、网页发起撤销、Telegram 授权、撤销态回读”的真实可逆闭环。
 - 正式提交和撤销各生成一个成功 Operation，两个执行授权均只消费一次，任务最终为
   `succeeded`。李世玉只参与只读与微信接续验收，没有处理其待办或执行业务写入。
-- 完整证据与剩余边界见 [整体系统验收报告](./system-wide-acceptance-2026-08-04.md)。
+- 完整证据与剩余边界见 [整体系统验收报告](../acceptance/system-wide-acceptance-2026-08-04.md)。

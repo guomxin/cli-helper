@@ -33,14 +33,38 @@ class DocumentationTests(unittest.TestCase):
         index = ROOT / "docs" / "README.md"
         text = index.read_text(encoding="utf-8")
         for expected in (
-            "./governed-write-model.md",
-            "./current-deployment-plan.md",
-            "./development-and-release-workflow.md",
-            "./oa-write-action-expansion-playbook.md",
+            "./project-status.md",
+            "./architecture/governed-write-model.md",
+            "./operations/current-deployment-plan.md",
+            "./operations/development-and-release-workflow.md",
+            "./systems/README.md",
+            "./acceptance/README.md",
+            "./roadmap/deferred-considerations.md",
             "./archive/README.md",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, text)
+
+    def test_current_documentation_uses_category_directories(self):
+        self.assertEqual(
+            {path.name for path in ROOT.glob("*.md")},
+            {"README.md"},
+        )
+        self.assertEqual(
+            {path.name for path in (ROOT / "docs").glob("*.md")},
+            {"README.md", "project-status.md"},
+        )
+        for category in (
+            "architecture",
+            "platform",
+            "operations",
+            "systems",
+            "acceptance",
+            "roadmap",
+            "archive",
+        ):
+            with self.subTest(category=category):
+                self.assertTrue((ROOT / "docs" / category).is_dir())
 
     def test_retired_documents_are_archived(self):
         for retired_path in (
@@ -57,14 +81,16 @@ class DocumentationTests(unittest.TestCase):
             ROOT / "docs" / "archive" / "bscli-browser-bridge-design-zh.md",
             ROOT / "docs" / "archive" / "oa-write-safety-legacy.md",
             ROOT / "docs" / "archive" / "oa-write-discovery-legacy.md",
+            ROOT / "docs" / "archive" / "legacy-bridge-retirement.md",
+            ROOT / "docs" / "archive" / "current-deployment-plan-history.md",
         ):
             with self.subTest(path=archived_path.relative_to(ROOT)):
                 self.assertTrue(archived_path.exists())
 
     def test_current_write_guides_do_not_publish_retired_commands(self):
         for relative_path in (
-            "docs/governed-write-model.md",
-            "docs/oa-write-action-expansion-playbook.md",
+            "docs/architecture/governed-write-model.md",
+            "docs/systems/oa/oa-write-action-expansion-playbook.md",
         ):
             text = (ROOT / relative_path).read_text(encoding="utf-8")
             for forbidden in (

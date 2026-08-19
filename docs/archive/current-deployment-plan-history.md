@@ -1,5 +1,9 @@
 # AgentBridge 当前内网 PoC 部署方案
 
+> **归档说明（2026-08-19）：** 本文冻结保存 2026-07 至 2026-08 的部署演进、故障和修复
+> 证据，正文中的“当前”均指对应记录产生时。现行参数、版本和操作步骤以
+> [当前内网部署](../operations/current-deployment-plan.md) 为准。
+
 > 文档日期：2026-08-03
 >
 > 适用阶段：双用户、受控公司内网、跨机器联调
@@ -479,7 +483,7 @@ Playwright/Chromium 与上述 systemd 加固项需要在目标 Linux 发行版�
 
 仅支持核心 MCP 的宿主可以在 OA 会话有效时使用只读能力；遇到登录、字段填写或执行授权时，必须具备 MCP Apps 或经过批准的私有宿主适配器。服务不会把卡片 URL 降级暴露给模型。
 
-当前仍使用管理员签发的 Bearer 和内部 CA，因此“添加 MCP 地址并授权”尚未完全一键化。标准 OAuth 2.1、浏览器身份绑定和每用户独立 OS/容器安全主体仍是后续生产化工作。详细说明见 [远程 MCP 低安装接入](remote-mcp-onboarding.md)。
+当前仍使用管理员签发的 Bearer 和内部 CA，因此“添加 MCP 地址并授权”尚未完全一键化。标准 OAuth 2.1、浏览器身份绑定和每用户独立 OS/容器安全主体仍是后续生产化工作。详细说明见 [远程 MCP 低安装接入](../platform/remote-mcp-onboarding.md)。
 
 ### 9.2 当前 OpenClaw 兼容适配
 
@@ -512,7 +516,7 @@ openclaw gateway status --deep --require-rpc
 `channel + accountId + senderId` 指定独立 `tokenEnv`，Token 值只放入 OpenClaw
 托管 Gateway 的 `.env`。不要同时保留全局 `mcp.servers.agentbridge`，否则会重新暴露
 一套共享 Token 工具。完整配置见
-[OpenClaw 多用户身份路由](./openclaw-multi-user-identity-routing.md)。
+[OpenClaw 多用户身份路由](../architecture/openclaw-multi-user-identity-routing.md)。
 
 链接安装只让 OpenClaw 指向源码目录，不代表 Gateway 会自动换掉 Node 已缓存的插件模块。修改插件源码后必须完整重启 Gateway，并从启动日志确认实际版本，例如 `AgentBridge interaction plugin registered (version=0.4.16, ..., identities=2, ...)`。Windows 上的托管 `openclaw gateway restart` 可能需要两分钟以上，即使命令调用方先超时，后台重启仍可能继续；至少等待 120 秒后再判断失败，等待期间不要重复重启或提前结束 Node 进程。最终以 18789 监听、深度 RPC 状态和插件版本日志三项为准。如果切换 Node/NVM 后 `gateway status` 显示 Windows Scheduled Task 丢失，执行 `openclaw gateway install --force --json` 重建托管启动项，再用 `openclaw gateway status --deep --require-rpc --json` 核对新 PID、RPC 和插件版本。
 
@@ -758,7 +762,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 新增 `scripts/Deploy-AgentBridge.ps1`。它支持计划预览、脏工作区默认拒绝、标准 wheel、单次 SCP、单次 SSH、版本化留存、远端编译与依赖检查、systemd 重启和自动 MCP 冒烟。OpenClaw Gateway 仅在显式 `-RestartOpenClaw` 时重启；
 - 开发态真实部署在 `10.10.50.213` 完成：wheel 安装、`pip check`、systemd 重启、会话恢复及登录复用均成功，两次成功复验耗时 36.10-62.29 秒；未执行任何 OA 业务写入，也未重启 OpenClaw Gateway；
 - 当前全量基线为 Python `200 passed, 3 skipped, 19 subtests passed`、OpenClaw Node `25/25`、`compileall`、`pip check` 和 `npm pack --dry-run` 全部通过，两次墙钟时间为 69.17-91.22 秒；
-- 具体命令、故障解释和安全边界见 [开发验证与发布流程](development-and-release-workflow.md)。
+- 具体命令、故障解释和安全边界见 [开发验证与发布流程](../operations/development-and-release-workflow.md)。
 
 ## 15.2 2026-07-18 写能力扩展一期部署与只读实机预检
 
@@ -1295,7 +1299,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 - 从当前适配器和中央服务返回值中删除冗余的 `browser_bridge_used` /
   `browserBridgeUsed` 字段，统一以 `transport` 表示实际执行通道；
 - 增加源码退役守卫、文档链接和历史归档守卫。当前文档入口收敛到
-  `docs/README.md`，受治理写动作以 `docs/governed-write-model.md` 为准，旧桥设计和
+  `docs/README.md`，受治理写动作以 `docs/architecture/governed-write-model.md` 为准，旧桥设计和
   早期写动作草案移入 `docs/archive/`，仅保留历史证据；
 - 完整发布门禁通过 Python `333 passed, 3 skipped, 156 subtests passed`、
   OpenClaw `68/68`、`compileall`、`pip check` 和 npm pack dry-run；追加的文档与退役
@@ -1911,7 +1915,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
   为 `succeeded`。李世玉待办未处理，也未以李世玉身份执行业务写入。
 - AgentBridge 4 个下游 Session 连续 6 轮保活全部成功，当前 Outbox 无积压、无重复键；
   `0.4.22` 部署后微信新增 5 条投递均一次确认，新增失败为 0。
-- 详细证据见 [整体系统验收报告](./system-wide-acceptance-2026-08-04.md)。
+- 详细证据见 [整体系统验收报告](../acceptance/system-wide-acceptance-2026-08-04.md)。
 
 ### 15.54 2026-08-04 撤销任务卡边界与自然指令收口
 
@@ -2091,7 +2095,7 @@ Test-NetConnection $AgentBridgeIp -Port 8780
 ### 15.63 2026-08-19 Workspace 反向隧道运行基线
 
 - 新增独立运行手册
-  [Agent Workspace 反向 SSH 隧道](./agent-workspace-reverse-ssh-tunnel.md)，固定记录
+  [Agent Workspace 反向 SSH 隧道](../operations/agent-workspace-reverse-ssh-tunnel.md)，固定记录
   浏览器、AgentBridge、服务器 `sshd`、Windows `ssh.exe` 和 OpenClaw Gateway 的真实
   数据方向与进程边界。浏览器不直接穿过隧道，隧道只承载中心端到本机 Gateway 的连接。
 - Windows 当前由登录任务 `AgentBridge Workspace Tunnel` 启动隐藏 PowerShell，后者

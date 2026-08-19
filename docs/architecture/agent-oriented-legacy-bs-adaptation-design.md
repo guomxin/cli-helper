@@ -1,42 +1,51 @@
 # 面向智能体的 B/S 遗留系统非侵入式适配设计方案
 
-> 文档状态：Draft v0.15
-> 更新日期：2026-07-30
+> 文档状态：Current architecture baseline v1.0
+> 更新日期：2026-08-19
 > 适用范围：只面向智能体的系统适配；必须支持不同用户以各自在遗留系统中的身份并发使用，并支持通过手机端智能体安全使用；不重建遗留系统的面向人业务前端，不要求对外提供通用业务 API
 
-> **文档定位：目标架构与后续参考，不是首期实现清单。** 快速可行性验证按 [PoC 验证方案](./poc-validation-plan.md) 实施；暂缓事项统一记录在 [后续增强事项](./deferred-considerations.md)。独立用户网页端及网页、Telegram、微信之间的任务延续见 [多端智能体任务延续设计](./docs/omnichannel-agent-task-continuity-design.md)。
+> **文档定位：当前架构基线与长期边界，不是版本状态流水账。** 当前实现事实见
+> [项目当前状态](../project-status.md)，阶段证据见 [PoC 验证基线](../acceptance/poc-validation-plan.md)，
+> 暂缓事项见 [后续增强事项](../roadmap/deferred-considerations.md)。独立用户网页端及网页、
+> Telegram、微信之间的任务延续见 [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
 
-## 0. 当前实现快照（2026-07-29）
+## 0. 当前实现快照（2026-08-19）
 
-当前实现已经形成中心端、多系统、多用户的可运行 PoC：
+当前实现已经形成中心端、四系统、双真实用户和多端接续的可运行 PoC/试点基线：
 
 - 最终用户设备不安装系统连接器。OpenClaw 等宿主通过 HTTPS MCP 调用中心
   AgentBridge，可信卡片在模型循环之外处理登录、字段填写和执行授权；
-- Seeyon OA 使用每用户受控 Playwright Profile 与 HTTP Session，泰华日志系统使用
-  每用户中心 Token 会话，语雀部门信息库使用每用户中心浏览器 Cookie 会话；所有配置
-  只接受 `central_session`，不会回退旧浏览器桥；
+- Seeyon OA 使用每用户受控 Playwright Profile 与 HTTP Session，泰华日志系统使用每用户
+  中心 Token 会话，语雀部门信息库使用每用户中心浏览器 Cookie 会话，照明实验室系统使用
+  CAS Cookie 与 JWT 再签；所有系统只接受中心会话，不会回退旧浏览器桥；
 - Telegram 的辛国茂和微信的李世玉使用独立 MCP Token、预期身份、会话、Profile、
-  权限与操作账本。真实读取和通道路由隔离已通过 PoC 验收；每用户独立 OS/容器
-  Worker 仍属于生产隔离门槛；
-- 认证卡、字段卡和授权卡统一使用 `agentbridge.interaction.v1`，支持后台轮询、恢复原
-  请求和后续卡片直投；密码、Cookie、完整字段值和短期卡片 URL 不进入模型上下文；
-- OA 已发布模板、待办、已发、已办、跟踪、详情和意见读取，以及出差、请假、补签、
-  会议、普通协同、周报、效能数据、差旅费、劳动合同续签和流程撤销等工作流能力；
+  权限与操作账本。Agent Workspace 通过一次性配对映射到同一 `userSubject`，支持跨端任务、
+  文本、卡片、图片和文件同步；每用户独立 OS/容器 Worker 仍属于生产隔离门槛；
+- 认证卡、字段卡和授权卡统一使用 `agentbridge.interaction.v1`，支持轮询、原请求恢复、
+  多端展示和单次完成；密码、Cookie、完整字段值和短期卡片控制值不进入模型上下文；
+- 中央注册表发布 69 个业务能力：OA 40、泰华 5、语雀 4、照明 20；线上 MCP 连同会话、
+  可信交互、任务、文件和治理工具共发现 99 个工具；
+- OA 已发布模板、待办、已发、已办、跟踪、详情、意见和证书文档读取，以及出差、请假、
+  补签、会议、普通协同、周报、效能数据、差旅费、劳动合同续签、知识产权、加班、考勤确认
+  和流程撤销等工作流能力；
 - 出差和请假正式提交、流程撤销、普通协同、周报知会、会议创建等路径已完成真实
   commit 与权威回读。所有写操作遵循字段收集、实时 prepare、独立授权、单次 commit
   和 verify；结果未知时停止且不自动重试；
 - 泰华日志系统已完成登录、令牌刷新、个人/团队日志筛选、项目查询和受控日志创建；
-- 语雀第三系统已实现公共区、跨知识库目录、组织级全文检索和统一文档读取，适配器内部解析
+- 语雀已实现公共区、跨知识库目录、组织级全文检索和统一文档读取，适配器内部解析
   Doc、Sheet、Table、正文表格与图片 OCR；其滑块与短信验证由用户在按挑战隔离的 noVNC
   可信卡中完成；搜索不返回摘要，明确选择后的正文和结构元数据按规则脱敏；
   当前只开放独立 `yuque:read` scope，真实登录、身份核验、加密 Cookie 保存和临时资源清理均已通过；
+- 照明系统已发布概览、资产、告警、巡检、漏电分析和报告导出，受控写聚焦 RTU 告警备注、
+  工区流转与精确处置；不开放通用设备控制、任意告警处置或通用 CRUD；
 - Linux 内网部署使用版本化 wheel、systemd、AES-256-GCM 会话密文、内部 CA 和
-  Streamable HTTP MCP。生产仍需企业 OAuth/OIDC、正式 PKI、限流、集中审计及
-  Vault/KMS，并补做每用户独立安全主体隔离。
+  Streamable HTTP MCP。Windows OpenClaw 通过工作站主动建立的反向 SSH 隧道服务 Workspace，
+  切换网络无需修改服务器地址。生产仍需企业 OAuth/OIDC、正式 PKI、限流、集中审计、
+  Vault/KMS 和每用户独立安全主体隔离。
 
-当前运行证据见 [内网部署方案](./docs/current-deployment-plan.md)，能力验收状态见
-[PoC 验证方案](./poc-validation-plan.md)，写操作边界见
-[受控写模型](./docs/governed-write-model.md)。以下增量章节保留历史演进过程。
+当前运行证据见 [内网部署方案](../operations/current-deployment-plan.md)，能力验收状态见
+[验收目录](../acceptance/README.md)，写操作边界见 [受控写模型](./governed-write-model.md)。
+以下增量章节保留历史演进过程，其中的旧版本数字和阶段判断只代表当时状态。
 ### 0.1 历史实现增量（2026-07-19）
 
 - 当前中心目录已扩展为 18 个 OA 能力：6 个只读能力，以及按具体流程组织的
@@ -625,7 +634,7 @@ IdentityBinding {
 - 共享技术账号只允许作为经批准的特殊降级模式，例如少量只读公共查询；它不满足“多种用户身份使用遗留系统”的正常验收条件；
 - `downstreamPrincipalRef` 只保存非敏感账号引用，真实凭据留在按用户隔离的区域凭据保险库；
 - 用户、遗留账号或角色被禁用后，关联绑定、会话租约和未消费执行授权立即失效；
-- 手机和桌面上的同一用户可以查看自己的同一任务与操作状态，但设备身份不能扩大用户权限；跨端任务、客户端绑定和可信交互领取按 [多端智能体任务延续设计](./docs/omnichannel-agent-task-continuity-design.md) 实施；
+- 手机和桌面上的同一用户可以查看自己的同一任务与操作状态，但设备身份不能扩大用户权限；跨端任务、客户端绑定和可信交互领取按 [多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md) 实施；
 - 命令账本、工作流、会话、执行授权、审计和证据至少按 `userSubject` 隔离；启用多组织部署时再叠加服务端确定的 `tenantId`、行级安全和租户密钥策略。
 
 IdentityBinding 生命周期至少包含 `pending_verification`、`active`、`expired`、`revoked` 和 `quarantined`。优先通过 IdP/遗留系统事件即时失效；没有事件接口时采用有界 TTL 与轮询复核。每次执行前检查状态和有效期，W2/W3 还必须按 CapabilitySpec 声明的最大验证时效实时或强制刷新账号状态、角色和权限；无法确认时 fail-closed。

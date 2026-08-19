@@ -2,7 +2,7 @@
 
 > Historical prototype design. The Chrome extension, localhost daemon, and
 > daemon-backed command runtime described below were removed on 2026-07-13.
-> Use agent-oriented-legacy-bs-adaptation-design.md for the active architecture.
+> Use `docs/architecture/agent-oriented-legacy-bs-adaptation-design.md` for the active architecture.
 
 ## 1. Goal
 

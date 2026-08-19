@@ -84,7 +84,7 @@ AgentBridge 对外暴露工作流级业务能力，例如提交请假、审批�
 6. 在真实系统中完成一次 prepare 验证；真实提交必须获得该具体事项的明确授权；
 7. 可撤销流程也不能把撤销当作无副作用的自动清理。
 
-具体实施顺序见 [OA 写能力扩展手册](./oa-write-action-expansion-playbook.md)。
+具体实施顺序见 [OA 写能力扩展手册](../systems/oa/oa-write-action-expansion-playbook.md)。
 
 ## 7. 发布验收
 
@@ -96,4 +96,4 @@ AgentBridge 对外暴露工作流级业务能力，例如提交请假、审批�
 - 不使用旧浏览器桥、localhost daemon 或员工个人浏览器 Profile。
 
 发布命令和证据要求见
-[开发验证与发布流程](./development-and-release-workflow.md)。
+[开发验证与发布流程](../operations/development-and-release-workflow.md)。

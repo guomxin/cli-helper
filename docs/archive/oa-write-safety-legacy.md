@@ -431,7 +431,7 @@ Before a new OA write action can become executable, it must have:
 
 Until those conditions are met and reviewed for that action, BSCLI must keep it
 at discovery, draft, and dry-run only.
-Use `docs/oa-write-action-expansion-playbook.md` as the practical checklist for
+Use `docs/systems/oa/oa-write-action-expansion-playbook.md` as the practical checklist for
 moving an action through discovery, implementation, live validation, and
 promotion.
 

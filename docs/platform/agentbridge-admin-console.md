@@ -6,11 +6,11 @@
 
 ## 1. 定位
 
-管理控制台是 AgentBridge 的独立运行治理面，用于查看多用户、多系统的运行状态，并在异常或维护期间控制写能力。它不代替 OpenClaw，不直接操作 OA、泰华或语雀业务，也不展示登录凭据、Cookie、可信卡片 URL、业务字段值或 MCP Token 密钥。
+管理控制台是 AgentBridge 的独立运行治理面，用于查看多用户、多系统的运行状态，并在异常或维护期间控制写能力。它不代替 OpenClaw，不直接操作 OA、泰华、语雀或照明系统业务，也不展示登录凭据、Cookie、可信卡片 URL、业务字段值或 MCP Token 密钥。
 
 普通用户使用的 Agent Workspace 是与 Telegram、微信同层的独立智能体客户端，
 不复用管理端账户、页面或会话。其目标边界见
-[多端智能体任务延续设计](./omnichannel-agent-task-continuity-design.md)。
+[多端智能体任务延续设计](../architecture/omnichannel-agent-task-continuity-design.md)。
 
 管理端与 MCP、可信卡片共用一个 AgentBridge 进程和 SQLite 状态库，但使用独立的 HTTPS 监听端口、管理员账户、会话 Cookie、CSRF 校验和追加式管理审计。
 
@@ -21,7 +21,7 @@
 | `admin` | 查看全部治理信息；签发和撤销 MCP Token；检查或使下游会话失效；暂停和恢复写能力；创建管理员或审计员账户 |
 | `auditor` | 只读查看总览、身份、会话、能力、操作、可信交互、多端任务、运行信息和管理审计 |
 
-管理账户与智能体用户身份分离。管理员登录管理台不会获得任何 OA、泰华或语雀业务身份，也不能通过管理台代替用户提交业务流程。
+管理账户与智能体用户身份分离。管理员登录管理台不会获得任何下游系统业务身份，也不能通过管理台代替用户提交业务流程。
 
 ## 3. 页面
 
@@ -88,7 +88,7 @@ sudo -u agentbridge /home/guomao/agentbridge/venv/bin/python -P \
 
 ## 7. MCP Token 管理
 
-管理台签发 Token 时要求填写用户标识、权限范围、有效期和审计原因。首次开通某个系统时，还必须填写该系统的预期下游主体；已有绑定的系统会自动复用现有绑定。同一用户在 OA、泰华和语雀可以使用不同的账号或显示名。
+管理台签发 Token 时要求填写用户标识、权限范围、有效期和审计原因。首次开通某个系统时，还必须填写该系统的预期下游主体；已有绑定的系统会自动复用现有绑定。同一用户在不同下游系统中可以使用不同的账号或显示名。
 
 Token 只绑定 `userSubject`、客户端标签和 scope，不再以一个全局姓名校验所有系统。旧 Token 中的 `expectedPrincipalRef` 仅作兼容字段；登录校验以 `(userSubject, systemId)` 会话上的系统级绑定为准。
 

@@ -168,6 +168,6 @@ flowchart LR
 4. 扩展通用报告附件契约，再交付二期 B 的 CSV 报告导出。
 
 二期 A 的真实验收记录见
-[照明实验室测试系统二期 A 验收报告](smartlight-phase2-acceptance-2026-08-12.md)。
+[照明实验室测试系统二期 A 验收报告](../../acceptance/smartlight/smartlight-phase2-acceptance-2026-08-12.md)。
 二期 B 的 CSV 文件交付验收记录见
-[照明实验室测试系统二期 B 验收报告](smartlight-phase2b-acceptance-2026-08-12.md)。
+[照明实验室测试系统二期 B 验收报告](../../acceptance/smartlight/smartlight-phase2b-acceptance-2026-08-12.md)。

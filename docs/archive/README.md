@@ -19,5 +19,11 @@
 - [Discovered API Runtime 计划](./plans/2026-06-23-discovered-runtime.md)
 - [OA Matter Intent 设计](./specs/2026-06-26-oa-matter-intent-design.md)
 
+## 演进记录
+
+- [旧浏览器桥退役记录](./legacy-bridge-retirement.md)
+- [2026-07 至 2026-08 部署演进记录](./current-deployment-plan-history.md)：保留阶段 Release、
+  故障和修复证据；当前可执行部署以 [现行运行手册](../operations/current-deployment-plan.md) 为准。
+
 退役范围和防回归规则见
-[旧浏览器桥退役记录](../legacy-bridge-retirement.md)。
+[旧浏览器桥退役记录](./legacy-bridge-retirement.md)。

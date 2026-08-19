@@ -9,7 +9,7 @@ Workspace in one OpenClaw Gateway. It
 registers the complete AgentBridge MCP catalog as native OpenClaw tools and
 selects an environment-backed Bearer token from trusted runtime sender context,
 never from model tool arguments. See
-[`docs/openclaw-multi-user-identity-routing.md`](../../docs/openclaw-multi-user-identity-routing.md)
+[`docs/architecture/openclaw-multi-user-identity-routing.md`](../../docs/architecture/openclaw-multi-user-identity-routing.md)
 for provisioning, migration, and the remaining real second-user acceptance.
 
 AgentBridge also publishes a standard MCP Apps resource. This plugin is the

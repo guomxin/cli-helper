@@ -1,6 +1,6 @@
 # Agent Interaction Protocol
 
-> Status: current protocol baseline for AgentBridge `0.4.16`
+> Status: current protocol baseline for AgentBridge OpenClaw plugin `0.4.48`
 >
 > Updated: 2026-08-03
 

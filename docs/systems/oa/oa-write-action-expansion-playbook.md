@@ -1,7 +1,7 @@
 # OA Write Action Expansion Playbook
 
 > Status: current implementation guide. All discovery and execution use the managed
-> central session. Follow the [governed write model](./governed-write-model.md) and
+> central session. Follow the [governed write model](../../architecture/governed-write-model.md) and
 > record coverage in the [OA matter matrix](./oa-matter-matrix.md).
 
 This playbook turns one-off OA exploration into a repeatable promotion path for

@@ -13,13 +13,13 @@ The active runtime is central AgentBridge:
 - A persistent Task Hub that links host tasks, operations, trusted interactions,
   client endpoints, subscriptions, and notification outbox records
 - Seeyon OA, API-first Taihua work logs, trusted-browser Yuque knowledge access,
-  and Smartlight laboratory monitoring with one governed reversible write sample
-  under one multi-system runtime
+  and Smartlight laboratory monitoring with governed RTU write workflows under
+  one multi-system runtime
 
 The original Chrome extension, browser bridge, localhost daemon, daemon-backed
 MCP server, and their public CLI commands were retired on 2026-07-13. They are
 not fallback paths. See
-[the retirement ledger](docs/legacy-bridge-retirement.md) for the remaining
+[the retirement ledger](docs/archive/legacy-bridge-retirement.md) for the remaining
 capability-migration inventory.
 
 ## Requirements
@@ -104,7 +104,7 @@ Published Taihua capabilities:
 
 Taihua uses central HTTP token sessions with refresh, exact-origin enforcement,
 and no browser during normal reads or writes. See the
-[Taihua adapter guide](docs/taihua-log-system-adapter.md).
+[Taihua adapter guide](docs/systems/taihua/taihua-log-system-adapter.md).
 
 Published Yuque capabilities:
 
@@ -124,7 +124,7 @@ normalize Doc, Sheet, and Table content into structured text with row paging, ou
 table, link, image OCR, and attachment metadata. Search snippets remain omitted, and
 selected content is redacted for likely credentials and tokens. Attachment download is
 not claimed until a real independent file card is available for acceptance. See the
-[Yuque department knowledge adapter guide](docs/yuque-department-knowledge-adapter.md).
+[Yuque department knowledge adapter guide](docs/systems/yuque/yuque-department-knowledge-adapter.md).
 
 Published Smartlight capabilities:
 
@@ -151,22 +151,23 @@ Published Smartlight capabilities:
 Smartlight uses a trusted username/password/image-captcha card only for login.
 After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
 normal reads do not open a remote browser. The current integration deliberately
-does not expose device control, configuration, alarm disposition, or general CRUD.
-Its write package can change one exact RTU alarm remark, submit or revoke an RTU
-alarm's work-area routing, and dispose one RTU alarm. Every action uses a frozen
+does not expose device control, configuration, general CRUD, or arbitrary alarm
+disposition. Its governed write package can change one exact RTU alarm remark,
+submit or revoke an RTU alarm's work-area routing, and dispose one eligible RTU
+alarm. Every action uses a frozen
 target snapshot, separate authorization, pre-commit concurrency check, and
 authoritative readback. Remark changes and work-area routing expose explicit
 compensation paths; alarm disposition is marked irreversible. Commit capabilities
 remain internal and are not exposed to agents. Deployment does not automatically
 grant the new write scopes to an existing identity token.
-See the [Smartlight adapter guide](docs/smartlight-lab-system-adapter.md).
+See the [Smartlight adapter guide](docs/systems/smartlight/smartlight-lab-system-adapter.md).
 The phase-two contracts and staged report-export plan are documented in the
-[published Smartlight read phase-two capability package](docs/smartlight-phase2-capability-package.md).
+[published Smartlight read phase-two capability package](docs/systems/smartlight/smartlight-phase2-capability-package.md).
 The write risk matrix and acceptance path are documented in
-[Smartlight write phase one](docs/smartlight-write-phase1.md).
+[Smartlight write phase one](docs/systems/smartlight/smartlight-write-phase1.md).
 The A-B implementation and the remaining C-D rollout for RTU alarms, lamp alarms,
 and inspection reviews are documented in the
-[Smartlight controlled-write phase-two design](docs/smartlight-write-phase2-design.md).
+[Smartlight controlled-write phase-two design](docs/systems/smartlight/smartlight-write-phase2-design.md).
 
 Workflow capabilities expose business data and opaque affair IDs. They do not
 expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
@@ -293,8 +294,8 @@ The equivalent MCP tools are `agentbridge_interaction_get` and
 captures these envelopes, withholds trusted URLs from the model, renders cards
 only in private sessions, and polls/resumes outside the model loop. The Python
 renderer remains a host-adapter reference. See the
-[agent interaction protocol](docs/agent-interaction-protocol.md) and the
-[remote MCP low-install onboarding guide](docs/remote-mcp-onboarding.md).
+[agent interaction protocol](docs/architecture/agent-interaction-protocol.md) and the
+[remote MCP low-install onboarding guide](docs/platform/remote-mcp-onboarding.md).
 
 ## Task Continuity
 
@@ -312,7 +313,7 @@ official `gateway_start` hook to restore each configured identity's pending
 interaction, original private route, polling, and card delivery after a Gateway
 restart. The host-only MCP coordination tools require private request metadata
 and are deliberately absent from the plugin's model-visible native tool
-catalog. The independent [Agent Workspace](docs/agent-workspace.md) adds
+catalog. The independent [Agent Workspace](docs/platform/agent-workspace.md) adds
 persistent web login, OpenClaw chat, task timelines, a Continue action, and
 endpoint visibility without placing MCP or Gateway tokens in the browser.
 Workspace image input is stored as user-bound, seven-day governed media: the
@@ -324,7 +325,7 @@ Natural-language continuation can select one same-user task, reuse its pending
 trusted interaction, observe running or terminal state without duplicate work,
 or attach an explicit follow-up to the original task ID. Shared model Transcript
 and OBO execution-host transfer remain later phases in the
-[multi-end task design](docs/omnichannel-agent-task-continuity-design.md).
+[multi-end task design](docs/architecture/omnichannel-agent-task-continuity-design.md).
 
 ## Governed OA Writes
 
@@ -450,7 +451,7 @@ or revoke MCP Tokens, inspect or invalidate downstream sessions, and pause write
 capabilities globally or by system, user, capability, and version. Auditors are
 read-only. Every control action requires a reason and is written to an
 append-only audit ledger. See the
-[administration guide](docs/agentbridge-admin-console.md).
+[administration guide](docs/platform/agentbridge-admin-console.md).
 ## Streamable HTTP MCP
 
 Issue a short-lived identity token from a trusted administrator terminal:
@@ -486,8 +487,8 @@ python -m bscli.cli.main --home .bscli mcp central-serve \
 ~~~
 
 Session keepalive is disabled unless `--session-keepalive-interval` is set. The
-example probes active OA sessions every 10 minutes while they remain inside an
-eight-hour activity lease. Login and real agent requests renew that lease;
+example probes active sessions every 10 minutes while they remain inside a
+seven-day activity lease. Login and real agent requests renew that lease;
 background probes do not renew themselves. An explicit OA login response
 expires the session, while a transient probe failure preserves it for retry.
 
@@ -554,7 +555,7 @@ For a multi-user Gateway, configure one plugin `identityBindings` entry and one
 environment-backed Bearer token per trusted messaging identity. Do not keep a
 global `mcp.servers.agentbridge` Bearer alongside multi-user bindings; that
 would expose a second shared-identity tool surface. See
-`docs/openclaw-multi-user-identity-routing.md` for the complete mapping.
+`docs/architecture/openclaw-multi-user-identity-routing.md` for the complete mapping.
 
 When OpenClaw uses a restricted tool profile such as `coding`, the native
 AgentBridge adapter must be explicitly added through `tools.alsoAllow`.
@@ -609,7 +610,7 @@ On Windows, use the persistent layered validation entry points:
 Targeted OpenClaw checks skip `npm pack` unless `-PackCheck` is supplied; full
 validation always includes it. The persistent Python 3.12 environment is
 fingerprinted from `pyproject.toml`, so unchanged dependencies are reused.
-See the [development validation and release workflow](docs/development-and-release-workflow.md)
+See the [development validation and release workflow](docs/operations/development-and-release-workflow.md)
 for MCP smoke-test safety boundaries and wheel deployment commands.
 
 The central path has completed real-OA validation for trusted-card login,
@@ -618,23 +619,23 @@ business-field collection, authorization, draft and formal submission, approval,
 revoke, meeting creation, field readback, and idempotent replay. Results identify
 the actual central execution channel through `transport`.
 
-Formal Windows current-user root trust, native TLS, and production Telegram
-WebView clicks for credential, business-input, and execution-authorization cards
-are now validated. Login-card reuse and login-completion continuation are covered
-by central and host tests; a currently active real session also returned
-`reused=true` without a new interaction. A second real OA user, real mobile CA
-distribution, a natural-expiry end-to-end continuation observation, and additional
-central write workflows remain open validation items. The current intranet server
+Formal Windows and Android root trust, native TLS, and real Telegram/WeChat card
+flows have been validated. Login-card reuse and login-completion continuation are
+covered by central and host tests. Two real OA users have completed identity and
+result-isolation checks, and one user completed a 24-hour idle keepalive observation.
+Additional workflow-specific acceptance, per-user OS/container workers, and
+enterprise identity and key management remain open. The current intranet server
 and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
 
 ## Documentation
 
-Start with the [documentation map](docs/README.md). The primary references are:
+Start with the [documentation map](docs/README.md) and
+[current project status](docs/project-status.md). The primary references are:
 
-- [Target architecture](agent-oriented-legacy-bs-adaptation-design.md)
-- [Agent interaction protocol](docs/agent-interaction-protocol.md)
-- [Governed write model](docs/governed-write-model.md)
-- [Current Linux intranet deployment](docs/current-deployment-plan.md)
-- [Development validation and release workflow](docs/development-and-release-workflow.md)
-- [PoC validation plan](poc-validation-plan.md)
-- [Deferred production considerations](deferred-considerations.md)
+- [Target architecture](docs/architecture/agent-oriented-legacy-bs-adaptation-design.md)
+- [Agent interaction protocol](docs/architecture/agent-interaction-protocol.md)
+- [Governed write model](docs/architecture/governed-write-model.md)
+- [Current Linux intranet deployment](docs/operations/current-deployment-plan.md)
+- [Development validation and release workflow](docs/operations/development-and-release-workflow.md)
+- [PoC validation baseline](docs/acceptance/poc-validation-plan.md)
+- [Deferred production considerations](docs/roadmap/deferred-considerations.md)

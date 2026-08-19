@@ -2,10 +2,10 @@
 
 > 状态：二期网页端、多端执行授权、能力一致、文本同步和跨端任务接续二期已实现
 >
-> 更新日期：2026-08-10
+> 更新日期：2026-08-19
 >
 > 适用版本：AgentBridge 当前主线、OpenClaw 2026.7.1、
-> `agentbridge-interactions` 0.4.32
+> `agentbridge-interactions` 0.4.48
 
 ## 1. 定位
 
@@ -92,7 +92,7 @@ agent:main:agentbridge-workspace:direct:<workspace-account-id>
 - MCP 目录中 `readOnlyHint=true` 的读取工具；
 - OA 发起、待办处理、撤销和会议创建的全部受治理 `prepare` 入口；
 - 泰华日志填写的受治理 `prepare` 入口；
-- OA、泰华和语雀的可信登录入口。
+- OA、泰华、语雀和照明系统的可信登录入口。
 
 各入口是否能够执行，继续由当前 `userSubject` 对应 MCP Token 的 scopes 在中心端
 逐次校验。模型看不到保存草稿、正式提交、审批、撤销、会议创建、日志创建等内部
@@ -135,7 +135,7 @@ OpenClaw Gateway 当前使用 `gateway.bind=lan`，但 AgentBridge 不再依赖�
 服务器 `127.0.0.1` 的反向 SSH 隧道；切换有线、无线、家庭或度假网络后，脚本会自动
 重连。Gateway Token 认证和设备配对仍然保留。完整的数据流、两端进程、恢复时序、
 安全边界和排障命令见
-[Agent Workspace 反向 SSH 隧道](./agent-workspace-reverse-ssh-tunnel.md)。
+[Agent Workspace 反向 SSH 隧道](../operations/agent-workspace-reverse-ssh-tunnel.md)。
 
 AgentBridge systemd 参数包括：
 
