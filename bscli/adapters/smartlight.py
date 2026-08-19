@@ -116,6 +116,8 @@ _SMARTLIGHT_ALARM_SORTS = {
     "last_activity": ("lastActivityAt", "1"),
 }
 
+_SMARTLIGHT_REFRESH_LOGIN_REQUIRED_CODES = {"1009"}
+
 _FORM_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -443,6 +445,24 @@ class SmartlightCentralAdapter:
                     ) from exc
                 raise
         worker.set_http_state(token_state)
+        return self._probe_result(token_state)
+
+    def keepalive_session(self, worker) -> dict:
+        """Keep the parent CAS session alive and renew the complete JWT pair."""
+        try:
+            principal = self._cas_principal(worker)
+            token_state = self._exchange_token(worker, principal)
+        except (
+            SmartlightLoginRequired,
+            SmartlightSessionCheckUnavailable,
+            SmartlightLoginContractMismatch,
+        ):
+            return self.probe_session(worker)
+        worker.set_http_state(token_state)
+        return self._probe_result(token_state)
+
+    @staticmethod
+    def _probe_result(token_state: dict) -> dict:
         return {
             "authenticated": True,
             "observed_principal_ref": token_state["principal"]["name"],
@@ -457,6 +477,10 @@ class SmartlightCentralAdapter:
         principal = state.get("principal")
         if not refresh_token or not isinstance(principal, dict):
             return None
+        if _jwt_is_expired(refresh_token):
+            raise SmartlightLoginRequired(
+                "Smartlight refresh token has expired."
+            )
         response = worker.request(
             "POST",
             f"{self.origin}/jwtcenter//JWTInfoController/refreshToken",
@@ -469,10 +493,20 @@ class SmartlightCentralAdapter:
                 "Smartlight refresh token is no longer accepted."
             )
         payload = response.get("json")
+        if _refresh_response_requires_login(payload):
+            raise SmartlightLoginRequired(
+                "Smartlight refresh token has expired or is no longer accepted."
+            )
         data = payload.get("resp_data") if isinstance(payload, dict) else None
         if response["status"] != 200 or not isinstance(data, dict):
+            response_code = (
+                str(payload.get("resp_code"))
+                if isinstance(payload, dict) and payload.get("resp_code") is not None
+                else "unknown"
+            )
             raise SmartlightSessionCheckUnavailable(
-                "Smartlight token refresh service is temporarily unavailable."
+                "Smartlight token refresh service is temporarily unavailable "
+                f"(HTTP {response['status']}, code={response_code})."
             )
         access_token = str(data.get("access_token") or "").strip()
         if not access_token:
@@ -3203,6 +3237,33 @@ def _session_error_summary(error: Exception) -> str:
     if len(message) > 300:
         message = f"{message[:297]}..."
     return f"{error.__class__.__name__}: {message or 'no details'}"
+
+
+def _jwt_is_expired(token: str, *, now: datetime | None = None) -> bool:
+    parts = str(token or "").split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+        expires_at = float(payload["exp"])
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    checked_at = now or datetime.now(timezone.utc)
+    return expires_at <= checked_at.timestamp()
+
+
+def _refresh_response_requires_login(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    code = str(payload.get("resp_code") or "").strip()
+    if code in _SMARTLIGHT_REFRESH_LOGIN_REQUIRED_CODES:
+        return True
+    message = " ".join(str(payload.get("resp_msg") or "").lower().split())
+    return "refresh_token" in message and any(
+        marker in message
+        for marker in ("失效", "过期", "重新登录", "expired", "invalid")
+    )
 
 
 def _same_origin_url(origin: str, value: Any) -> str:

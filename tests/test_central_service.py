@@ -646,8 +646,9 @@ class CentralCapabilityServiceTests(unittest.TestCase):
 
             response = service.session_status(user_subject="user-a")
 
-            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["status"], "failed")
             self.assertEqual(response["error"]["code"], "SESSION_CHECK_UNAVAILABLE")
+            self.assertTrue(response["error"]["retryable"])
             self.assertEqual(response["statusSource"], "live")
             self.assertEqual(response["session"]["status"], "active")
             self.assertTrue(response["nextAction"]["sessionPreserved"])
@@ -687,6 +688,32 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
             self.assertIsNotNone(persisted["last_keepalive_at"])
             service.adapter.probe_session.assert_called_once_with(worker)
+
+    def test_keepalive_cycle_prefers_adapter_keepalive_probe(self):
+        with TemporaryDirectory() as tmp:
+            worker = FakeWorker()
+            service = self._service(tmp, worker, keepalive_lease_seconds=604_800)
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock()
+            service.adapter.keepalive_session = MagicMock(
+                return_value={
+                    "authenticated": True,
+                    "template_count": None,
+                    "transport": "central_cas_cookie_jwt",
+                }
+            )
+
+            summary = service.run_session_keepalive_cycle(
+                activity_lease_seconds=3_600,
+                now=(
+                    datetime.fromisoformat(session["last_user_activity_at"])
+                    + timedelta(minutes=1)
+                ),
+            )
+
+            self.assertEqual(summary["keptAlive"], 1)
+            service.adapter.keepalive_session.assert_called_once_with(worker)
+            service.adapter.probe_session.assert_not_called()
 
     def test_keepalive_cycle_stops_after_activity_lease(self):
         with TemporaryDirectory() as tmp:
@@ -1020,8 +1047,9 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 card_base_url="http://127.0.0.1:8780",
             )
 
-            self.assertEqual(response["status"], "requires_user_action")
+            self.assertEqual(response["status"], "failed")
             self.assertEqual(response["error"]["code"], "SESSION_CHECK_UNAVAILABLE")
+            self.assertTrue(response["error"]["retryable"])
             self.assertEqual(
                 response["nextAction"]["type"],
                 "retry_session_check",

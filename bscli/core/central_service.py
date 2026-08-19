@@ -951,7 +951,14 @@ class CentralCapabilityService:
             try:
                 with selected_worker_factory(session, adapter) as worker:
                     worker.restore_session_state(state)
-                    probe = adapter.probe_session(worker)
+                    probe_session = adapter.probe_session
+                    if record_keepalive:
+                        probe_session = getattr(
+                            adapter,
+                            "keepalive_session",
+                            probe_session,
+                        )
+                    probe = probe_session(worker)
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
@@ -3932,7 +3939,18 @@ def _session_check_unavailable_response(
         session,
         diagnostics=diagnostics,
     )
-    return _session_action_response(action, session)
+    return {
+        "protocolVersion": "0.1",
+        "status": "failed",
+        "sessionId": session["session_id"],
+        "error": {
+            "code": action.code,
+            "message": action.message,
+            "retryable": True,
+        },
+        "nextAction": action.next_action,
+        "reused": False,
+    }
 
 
 def _session_action_response(action: RequiresUserAction, session: dict) -> dict:

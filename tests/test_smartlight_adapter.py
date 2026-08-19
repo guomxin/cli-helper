@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
@@ -146,6 +147,29 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertTrue(result["authenticated"])
         self.assertEqual(worker.state["refresh_token"], "jwt-refresh-rotated")
 
+    def test_keepalive_renews_complete_token_pair_through_cas(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        result = self.adapter.keepalive_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(worker.state["access_token"], "jwt-access")
+        self.assertEqual(worker.state["refresh_token"], "jwt-refresh")
+        self.assertEqual(worker.principal_requests, 1)
+        self.assertEqual(worker.token_exchange_requests, 1)
+        self.assertEqual(worker.refresh_requests, 0)
+
+    def test_keepalive_falls_back_to_refresh_when_cas_is_logged_out(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.empty_principal = True
+
+        result = self.adapter.keepalive_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(worker.principal_requests, 1)
+        self.assertEqual(worker.token_exchange_requests, 0)
+        self.assertEqual(worker.refresh_requests, 1)
+
     def test_probe_session_falls_back_to_cas_when_refresh_is_rejected(self):
         worker = FakeSmartlightWorker(authenticated=True)
         worker.reject_refresh_token = True
@@ -168,6 +192,27 @@ class SmartlightAdapterTests(unittest.TestCase):
 
         self.assertIn("refresh token and CAS session", str(raised.exception))
         self.assertIn("SmartlightLoginRequired", str(raised.exception))
+
+    def test_probe_session_expires_for_http_200_refresh_expiry_response(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.refresh_expired_payload = True
+        worker.empty_principal = True
+
+        with self.assertRaises(SmartlightLoginRequired) as raised:
+            self.adapter.probe_session(worker)
+
+        self.assertIn("refresh token and CAS session", str(raised.exception))
+        self.assertEqual(worker.refresh_requests, 1)
+
+    def test_probe_session_rejects_expired_jwt_before_network_refresh(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.state["refresh_token"] = _unsigned_jwt(exp=1)
+        worker.empty_principal = True
+
+        with self.assertRaises(SmartlightLoginRequired):
+            self.adapter.probe_session(worker)
+
+        self.assertEqual(worker.refresh_requests, 0)
 
     def test_probe_session_preserves_session_when_refresh_is_temporarily_unavailable(self):
         worker = FakeSmartlightWorker(authenticated=True)
@@ -908,6 +953,14 @@ class FakePage:
         """
 
 
+def _unsigned_jwt(*, exp: int) -> str:
+    def encode(payload: dict) -> str:
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode({'alg': 'none'})}.{encode({'exp': exp})}.signature"
+
+
 class FakeSmartlightWorker:
     def __init__(
         self,
@@ -925,6 +978,7 @@ class FakeSmartlightWorker:
         self.login_rejection = login_rejection
         self.login_completed = authenticated
         self.reject_refresh_token = False
+        self.refresh_expired_payload = False
         self.refresh_temporarily_unavailable = False
         self.rotated_refresh_token = ""
         self.empty_principal = False
@@ -1074,6 +1128,13 @@ class FakeSmartlightWorker:
                 response = _response({"resp_code": 1001, "resp_data": None})
                 response["status"] = 401
                 return response
+            if self.refresh_expired_payload:
+                return _response(
+                    {
+                        "resp_code": 1009,
+                        "resp_msg": "refresh_token已失效,请重新登录以取得新的Token.",
+                    }
+                )
             if self.refresh_temporarily_unavailable:
                 response = _response({"message": "temporarily unavailable"})
                 response["status"] = 503
