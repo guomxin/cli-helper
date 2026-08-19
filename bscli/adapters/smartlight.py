@@ -36,6 +36,12 @@ SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY = "smartlight.alarm.analysis"
 SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY = "smartlight.inspection_task.detail"
 SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY = "smartlight.leakage.analysis"
 SMARTLIGHT_REPORT_EXPORT_CAPABILITY = "smartlight.report.export"
+SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY = "smartlight.runtime.overview"
+SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY = "smartlight.rtu.status.list"
+SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY = "smartlight.lamp.status.list"
+SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY = "smartlight.lamp.alarm.list"
+SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY = "smartlight.lamp.alarm.analysis"
+SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY = "smartlight.rtu.survey.records"
 SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY = (
     "smartlight.alarm.remark.update.prepare"
 )
@@ -111,6 +117,8 @@ SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA = {
 _SMARTLIGHT_ANALYSIS_LIMIT = 500
 _SMARTLIGHT_ANALYSIS_PAGE_SIZE = 100
 _SMARTLIGHT_ALARM_TIE_PROBE_SIZE = 20
+_SMARTLIGHT_RUNTIME_SCAN_LIMIT = 500
+_SMARTLIGHT_SURVEY_MAX_DAYS = 7
 _SMARTLIGHT_ALARM_SORTS = {
     "occurred_at": ("occurredAt", "0"),
     "last_activity": ("lastActivityAt", "1"),
@@ -529,6 +537,18 @@ class SmartlightCentralAdapter:
     def invoke_capability(self, capability_name: str, worker, arguments: dict) -> dict:
         if capability_name == SMARTLIGHT_OVERVIEW_CAPABILITY:
             return self.system_overview(worker)
+        if capability_name == SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY:
+            return self.runtime_overview(worker)
+        if capability_name == SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY:
+            return self.list_rtu_status(worker, arguments)
+        if capability_name == SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY:
+            return self.list_lamp_status(worker, arguments)
+        if capability_name == SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY:
+            return self.list_lamp_alarms(worker, arguments)
+        if capability_name == SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY:
+            return self.analyze_lamp_alarms(worker, arguments)
+        if capability_name == SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY:
+            return self.list_rtu_survey_records(worker, arguments)
         if capability_name == SMARTLIGHT_LAMPPOST_LIST_CAPABILITY:
             return self.list_lampposts(worker, arguments)
         if capability_name == SMARTLIGHT_ALARM_LIST_CAPABILITY:
@@ -613,6 +633,518 @@ class SmartlightCentralAdapter:
                 for item in cabinet_items[:10]
                 if isinstance(item, dict)
             ],
+        }
+
+    def runtime_overview(self, worker) -> dict:
+        context = self._principal_context(worker)
+        rtu_query = _rtu_status_query()
+        rtu_counts = self._authorized_post_json(
+            worker,
+            "/rRtu/getRtuStateCountDataByConditionNew",
+            {
+                "json": _json_text(rtu_query),
+                "organroleId": context["organroleId"],
+            },
+        )
+        lamp_counts = self._authorized_post_json(
+            worker,
+            "/lLamppost/newGetTotalStatus",
+            {
+                "json": _json_text({"lampTypeIds": [], "streetIds": []}),
+                "organroleId": context["organroleId"],
+            },
+        )
+        observed_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "scope": "authenticated_user_runtime_pages",
+            "observedAt": observed_at,
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "rtu": {
+                "total": _first(rtu_counts, "rAllCount"),
+                "online": _first(rtu_counts, "rOnlineCount"),
+                "offline": _first(rtu_counts, "rNoOnlineWithNoHandleCount"),
+                "powerOff": _first(rtu_counts, "rPowerOutageCount"),
+                "disabled": _first(rtu_counts, "rDisableCount"),
+                "onlineWithElectricity": _first(
+                    rtu_counts, "rOnlineWithEleCount"
+                ),
+                "onlineWithoutElectricity": _first(
+                    rtu_counts, "rOnlineWithOutEleCount"
+                ),
+                "notCalculated": _first(rtu_counts, "rOnlineNoCalCount"),
+                "source": "/rRtu/getRtuStateCountDataByConditionNew",
+                "scope": "lighting_runtime_rtu",
+            },
+            "singleLamp": {
+                "controllerTotal": _first(lamp_counts, "AllControlCount"),
+                "controllerOnline": _first(lamp_counts, "OnlineCount"),
+                "controllerOffline": _first(lamp_counts, "OfflineCount"),
+                "lampTotal": _first(lamp_counts, "AlonelampCount"),
+                "lampOn": _first(lamp_counts, "OpenLampCount"),
+                "lampOff": _first(lamp_counts, "CloseLampCount"),
+                "lampPostTotal": _first(lamp_counts, "LampPostCount"),
+                "singleLampPosts": _first(lamp_counts, "SingleLampPostCount"),
+                "doubleLampPosts": _first(lamp_counts, "DoubleLampPostCount"),
+                "tripleLampPosts": _first(lamp_counts, "TribleLampPostCount"),
+                "otherLampPosts": _first(lamp_counts, "OtherLampPostCount"),
+                "alarmLampPosts": _first(lamp_counts, "alarmLampPostCount"),
+                "source": "/lLamppost/newGetTotalStatus",
+                "scope": "single_lamp_runtime",
+            },
+            "semantics": {
+                "countsAreDownstreamSnapshots": True,
+                "derivedCountsAdded": False,
+                "assetInventoryComparable": False,
+            },
+        }
+
+    def list_rtu_status(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        keyword = str(arguments.get("keyword") or "").strip()
+        state = _normalize_choice(
+            arguments.get("state"),
+            default="all",
+            allowed={"all", "online", "offline", "power_off", "disabled"},
+            field_name="state",
+        )
+        alarm_only = bool(arguments.get("alarm_only"))
+        query = _rtu_status_query(
+            keyword=keyword,
+            work_area=str(arguments.get("work_area") or "").strip(),
+            group=str(arguments.get("group") or "").strip(),
+            model=str(arguments.get("model") or "").strip(),
+        )
+        local_filter = alarm_only or state == "online"
+        if local_filter:
+            downstream_filters = (
+                ["OnlineWithElc", "OffLamppost"] if state == "online" else [None]
+            )
+            records: list[dict] = []
+            downstream_total = 0
+            truncated = False
+            seen: set[str] = set()
+            for downstream_filter in downstream_filters:
+                payload = self._rtu_status_page(
+                    worker,
+                    context,
+                    query=query,
+                    downstream_filter=downstream_filter,
+                    page=1,
+                    size=_SMARTLIGHT_RUNTIME_SCAN_LIMIT,
+                )
+                downstream_total += _page_total(payload)
+                truncated = truncated or _page_total(payload) > len(_page_items(payload))
+                for item in _page_items(payload):
+                    key = str(_first(item, "rtuId", "id") or id(item))
+                    if key not in seen:
+                        records.append(item)
+                        seen.add(key)
+            normalized = [_normalize_rtu_status(item, requested_state=state) for item in records]
+            if alarm_only:
+                normalized = [item for item in normalized if item["hasAlarm"] is True]
+            start = (page - 1) * size
+            selected = normalized[start : start + size]
+            total = len(normalized)
+        else:
+            downstream_filter = _rtu_state_filter(state)
+            payload = self._rtu_status_page(
+                worker,
+                context,
+                query=query,
+                downstream_filter=downstream_filter,
+                page=page,
+                size=size,
+            )
+            selected = [
+                _normalize_rtu_status(item, requested_state=state)
+                for item in _page_items(payload)
+            ]
+            downstream_total = _page_total(payload)
+            total = downstream_total
+            truncated = False
+        return {
+            "scope": "lighting_runtime_rtu",
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "filters": {
+                "keyword": keyword or None,
+                "state": state,
+                "alarmOnly": alarm_only,
+                "workArea": arguments.get("work_area") or None,
+                "group": arguments.get("group") or None,
+                "model": arguments.get("model") or None,
+            },
+            "page": page,
+            "size": size,
+            "total": total,
+            "downstreamTotal": downstream_total,
+            "count": len(selected),
+            "truncated": truncated,
+            "source": "/rRtu/getRtusByConditionNew",
+            "items": selected,
+        }
+
+    def _rtu_status_page(
+        self,
+        worker,
+        context: dict,
+        *,
+        query: dict,
+        downstream_filter: str | None,
+        page: int,
+        size: int,
+    ) -> Any:
+        request_query = dict(query)
+        request_query["filterParam"] = downstream_filter
+        return self._authorized_post_json(
+            worker,
+            "/rRtu/getRtusByConditionNew",
+            {
+                "json": _json_text(request_query),
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+
+    def list_lamp_status(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        keyword = str(arguments.get("keyword") or "").strip()
+        controller_state = _normalize_choice(
+            arguments.get("controller_state"),
+            default="all",
+            allowed={"all", "online", "offline"},
+            field_name="controller_state",
+        )
+        lamp_state = _normalize_choice(
+            arguments.get("lamp_state"),
+            default="all",
+            allowed={"all", "on", "off", "abnormal"},
+            field_name="lamp_state",
+        )
+        alarm_only = bool(arguments.get("alarm_only"))
+        query = {
+            "_like_params": keyword,
+            "_include_leffecteId": [],
+            "_include_streetId": _single_filter_list(arguments.get("street")),
+            "_include_controlCabinetId": _single_filter_list(arguments.get("cabinet")),
+            "_include_workAreaId": _single_filter_list(arguments.get("work_area")),
+            "lampTypeIds": [],
+            "streetIds": [],
+        }
+        status = _lamp_status_filter(controller_state, lamp_state)
+        local_filter = (
+            alarm_only
+            or lamp_state == "abnormal"
+            or (controller_state != "all" and lamp_state != "all")
+        )
+        if local_filter:
+            payload = self._lamp_status_page(
+                worker,
+                context,
+                query=query,
+                status=None,
+                page=1,
+                size=_SMARTLIGHT_RUNTIME_SCAN_LIMIT,
+            )
+            normalized = [_normalize_lamp_status(item) for item in _page_items(payload)]
+            normalized = [
+                item
+                for item in normalized
+                if _lamp_status_matches(
+                    item,
+                    controller_state=controller_state,
+                    lamp_state=lamp_state,
+                    alarm_only=alarm_only,
+                )
+            ]
+            start = (page - 1) * size
+            selected = normalized[start : start + size]
+            downstream_total = _page_total(payload)
+            total = len(normalized)
+            truncated = downstream_total > len(_page_items(payload))
+        else:
+            payload = self._lamp_status_page(
+                worker,
+                context,
+                query=query,
+                status=status,
+                page=page,
+                size=size,
+            )
+            selected = [_normalize_lamp_status(item) for item in _page_items(payload)]
+            downstream_total = _page_total(payload)
+            total = downstream_total
+            truncated = False
+        return {
+            "scope": "single_lamp_runtime",
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "filters": {
+                "keyword": keyword or None,
+                "controllerState": controller_state,
+                "lampState": lamp_state,
+                "alarmOnly": alarm_only,
+                "street": arguments.get("street") or None,
+                "cabinet": arguments.get("cabinet") or None,
+                "workArea": arguments.get("work_area") or None,
+            },
+            "page": page,
+            "size": size,
+            "total": total,
+            "downstreamTotal": downstream_total,
+            "count": len(selected),
+            "truncated": truncated,
+            "source": "/lLamppost/getLampDetialList",
+            "items": selected,
+        }
+
+    def _lamp_status_page(
+        self,
+        worker,
+        context: dict,
+        *,
+        query: dict,
+        status: str | None,
+        page: int,
+        size: int,
+    ) -> Any:
+        fields: dict[str, Any] = {
+            "json": _json_text(query),
+            "pageNum": page,
+            "pageSize": size,
+            "organroleId": context["organroleId"],
+        }
+        if status:
+            fields["status"] = status
+        return self._authorized_post_json(
+            worker,
+            "/lLamppost/getLampDetialList",
+            fields,
+        )
+
+    def list_lamp_alarms(self, worker, arguments: dict) -> dict:
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        normalized, metadata = self._lamp_alarm_records(worker, arguments)
+        start = (page - 1) * size
+        selected = normalized[start : start + size]
+        return {
+            **metadata,
+            "page": page,
+            "size": size,
+            "total": len(normalized),
+            "count": len(selected),
+            "items": selected,
+        }
+
+    def analyze_lamp_alarms(self, worker, arguments: dict) -> dict:
+        top_n = _bounded_int(arguments.get("top_n"), default=10, minimum=1, maximum=20)
+        normalized, metadata = self._lamp_alarm_records(worker, arguments)
+        result = {
+            **metadata,
+            "analyzedCount": len(normalized),
+            "dailyTrend": _daily_counts(normalized, "lastActivityAt"),
+            "topAlarmTypes": _top_counts(normalized, "alarmType", top_n),
+            "topLampPosts": _top_counts(normalized, "lampPost", top_n),
+            "topRoads": _top_counts(normalized, "road", top_n),
+            "stateCounts": _top_counts(normalized, "stateLabel", top_n),
+            "recentAlarms": normalized[:20],
+        }
+        if arguments.get("_include_report_rows") is True:
+            result["_reportRows"] = normalized
+        return result
+
+    def _lamp_alarm_records(self, worker, arguments: dict) -> tuple[list[dict], dict]:
+        context = self._principal_context(worker)
+        start_date, end_date, range_source, last_days = _resolve_analysis_date_range(
+            arguments
+        )
+        alarm_state = _normalize_choice(
+            arguments.get("alarm_state"),
+            default="all",
+            allowed={"all", "current", "non_current"},
+            field_name="alarm_state",
+        )
+        query = {
+            "_include_controlCabinetId": _single_filter_list(arguments.get("cabinet")),
+            "_like_lampPostCode": str(arguments.get("keyword") or "").strip(),
+            "_timebegin_alarmAddDate": "",
+            "_timeend_alarmAddDate": "",
+            "_include_alarmState": (
+                [0] if alarm_state == "current" else [1] if alarm_state == "non_current" else [0, 1]
+            ),
+            "_include_duration": [0],
+            "_include_hitchDicId": [],
+            "_include_streetId": _single_filter_list(arguments.get("road")),
+            "_include_workId": _single_filter_list(arguments.get("work_area")),
+            "_timebegin_lastDate": f"{start_date} 00:00:00",
+            "_timeend_lastDate": f"{end_date} 23:59:59",
+            "_show_newData": True,
+            "_leakage_threshold": 0,
+            "_leakage_current": 0,
+            "_duration": 0,
+            "userId": context["userId"],
+        }
+        raw_items: list[dict] = []
+        downstream_total = 0
+        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // _SMARTLIGHT_ANALYSIS_PAGE_SIZE) + 1):
+            payload = self._authorized_post_json(
+                worker,
+                "/lHisHitchAlarm/getDataByCondition",
+                {
+                    "json": _json_text(query),
+                    "orderBy": "l_his_coplog.cop_date",
+                    "pageNum": page,
+                    "pageSize": _SMARTLIGHT_ANALYSIS_PAGE_SIZE,
+                    "organroleId": context["organroleId"],
+                },
+            )
+            page_items = _page_items(payload)
+            if page == 1:
+                downstream_total = _page_total(payload)
+            raw_items.extend(page_items)
+            if (
+                not page_items
+                or len(raw_items) >= downstream_total
+                or len(raw_items) >= _SMARTLIGHT_ANALYSIS_LIMIT
+            ):
+                break
+        normalized = [_normalize_lamp_alarm(item) for item in raw_items]
+        for argument_name, item_field in (
+            ("alarm_type", "alarmType"),
+            ("road", "road"),
+            ("work_area", "workArea"),
+        ):
+            needle = str(arguments.get(argument_name) or "").strip().casefold()
+            if needle:
+                normalized = [
+                    item
+                    for item in normalized
+                    if needle in str(item.get(item_field) or "").casefold()
+                ]
+        normalized.sort(
+            key=lambda item: (
+                str(item.get("lastActivityAt") or ""),
+                str(item.get("id") or ""),
+            ),
+            reverse=True,
+        )
+        return normalized, {
+            "alarmSource": "single_lamp",
+            "dateRange": {
+                "source": range_source,
+                "lastDays": last_days,
+                "startDate": start_date,
+                "endDate": end_date,
+                "inclusive": True,
+                "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            },
+            "filters": {
+                "keyword": arguments.get("keyword") or None,
+                "alarmType": arguments.get("alarm_type") or None,
+                "alarmState": alarm_state,
+                "road": arguments.get("road") or None,
+                "workArea": arguments.get("work_area") or None,
+                "cabinet": arguments.get("cabinet") or None,
+            },
+            "downstreamTotal": downstream_total,
+            "retrievedCount": len(raw_items),
+            "truncated": downstream_total > len(raw_items),
+            "analysisLimit": _SMARTLIGHT_ANALYSIS_LIMIT,
+            "source": "/lHisHitchAlarm/getDataByCondition",
+        }
+
+    def list_rtu_survey_records(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_time, end_time, range_source = _resolve_survey_time_range(arguments)
+        rtu_id = str(arguments.get("rtu_id") or "").strip()
+        rtu_keyword = str(arguments.get("rtu_keyword") or "").strip()
+        candidates: list[dict] = []
+        if not rtu_id:
+            if not rtu_keyword:
+                raise ValueError("rtu_id or rtu_keyword is required")
+            candidate_payload = self._rtu_status_page(
+                worker,
+                context,
+                query=_rtu_status_query(keyword=rtu_keyword),
+                downstream_filter=None,
+                page=1,
+                size=100,
+            )
+            candidates = [
+                _normalize_rtu_status(item, requested_state="all")
+                for item in _page_items(candidate_payload)
+            ]
+            if len(candidates) != 1:
+                return {
+                    "resolved": False,
+                    "resolution": "not_found" if not candidates else "ambiguous",
+                    "rtuKeyword": rtu_keyword,
+                    "candidateTotal": _page_total(candidate_payload),
+                    "candidates": candidates[:20],
+                    "message": (
+                        "未找到匹配 RTU。" if not candidates else "匹配到多个 RTU，请使用精确 rtu_id。"
+                    ),
+                }
+            rtu_id = str(candidates[0].get("id") or "")
+        start_date, start_clock = start_time.split(" ", 1)
+        end_date, end_clock = end_time.split(" ", 1)
+        query = {
+            "isOnlyAbnormal": "1" if arguments.get("abnormal_only") else "0",
+            "isConbineTime": "1",
+            "isRatingData": "1",
+            "isRtuRelayI": "0",
+            "isRtuRoadI": "1",
+            "_like_params": rtu_keyword,
+            "_timebegin_addDate": start_date,
+            "_timebegin_addTime": start_clock,
+            "_timeend_addDate": end_date,
+            "_timeend_addTime": end_clock,
+            "_dataArray": [],
+            "dataArray": [],
+            "selectDataArray": ["2"],
+            "selectStreetArray": [],
+            "_timebegin_addDateTime": start_time,
+            "_timeend_addDateTime": end_time,
+            "rtuId": rtu_id,
+        }
+        payload = self._authorized_post_json(
+            worker,
+            "/rHisCoplogPhase/getDataByCondition",
+            {
+                "json": _json_text(query),
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+        items = [_normalize_rtu_survey(item) for item in _page_items(payload)]
+        return {
+            "resolved": True,
+            "scope": "rtu_survey_history",
+            "rtuId": rtu_id,
+            "rtuKeyword": rtu_keyword or None,
+            "resolvedRtu": candidates[0] if candidates else None,
+            "dateRange": {
+                "source": range_source,
+                "startTime": start_time,
+                "endTime": end_time,
+                "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+                "maximumDays": _SMARTLIGHT_SURVEY_MAX_DAYS,
+            },
+            "page": page,
+            "size": size,
+            "total": _page_total(payload),
+            "count": len(items),
+            "source": "/rHisCoplogPhase/getDataByCondition",
+            "items": items,
         }
 
     def list_lampposts(self, worker, arguments: dict) -> dict:
@@ -896,6 +1428,7 @@ class SmartlightCentralAdapter:
             )
             normalized_items = tie_items[:size]
         return {
+            "alarmSource": "rtu",
             "keyword": keyword or None,
             "sortBy": sort_by,
             "page": page,
@@ -1056,6 +1589,7 @@ class SmartlightCentralAdapter:
             reverse=True,
         )
         result = {
+            "alarmSource": "rtu",
             "filters": {
                 "keyword": keyword or None,
                 "alarmType": alarm_type or None,
@@ -1314,161 +1848,32 @@ class SmartlightCentralAdapter:
         return result
 
     def leakage_summary(self, worker, arguments: dict) -> dict:
-        context = self._principal_context(worker)
-        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
-        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
-        start_date, end_date, range_source, last_days = _resolve_date_range(arguments)
-        query = {
-            "dateType": "",
-            "_include_controlCabinetId": [],
-            "_like_lampPostCode": "",
-            "_timebegin_alarmAddDate": "",
-            "_timeend_alarmAddDate": "",
-            "_include_alarmState": [0, 1],
-            "_include_duration": [0],
-            "_include_hitchDicId": [],
-            "_include_streetId": [],
-            "_include_workId": [],
-            "_timebegin_lastDate": f"{start_date} 00:00:00" if start_date else "",
-            "_timeend_lastDate": f"{end_date} 23:59:59" if end_date else "",
-            "_show_newData": True,
-            "_leakage_threshold": 0,
-            "_leakage_current": 0,
-            "_duration": 0,
-            "userId": context["userId"],
-        }
-        records = self._authorized_post_json(
-            worker,
-            "/lHisHitchAlarm/getDataByCondition",
+        result = self.list_lamp_alarms(worker, arguments)
+        result.update(
             {
-                "json": _json_text(query),
-                "orderBy": "l_his_coplog.cop_date",
-                "pageNum": page,
-                "pageSize": size,
-                "organroleId": context["organroleId"],
-            },
-        )
-        counts = self._authorized_post_json(
-            worker,
-            "/lHisHitchAlarm/getCountDataByCondition",
-            {
-                "json": _json_text(
-                    {
-                        **query,
-                        "_timebegin_lastDate": "",
-                        "_timeend_lastDate": "",
-                    }
+                "deprecated": True,
+                "canonicalTool": "smartlight_lamp_alarm_list",
+                "alarmSource": "single_lamp",
+                "compatibilityNotice": (
+                    "兼容旧入口：该接口实际返回单灯告警，不代表漏电记录。"
                 ),
-                "organroleId": context["organroleId"],
-            },
+            }
         )
-        items = _page_items(records)
-        record_total = _page_total(records)
-        return {
-            "startDate": start_date or None,
-            "endDate": end_date or None,
-            "dateRange": {
-                "source": range_source,
-                "lastDays": last_days,
-                "startDate": start_date or None,
-                "endDate": end_date or None,
-                "inclusive": True,
-                "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
-            },
-            "page": page,
-            "size": size,
-            "total": record_total,
-            "count": len(items),
-            "rangeSummary": {"recordTotal": record_total},
-            "summary": _bounded_json(counts),
-            "summaryScope": {
-                "type": "current_system_snapshot",
-                "dateRangeApplied": False,
-                "checkedAt": datetime.now(timezone.utc).isoformat(),
-            },
-            "items": [_normalize_leakage(item) for item in items],
-        }
+        return result
 
     def analyze_leakage(self, worker, arguments: dict) -> dict:
-        context = self._principal_context(worker)
-        top_n = _bounded_int(arguments.get("top_n"), default=10, minimum=1, maximum=20)
-        start_date, end_date, range_source, last_days = _resolve_analysis_date_range(
-            arguments
+        result = self.analyze_lamp_alarms(worker, arguments)
+        result.update(
+            {
+                "deprecated": True,
+                "canonicalTool": "smartlight_lamp_alarm_analysis",
+                "canonicalReportType": "lamp_alarm_analysis",
+                "alarmSource": "single_lamp",
+                "compatibilityNotice": (
+                    "兼容旧入口：该接口实际分析单灯告警，不代表漏电分析。"
+                ),
+            }
         )
-        query = {
-            "dateType": "",
-            "_include_controlCabinetId": [],
-            "_like_lampPostCode": "",
-            "_timebegin_alarmAddDate": "",
-            "_timeend_alarmAddDate": "",
-            "_include_alarmState": [0, 1],
-            "_include_duration": [0],
-            "_include_hitchDicId": [],
-            "_include_streetId": [],
-            "_include_workId": [],
-            "_timebegin_lastDate": (
-                f"{start_date} 00:00:00" if start_date else ""
-            ),
-            "_timeend_lastDate": f"{end_date} 23:59:59" if end_date else "",
-            "_show_newData": True,
-            "_leakage_threshold": 0,
-            "_leakage_current": 0,
-            "_duration": 0,
-            "userId": context["userId"],
-        }
-        raw_items: list[dict] = []
-        downstream_total = 0
-        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // _SMARTLIGHT_ANALYSIS_PAGE_SIZE) + 1):
-            payload = self._authorized_post_json(
-                worker,
-                "/lHisHitchAlarm/getDataByCondition",
-                {
-                    "json": _json_text(query),
-                    "orderBy": "l_his_coplog.cop_date",
-                    "pageNum": page,
-                    "pageSize": _SMARTLIGHT_ANALYSIS_PAGE_SIZE,
-                    "organroleId": context["organroleId"],
-                },
-            )
-            page_items = _page_items(payload)
-            if page == 1:
-                downstream_total = _page_total(payload)
-            raw_items.extend(page_items)
-            if (
-                not page_items
-                or len(raw_items) >= downstream_total
-                or len(raw_items) >= _SMARTLIGHT_ANALYSIS_LIMIT
-            ):
-                break
-        normalized = [_normalize_leakage(item) for item in raw_items]
-        normalized.sort(key=lambda item: str(item.get("time") or ""), reverse=True)
-        result = {
-            "dateRange": {
-                "source": range_source,
-                "lastDays": last_days,
-                "startDate": start_date,
-                "endDate": end_date,
-                "inclusive": True,
-                "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
-            },
-            "downstreamTotal": downstream_total,
-            "retrievedCount": len(raw_items),
-            "analyzedCount": len(normalized),
-            "truncated": downstream_total > len(raw_items),
-            "analysisLimit": _SMARTLIGHT_ANALYSIS_LIMIT,
-            "dailyTrend": _daily_counts(normalized, "time"),
-            "topLampPosts": _top_counts(normalized, "lampPost", top_n),
-            "topRoads": _top_counts(normalized, "road", top_n),
-            "topAlarmTypes": _top_counts(normalized, "alarmType", top_n),
-            "stateCounts": _top_counts(normalized, "state", top_n),
-            "recentRecords": normalized[:20],
-            "summaryScope": {
-                "type": "date_range_records_only",
-                "globalDashboardCountersIncluded": False,
-            },
-        }
-        if arguments.get("_include_report_rows") is True:
-            result["_reportRows"] = normalized
         return result
 
     def export_report(self, worker, arguments: dict) -> dict:
@@ -1477,6 +1882,7 @@ class SmartlightCentralAdapter:
             default="",
             allowed={
                 "alarm_analysis",
+                "lamp_alarm_analysis",
                 "leakage_analysis",
                 "asset_inventory",
                 "inspection_progress",
@@ -1519,25 +1925,25 @@ class SmartlightCentralAdapter:
                     "truncated": analysis["truncated"],
                 },
             )
-        if report_type == "leakage_analysis":
-            analysis = self.analyze_leakage(
+        if report_type in {"lamp_alarm_analysis", "leakage_analysis"}:
+            analysis = self.analyze_lamp_alarms(
                 worker,
                 {**report_arguments, "_include_report_rows": True},
             )
             rows = analysis.pop("_reportRows")
             return _smartlight_report_result(
                 report_type=report_type,
-                title="照明漏电分析",
+                title="照明单灯告警分析",
                 columns=(
-                    ("id", "记录ID"),
-                    ("time", "时间"),
+                    ("id", "告警ID"),
+                    ("occurredAt", "首次发生时间"),
+                    ("lastActivityAt", "最近活动时间"),
                     ("lampPost", "灯杆"),
                     ("lamp", "灯具"),
                     ("road", "道路"),
-                    ("value", "漏电值"),
-                    ("voltage", "电压"),
+                    ("cabinet", "控制柜"),
                     ("alarmType", "告警类型"),
-                    ("state", "状态"),
+                    ("stateLabel", "状态"),
                 ),
                 rows=rows,
                 metadata={
@@ -1545,6 +1951,9 @@ class SmartlightCentralAdapter:
                     "downstreamTotal": analysis["downstreamTotal"],
                     "retrievedCount": analysis["retrievedCount"],
                     "truncated": analysis["truncated"],
+                    "alarmSource": "single_lamp",
+                    "deprecated": report_type == "leakage_analysis",
+                    "canonicalReportType": "lamp_alarm_analysis",
                 },
             )
         if report_type == "asset_inventory":
@@ -2683,6 +3092,138 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
             workflow="smartlight-lamppost-list-v1",
         ),
         CapabilitySpec(
+            name=SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Read the current RTU and single-lamp runtime snapshots without "
+                "mixing them with the registered asset inventory."
+            ),
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-runtime-overview-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
+            version="0.1.0",
+            description="List RTUs from the lighting runtime page with explicit state scope.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "state": {
+                        "type": "string",
+                        "enum": ["all", "online", "offline", "power_off", "disabled"],
+                    },
+                    "alarm_only": {"type": "boolean"},
+                    "work_area": {"type": "string"},
+                    "group": {"type": "string"},
+                    "model": {"type": "string"},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-status-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY,
+            version="0.1.0",
+            description="List single-lamp controllers and their observed electrical state.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "controller_state": {
+                        "type": "string",
+                        "enum": ["all", "online", "offline"],
+                    },
+                    "lamp_state": {
+                        "type": "string",
+                        "enum": ["all", "on", "off", "abnormal"],
+                    },
+                    "alarm_only": {"type": "boolean"},
+                    "street": {"type": "string"},
+                    "cabinet": {"type": "string"},
+                    "work_area": {"type": "string"},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-lamp-status-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
+            version="0.1.0",
+            description="List bounded single-lamp alarms with their original alarm semantics.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "alarm_type": {"type": "string"},
+                    "alarm_state": {
+                        "type": "string",
+                        "enum": ["all", "current", "non_current"],
+                    },
+                    "road": {"type": "string"},
+                    "work_area": {"type": "string"},
+                    "cabinet": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 3660},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-lamp-alarm-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY,
+            version="0.1.0",
+            description="Analyze at most 500 single-lamp alarms by day, type, lamp post and road.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "alarm_type": {"type": "string"},
+                    "alarm_state": {
+                        "type": "string",
+                        "enum": ["all", "current", "non_current"],
+                    },
+                    "road": {"type": "string"},
+                    "work_area": {"type": "string"},
+                    "cabinet": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 3660},
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-lamp-alarm-analysis-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY,
+            version="0.1.0",
+            description="Read a bounded RTU survey history window of at most seven days.",
+            input_schema=_paged_schema(
+                {
+                    "rtu_id": {"type": "string"},
+                    "rtu_keyword": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "abnormal_only": {"type": "boolean"},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-survey-records-v1",
+        ),
+        CapabilitySpec(
             name=SMARTLIGHT_ALARM_LIST_CAPABILITY,
             version="0.3.0",
             description=(
@@ -2739,10 +3280,10 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
-            version="0.2.0",
+            version="0.3.0",
             description=(
-                "List date-filtered Smartlight leakage records and separately expose "
-                "the unfiltered current-system dashboard counters."
+                "Deprecated compatibility alias for the single-lamp alarm list; "
+                "the underlying records are not a leakage-only dataset."
             ),
             input_schema=_paged_schema(
                 {
@@ -2867,10 +3408,9 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
-                "Analyze bounded Smartlight leakage records by day, lamp post, "
-                "road, alarm type, and state."
+                "Deprecated compatibility alias for single-lamp alarm analysis."
             ),
             input_schema={
                 "type": "object",
@@ -2901,6 +3441,7 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
                         "type": "string",
                         "enum": [
                             "alarm_analysis",
+                            "lamp_alarm_analysis",
                             "leakage_analysis",
                             "asset_inventory",
                             "inspection_progress",
@@ -3284,6 +3825,332 @@ def _paged_schema(properties: dict) -> dict:
             "size": {"type": "integer"},
         },
         "additionalProperties": False,
+    }
+
+
+def _single_filter_list(value: Any) -> list[str]:
+    normalized = str(value or "").strip()
+    return [normalized] if normalized else []
+
+
+def _rtu_status_query(
+    *,
+    keyword: str = "",
+    work_area: str = "",
+    group: str = "",
+    model: str = "",
+) -> dict:
+    return {
+        "_like_params": keyword,
+        "_include_transTypeId": [],
+        "_include_productModelId": _single_filter_list(model),
+        "_include_rtuTypeId": [],
+        "_include_groupId": _single_filter_list(group),
+        "_include_workAreaId": _single_filter_list(work_area),
+        "_include_workModeId": [],
+        "_include_streetId": [],
+        "duration": None,
+        "WorkModel": None,
+        "filterParam": None,
+        "filterParamFromIndex": None,
+    }
+
+
+def _rtu_state_filter(state: str) -> str | None:
+    return {
+        "all": None,
+        "offline": "NoOnlineWithNoHandle",
+        "power_off": "PowerOutage",
+        "disabled": "Disable",
+    }.get(state)
+
+
+def _lamp_status_filter(controller_state: str, lamp_state: str) -> str | None:
+    if controller_state == "online" and lamp_state == "all":
+        return "ONLINE"
+    if controller_state == "offline" and lamp_state == "all":
+        return "OFFLINE"
+    if controller_state == "all" and lamp_state == "on":
+        return "OPEN"
+    if controller_state == "all" and lamp_state == "off":
+        return "CLOSE"
+    return None
+
+
+def _smartlight_bool(value: Any) -> bool | None:
+    if value in (True, 1, "1", "true", "True", "yes", "YES"):
+        return True
+    if value in (False, 0, "0", "false", "False", "no", "NO"):
+        return False
+    return None
+
+
+def _normalize_rtu_status(item: dict, *, requested_state: str) -> dict:
+    state_code = _smartlight_int(_first(item, "rtuRunningState", "runningState"))
+    state_label = {
+        "online": "在线",
+        "offline": "离线",
+        "power_off": "电源停电",
+        "disabled": "未启用",
+    }.get(requested_state)
+    if state_label is None:
+        state_label = {
+            1: "在线",
+            2: "在线",
+            4: "离线或电源停电",
+            5: "未启用",
+        }.get(state_code, "未知")
+    phase = item.get("coplogPhase") if isinstance(item.get("coplogPhase"), dict) else {}
+    alarm_list = item.get("rtuAlarmList")
+    has_alarm = _smartlight_bool(item.get("isAlarm"))
+    if has_alarm is None and isinstance(alarm_list, list):
+        has_alarm = bool(alarm_list)
+    return {
+        "id": _first(item, "rtuId", "id"),
+        "code": _first(item, "rtuCode", "code"),
+        "name": _first(item, "rtuName", "name"),
+        "modelId": _first(item, "rtuProductModelId", "productModelId"),
+        "model": _first(item, "rtuProductModelName", "productModelName", "productModel"),
+        "cabinetId": _first(item, "controlCabinetId"),
+        "cabinet": _first(item, "controlCabinetName"),
+        "workAreaId": _first(item, "workAreaId"),
+        "workArea": _first(item, "workAreaName"),
+        "groupId": _first(item, "rtuGroupId", "groupId"),
+        "group": _first(item, "rtuGroupName", "groupName"),
+        "road": _first(item, "streetName"),
+        "side": _first(item, "streetSideName"),
+        "state": state_label,
+        "stateCode": state_code,
+        "stateScope": (
+            "selected_downstream_filter" if requested_state != "all" else "record_state_code"
+        ),
+        "lastOnlineAt": _first(item, "lastOnlineTime"),
+        "lastSurveyAt": _first(item, "coplogTime", "lastCoplogTime", "addDate"),
+        "hasAlarm": has_alarm,
+        "alarms": _bounded_json(alarm_list or []),
+        "isOpen": _smartlight_bool(item.get("isOpen")),
+        "isEnabled": _smartlight_bool(item.get("isEnabled")),
+        "isSucceeded": _smartlight_bool(item.get("isSucceeded")),
+        "workModes": _bounded_json(_first(item, "workModels", "workModeName")),
+        "relayNumbers": _bounded_json(item.get("relayNums")),
+        "telemetry": {
+            "phaseVoltage": {
+                "a": _first(phase, "strRtuScaleU1", "Ua", "ua"),
+                "b": _first(phase, "strRtuScaleU2", "Ub", "ub"),
+                "c": _first(phase, "strRtuScaleU3", "Uc", "uc"),
+            },
+            "phaseCurrent": {
+                "a": _first(phase, "strRtuScaleIsp1", "Ia", "ia"),
+                "b": _first(phase, "strRtuScaleIsp2", "Ib", "ib"),
+                "c": _first(phase, "strRtuScaleIsp3", "Ic", "ic"),
+            },
+            "temperature": _first(phase, "temperature"),
+            "humidity": _first(phase, "humidity"),
+            "leakCurrents": _bounded_json(
+                _first(phase, "LeakCurrents", "relayLeakCurrents")
+            ),
+        },
+    }
+
+
+def _normalize_lamp_status(item: dict) -> dict:
+    raw_lamps = item.get("AloneLamps") if isinstance(item.get("AloneLamps"), list) else []
+    lamps = [_normalize_single_lamp(lamp) for lamp in raw_lamps if isinstance(lamp, dict)]
+    online_values = [lamp["controllerOnline"] for lamp in lamps if lamp["controllerOnline"] is not None]
+    controller_online = any(online_values) if online_values else None
+    has_alarm = any(lamp["hasAlarm"] for lamp in lamps)
+    last_activity = max(
+        (str(lamp.get("lastActivityAt") or "") for lamp in lamps),
+        default="",
+    ) or None
+    if any(lamp["switchOn"] is True for lamp in lamps):
+        lamp_state = "on"
+    elif any(lamp["switchOn"] is False for lamp in lamps):
+        lamp_state = "off"
+    else:
+        lamp_state = "unknown"
+    return {
+        "id": _first(item, "LampPostID", "lampPostId", "id"),
+        "code": _first(item, "LampPostCode", "lampPostCode"),
+        "type": _first(item, "LampPostType", "lampPostTypeName"),
+        "road": _first(item, "StreetName", "streetName"),
+        "side": _first(item, "StreetSideName", "streetSideName"),
+        "workArea": _first(item, "WorkAreaName", "workAreaName"),
+        "cabinetCode": _first(item, "controlCabinetCode"),
+        "cabinet": _first(item, "controlCabinetName"),
+        "rtuCode": _first(item, "rtuCode"),
+        "rtuName": _first(item, "rtuName"),
+        "controllerOnline": controller_online,
+        "controllerState": (
+            "online" if controller_online is True else "offline" if controller_online is False else "unknown"
+        ),
+        "lastActivityAt": last_activity,
+        "lampState": "abnormal" if has_alarm else lamp_state,
+        "hasAlarm": has_alarm,
+        "lampCount": len(lamps),
+        "lamps": lamps,
+    }
+
+
+def _normalize_single_lamp(item: dict) -> dict:
+    alarms = item.get("hitchAlarms") if isinstance(item.get("hitchAlarms"), list) else []
+    return {
+        "id": _first(item, "AloneLampId", "aloneLampId", "id"),
+        "controllerId": _first(item, "aloneLampControlId"),
+        "number": _first(item, "LampNumber", "lampNumber"),
+        "code": _first(item, "LampCode", "lampCode"),
+        "effect": _first(item, "Effect", "lampEffectName"),
+        "controllerOnline": _smartlight_bool(_first(item, "IsOnline", "online")),
+        "switchOn": _smartlight_bool(_first(item, "IsSwitchOn", "switchOn")),
+        "lastActivityAt": _first(item, "copDate", "deviceTime"),
+        "voltage": _first(item, "U", "voltage"),
+        "current": _first(item, "I", "lampIsp"),
+        "powerFactor": _first(item, "Pf", "powerFactor"),
+        "activePower": _first(item, "Ap", "activePower"),
+        "dimming": _first(item, "dimmingValue"),
+        "energy": _first(item, "energy"),
+        "leakageVoltage": _first(item, "leakageVoltage"),
+        "leakageCurrent": _first(item, "leakageCurrent", "LeakCurrent"),
+        "hasAlarm": bool(alarms),
+        "alarms": _bounded_json(alarms),
+    }
+
+
+def _lamp_status_matches(
+    item: dict,
+    *,
+    controller_state: str,
+    lamp_state: str,
+    alarm_only: bool,
+) -> bool:
+    if controller_state != "all" and item.get("controllerState") != controller_state:
+        return False
+    if lamp_state == "abnormal" and item.get("hasAlarm") is not True:
+        return False
+    if lamp_state in {"on", "off"} and item.get("lampState") != lamp_state:
+        return False
+    if alarm_only and item.get("hasAlarm") is not True:
+        return False
+    return True
+
+
+def _normalize_lamp_alarm(item: dict) -> dict:
+    state_code = _smartlight_int(item.get("alarmState"))
+    state_label = _first(item, "alarmStateName") or {
+        0: "当前报警",
+        1: "非当前报警",
+        2: "已解除报警",
+        3: "已处置",
+    }.get(state_code, "未知")
+    return {
+        "id": _first(item, "hisHitchAlarmId", "alarmId", "id"),
+        "occurredAt": _first(item, "alarmAddDate", "occurDate"),
+        "lastActivityAt": _first(item, "lastDate", "alarmAddDate"),
+        "lampPostId": _first(item, "lampPostId"),
+        "lampPost": _first(item, "lampPostCode", "lampPostName"),
+        "lampId": _first(item, "aloneLampId"),
+        "lamp": _first(item, "lampEffectName", "aloneLampName"),
+        "roadId": _first(item, "streetId"),
+        "road": _first(item, "streetName", "roadName"),
+        "side": _first(item, "streetSideName"),
+        "cabinetCode": _first(item, "controlCabinetCode"),
+        "cabinet": _first(item, "controlCabinetName"),
+        "workArea": _first(item, "workAreaName"),
+        "alarmTypeId": _first(item, "hitchDicId"),
+        "alarmType": _first(item, "hitchDicName", "alarmTypeName"),
+        "stateCode": state_code,
+        "stateLabel": state_label,
+        "leakageVoltage": _first(item, "leakageVoltage"),
+        "leakageCurrent": _first(item, "leakageCurrent"),
+        "remark": _first(item, "remark"),
+    }
+
+
+def _resolve_survey_time_range(
+    arguments: dict,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str, str]:
+    start_text = str(arguments.get("start_time") or "").strip()
+    end_text = str(arguments.get("end_time") or "").strip()
+    if bool(start_text) != bool(end_text):
+        raise ValueError("start_time and end_time must be provided together")
+    if not start_text:
+        end = (now or datetime.now(_SMARTLIGHT_BUSINESS_TIMEZONE)).astimezone(
+            _SMARTLIGHT_BUSINESS_TIMEZONE
+        )
+        start = end - timedelta(hours=24)
+        source = "default_last_24_hours"
+    else:
+        start = _parse_business_datetime(start_text, "start_time")
+        end = _parse_business_datetime(end_text, "end_time")
+        source = "explicit"
+    if start > end:
+        raise ValueError("start_time cannot be after end_time")
+    if end - start > timedelta(days=_SMARTLIGHT_SURVEY_MAX_DAYS):
+        raise ValueError("RTU survey range cannot exceed 7 days")
+    return (
+        start.strftime("%Y-%m-%d %H:%M"),
+        end.strftime("%Y-%m-%d %H:%M"),
+        source,
+    )
+
+
+def _parse_business_datetime(value: str, field_name: str) -> datetime:
+    normalized = value.replace("T", " ")
+    for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(normalized, pattern)
+            return parsed.replace(tzinfo=_SMARTLIGHT_BUSINESS_TIMEZONE)
+        except ValueError:
+            continue
+    raise ValueError(f"{field_name} must use YYYY-MM-DD HH:MM")
+
+
+def _normalize_rtu_survey(item: dict) -> dict:
+    received_at = _first(item, "addDateTime", "copDate", "addDate")
+    if not received_at and item.get("addDate") and item.get("addTime"):
+        received_at = f"{item['addDate']} {item['addTime']}"
+    return {
+        "id": _first(item, "hisCoplogPhaseId", "coplogId", "id"),
+        "rtuId": _first(item, "rtuId"),
+        "rtuCode": _first(item, "rtuCode"),
+        "rtuName": _first(item, "rtuName"),
+        "receivedAt": received_at,
+        "rtuTime": _first(item, "rtuDateTime", "rtuTime", "deviceTime"),
+        "phaseVoltage": {
+            "a": _first(item, "strRtuScaleU1", "Ua", "ua"),
+            "b": _first(item, "strRtuScaleU2", "Ub", "ub"),
+            "c": _first(item, "strRtuScaleU3", "Uc", "uc"),
+        },
+        "phaseCurrent": {
+            "a": _first(item, "strRtuScaleIsp1", "Ia", "ia"),
+            "b": _first(item, "strRtuScaleIsp2", "Ib", "ib"),
+            "c": _first(item, "strRtuScaleIsp3", "Ic", "ic"),
+        },
+        "phaseCurrentRatio": {
+            "a": _first(item, "strRtuScaleI1", "Ian", "ian"),
+            "b": _first(item, "strRtuScaleI2", "Ibn", "ibn"),
+            "c": _first(item, "strRtuScaleI3", "Icn", "icn"),
+        },
+        "powerFactor": {
+            "a": _first(item, "APowerFactor", "powerFactorA"),
+            "b": _first(item, "BPowerFactor", "powerFactorB"),
+            "c": _first(item, "CPowerFactor", "powerFactorC"),
+        },
+        "temperature": _first(item, "temperature"),
+        "humidity": _first(item, "humidity"),
+        "relayCurrents": _bounded_json(
+            _first(item, "relayCurrents", "strRelayCurrentSum")
+        ),
+        "leakCurrents": _bounded_json(
+            _first(item, "LeakCurrents", "relayLeakCurrents", "leakCurrents")
+        ),
+        "relayLeakIds": _bounded_json(item.get("relayLeakIds")),
+        "openRelays": _bounded_json(_first(item, "onRelayIds", "openRelayIds")),
+        "closedRelays": _bounded_json(_first(item, "offRelayIds", "closedRelayIds")),
+        "state": _first(item, "stateName", "state"),
+        "alarmContent": _first(item, "hitchIntro", "alarmContent", "hitchContent"),
     }
 
 

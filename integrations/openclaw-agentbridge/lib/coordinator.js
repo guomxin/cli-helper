@@ -82,6 +82,30 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "smartlight_overview", system: "照明实验室测试系统", label: "系统概览" },
   ],
   [
+    "smartlight_runtime_overview",
+    { kind: "smartlight_runtime", system: "照明实验室测试系统", label: "运行概览" },
+  ],
+  [
+    "smartlight_rtu_status_list",
+    { kind: "smartlight_rtu_status", system: "照明实验室测试系统", label: "RTU 运行状态" },
+  ],
+  [
+    "smartlight_lamp_status_list",
+    { kind: "smartlight_lamp_status", system: "照明实验室测试系统", label: "单灯运行状态" },
+  ],
+  [
+    "smartlight_lamp_alarm_list",
+    { kind: "smartlight_lamp_alarm", system: "照明实验室测试系统", label: "单灯告警" },
+  ],
+  [
+    "smartlight_lamp_alarm_analysis",
+    { kind: "smartlight_lamp_alarm", system: "照明实验室测试系统", label: "单灯告警分析" },
+  ],
+  [
+    "smartlight_rtu_survey_records",
+    { kind: "smartlight_rtu_survey", system: "照明实验室测试系统", label: "RTU 巡测记录" },
+  ],
+  [
     "smartlight_lamppost_list",
     { kind: "smartlight_lamppost", system: "照明实验室测试系统", label: "灯杆" },
   ],
@@ -99,7 +123,7 @@ const LOGIN_READ_TOOLS = new Map([
   ],
   [
     "smartlight_leakage_summary",
-    { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电统计" },
+    { kind: "smartlight_lamp_alarm", system: "照明实验室测试系统", label: "单灯告警（兼容入口）" },
   ],
   [
     "smartlight_asset_search",
@@ -119,7 +143,7 @@ const LOGIN_READ_TOOLS = new Map([
   ],
   [
     "smartlight_leakage_analysis",
-    { kind: "smartlight_leakage", system: "照明实验室测试系统", label: "漏电分析" },
+    { kind: "smartlight_lamp_alarm", system: "照明实验室测试系统", label: "单灯告警分析（兼容入口）" },
   ],
   [
     "smartlight_report_export",

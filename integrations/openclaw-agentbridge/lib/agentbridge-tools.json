@@ -4029,6 +4029,713 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "读取当前 RTU、单灯控制器和灯具的运行快照。回答在线、离线、停电、开灯等当前状态时使用本工具；登记资产数量请使用 smartlight_system_overview 或 smartlight_asset_search，不得混用两个统计口径。",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "title": "smartlight_runtime_overviewArguments",
+        "type": "object"
+      },
+      "name": "smartlight_runtime_overview",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_runtime_overviewDictOutput",
+        "type": "object"
+      },
+      "title": "查看照明实时运行概览"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "查询照明用途 RTU 的当前运行状态，可筛选在线、离线、电源停电、未启用和当前有告警的设备。结果属于运行页面口径，不代表全部登记资产。",
+      "inputSchema": {
+        "properties": {
+          "alarm_only": {
+            "default": false,
+            "title": "Alarm Only",
+            "type": "boolean"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "online",
+              "offline",
+              "power_off",
+              "disabled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "work_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Work Area"
+          }
+        },
+        "title": "smartlight_rtu_status_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_status_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_status_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询 RTU 运行状态"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "查询单灯控制器在线状态、灯具开关和响应中真实存在的电压、电流、功率等数据。abnormal 表示响应中带单灯告警，不等同于漏电。",
+      "inputSchema": {
+        "properties": {
+          "alarm_only": {
+            "default": false,
+            "title": "Alarm Only",
+            "type": "boolean"
+          },
+          "cabinet": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cabinet"
+          },
+          "controller_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "online",
+              "offline"
+            ],
+            "title": "Controller State",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "lamp_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "on",
+              "off",
+              "abnormal"
+            ],
+            "title": "Lamp State",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "street": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Street"
+          },
+          "work_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Work Area"
+          }
+        },
+        "title": "smartlight_lamp_status_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_lamp_status_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_lamp_status_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询单灯运行状态"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "分页查询单灯告警，例如异常亮灯。相对时间直接传 last_days。该数据源不是漏电专表；查询真正的漏电报警请用 smartlight_alarm_list/analysis 并筛选告警类型，查询漏电电流请用 smartlight_rtu_survey_records。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "non_current"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "alarm_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alarm Type"
+          },
+          "cabinet": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cabinet"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "road": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Road"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "work_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Work Area"
+          }
+        },
+        "title": "smartlight_lamp_alarm_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_lamp_alarm_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_lamp_alarm_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询单灯告警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "对最多 500 条单灯告警做日期趋势及告警类型、灯杆、道路、状态排行。未传日期时默认最近 30 天；结果始终标记 alarmSource=single_lamp。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "non_current"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "alarm_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alarm Type"
+          },
+          "cabinet": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cabinet"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 3660,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "road": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Road"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          },
+          "work_area": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Work Area"
+          }
+        },
+        "title": "smartlight_lamp_alarm_analysisArguments",
+        "type": "object"
+      },
+      "name": "smartlight_lamp_alarm_analysis",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_lamp_alarm_analysisDictOutput",
+        "type": "object"
+      },
+      "title": "分析单灯告警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "读取指定 RTU 的电压、电流、温湿度、开关量和漏电电流历史。优先传精确rtu_id；只传 rtu_keyword 时必须唯一命中。默认最近 24 小时，最长 7 天。巡测记录是设备遥测历史，不是巡检任务。",
+      "inputSchema": {
+        "properties": {
+          "abnormal_only": {
+            "default": false,
+            "title": "Abnormal Only",
+            "type": "boolean"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "rtu_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rtu Id"
+          },
+          "rtu_keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rtu Keyword"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "smartlight_rtu_survey_recordsArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_survey_records",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_survey_recordsDictOutput",
+        "type": "object"
+      },
+      "title": "查询 RTU 巡测记录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "List lamp posts visible to the authenticated lighting-system user.",
       "inputSchema": {
         "properties": {
@@ -4297,7 +5004,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "查询指定日期或最近 N 天的漏电记录。相对时间请直接传 last_days，不要调用其他时间或会话工具。summary 是不受日期范围限制的当前系统快照，日期范围内记录数见 rangeSummary。",
+      "description": "已弃用的兼容入口，实际数据源是单灯告警，并非漏电专表。新请求必须使用 smartlight_lamp_alarm_list；自然语言“漏电”不得选择本工具。",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -4377,7 +5084,7 @@
         "title": "smartlight_leakage_summaryDictOutput",
         "type": "object"
       },
-      "title": "查询照明漏电记录"
+      "title": "兼容旧入口：查询单灯告警"
     },
     {
       "annotations": {
@@ -4763,7 +5470,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "分析指定日期或最近 N 天的漏电记录，返回日期趋势以及灯杆、道路、告警类型和状态排行。未传日期时默认最近 30 天；最多分析 500 条，不混入系统首页的全局实时计数。",
+      "description": "已弃用的兼容入口，实际分析单灯告警。新请求必须使用 smartlight_lamp_alarm_analysis；自然语言“漏电”不得选择本工具。",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -4836,7 +5543,7 @@
         "title": "smartlight_leakage_analysisDictOutput",
         "type": "object"
       },
-      "title": "分析照明漏电记录"
+      "title": "兼容旧入口：分析单灯告警"
     },
     {
       "annotations": {
@@ -4845,7 +5552,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 alarm_analysis、leakage_analysis、asset_inventory 或 inspection_progress。设施清单必须传 asset_type；巡检报告必须传 task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。",
+      "description": "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 alarm_analysis、lamp_alarm_analysis、asset_inventory 或 inspection_progress。设施清单必须传 asset_type；巡检报告必须传 task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。leakage_analysis 仅是单灯告警报告的旧兼容别名，不得用于自然语言漏电请求。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。",
       "inputSchema": {
         "properties": {
           "alarm_state": {
@@ -4982,6 +5689,7 @@
           "report_type": {
             "enum": [
               "alarm_analysis",
+              "lamp_alarm_analysis",
               "leakage_analysis",
               "asset_inventory",
               "inspection_progress"

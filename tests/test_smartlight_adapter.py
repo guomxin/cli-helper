@@ -22,10 +22,16 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
+    SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY,
+    SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY,
     SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
+    SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY,
+    SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
     SmartlightAlarmActionOutcomeUnknown,
@@ -36,6 +42,7 @@ from bscli.adapters.smartlight import (
     SmartlightSessionCheckUnavailable,
     _normalize_alarm,
     _resolve_date_range,
+    _resolve_survey_time_range,
     build_smartlight_capability_registry,
     commit_smartlight_alarm_remark_update,
     commit_smartlight_alarm_work_area_revoke,
@@ -283,7 +290,7 @@ class SmartlightAdapterTests(unittest.TestCase):
             worker,
             {"task_name": "夜巡", "state": 2, "page": 1, "size": 10},
         )
-        leakage = self.adapter.invoke_capability(
+        compatibility_alarm_list = self.adapter.invoke_capability(
             SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
             worker,
             {"start_date": "2026-08-01", "end_date": "2026-08-11"},
@@ -297,6 +304,7 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         self.assertEqual(lamp_posts["items"][0]["code"], "LP-001")
         self.assertEqual(alarms["summary"]["untreated"], 2)
+        self.assertEqual(alarms["alarmSource"], "rtu")
         self.assertEqual(alarms["sort"]["field"], "occurredAt")
         self.assertEqual(alarms["sort"]["scope"], "downstream_global")
         self.assertTrue(alarms["sort"]["verified"])
@@ -333,22 +341,20 @@ class SmartlightAdapterTests(unittest.TestCase):
             tasks["items"][0]["progressScope"],
             "downstream_reported_independent_metric",
         )
-        self.assertEqual(leakage["summary"]["untreated"], 1)
-        self.assertEqual(leakage["rangeSummary"], {"recordTotal": 1})
-        self.assertFalse(leakage["summaryScope"]["dateRangeApplied"])
-        self.assertEqual(leakage["dateRange"]["source"], "explicit")
-        self.assertEqual(leakage["items"][0]["value"], 12)
+        self.assertTrue(compatibility_alarm_list["deprecated"])
+        self.assertEqual(
+            compatibility_alarm_list["canonicalTool"],
+            "smartlight_lamp_alarm_list",
+        )
+        self.assertEqual(compatibility_alarm_list["alarmSource"], "single_lamp")
+        self.assertEqual(
+            compatibility_alarm_list["items"][0]["alarmType"],
+            "异常亮灯",
+        )
+        self.assertNotIn("value", compatibility_alarm_list["items"][0])
         self.assertTrue(
             all("x-Authentication-Token" in headers for headers in worker.api_headers)
         )
-        count_request = next(
-            item
-            for item in worker.api_requests
-            if item["path"].endswith("/lHisHitchAlarm/getCountDataByCondition")
-        )
-        count_query = json.loads(parse_qs(count_request["body"])["json"][0])
-        self.assertEqual(count_query["_timebegin_lastDate"], "")
-        self.assertEqual(count_query["_timeend_lastDate"], "")
         task_request = next(
             item
             for item in worker.api_requests
@@ -356,6 +362,73 @@ class SmartlightAdapterTests(unittest.TestCase):
         )
         task_query = json.loads(parse_qs(task_request["body"])["json"][0])
         self.assertEqual(task_query["_taskState"], 2)
+
+    def test_runtime_lamp_alarm_and_survey_capabilities_use_observed_contracts(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        runtime = self.adapter.invoke_capability(
+            SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY, worker, {}
+        )
+        rtus = self.adapter.invoke_capability(
+            SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
+            worker,
+            {"state": "offline", "page": 1, "size": 20},
+        )
+        lamps = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY,
+            worker,
+            {"controller_state": "offline", "page": 1, "size": 20},
+        )
+        lamp_alarms = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
+            worker,
+            {"last_days": 30, "page": 1, "size": 20},
+        )
+        lamp_analysis = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY,
+            worker,
+            {"last_days": 30},
+        )
+        survey = self.adapter.invoke_capability(
+            SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY,
+            worker,
+            {
+                "rtu_id": "rtu-1",
+                "start_time": "2026-08-10 00:00",
+                "end_time": "2026-08-10 23:59",
+            },
+        )
+
+        self.assertEqual(runtime["scope"], "authenticated_user_runtime_pages")
+        self.assertEqual(runtime["rtu"]["total"], 29)
+        self.assertEqual(runtime["singleLamp"]["controllerTotal"], 118)
+        self.assertEqual(rtus["items"][0]["state"], "离线")
+        self.assertEqual(rtus["items"][0]["telemetry"]["phaseVoltage"]["a"], 220.1)
+        self.assertFalse(lamps["items"][0]["controllerOnline"])
+        self.assertEqual(lamps["items"][0]["lamps"][0]["effect"], "主道灯")
+        self.assertEqual(lamp_alarms["alarmSource"], "single_lamp")
+        self.assertEqual(lamp_alarms["items"][0]["alarmType"], "异常亮灯")
+        self.assertEqual(lamp_analysis["topAlarmTypes"][0]["value"], "异常亮灯")
+        self.assertTrue(survey["resolved"])
+        self.assertEqual(survey["items"][0]["phaseVoltage"]["a"], 220.1)
+        self.assertEqual(survey["items"][0]["leakCurrents"], [0.02, 0.01])
+
+        request_by_path = {item["path"]: item for item in worker.api_requests}
+        rtu_query = json.loads(
+            parse_qs(request_by_path["/smartlight/rRtu/getRtusByConditionNew"]["body"])[
+                "json"
+            ][0]
+        )
+        self.assertEqual(rtu_query["filterParam"], "NoOnlineWithNoHandle")
+        survey_query = json.loads(
+            parse_qs(
+                request_by_path[
+                    "/smartlight/rHisCoplogPhase/getDataByCondition"
+                ]["body"]
+            )["json"][0]
+        )
+        self.assertEqual(survey_query["rtuId"], "rtu-1")
+        self.assertEqual(survey_query["_timebegin_addDateTime"], "2026-08-10 00:00")
 
     def test_alarm_list_uses_downstream_time_sort_and_reports_latest_ties(self):
         worker = FakeSmartlightWorker(authenticated=True)
@@ -460,6 +533,30 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(end, "2026-08-12")
         self.assertEqual(source, "last_days")
         self.assertEqual(last_days, 30)
+
+    def test_survey_range_defaults_to_24_hours_and_rejects_more_than_7_days(self):
+        start, end, source = _resolve_survey_time_range(
+            {},
+            now=datetime(
+                2026,
+                8,
+                20,
+                12,
+                30,
+                tzinfo=timezone(timedelta(hours=8)),
+            ),
+        )
+
+        self.assertEqual(start, "2026-08-19 12:30")
+        self.assertEqual(end, "2026-08-20 12:30")
+        self.assertEqual(source, "default_last_24_hours")
+        with self.assertRaisesRegex(ValueError, "cannot exceed 7 days"):
+            _resolve_survey_time_range(
+                {
+                    "start_time": "2026-08-01 00:00",
+                    "end_time": "2026-08-09 00:00",
+                }
+            )
 
     def test_inspection_state_string_is_normalized_before_downstream_request(self):
         worker = FakeSmartlightWorker(authenticated=True)
@@ -586,10 +683,10 @@ class SmartlightAdapterTests(unittest.TestCase):
     def test_registry_contains_read_and_reversible_write_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 20)
+        self.assertEqual(len(capabilities), 26)
         self.assertEqual(
             sum(spec.effect == "read" for spec in capabilities),
-            12,
+            18,
         )
         self.assertEqual(
             {
@@ -1164,8 +1261,73 @@ class FakeSmartlightWorker:
                     }
                 ]
             )
+        if path.endswith("/rRtu/getRtuStateCountDataByConditionNew"):
+            return _response(
+                {
+                    "rAllCount": 29,
+                    "rOnlineCount": 0,
+                    "rNoOnlineWithNoHandleCount": 27,
+                    "rPowerOutageCount": 1,
+                    "rDisableCount": 1,
+                    "rOnlineWithEleCount": 0,
+                    "rOnlineWithOutEleCount": 0,
+                    "rOnlineNoCalCount": 0,
+                }
+            )
+        if path.endswith("/lLamppost/newGetTotalStatus"):
+            return _response(
+                {
+                    "AllControlCount": 118,
+                    "OnlineCount": 0,
+                    "OfflineCount": 118,
+                    "AlonelampCount": 178,
+                    "OpenLampCount": 0,
+                    "CloseLampCount": 0,
+                    "LampPostCount": 116,
+                    "SingleLampPostCount": 56,
+                    "DoubleLampPostCount": 57,
+                    "TribleLampPostCount": 2,
+                    "OtherLampPostCount": 3,
+                    "alarmLampPostCount": 0,
+                }
+            )
         if path.endswith("/lLamppost/getLampDetialList"):
-            return _response({"list": [], "totalCount": 116})
+            return _response(
+                {
+                    "list": [
+                        {
+                            "LampPostID": "lp-runtime-1",
+                            "LampPostCode": "LP-RUNTIME-001",
+                            "LampPostType": "单臂灯",
+                            "StreetName": "测试路",
+                            "StreetSideName": "北侧",
+                            "WorkAreaName": "实验室工区",
+                            "controlCabinetCode": "CAB-001",
+                            "controlCabinetName": "一号箱变",
+                            "rtuCode": "RTU-001",
+                            "rtuName": "一号 RTU",
+                            "AloneLamps": [
+                                {
+                                    "AloneLampId": "lamp-1",
+                                    "aloneLampControlId": "controller-1",
+                                    "LampNumber": 1,
+                                    "LampCode": "1",
+                                    "Effect": "主道灯",
+                                    "IsOnline": False,
+                                    "IsSwitchOn": False,
+                                    "copDate": "2026-08-10 10:00:00",
+                                    "U": 0,
+                                    "I": 0,
+                                    "Pf": 0,
+                                    "Ap": 0,
+                                    "hitchAlarms": None,
+                                }
+                            ],
+                        }
+                    ],
+                    "totalCount": 116,
+                }
+            )
         if path.endswith("/lLamppost/getDataByConditionForFacilityEx"):
             return _response(
                 {
@@ -1222,6 +1384,45 @@ class FakeSmartlightWorker:
                             "controlCabinetName": "一号箱变",
                             "groupName": "测试组",
                             "runningStateName": "在线",
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/rRtu/getRtusByConditionNew"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "rtuId": "rtu-1",
+                            "rtuCode": "RTU-001",
+                            "rtuName": "一号 RTU",
+                            "rtuProductModelId": "model-1",
+                            "rtuProductModelName": "RTU-X",
+                            "controlCabinetId": "cab-1",
+                            "controlCabinetName": "一号箱变",
+                            "workAreaId": "work-area-1",
+                            "workAreaName": "实验室工区",
+                            "rtuGroupId": "group-1",
+                            "rtuGroupName": "测试组",
+                            "rtuRunningState": 4,
+                            "lastOnlineTime": "2026-08-10 09:59:00",
+                            "coplogTime": "2026-08-10 10:00:00",
+                            "isAlarm": 1,
+                            "isOpen": 0,
+                            "isEnabled": 1,
+                            "workModels": ["全夜灯"],
+                            "coplogPhase": {
+                                "strRtuScaleU1": 220.1,
+                                "strRtuScaleU2": 220.2,
+                                "strRtuScaleU3": 220.3,
+                                "strRtuScaleIsp1": 1.1,
+                                "strRtuScaleIsp2": 1.2,
+                                "strRtuScaleIsp3": 1.3,
+                                "temperature": 25.5,
+                                "humidity": 48,
+                                "relayLeakCurrents": [0.02, 0.01],
+                            },
                         }
                     ],
                     "total": 1,
@@ -1374,18 +1575,51 @@ class FakeSmartlightWorker:
                     "total": 1,
                 }
             )
+        if path.endswith("/rHisCoplogPhase/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "hisCoplogPhaseId": "survey-1",
+                            "rtuId": "rtu-1",
+                            "rtuCode": "RTU-001",
+                            "rtuName": "一号 RTU",
+                            "addDateTime": "2026-08-10 10:00:00",
+                            "rtuTime": "2026-08-10 09:59:58",
+                            "strRtuScaleU1": 220.1,
+                            "strRtuScaleU2": 220.2,
+                            "strRtuScaleU3": 220.3,
+                            "strRtuScaleIsp1": 1.1,
+                            "strRtuScaleIsp2": 1.2,
+                            "strRtuScaleIsp3": 1.3,
+                            "APowerFactor": 0.91,
+                            "BPowerFactor": 0.92,
+                            "CPowerFactor": 0.93,
+                            "temperature": 25.5,
+                            "humidity": 48,
+                            "relayLeakCurrents": [0.02, 0.01],
+                            "onRelayIds": [1],
+                            "offRelayIds": [2],
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
         if path.endswith("/lHisHitchAlarm/getDataByCondition"):
             return _response(
                 {
                     "list": [
                         {
-                            "hisHitchAlarmId": "leak-1",
+                            "hisHitchAlarmId": "lamp-alarm-1",
                             "alarmAddDate": "2026-08-10 10:00:00",
+                            "lastDate": "2026-08-10 10:05:00",
                             "lampPostCode": "LP-001",
-                            "leakageCurrent": 12,
-                            "leakageVoltage": 220,
-                            "hitchDicName": "漏电告警",
-                            "alarmState": 0,
+                            "lampEffectName": "主道灯",
+                            "streetName": "测试路",
+                            "controlCabinetName": "一号箱变",
+                            "workAreaName": "实验室工区",
+                            "hitchDicName": "异常亮灯",
+                            "alarmState": 1,
                         }
                     ],
                     "total": 1,

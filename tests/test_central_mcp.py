@@ -189,6 +189,12 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("taihua_session_status", names)
         self.assertIn("taihua_session_login", names)
         self.assertIn("smartlight_system_overview", names)
+        self.assertIn("smartlight_runtime_overview", names)
+        self.assertIn("smartlight_rtu_status_list", names)
+        self.assertIn("smartlight_lamp_status_list", names)
+        self.assertIn("smartlight_lamp_alarm_list", names)
+        self.assertIn("smartlight_lamp_alarm_analysis", names)
+        self.assertIn("smartlight_rtu_survey_records", names)
         self.assertIn("smartlight_lamppost_list", names)
         self.assertIn("smartlight_alarm_list", names)
         self.assertIn("smartlight_alarm_remark_get", names)
@@ -242,7 +248,15 @@ class CentralMcpTests(unittest.TestCase):
             "last_days",
             smartlight_leakage_tool["inputSchema"]["properties"],
         )
-        self.assertEqual(smartlight_leakage_tool["title"], "查询照明漏电记录")
+        self.assertEqual(
+            smartlight_leakage_tool["title"],
+            "兼容旧入口：查询单灯告警",
+        )
+        self.assertIn("自然语言“漏电”不得选择本工具", smartlight_leakage_tool["description"])
+        smartlight_survey_tool = next(
+            tool for tool in tools if tool["name"] == "smartlight_rtu_survey_records"
+        )
+        self.assertIn("最长 7 天", smartlight_survey_tool["description"])
         smartlight_asset_tool = next(
             tool for tool in tools if tool["name"] == "smartlight_asset_search"
         )

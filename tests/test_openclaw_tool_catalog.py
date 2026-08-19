@@ -41,6 +41,26 @@ class OpenClawToolCatalogTests(unittest.TestCase):
             expected_agent_tools,
         )
 
+        tools_by_name = {tool["name"]: tool for tool in committed["tools"]}
+        self.assertTrue(
+            {
+                "smartlight_runtime_overview",
+                "smartlight_rtu_status_list",
+                "smartlight_lamp_status_list",
+                "smartlight_lamp_alarm_list",
+                "smartlight_lamp_alarm_analysis",
+                "smartlight_rtu_survey_records",
+            }.issubset(tools_by_name)
+        )
+        self.assertIn(
+            "自然语言“漏电”不得选择本工具",
+            tools_by_name["smartlight_leakage_summary"]["description"],
+        )
+        self.assertIn(
+            "设备遥测",
+            tools_by_name["smartlight_rtu_survey_records"]["description"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
