@@ -1,325 +1,237 @@
-# AgentBridge Interactions for OpenClaw
+# OpenClaw 的 AgentBridge 交互适配器
 
-This native OpenClaw plugin recognizes `agentbridge.interaction.v1` envelopes
-returned by AgentBridge MCP tools and renders trusted card buttons in private
-conversations.
+`agentbridge-interactions` 把中心 AgentBridge 的远程 MCP、可信交互和 Task Hub 接入
+OpenClaw。它是宿主兼容层，不包含协同办公、泰华、语雀或照明系统的业务实现，也不修改
+OpenClaw 核心源码。
 
-Version 0.4 supports multiple messaging identities and the independent Agent
-Workspace in one OpenClaw Gateway. It
-registers the complete AgentBridge MCP catalog as native OpenClaw tools and
-selects an environment-backed Bearer token from trusted runtime sender context,
-never from model tool arguments. See
-[`docs/architecture/openclaw-multi-user-identity-routing.md`](../../docs/architecture/openclaw-multi-user-identity-routing.md)
-for provisioning, migration, and the remaining real second-user acceptance.
+当前版本：`0.4.48`
 
-AgentBridge also publishes a standard MCP Apps resource. This plugin is the
-compatibility adapter for OpenClaw versions that do not yet provide equivalent
-MCP Apps rendering, private-session binding, polling, and resume behavior; it
-is not a dependency of the central OA business implementation. The plugin can
-read the full envelope from host-private
-`CallToolResult._meta["io.agentbridge/interaction"]`, while the model-visible
-result contains only the redacted interaction status. OpenClaw 2026.7.1 drops
-top-level MCP result `_meta` while materializing remote tools, so the adapter
-also recognizes a strictly validated public interaction reference and uses its
-authenticated background MCP client to retrieve the private envelope. This
-fallback is accepted only from the configured AgentBridge MCP server and never
-copies the trusted URL into model-visible content.
+兼容基线：OpenClaw `2026.7.1`
+完整身份设计见 [智能体宿主多用户身份路由](../../docs/架构设计/智能体宿主多用户身份路由.md)。
 
-Security behavior is intentionally fail closed:
+## 一、职责边界
 
-- card URLs are accepted only from `allowedCardOrigins`;
-- card URLs are removed before tool results are returned to the model;
-- interactions nested in operation audit history are sanitized but never
-  captured, polled, or delivered as the current card;
-- identity-routed tools are available only to configured trusted sender IDs;
-- one OpenClaw session cannot switch to another sender identity;
-- polling and resume use the same per-user client that captured the interaction;
-- legacy global `agentbridge__...` tools are blocked in identity-routing mode;
-- cards are not rendered in group, channel, or room sessions;
-- credentials, business fields, cookies, and authorization decisions remain in
-  AgentBridge trusted pages;
-- repeated OA, Taihua, or Yuque session-login calls for the same bound session and unchanged
-  authentication contract reuse the existing unexpired credential card and
-  interaction, including while the trusted page is processing;
-- after a successful credential resume that explicitly returns
-  `nextAction.type=retry_original_request`, a login-blocked OA workflow-list or
-  Taihua log/project or Yuque knowledge read is replayed once through the same per-user MCP client
-  and delivered directly to the originating private channel; login-first
-  requests can infer only the registered read intents from the current user message;
-- write tools are never captured or replayed by login continuation;
-- background polling resumes a completed interaction once and delivers the
-  next trusted card or a fixed terminal-status message through the original
-  private channel without involving the model; an opaque heartbeat is retained
-  only as a delivery fallback.
+插件负责：
 
-Version 0.3 added the first persistent Task Hub adapter. The plugin lazily creates
-one server-owned task when an AgentBridge business tool is first called, reuses
-the same task for tools in the same OpenClaw run, and attaches the opaque task
-reference through host-private MCP metadata rather than model arguments.
-Operation and interaction IDs are observed back into AgentBridge after each
-call. On `gateway_start`, each configured identity independently restores its
-own pending interactions, original private route, polling, and card delivery
-from AgentBridge. Task coordination failures are logged but do not replace a
-valid legacy-system tool result.
+- 根据 Telegram、微信和 Agent Workspace 的可信宿主上下文选择 AgentBridge 身份；
+- 为不同用户使用不同的环境变量 Token；
+- 按 Token scope 裁剪模型可见工具；
+- 把认证卡、字段卡和授权卡展示到合格端点；
+- 有界轮询交互状态并在完成后续办；
+- 同步任务文本、状态、图片和文件；
+- 在登录完成后安全恢复允许自动重放的只读请求；
+- 保持网页拉取端、Telegram 和微信各自正确的投递方式。
 
-Version 0.4 adds two host-only web integration controls. The
-`/agentbridge link <code>` command confirms a short-lived Agent Workspace
-enrollment through the already trusted Telegram or WeChat identity. The
-`agentbridge.workspace.bind` Gateway method redeems a one-use server grant and
-pins the synthetic web session to the only MCP identity that can redeem it.
-Version 0.4.3 also treats that process-level pin as a cache: if Agent Runtime
-starts after the pin has disappeared, the plugin calls the host-private,
-read-only `agentbridge_host_workspace_session_resolve` tool with each
-configured Bearer identity and restores only the identity that centrally owns
-the exact web session. Browser or model input cannot select the identity.
-Version 0.4.4 adds endpoint-specific execution-authorization presentations and
-an acknowledged notification outbox pump. A final authorization can be visible
-in Agent Workspace, Telegram, and WeChat at the same time. Every endpoint gets
-its own URL and card session, while AgentBridge atomically accepts only the
-first valid decision. Non-origin channels never resume the business task; the
-originating session remains the sole commit/verify coordinator. Failed channel
-deliveries are leased and retried at most five times.
+插件不负责：
 
-Version 0.4.8 adds an ordered, host-private display timeline for non-sensitive
-user and assistant text. Bound Telegram and WeChat sessions publish text with
-stable idempotency keys; duplicate OpenClaw outbound hooks share one publication.
-Agent Workspace appends its own messages through the BFF, reads remote messages
-through SSE, and reuses one stable DOM node for each task card. Credentials,
-trusted-card field values, tool arguments/results, system prompts, and complete
-OpenClaw transcripts are never copied into this timeline. Set
-`syncTimeline=false` only to disable messaging-endpoint publication during
-diagnosis; the default is `true`.
+- 保存或解释用户密码、验证码、Cookie 和业务字段；
+- 实现目标系统流程、表单填充或提交逻辑；
+- 让模型直接调用内部 commit、续办和 Task Hub 工具；
+- 绕过 AgentBridge Token scope；
+- 为 OpenClaw 修补网络代理、通道实现或核心源码。
 
-Version 0.4.9 gives Agent Workspace, Telegram, and WeChat the same agent-facing
-catalog: read-only tools, every governed prepare flow, and trusted session-login
-entries. Direct commit/save/approve/revoke/create tools and
-`agentbridge_interaction_resume` remain internal. After a user completes the
-trusted field and authorization surfaces, the originating coordinator resumes
-the frozen interaction and the central service rechecks the Bearer scopes before
-commit/verify.
+## 二、模型工具面
 
-Version 0.4.10 hardened cross-end coordination under multiple identities. Empty
-notification claims use a read-only fast path, each identity polls independently,
-and idle polling backs off from two to ten seconds before resetting immediately
-when work appears. Timeline publication no longer blocks inbound chat hooks and
-retries transient failures with one stable idempotency key. The central MCP logs
-host-control calls slower than one second without recording message content or
-credentials.
+中心导出 84 个可代理工具描述。插件只向模型注册：
 
-Version 0.4.13 loads a scope-aware tool profile for every configured identity
-and keeps the same reduced catalog across that user's web and chat endpoints.
-Version 0.4.14 adds bounded cross-end reference resolution. Only prompts that
-explicitly mention another endpoint and use a referential phrase trigger a
-host-private read of up to 12 messages from the same user's other endpoints
-within six hours. The current endpoint is excluded, injected text is capped at
-6,000 characters and marked as untrusted conversation data, and no execution
-authority moves between sessions. Ordinary prompts do not perform this read.
+- 读取工具；
+- 受治理的 `prepare` 或登录入口；
+- 一个本地身份状态工具。
 
-Version 0.4.15 keeps control-plane `webchat`/`http` inspection of an existing
-channel session from permanently poisoning that channel's pinned identity. The
-inspecting invocation still fails closed, while a real account change on the
-same channel remains a sticky identity conflict.
+当前模型可见工具共 63 个。内部 commit、可信交互续办、任务协调、端点管理和文件投递工具保持
+宿主私有。即使工具在模型目录中可见，中央服务仍按当前用户 Token scope 逐次授权。
 
-Version 0.4.16 adds server-backed cross-endpoint task continuation. Explicit
-continuation requests resolve only tasks owned by the current identity, persist
-ambiguous numbered choices, inject an authoritative non-sensitive task snapshot,
-reuse pending trusted interactions, and prevent terminal or running tasks from
-starting a duplicate business operation. Explicit follow-up work reuses the
-original task ID while AgentBridge operation idempotency remains authoritative.
+插件工具被限制性工具配置过滤时，需要显式加入：
 
-Version 0.4.22 makes everyday continuation references natural. Requests such as
-"continue the task I just started on the web" select the most recent same-user
-task from that endpoint without asking the user for an internal task number.
-Ambiguous older references are clarified with a human-readable title and time;
-internal task IDs remain an audit and idempotency key rather than user-facing UX.
+```powershell
+openclaw config set tools.alsoAllow '["agentbridge-interactions"]' --strict-json
+```
 
-Version 0.4.23 treats workflow revocation as a separate user-visible task and
-card. It may reference a workflow created by an earlier submission task, but it
-does not replace that submission card. Users can say "revoke the business-trip
-request I just submitted"; OpenClaw resolves the recent sent workflow and asks
-only for a human-readable title or date when several items remain plausible.
-Opaque affair, process, and task IDs remain internal, while the final revoke
-still requires a dedicated trusted authorization.
+不要使用 `group:plugins` 扩大全部插件权限。若 `tools.alsoAllow` 已有其他条目，应合并而不是覆盖。
 
-Version 0.4.24 treats Agent Workspace as a pull-based Task Hub client. Trusted
-cards and status updates remain available through its SSE timeline without an
-impossible `webchat` direct-send attempt or a no-op model heartbeat. Telegram
-and WeChat retain direct delivery, while login completion may still resume the
-original request. The host also suppresses a model-requested duplicate
-`agentbridge_interaction_get` in the same run, without affecting background
-polling, later explicit redisplay, or metadata recovery.
+## 三、安装
 
-Version 0.4.26 adds the governed OA monthly-attendance confirmation entry tool
-and keeps the 0.4.25 WeChat direct-delivery activity guard. A stale per-message
-WeChat context token now causes one delivery attempt followed by a durable
-`deferred` acknowledgement instead of five rapid retries and a permanent
-failure. The next inbound message from the same trusted WeChat endpoint
-reactivates only that endpoint's deferred notifications with a fresh attempt
-budget. Telegram retry behavior and Workspace SSE delivery are unchanged.
-
-Version 0.4.31 keeps image-plus-text certificate requests in one Task Hub task,
-deduplicates repeated prepared-file results, and retries one transient native
-attachment failure before sending the governed download-link fallback. The host
-reports each file's actual attachment, fallback-link, or failed outcome to the
-central task, so both the model result and Agent Workspace show exact delivery
-counts instead of equating file preparation with endpoint receipt.
-
-Version 0.4.32 persists each Agent Workspace user-turn reference in the central
-store before OpenClaw starts tool execution. Task creation therefore converges
-on one central task even when Gateway binding and business tools run in separate
-plugin instances. Reverse actions such as workflow revocation retain their own
-task scope and cannot be folded into the original request.
-
-## Local installation
-
-The commands below retain the legacy single-user MCP configuration for existing
-installations. Do not use one global `mcp.servers.agentbridge` Bearer token for
-multiple messaging users. Multi-user deployments configure plugin `mcpUrl` plus
-`identityBindings`, then remove the global MCP server entry.
+本地链接安装：
 
 ```powershell
 openclaw plugins install --link D:\Codes\CLIExp\integrations\openclaw-agentbridge
 openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
-openclaw config set "mcp.servers.agentbridge.timeout" 150
+openclaw config set "plugins.entries.agentbridge-interactions.config.mcpUrl" https://10.10.50.213:8790/mcp
 openclaw config set "plugins.entries.agentbridge-interactions.config.allowedCardOrigins[0]" https://10.10.50.213:8780
-openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
+openclaw config set tools.alsoAllow '["agentbridge-interactions"]' --strict-json
 openclaw plugins enable agentbridge-interactions
 openclaw gateway restart
 openclaw plugins inspect agentbridge-interactions --runtime --json
-openclaw gateway status --deep --require-rpc
+openclaw gateway status --deep --require-rpc --json
 ```
 
-Restricted profiles such as `tools.profile: "coding"` do not expose native
-third-party plugin tools by default. Keep the restricted profile and add only
-`agentbridge-interactions` through `tools.alsoAllow`; do not use
-`group:plugins`. If `tools.alsoAllow` already contains other entries, merge
-this plugin id into the existing array instead of replacing it. A plugin can
-report `loaded` while all of its tools are still filtered, so acceptance must
-also confirm that `agentbridge_identity_status` is visible in a real bound
-private session.
+`NODE_EXTRA_CA_CERTS` 必须写入 OpenClaw 持久 `env.vars`，不能只在临时 PowerShell 环境中设置。
+重建托管任务后，深度状态应在 `environmentValueSources` 中显示该变量。
 
-Linked plugin source changes require a real Gateway process restart. A config
-hot reload can leave Node's previously imported module in memory. Verify the
-startup log contains the expected plugin version, for example:
+源码链接并不意味着 Node 会自动重新加载模块。修改插件源码后必须完整重启 Gateway，并从启动
+日志核对实际版本：
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.32, ...)
+AgentBridge interaction plugin registered (version=0.4.48, ...)
 ```
 
-The CA setting must use OpenClaw's `env.vars` path rather than a temporary shell
-variable. After installing or rebuilding the managed task, deep status should
-list `NODE_EXTRA_CA_CERTS` under `environmentValueSources`; a real MCP read then
-proves that the restarted Node process trusts the internal CA.
+Windows 托管的 Gateway 重启可能超过两分钟。命令调用方超时不代表后台重启失败：
 
-On Windows, a managed `openclaw gateway restart` can legitimately take more
-than two minutes even when the command runner times out first. Wait at least
-120 seconds before diagnosing failure, and do not issue a second restart or
-kill Node processes during that window. Confirm the final listener, deep RPC
-status, and plugin-version log before taking recovery action.
+1. 等待至少 120 秒；
+2. 不要重复执行重启；
+3. 不要提前结束 Node 进程；
+4. 最终检查 18789 监听、深度 RPC 和插件版本日志。
 
-If a Node/NVM switch leaves the Windows Scheduled Task missing or an old
-Gateway process alive, repair the launcher and restart with:
+切换 Node/NVM 后若 Windows 计划任务丢失，使用：
 
 ```powershell
 openclaw gateway install --force --json
 openclaw gateway status --deep --require-rpc --json
 ```
 
-In legacy single-user mode the plugin reuses the configured
-`mcp.servers.agentbridge` endpoint and its environment-backed Authorization
-header. In multi-user mode it uses plugin `mcpUrl` only as an address and chooses
-the Authorization header from the bound sender's `tokenEnv`; it never stores or
-prints token values. The interaction record pins that client for background
-polling and resume.
+## 四、单用户与多用户配置
 
-Governed OA submissions can include browser setup, the
-multi-stage CAP4 send chain, and server-side readback, so the endpoint timeout
-must remain at least 150 seconds. A host timeout is not proof that OA rejected or
-accepted a write; reconcile the AgentBridge operation ledger and OA collections
-before any retry.
+### 4.1 单用户兼容模式
 
-Telegram receives a native Web App button when the trusted card uses HTTPS.
-Credential, business-input, and execution-authorization cards all use this
-embedded path. The same private message also includes a host-rendered
-"浏览器打开" URL button for Android Telegram clients that reject a user-installed
-internal CA in their embedded WebView. Both buttons carry the same short-lived
-trusted URL only in host presentation metadata; the URL remains absent from
-model-visible results. Private HTTP remains a portable-link fallback for local
-development only.
+旧的单用户安装可以让插件复用全局 `mcp.servers.agentbridge` 地址和环境变量授权头。
 
-Certificate files use a separate host-owned delivery path. After
-`oa_certificate_prepare_download` finishes the slow OA fetch, the plugin queues
-the prepared files per private session and sends each as an independent
-`mediaUrl` payload. One failed attachment therefore cannot suppress later files.
-If the channel adapter throws, the plugin immediately falls back to a text message
-containing the same short-lived prepared-file URL. Configure Telegram transport
-proxy and bounded retry in OpenClaw itself; this plugin does not patch OpenClaw
-source or retain files after the AgentBridge grant expires.
+```powershell
+openclaw config set "mcp.servers.agentbridge.url" https://10.10.50.213:8790/mcp
+openclaw config set "mcp.servers.agentbridge.timeout" 150
+```
 
-The official Tencent WeChat adapter exposes text and media delivery but no
-presentation renderer. For WeChat and any other adapter without
-`renderPresentation`, the trusted host appends the action label and short-lived
-HTTP(S) URL directly to the outbound text. The URL still never enters the model
-result, and Telegram continues to use native buttons. AgentBridge pages use a small self-hosted
-lifecycle bridge
-that signals ready, expand, and close without reading or forwarding form data.
-The plugin records the trusted private delivery route that initiated an
-interaction. After a trusted page is completed,
-background resume first sends the next trusted card directly through that same
-channel adapter, without exposing its URL or submitted values to the model.
-When no next card exists, success, rejection, expiry, and failure are reported
-as fixed host-owned status text through the same adapter.
+### 4.2 多用户模式
 
-A successful credential resume with
-`nextAction.type=retry_original_request` is the deliberate exception to the
-model-free terminal path. Registered OA workflow-list reads, Taihua
-`my/team work logs` or `project search` reads, and Yuque public-book, catalog,
-search, or selected-document reads retain only their allowlisted selectors,
-filters, dates, and pagination values. They drop the old idempotency key and
-replay once through the same identity-bound MCP client after login. Login-first
-intent inference is likewise restricted to named read collections that do not
-require unsafe parameter guessing. A successful replay is formatted for the
-corresponding business object and delivered directly to the original channel;
-a failed replay reports its error code.
+多用户部署不得共用一个全局 Bearer。配置一个 `mcpUrl` 和多条 `identityBindings`，每条绑定包含：
 
-No draft, approval, submission, meeting, revoke, or other write tool is eligible
-for automatic replay. Other credential continuations retain the one-time opaque
-agent wake fallback. Business-input and execution-authorization completion never
-infer login continuation.
+- 聊天通道；
+- 发送者或网页身份；
+- AgentBridge `userSubject`；
+- 保存 Token 的环境变量名 `tokenEnv`；
+- 允许卡片 Origin。
 
-If either direct path
-is unavailable, an opaque private-session heartbeat is used as a fallback. The
-fallback wake reason is hook-prefixed so OpenClaw does not gate it on a non-empty
-`HEARTBEAT.md`; the event still contains no submitted values, credentials, or
-trusted-card URL. `/agentbridge pending` remains a manual redraw fallback. Set
-`wakeAgentOnComplete=false` only when provider policy forbids background model
-wake-ups. Direct card and status delivery still work, but credential completion
-then requires the user or host to retry the original request.
+插件只把 `mcpUrl` 当作地址，根据可信发送者选择授权头；Token 值不写入配置、日志或模型上下文。
+启用多用户绑定后应删除带共享 Bearer 的全局 MCP 服务配置，避免形成第二个共享身份工具面。
 
-In a private conversation, `/agentbridge status` reports safe diagnostics and
-`/agentbridge pending` redraws the latest unexpired trusted interaction.
+同一私聊或 Workspace 会话一旦绑定身份就不能切换。未知身份只能看到
+`agentbridge_identity_status`，不能调用业务工具。
 
-For acceptance testing, use a real inbound message from the target private
-conversation. `openclaw agent --deliver` can execute the MCP tool and deliver
-the model's text while bypassing the normal inbound reply path that attaches a
-host presentation, so a text-only result from that command is not evidence that
-card rendering failed. If an interaction is already captured, use
-`/agentbridge pending` in the same private conversation to redraw it without
-creating a second operation.
+## 五、可信卡片投递
 
-`oa_session_status` live-verifies an active OA session but never creates a card.
-Its `checkedAt` value is the current liveness-check time; `lastVerifiedAt`
-remains the authentication epoch. `SESSION_CHECK_UNAVAILABLE` means retry
-without requesting credentials because the encrypted session is preserved. To
-exercise the authentication-card path, ask OpenClaw to log in to OA so it calls
-`oa_session_login`. OpenClaw 2026.7.1 does not include the conversation key in
-tool-result middleware context, so version 0.1.1 binds the private session
-during `before_tool_call` and consumes that binding by `toolCallId`. Missing or
-non-private bindings still fail closed.
+### 5.1 Telegram
 
-After credential login completes, the plugin checks for pending trusted cards
-before the status reply, after that reply, and again after the original-request
-continuation heartbeat. A field or confirmation card created by that heartbeat
-is delivered directly even when the continuation has a new run id; a card
-already delivered through the normal reply path is not sent twice.
+HTTPS 可信卡优先显示 Telegram Web App 按钮。为兼容不信任用户安装内部 CA 的 Android
+WebView，同一消息还可以显示“浏览器打开”入口。两个按钮都使用相同短期 URL，URL 只存在于
+宿主展示元数据中，不进入模型结果。
+
+### 5.2 微信
+
+腾讯微信适配器支持文本和媒体投递，但没有统一的卡片渲染器。插件把动作标签和短期 HTTPS
+链接追加到宿主生成的出站文本；链接仍不进入模型。微信通道不可用时只报告通道错误，不得把
+结果误投到 Telegram 或其他用户。
+
+### 5.3 Agent Workspace
+
+Workspace 是拉取式 Task Hub 客户端，通过 SSE 和历史接口获取有序文本、状态、卡片、图片和
+文件。插件不得把 Workspace 当成聊天通道直推，也不得因为网页拉取失败额外唤醒模型。
+
+同一可信交互可以在多个合格端展示，但服务端只能完成一次。完成后其他端同步终态，旧卡不会
+长期停留在“等待用户”。
+
+## 六、完成后的续办
+
+可信页面完成后：
+
+1. 插件先读取服务端交互终态；
+2. 若产生下一张可信卡，直接投递到原端点和其他合格端点；
+3. 若业务已经结束，使用宿主固定文本投递成功、拒绝、过期或失败；
+4. 需要模型继续理解结果时，使用不含秘密的私有唤醒事件；
+5. 禁止同一轮重复调用 `agentbridge_interaction_get`。
+
+### 6.1 登录后自动恢复
+
+登录成功时，以下只读请求可以按白名单重放一次：
+
+- 协同办公的已知流程集合读取；
+- 泰华个人/团队日志和项目搜索；
+- 语雀知识库、目录、搜索和选中文档读取；
+- 照明系统的已注册只读查询。
+
+只保留允许的过滤条件、日期和分页值，丢弃旧幂等键。重放仍使用原身份 MCP 客户端，结果回到
+原任务和原通道。
+
+草稿、审批、正式提交、会议、撤销和其他写工具绝不自动重放。字段卡和授权卡完成后也不能推断
+成“重新登录后自动提交”。
+
+## 七、跨端任务与时间线
+
+插件在调用业务工具前把宿主请求绑定到中央 `AgentTask`：
+
+- 网页、Telegram 和微信使用同一用户主体时可以继续同一任务；
+- 文本、卡片和文件按服务端序号写入同一时间线；
+- 相对表达“刚才、上一个、继续上面的任务”由受控任务引用解析；
+- 多个候选任务时要求用户选择，不能猜测；
+- 撤销是独立任务，通过业务对象关联原提交任务，不复用原提交卡片；
+- 同一轮重复工具调用和重复卡片投递由幂等键与投递记录抑制。
+
+网页刷新后从中央时间线恢复，不依赖浏览器内存。历史文件到期后保留“已过期”卡片，并可通过
+新的准备操作重新生成下载入口。
+
+## 八、文件交付
+
+证书扫描件等文件由 AgentBridge 准备后绑定当前任务：
+
+- 多文件使用一次批量准备调用；
+- 每个文件独立投递，一个失败不阻断后续文件；
+- Telegram/微信媒体发送失败时回退到同一短期下载链接；
+- Workspace 展示文件名、大小、状态、到期时间和重新生成入口；
+- 二进制不进入模型文本上下文；
+- 插件不在 AgentBridge 授权过期后自行保留文件。
+
+通道代理和重试由 OpenClaw 配置负责，插件不修改网络和代理设置。
+
+## 九、超时与结果对账
+
+协同办公提交可能包含浏览器准备、CAP4 多阶段发送和权威回读，MCP 超时应至少为 150 秒。
+
+宿主超时不等于下游接受或拒绝。任何已经越过提交边界的超时必须：
+
+1. 查询 AgentBridge 操作账本；
+2. 查询下游已发、待办或详情等权威集合；
+3. 能确认时返回明确结果；
+4. 不能确认时返回 `RESULT_UNKNOWN`；
+5. 在未对账前不自动重试。
+
+## 十、诊断命令
+
+私聊中：
+
+- `/agentbridge status`：查看不含秘密的身份和运行诊断；
+- `/agentbridge pending`：重新显示当前未过期可信交互。
+
+`openclaw agent --deliver` 可以执行工具和发送模型文本，但它绕过正常入站回复路径，因此该命令
+只出现文本不能证明卡片渲染失败。卡片验收应使用目标私聊的真实入站消息，或在同一私聊执行
+`/agentbridge pending`。
+
+`oa_session_status` 只检查会话，不创建认证卡。`SESSION_CHECK_UNAVAILABLE` 表示保留会话并稍后
+重试，不能要求用户重新输入密码。要测试登录卡，应明确请求登录，使模型调用 `oa_session_login`。
+
+## 十一、测试与打包
+
+```powershell
+Set-Location D:\Codes\CLIExp\integrations\openclaw-agentbridge
+npm test
+npm run pack:check
+```
+
+验收至少确认：
+
+- 包版本、入口常量和运行时日志一致；
+- CLI 与 Gateway 版本一致且深度 RPC 正常；
+- 插件状态为 `loaded`，无版本漂移；
+- 两个身份使用不同 Token 和工具范围；
+- 未绑定用户不能调用业务工具；
+- 三类卡片在 Telegram、微信和 Workspace 正确展示；
+- 登录后只读请求自动恢复，写请求不自动重放；
+- 网页拉取不触发聊天直推或重复模型唤醒；
+- 同一任务文本、卡片和文件不重复、不乱序、不串用户。

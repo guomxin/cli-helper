@@ -1,100 +1,104 @@
-# AgentBridge CLI Helper
+# AgentBridge 智能体能力桥接平台
 
-Python-first, non-intrusive adapters that expose legacy B/S system capabilities
-to agents without modifying the target system.
+AgentBridge 使用 Python 构建，以非侵入方式把遗留 B/S 系统封装为智能体可调用的业务能力，
+不修改目标系统源码、二进制和数据库，也不把浏览器、Cookie、密码或底层接口暴露给智能体。
 
-The active runtime is central AgentBridge:
+当前运行形态是中心化 AgentBridge：
 
-- Versioned business capabilities shared by CLI and MCP
-- Per-user managed Playwright profiles and HTTP sessions
-- Trusted authentication, business-field, and write-authorization cards
-- A Credential Broker that keeps credentials outside model-visible channels
-- A durable operation ledger with idempotency and explicit outcome states
-- A persistent Task Hub that links host tasks, operations, trusted interactions,
-  client endpoints, subscriptions, and notification outbox records
-- Seeyon OA, API-first Taihua work logs, trusted-browser Yuque knowledge access,
-  and Smartlight laboratory monitoring with governed RTU write workflows under
-  one multi-system runtime
+- CLI、远程 MCP 和 OpenClaw 共用同一业务能力内核；
+- 每个用户拥有独立的系统身份绑定、会话、浏览器 Profile、权限和操作账本；
+- 登录、业务字段填写和最终授权通过模型循环之外的可信卡片完成；
+- 正式写入遵循“准备、授权、提交、核验”的固定流程；
+- Telegram、微信和 Agent Workspace 支持跨端任务、文本、卡片、图片和文件同步；
+- 已接入协同办公、泰华日志、语雀部门信息库和照明实验室四个系统；
+- Chrome 扩展、旧浏览器桥、localhost daemon 和代理型 CLI 已于 2026-07-13 退役。
 
-The original Chrome extension, browser bridge, localhost daemon, daemon-backed
-MCP server, and their public CLI commands were retired on 2026-07-13. They are
-not fallback paths. See
-[the retirement ledger](docs/archive/legacy-bridge-retirement.md) for the remaining
-capability-migration inventory.
+项目当前状态见 [项目当前状态](docs/项目当前状态.md)，全部文档从
+[文档导航](docs/文档导航.md) 进入。
 
-## Requirements
+## 一、核心架构
 
-- Python 3.12 or newer
-- A Chromium runtime supported by Playwright
-- Network access from the central worker to the target legacy system
+```text
+Telegram / 微信 / Agent Workspace / 其他 MCP 宿主
+                         |
+                         v
+                 OpenClaw 或 MCP 客户端
+                         |
+                         v
+              AgentBridge 中心能力与治理层
+       +-----------------+------------------+
+       |                 |                  |
+   身份与会话        可信交互与任务       操作账本与审计
+       |                 |                  |
+       +-----------------+------------------+
+                         |
+                         v
+       协同办公 / 泰华日志 / 语雀 / 照明实验室
+```
 
-The selected intranet deployment target is Linux. Set
-`AGENTBRIDGE_SESSION_KEY_FILE` to an absolute path containing exactly 32 random
-bytes; AgentBridge uses AES-256-GCM with session-bound authenticated data and
-rejects symlinks, broad permissions, wrong keys, and modified ciphertext.
-Windows continues to use user-scoped DPAPI. Plaintext Cookie persistence is not
-an accepted fallback.
+智能体调用的是 `oa.workflow.pending.list`、`taihua.work_log.create.prepare`、
+`smartlight.alarm.analysis` 这类有业务含义的能力，而不是任意 HTTP、JavaScript、DOM、
+选择器或数据库语句。
 
-~~~bash
+## 二、运行要求
+
+- Python 3.12 或更高版本；
+- Playwright 支持的 Chromium；
+- 中心节点能够访问目标遗留系统；
+- Linux 使用权限受限的 32 字节会话密钥；
+- 远程访问使用固定私网 IP、HTTPS 和内部 CA；
+- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.48`。
+
+本地开发安装：
+
+```bash
 python -m pip install -e .
 python -m playwright install chromium
 python -m bscli.cli.main --home .bscli system init-seeyon-oa
-~~~
+```
 
-## Capability CLI
+## 三、业务能力
 
-List and describe the currently published capabilities:
+查看中央能力目录：
 
-~~~bash
+```bash
 python -m bscli.cli.main --home .bscli capability list
 python -m bscli.cli.main --home .bscli capability describe oa.template.list
 python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prepare
-~~~
+```
 
-Published OA capabilities:
+截至 2026-08-19，中央注册表包含 69 个业务能力：
 
-- oa.template.list
-- oa.workflow.pending.list
-- oa.workflow.sent.list
-- oa.workflow.done.list
-- oa.workflow.tracked.list
-- oa.workflow.detail.get
-- oa.workflow.opinions.list
-- oa.document.certificate.search
-- oa.business_trip.prepare
-- oa.business_trip.save_draft
-- oa.business_trip.submit.prepare
-- oa.business_trip.submit
-- oa.leave.prepare
-- oa.leave.save_draft
-- oa.leave.submit.prepare
-- oa.leave.submit
-- oa.missed_punch.prepare
-- oa.missed_punch.save_draft
-- oa.missed_punch.approval.prepare
-- oa.missed_punch.approve
-- oa.efficiency_data.approval.prepare
-- oa.efficiency_data.approve
-- oa.travel_expense.approval.prepare
-- oa.travel_expense.approve
-- oa.labor_contract_renewal.approval.prepare
-- oa.labor_contract_renewal.approve
-- oa.intellectual_property_declaration.approval.prepare
-- oa.intellectual_property_declaration.approve
-- oa.overtime.approval.prepare
-- oa.overtime.approve
-- oa.attendance_confirmation.prepare
-- oa.attendance_confirmation.confirm
-- oa.weekly_report.acknowledgement.prepare
-- oa.weekly_report.acknowledge
-- oa.standard_collaboration.approval.prepare
-- oa.standard_collaboration.approve
-- oa.meeting.create.prepare
-- oa.meeting.create
-- oa.workflow.revoke.prepare
-- oa.workflow.revoke
+| 系统 | 数量 | 主要范围 |
+| --- | ---: | --- |
+| 协同办公 | 40 | 模板、待办、已发、已办、跟踪、详情、意见、证书下载、发起、审批、知会、确认、会议、撤销 |
+| 泰华日志 | 5 | 个人日志、团队日志、项目搜索、日志填写与创建 |
+| 语雀部门信息库 | 4 | 知识库、跨库目录、组织搜索、结构化文档读取 |
+| 照明实验室 | 20 | 概览、资产、告警、巡检、漏电、报告、RTU 告警受控写入 |
 
-Published Taihua capabilities:
+线上 MCP 还包含会话、可信交互、任务、文件和治理工具。模型只看到读取能力和受治理的写入
+入口，内部提交、续办和宿主协调工具不会暴露给模型。
+
+### 协同办公能力
+
+读取能力区分不同页面集合，不把“待办、已发、已办、跟踪”混成一个概念：
+
+- `oa.template.list`
+- `oa.workflow.pending.list`
+- `oa.workflow.sent.list`
+- `oa.workflow.done.list`
+- `oa.workflow.tracked.list`
+- `oa.workflow.detail.get`
+- `oa.workflow.opinions.list`
+- `oa.document.certificate.search`
+
+写入能力按具体业务流程组织，已覆盖出差、请假、补签、效能数据、差旅费、劳动合同续签、
+知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
+准备入口；最终提交能力由可信授权续办，不作为普通模型工具公开。
+
+协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)。
+
+### 泰华日志能力
 
 - `taihua.work_log.my.list`
 - `taihua.work_log.team.list`
@@ -102,540 +106,167 @@ Published Taihua capabilities:
 - `taihua.work_log.create.prepare`
 - `taihua.work_log.create`
 
-Taihua uses central HTTP token sessions with refresh, exact-origin enforcement,
-and no browser during normal reads or writes. See the
-[Taihua adapter guide](docs/systems/taihua/taihua-log-system-adapter.md).
+正常读写使用中心 Token 会话和刷新机制，不需要每次打开浏览器。详见
+[泰华日志系统适配说明](docs/系统适配/泰华日志系统/泰华日志系统适配说明.md)。
 
-Published Yuque capabilities:
+### 语雀部门信息库能力
 
 - `yuque.public_books.list`
 - `yuque.document.catalog`
 - `yuque.document.search`
 - `yuque.document.read`
 
-Yuque uses a per-user central browser session because its current account cannot
-create a Personal Access Token and login requires a slider plus SMS verification.
-The trusted interactive login card embeds a challenge-scoped noVNC surface backed
-by isolated Xvfb, Chromium profile, loopback RFB, and loopback CDP resources. Native
-browser input, cookies, endpoints, temporary VNC credentials, and control tokens
-stay outside the model. Catalog and search work across all visible knowledge bases by default, while optional
-book, type, date, sort, and pagination arguments narrow the result. Explicit reads
-normalize Doc, Sheet, and Table content into structured text with row paging, outline,
-table, link, image OCR, and attachment metadata. Search snippets remain omitted, and
-selected content is redacted for likely credentials and tokens. Attachment download is
-not claimed until a real independent file card is available for acceptance. See the
-[Yuque department knowledge adapter guide](docs/systems/yuque/yuque-department-knowledge-adapter.md).
-
-Published Smartlight capabilities:
-
-- `smartlight.system.overview`
-- `smartlight.lamppost.list`
-- `smartlight.alarm.list`
-- `smartlight.inspection_task.list`
-- `smartlight.leakage.summary`
-- `smartlight.asset.search`
-- `smartlight.asset.detail`
-- `smartlight.alarm.analysis`
-- `smartlight.inspection_task.detail`
-- `smartlight.leakage.analysis`
-- `smartlight.report.export`
-- `smartlight.alarm.remark.update.prepare`
-- `smartlight.alarm.remark.update`
-- `smartlight.alarm.work_area.submit.prepare`
-- `smartlight.alarm.work_area.submit`
-- `smartlight.alarm.work_area.revoke.prepare`
-- `smartlight.alarm.work_area.revoke`
-- `smartlight.alarm.dispose.prepare`
-- `smartlight.alarm.dispose`
-
-Smartlight uses a trusted username/password/image-captcha card only for login.
-After CAS login, AgentBridge maintains the per-user central cookie and JWT state;
-normal reads do not open a remote browser. The current integration deliberately
-does not expose device control, configuration, general CRUD, or arbitrary alarm
-disposition. Its governed write package can change one exact RTU alarm remark,
-submit or revoke an RTU alarm's work-area routing, and dispose one eligible RTU
-alarm. Every action uses a frozen
-target snapshot, separate authorization, pre-commit concurrency check, and
-authoritative readback. Remark changes and work-area routing expose explicit
-compensation paths; alarm disposition is marked irreversible. Commit capabilities
-remain internal and are not exposed to agents. Deployment does not automatically
-grant the new write scopes to an existing identity token.
-See the [Smartlight adapter guide](docs/systems/smartlight/smartlight-lab-system-adapter.md).
-The phase-two contracts and staged report-export plan are documented in the
-[published Smartlight read phase-two capability package](docs/systems/smartlight/smartlight-phase2-capability-package.md).
-The write risk matrix and acceptance path are documented in
-[Smartlight write phase one](docs/systems/smartlight/smartlight-write-phase1.md).
-The A-B implementation and the remaining C-D rollout for RTU alarms, lamp alarms,
-and inspection reviews are documented in the
-[Smartlight controlled-write phase-two design](docs/systems/smartlight/smartlight-write-phase2-design.md).
-
-Workflow capabilities expose business data and opaque affair IDs. They do not
-expose internal URLs, raw HTML, cookies, private action endpoints, or hidden
-form fields.
-
-### Certificate delivery
-
-`oa_certificate_search` returns opaque, user-bound download IDs and browser download
-cards. When a chat user asks to receive a patent or software-copyright scan, the
-host calls `oa_certificate_prepare_download` for one selected ID or
-`oa_certificate_prepare_downloads` once for a selected batch. AgentBridge
-fetches the file from OA under the same central session, caches it only for the
-short grant lifetime, and exposes a fast media URL. A prepared file receives a fresh
-30-minute delivery window and is linked to the current Task Hub task as a user-bound
-artifact. Agent Workspace shows that artifact in the task card and task detail, while
-Telegram and WeChat companion endpoints receive one original-file attachment per
-message. Batch preparation reuses one OA browser worker and serial session lock. If the
-channel upload fails, the adapter sends the same short-lived URL as an explicit
-fallback instead of silently dropping the file. Artifact metadata is user-isolated;
-the administration surface can see state, size, task and expiry but never the download
-URL. Ad-hoc client download scripts are not part of the supported path.
-
-## Trusted Login
-
-Start the trusted-card service. The same listener serves authentication,
-business-input, write-authorization, and short-lived document-download pages:
-
-~~~bash
-python -m bscli.cli.main --home .bscli auth serve \
-  --host 127.0.0.1 \
-  --port 8780 \
-  --public-base-url http://127.0.0.1:8780
-~~~
-
-Ensure that the user's OA session is usable:
-
-~~~bash
-python -m bscli.cli.main --home .bscli session login \
-  --system oa \
-  --user-subject <trusted-user-subject> \
-  --expected-principal <oa-display-name> \
-  --card-base-url http://127.0.0.1:8780
-~~~
-
-`session login` is idempotent. For an active session it performs a live OA
-probe, refreshes the encrypted Cookie state, and returns `succeeded` with
-`reused=true`; it does not create a card. Only when OA confirms that the
-session is no longer authenticated does it return `LOGIN_REQUIRED` and a
-short-lived `nextAction.cardUrl`.
-
-`session status` and the MCP `oa_session_status` tool also live-probe an active
-session. Their response distinguishes the authentication epoch
-(`lastVerifiedAt`) from the current liveness check (`checkedAt`) and identifies
-the source as `live`. It also reports real user activity (`lastUserActivityAt`),
-the latest successful background probe (`lastKeepaliveAt`), the bounded lease
-deadline/state (`keepaliveEligibleUntil` / `keepaliveState`), and the detected
-expiry time (`expiredAt`). `lastActivityAt` remains a compatibility alias for
-`lastUserActivityAt`. Inactive sessions are reported from the registry without
-starting a browser. A temporary HTTP error or an unexpected non-login response
-returns `SESSION_CHECK_UNAVAILABLE` and preserves the encrypted session state;
-only an explicit login response expires and deletes that state.
-
-Open that URL in a trusted browser only when it is returned. Ordinary login
-fields are submitted directly to the Credential Broker. Systems that require
-human page interaction, such as Yuque's slider and SMS flow, use the same trusted
-origin to display a short-lived, login-only central browser surface. Neither mode
-puts credentials, OTP values, cookies, browser endpoints, or control tokens in CLI
-parameters, MCP tool arguments, the operation ledger, or model-visible fields.
-Card expiry applies to that one authentication challenge, not to an active target
-system session.
-
-After login, invoke a read capability:
-
-~~~bash
-python -m bscli.cli.main --home .bscli capability invoke \
-  oa.workflow.pending.list \
-  --user-subject <trusted-user-subject> \
-  --idempotency-key <request-key>
-~~~
-
-An inactive or OA-expired session returns
-`requires_user_action / LOGIN_REQUIRED`; the service never falls back to a personal browser or retired
-bridge. A transient live-probe failure returns `SESSION_CHECK_UNAVAILABLE` and
-must be retried without asking for credentials. `SESSION_RUNTIME_MISMATCH`
-means that the encrypted state could not be authenticated by the bound runtime,
-for example because a Windows security identity or Linux key changed. The
-session is preserved and the request must be routed through the correct runtime.
-
-Run the trusted-card Broker and capability Worker as one long-running central
-service under a fixed OS security identity and session-key boundary. Direct CLI
-processes that restore session state must use that same boundary. Agent
-integrations should normally use the long-running central MCP service, which
-keeps it stable across calls.
-
-## Host-Independent Interactions
-
-Authentication, business input, and execution authorization now share
-`agentbridge.interaction.v1`. AgentBridge returns an `interaction` object and
-never launches a browser itself. Codex, OpenClaw, or another host renders the
-trusted URL, polls state outside the model loop, and calls the resume tool when
-the user-bound record is ready.
-
-On MCP, the trusted URL is moved to host-private
-`CallToolResult._meta["io.agentbridge/interaction"]`; model-visible content and
-structured output contain only a fixed placeholder. Tools that directly
-present trusted interactions advertise the standard MCP Apps resource
-`ui://agentbridge/trusted-interaction.html`. A compatible host can therefore
-render, poll, resume, and hand a following interaction back to the user without
-an AgentBridge-specific plugin. The current OpenClaw plugin remains the adapter
-for hosts that do not yet implement MCP Apps.
-
-~~~bash
-python -m bscli.cli.main --home .bscli interaction get \
-  <interaction-id> --user-subject <trusted-user-subject>
-
-python -m bscli.cli.main --home .bscli interaction resume \
-  <interaction-id> --user-subject <trusted-user-subject> \
-  --idempotency-key <stable-resume-key>
-~~~
-
-The equivalent MCP tools are `agentbridge_interaction_get` and
-`agentbridge_interaction_resume`. The installable native OpenClaw plugin in
-[`integrations/openclaw-agentbridge`](integrations/openclaw-agentbridge)
-captures these envelopes, withholds trusted URLs from the model, renders cards
-only in private sessions, and polls/resumes outside the model loop. The Python
-renderer remains a host-adapter reference. See the
-[agent interaction protocol](docs/architecture/agent-interaction-protocol.md) and the
-[remote MCP low-install onboarding guide](docs/platform/remote-mcp-onboarding.md).
-
-## Task Continuity
-
-The Task Hub foundation, phase-two Agent Workspace, and server-backed task
-continuation are active for identity-routed OpenClaw calls. A private
-host adapter creates an opaque task on the first AgentBridge business tool call
-and associates subsequent Operation and Interaction IDs without accepting a
-model-supplied user identity or task argument. `ClientEndpoint`, `AgentTask`,
-append-only `TaskEvent`, subscription, and notification-outbox records share the
-central SQLite ledger, while credentials, cookies, submitted field values,
-authorization secrets, and trusted-card URLs remain outside it.
-
-The OpenClaw plugin keeps the existing Telegram and WeChat behavior. It uses the
-official `gateway_start` hook to restore each configured identity's pending
-interaction, original private route, polling, and card delivery after a Gateway
-restart. The host-only MCP coordination tools require private request metadata
-and are deliberately absent from the plugin's model-visible native tool
-catalog. The independent [Agent Workspace](docs/platform/agent-workspace.md) adds
-persistent web login, OpenClaw chat, task timelines, a Continue action, and
-endpoint visibility without placing MCP or Gateway tokens in the browser.
-Workspace image input is stored as user-bound, seven-day governed media: the
-timeline and notification outbox carry ordered opaque references rather than
-Base64. This lets a completed or refreshed web conversation restore its images
-and lets Telegram or WeChat receive the same media, with a trusted HTTPS-link
-fallback for text-only channels.
-Natural-language continuation can select one same-user task, reuse its pending
-trusted interaction, observe running or terminal state without duplicate work,
-or attach an explicit follow-up to the original task ID. Shared model Transcript
-and OBO execution-host transfer remain later phases in the
-[multi-end task design](docs/architecture/omnichannel-agent-task-continuity-design.md).
-
-## Governed OA Writes
-
-Every published write is workflow-specific and follows trusted field collection,
-live prepare, separate authorization, deterministic commit, and authoritative
-readback. Draft, approval, meeting, and formal-submission scopes are independent.
-Prepare tools accept optional prefill seeds only for values the user already supplied
-in the conversation. Those defaults reduce duplicate entry but remain editable; the
-submitted trusted-card values are authoritative. Omitted values stay inside the card,
-and neither submitted values nor card URLs are echoed into model-visible results.
-
-### Business-trip draft
-
-The first write vertical slice saves a Seeyon business-trip application as a
-wait-send draft. It never sends or submits the workflow.
-
-1. Request the trusted business-field card:
-
-~~~bash
-python -m bscli.cli.main --home .bscli capability invoke \
-  oa.business_trip.prepare \
-  --user-subject <trusted-user-subject> \
-  --card-base-url http://127.0.0.1:8780 \
-  --idempotency-key <input-key> \
-  --json '{}'
-~~~
-
-2. The host renders the returned business-input interaction. After the user
-   submits the trusted form and polling reports `resume.ready=true`, resume it:
-
-~~~bash
-python -m bscli.cli.main --home .bscli interaction resume \
-  <field-interaction-id> \
-  --user-subject <trusted-user-subject> \
-  --idempotency-key <prepare-key>
-~~~
-
-3. The second prepare validates the live template and form contract, freezes
-   the plan, and returns a separate authorization interaction. After user
-   approval, resume that interaction:
-
-~~~bash
-python -m bscli.cli.main --home .bscli interaction resume \
-  <authorization-interaction-id> \
-  --user-subject <trusted-user-subject> \
-  --idempotency-key <save-key>
-~~~
-
-A successful commit reloads the server-backed wait-send item, reads its fields
-back, and reports `workflow_submitted=false` and `submitted_count=0`. Uncertain
-post-click outcomes are recorded as unknown and are not retried automatically.
-
-### Business-trip formal submission
-
-`oa.business_trip.submit.prepare` and `oa.business_trip.submit` are a separate
-controlled-write pair. They require a new field submission and a new action
-authorization; a draft authorization cannot be reused. Commit consumes approval
-immediately before the OA send control and succeeds only after exactly one new
-matching item is found in the adapter-internal sent collection and its detail can
-be read back. That sent collection is verification-only and is not a public list
-or detail surface.
-
-Formal submission requires the independent `oa:write:submit` token scope. The
-formal submission path has completed real authorized commit, sent-list readback,
-and controlled revoke validation.
-
-### Leave request
-
-`oa.leave.prepare` and `oa.leave.save_draft` implement the `【HR】请假申请单`
-wait-send path. The first phase supports attachment-free `年休`, `事假`, and
-`调休` only. Draft success requires stable wait-send identifiers plus exact
-readback of every user-entered field. OA-computed days and hours are retained as
-advisory evidence because the live OA can leave both display controls blank even
-after the draft is durably saved.
-
-The 2026-07-19 live operation was reconciled read-only against OA: one matching
-11:36 draft existed in `待发事项`, so the former `RESULT_UNKNOWN` was a verifier
-false negative and was not retried. The draft pair remains under `oa:write:draft`.
-
-`oa.leave.submit.prepare` and `oa.leave.submit` are a separate formal-submission
-pair under `oa:write:submit`. They require a new field submission and a new action
-authorization, consume approval immediately before `#sendId_a`, and succeed only
-after exactly one new matching sent item and its detail can be read back. A live
-leave submission has completed this path; the user later cancelled that test item manually.
-
-### Sent workflow revoke
-
-`oa.workflow.revoke.prepare` and `oa.workflow.revoke` expose revocation as an
-independent cross-workflow controlled write. The agent first obtains an opaque
-`affair_id` from `oa_workflow_list_sent`; the trusted field card collects or
-prefills the mandatory revoke comment, and a separate action card freezes the
-sent item's affair, summary, process, title, and form identity.
-
-Commit uses OA's native revoke action for exactly one row. Authorization is
-consumed immediately before the final confirmation, and success requires both
-sent-list disappearance and the same identity returning to wait-send with the
-registered revoked state. Any uncertain post-confirmation result is reported as
-unknown and is never retried automatically. This is not an automatic test-data
-cleanup hook because OA may notify participants or retain audit and business
-side effects.
-
-The pair requires the independent `oa:write:revoke` scope. Existing identity
-tokens are not widened when the capability is deployed.
-## Admin Control Plane
-
-AgentBridge includes an independent administration surface for multi-user runtime
-visibility and write governance. It uses separate administrator accounts and
-sessions; it never exposes credentials, cookies, trusted-card URLs, business
-field values, or issued Token secrets.
-
-For the current intranet deployment, open
-`https://10.10.50.213:8782`. Bootstrap the first administrator from a trusted
-server terminal with a password supplied only on standard input:
-
-~~~bash
-sudo -u agentbridge /home/guomao/agentbridge/venv/bin/python -P \
-  -m bscli.cli.main --home /home/guomao/agentbridge/data \
-  admin account bootstrap --username admin --password-stdin
-~~~
-
-The first login requires an immediate password change. Administrators can issue
-or revoke MCP Tokens, inspect or invalidate downstream sessions, and pause write
-capabilities globally or by system, user, capability, and version. Auditors are
-read-only. Every control action requires a reason and is written to an
-append-only audit ledger. See the
-[administration guide](docs/platform/agentbridge-admin-console.md).
-## Streamable HTTP MCP
-
-Issue a short-lived identity token from a trusted administrator terminal:
-
-~~~bash
-python -m bscli.cli.main --home .bscli mcp token issue \
-  --user-subject <trusted-user-subject> \
-  --expected-principal <oa-display-name> \
-  --scope oa:write:draft \
-  --ttl-hours 24
-~~~
-
-Choose only the scopes required by that client. OA scopes (`oa:read`,
-`oa:write:draft`, `oa:write:approval`, `oa:write:meeting`, `oa:write:submit`,
-and `oa:write:revoke`) are independent from Taihua scopes (`taihua:read` and
-`taihua:write:worklog`) and the Yuque read scope (`yuque:read`).
-The token command adds the corresponding system's base read scope when any
-write scope for that system is requested, and only creates session bindings for
-systems represented by the final scope set.
-Completing a trusted card or deploying a new capability never widens an already
-issued token.
-
-Start the central MCP endpoint and trusted-card service in the same process:
-
-~~~bash
-python -m bscli.cli.main --home .bscli mcp central-serve \
-  --host 127.0.0.1 \
-  --port 8790 \
-  --auth-host 127.0.0.1 \
-  --auth-port 8780 \
-  --session-keepalive-interval 600 \
-  --session-keepalive-lease 604800
-~~~
-
-Session keepalive is disabled unless `--session-keepalive-interval` is set. The
-example probes active sessions every 10 minutes while they remain inside a
-seven-day activity lease. Login and real agent requests renew that lease;
-background probes do not renew themselves. An explicit OA login response
-expires the session, while a transient probe failure preserves it for retry.
-
-Connect the MCP client to http://127.0.0.1:8790/mcp with an Authorization Bearer
-header. MCP tools derive caller identity from the server-side token binding and
-do not accept userSubject arguments.
-
-After connection, call `agentbridge_server_profile` to discover the transport,
-interaction delivery methods, client footprint, and write-safety boundary.
-The same profile is available as `agentbridge://server/profile`, and the
-`agentbridge_oa_operator` MCP prompt supplies concise operating rules without
-requiring a separately installed Skill.
-
-For an intranet deployment, OpenClaw may run on the user's workstation while
-AgentBridge runs on another company-network machine. Issue a private-IP server
-certificate from a DPAPI-protected AgentBridge internal CA on the Windows
-administrator workstation:
-
-~~~powershell
-$TlsPackage = Join-Path $env:TEMP "agentbridge-tls"
-python -m bscli.cli.main pki issue-server `
-  --ip 10.20.30.40 `
-  --state-dir "$env:USERPROFILE\.agentbridge\pki" `
-  --output-dir $TlsPackage
-Import-Certificate `
-  -FilePath "$env:USERPROFILE\.agentbridge\pki\root-ca.crt" `
-  -CertStoreLocation Cert:\CurrentUser\Root
-~~~
-
-Deploy only `$TlsPackage\server.crt` and `$TlsPackage\server.key` to the Linux
-host, then delete the temporary package. The protected root
-private key stays on the Windows workstation and must never be copied to Linux
-or committed. Start AgentBridge with both listeners using the same IP-SAN
-certificate:
-
-~~~bash
-python -m bscli.cli.main --home .bscli mcp central-serve \
-  --host 10.20.30.40 \
-  --port 8790 \
-  --public-base-url https://10.20.30.40:8790 \
-  --tls-cert /path/to/server.crt \
-  --tls-key /path/to/server.key \
-  --auth-host 10.20.30.40 \
-  --auth-port 8780 \
-  --auth-public-base-url https://10.20.30.40:8780 \
-  --auth-tls-cert /path/to/server.crt \
-  --auth-tls-key /path/to/server.key \
-  --session-keepalive-interval 600 \
-  --session-keepalive-lease 604800
-~~~
-
-Configure OpenClaw with the HTTPS endpoint and exact trusted-card origin. Store
-the CA path in OpenClaw's durable service environment so it is written into the
-managed Gateway launcher and survives future restarts:
-
-~~~powershell
-openclaw config set env.vars.NODE_EXTRA_CA_CERTS "$env:USERPROFILE\.agentbridge\pki\root-ca.crt"
-openclaw config set plugins.entries.agentbridge-interactions.config.mcpUrl https://10.20.30.40:8790/mcp
-openclaw config set plugins.entries.agentbridge-interactions.config.allowedCardOrigins.0 https://10.20.30.40:8780
-openclaw config set tools.alsoAllow '[\"agentbridge-interactions\"]' --strict-json
-~~~
-
-For a multi-user Gateway, configure one plugin `identityBindings` entry and one
-environment-backed Bearer token per trusted messaging identity. Do not keep a
-global `mcp.servers.agentbridge` Bearer alongside multi-user bindings; that
-would expose a second shared-identity tool surface. See
-`docs/architecture/openclaw-multi-user-identity-routing.md` for the complete mapping.
-
-When OpenClaw uses a restricted tool profile such as `coding`, the native
-AgentBridge adapter must be explicitly added through `tools.alsoAllow`.
-Allow only `agentbridge-interactions`, not `group:plugins`, and merge it with
-any existing `alsoAllow` entries.
-
-Telegram then presents credential, business-input, and execution-authorization
-cards as native Web App buttons inside its own WebView instead of opening an
-external browser.
-
-The OpenClaw plugin is a host compatibility adapter, not part of the central
-business architecture. MCP Apps-capable hosts need only the remote MCP
-connection, TLS trust, and MCP authorization. Core-MCP-only hosts can use read
-tools while the OA session is active, but require either MCP Apps or a private
-host adapter for login, business input, and execution authorization.
-
-Loopback HTTP remains a local-development mechanism. The explicit private-IP
-HTTP switch is retained only for isolated recovery and must not be used for a
-routable deployment. Production remote access also requires enterprise
-OAuth/OIDC, token lifecycle policy, rate limiting, and real multi-user worker
-isolation.
-
-## Security Invariants
-
-- Final-user devices install no browser extension, local daemon, or OA connector.
-- Each user has a distinct central session and managed browser profile.
-- Credentials and trusted-card field values bypass the model and MCP.
-- The internal root private key is DPAPI-protected on the administrator
-  workstation; Linux receives only a leaf certificate and leaf private key.
-- Every write follows prepare -> authorize -> commit -> verify.
-- A plan, authorization, and idempotency key are immutable at commit time.
-- No capability silently falls back to a less-governed execution route.
-- Windows session state uses user-scoped DPAPI; Linux uses a restricted
-  key-file AES-256-GCM protector. Production multi-host deployments require a
-  Vault/KMS-backed protector with workload identity and key rotation.
-
-## Validation
-
-On Windows, use the persistent layered validation entry points:
-
-~~~powershell
-.\scripts\Invoke-AgentBridgeValidation.ps1 `
-  -Mode Targeted `
-  -PythonTests @('tests/test_auth_challenges.py', 'tests/test_central_service.py') `
-  -OpenClaw
+当前账号无法创建正式访问令牌，登录通过按挑战隔离的 noVNC 可信浏览器完成滑块和短信验证。
+读取阶段对 Doc、Sheet、Table、表格、图片文字、链接和附件元数据做统一结构化；搜索结果不返回
+可能泄露秘密的服务端摘要。详见
+[语雀部门信息库适配说明](docs/系统适配/语雀部门信息库/语雀部门信息库适配说明.md)。
 
+### 照明实验室能力
+
+读取能力覆盖系统概览、灯杆、资产、告警、巡检、漏电分析和报告导出。写入能力聚焦一条精确
+RTU 告警的备注、工区提交/撤回和不可逆处置，不开放通用设备控制、任意告警处置或通用增删改查。
+
+每次写入都冻结目标快照，执行授权、提交前并发检查和权威回读。可逆动作提供补偿路径，不可逆
+处置单独标记并要求独立权限。详见
+[照明实验室系统适配说明](docs/系统适配/照明实验室系统/照明实验室系统适配说明.md)。
+
+## 四、可信登录与会话
+
+用户需要登录下游系统时，AgentBridge 返回短期可信认证卡：
+
+1. 用户在卡片中填写账号、密码、验证码或完成交互式登录；
+2. 凭据通过同源 TLS 直接进入中心凭据代理，不经过模型、MCP 参数或聊天；
+3. AgentBridge 建立每用户中心会话并核验实际下游主体；
+4. 登录成功后自动恢复原始任务，不要求用户重新发送请求；
+5. 会话按系统采用 Cookie 探测、Token 刷新、CAS/JWT 再签或浏览器保活。
+
+当前保活间隔为 10 分钟，活动租约为 7 天。后台探测不会无限续租，也不会把下游已经注销的
+会话伪装为有效。实际登录身份与预期主体不一致时，会话立即隔离并失败关闭。
+
+## 五、可信字段与写入授权
+
+写操作分为三个用户可理解的阶段：
+
+```text
+填写业务信息 -> 核对冻结计划 -> 明确授权执行
+```
+
+完整服务端状态机为：
+
+```text
+prepare -> field input -> authorize -> internal commit -> verify
+```
+
+安全要求：
+
+- 字段卡根据用户对话中已经给出的信息预填；
+- 系统自动计算字段和只读字段不能伪装成用户可编辑字段；
+- 授权绑定用户、系统、会话、能力版本、目标、计划哈希和有效期；
+- 授权只能消费一次，跨用户、跨会话、过期或目标漂移均拒绝；
+- 提交成功必须通过目标系统权威页面或接口回读；
+- 结果未知时停止且不自动重试，先由用户或运维对账。
+
+详细约束见 [受控写入模型](docs/架构设计/受控写入模型.md) 和
+[智能体交互协议](docs/架构设计/智能体交互协议.md)。
+
+## 六、多用户与多端任务
+
+每个 MCP Token 在服务端绑定：
+
+- `userSubject`；
+- 允许系统和权限范围；
+- 每个系统的预期下游主体；
+- Token 有效期和审计原因。
+
+同一用户可以在 Telegram、微信和 Agent Workspace 使用同一业务身份继续任务，但设备和通道
+不会扩大权限。不同用户使用独立 Token、会话、Profile、账本和回复路由。
+
+Agent Workspace 支持：
+
+- 一次性身份配对与持久登录；
+- 流式模型输出；
+- 跨端有序文本、状态和应用卡片；
+- 图片输入、预览、放大和下载；
+- 任务文件交付、过期展示和重新生成下载入口；
+- 使用“继续刚才的任务”等自然语言跨端接续，而不是要求记忆任务号。
+
+详见 [多端智能体任务接续设计](docs/架构设计/多端智能体任务接续设计.md) 和
+[智能体工作台](docs/平台能力/智能体工作台.md)。
+
+## 七、管理控制台
+
+管理控制台位于 `https://10.10.50.213:8782`，与普通用户工作台分离。当前可查看和治理：
+
+- 用户、下游身份绑定和系统会话；
+- MCP Token、权限范围和有效期；
+- 操作、可信交互、多端任务和任务文件；
+- 写入暂停、会话失效和追加式管理审计；
+- AgentBridge、Workspace Gateway 和 OpenClaw 的脱敏运行状态。
+
+管理账户不会自动获得任何下游业务身份，也不能代替用户完成业务写入。详见
+[管理控制台](docs/平台能力/管理控制台.md)。
+
+## 八、内网部署
+
+当前中心服务部署在 Linux `10.10.50.213:/home/guomao/agentbridge`，由
+`agentbridge.service` 托管：
+
+| 端口 | 服务 |
+| ---: | --- |
+| 8780 | 可信认证、字段和授权卡片 |
+| 8781 | 按挑战开放的 noVNC 网关 |
+| 8782 | 管理控制台 |
+| 8783 | Agent Workspace |
+| 8790 | Streamable HTTP MCP |
+
+Workspace 通过服务器回环地址和 Windows 工作站主动建立的反向 SSH 隧道访问 OpenClaw
+Gateway，工作站切换网络时无需修改服务器配置。完整说明见
+[当前内网部署](docs/部署运维/当前内网部署.md)。
+
+## 九、验证与发布
+
+常用验证命令：
+
+```powershell
+.\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Targeted
 .\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Full
-.\scripts\Test-AgentBridgeMcp.ps1 -Check SessionStatus
-.\scripts\Deploy-AgentBridge.ps1 -PlanOnly
-~~~
+.\scripts\Test-AgentBridgeMcp.ps1 -Check Release
+.\scripts\Test-AgentBridgeReleaseAcceptance.ps1
+```
 
-Targeted OpenClaw checks skip `npm pack` unless `-PackCheck` is supplied; full
-validation always includes it. The persistent Python 3.12 environment is
-fingerprinted from `pyproject.toml`, so unchanged dependencies are reused.
-See the [development validation and release workflow](docs/operations/development-and-release-workflow.md)
-for MCP smoke-test safety boundaries and wheel deployment commands.
+正式发布入口：
 
-The central path has completed real-OA validation for trusted-card login,
-encrypted-session restoration, workflow reads, rendered details and opinions,
-business-field collection, authorization, draft and formal submission, approval,
-revoke, meeting creation, field readback, and idempotent replay. Results identify
-the actual central execution channel through `transport`.
+```powershell
+.\scripts\Publish-AgentBridge.ps1
+```
 
-Formal Windows and Android root trust, native TLS, and real Telegram/WeChat card
-flows have been validated. Login-card reuse and login-completion continuation are
-covered by central and host tests. Two real OA users have completed identity and
-result-isolation checks, and one user completed a 24-hour idle keepalive observation.
-Additional workflow-specific acceptance, per-user OS/container workers, and
-enterprise identity and key management remain open. The current intranet server
-and OpenClaw path use private-IP HTTPS with a dedicated internal CA.
+发布脚本负责全量验证、构建 wheel、部署版本化 Release、安装受控 systemd unit、重启服务、
+执行治理验收并推送 GitHub。纯文档变更不需要重启或部署 AgentBridge，但仍须通过文档链接、
+目录规范和相关回归测试。
 
-## Documentation
+开发边界见 [开发安全策略](docs/部署运维/开发安全策略.md)，完整流程见
+[开发验证与发布流程](docs/部署运维/开发验证与发布流程.md)。
 
-Start with the [documentation map](docs/README.md) and
-[current project status](docs/project-status.md). The primary references are:
+## 十、安全不变量
 
-- [Target architecture](docs/architecture/agent-oriented-legacy-bs-adaptation-design.md)
-- [Agent interaction protocol](docs/architecture/agent-interaction-protocol.md)
-- [Governed write model](docs/architecture/governed-write-model.md)
-- [Current Linux intranet deployment](docs/operations/current-deployment-plan.md)
-- [Development validation and release workflow](docs/operations/development-and-release-workflow.md)
-- [PoC validation baseline](docs/acceptance/poc-validation-plan.md)
-- [Deferred production considerations](docs/roadmap/deferred-considerations.md)
+- 最终用户设备不安装浏览器扩展、本地 daemon 或遗留系统连接器；
+- 用户会话和目标系统身份不可串用；
+- 密码、验证码、Cookie、Token 和完整业务字段不进入模型；
+- 智能体不能调用任意 Shell、HTTP、JavaScript、DOM 或底层提交工具；
+- 所有写入都有独立授权、幂等控制和结果回读；
+- 不存在静默降级到旧桥或更弱治理路径；
+- 结果未知时不自动重试；
+- 当前逻辑隔离不冒充生产级 OS/容器隔离。
+
+## 十一、文档
+
+从 [文档导航](docs/文档导航.md) 开始。核心资料：
+
+- [项目当前状态](docs/项目当前状态.md)
+- [面向智能体的遗留系统适配设计](docs/架构设计/面向智能体的遗留系统适配设计.md)
+- [智能体交互协议](docs/架构设计/智能体交互协议.md)
+- [受控写入模型](docs/架构设计/受控写入模型.md)
+- [当前内网部署](docs/部署运维/当前内网部署.md)
+- [系统适配导航](docs/系统适配/系统适配导航.md)
+- [验收记录导航](docs/验收记录/验收记录导航.md)
+- [后续增强事项](docs/后续规划/后续增强事项.md)

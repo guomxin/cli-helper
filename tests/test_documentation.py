@@ -30,17 +30,17 @@ class DocumentationTests(unittest.TestCase):
                     self.assertTrue(resolved.exists(), f"missing documentation link: {resolved}")
 
     def test_current_documentation_has_one_entry_point(self):
-        index = ROOT / "docs" / "README.md"
+        index = ROOT / "docs" / "文档导航.md"
         text = index.read_text(encoding="utf-8")
         for expected in (
-            "./project-status.md",
-            "./architecture/governed-write-model.md",
-            "./operations/current-deployment-plan.md",
-            "./operations/development-and-release-workflow.md",
-            "./systems/README.md",
-            "./acceptance/README.md",
-            "./roadmap/deferred-considerations.md",
-            "./archive/README.md",
+            "./项目当前状态.md",
+            "./架构设计/受控写入模型.md",
+            "./部署运维/当前内网部署.md",
+            "./部署运维/开发验证与发布流程.md",
+            "./系统适配/系统适配导航.md",
+            "./验收记录/验收记录导航.md",
+            "./后续规划/后续增强事项.md",
+            "./历史归档/历史资料导航.md",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, text)
@@ -52,16 +52,16 @@ class DocumentationTests(unittest.TestCase):
         )
         self.assertEqual(
             {path.name for path in (ROOT / "docs").glob("*.md")},
-            {"README.md", "project-status.md"},
+            {"文档导航.md", "项目当前状态.md"},
         )
         for category in (
-            "architecture",
-            "platform",
-            "operations",
-            "systems",
-            "acceptance",
-            "roadmap",
-            "archive",
+            "架构设计",
+            "平台能力",
+            "部署运维",
+            "系统适配",
+            "验收记录",
+            "后续规划",
+            "历史归档",
         ):
             with self.subTest(category=category):
                 self.assertTrue((ROOT / "docs" / category).is_dir())
@@ -77,20 +77,19 @@ class DocumentationTests(unittest.TestCase):
                 self.assertFalse(retired_path.exists())
 
         for archived_path in (
-            ROOT / "docs" / "archive" / "bscli-browser-bridge-design.md",
-            ROOT / "docs" / "archive" / "bscli-browser-bridge-design-zh.md",
-            ROOT / "docs" / "archive" / "oa-write-safety-legacy.md",
-            ROOT / "docs" / "archive" / "oa-write-discovery-legacy.md",
-            ROOT / "docs" / "archive" / "legacy-bridge-retirement.md",
-            ROOT / "docs" / "archive" / "current-deployment-plan-history.md",
+            ROOT / "docs" / "历史归档" / "旧浏览器桥设计.md",
+            ROOT / "docs" / "历史归档" / "旧协同办公写入安全模型.md",
+            ROOT / "docs" / "历史归档" / "旧协同办公写入探索记录.md",
+            ROOT / "docs" / "历史归档" / "旧浏览器桥退役记录.md",
+            ROOT / "docs" / "历史归档" / "部署演进记录-2026年7月至8月.md",
         ):
             with self.subTest(path=archived_path.relative_to(ROOT)):
                 self.assertTrue(archived_path.exists())
 
     def test_current_write_guides_do_not_publish_retired_commands(self):
         for relative_path in (
-            "docs/architecture/governed-write-model.md",
-            "docs/systems/oa/oa-write-action-expansion-playbook.md",
+            "docs/架构设计/受控写入模型.md",
+            "docs/系统适配/协同办公系统/写入能力扩展手册.md",
         ):
             text = (ROOT / relative_path).read_text(encoding="utf-8")
             for forbidden in (
@@ -101,6 +100,30 @@ class DocumentationTests(unittest.TestCase):
             ):
                 with self.subTest(document=relative_path, forbidden=forbidden):
                     self.assertNotIn(forbidden, text)
+
+    def test_documentation_names_and_titles_are_chinese(self):
+        for path in (ROOT / "docs").rglob("*"):
+            relative = path.relative_to(ROOT / "docs")
+            name = path.stem if path.is_file() else path.name
+            with self.subTest(path=relative):
+                self.assertNotRegex(name, r"[A-Za-z]")
+
+        paths = [
+            ROOT / "README.md",
+            *(ROOT / "docs").rglob("*.md"),
+            ROOT / "integrations" / "openclaw-agentbridge" / "README.md",
+        ]
+        for path in paths:
+            first_heading = next(
+                (
+                    line
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.startswith("# ")
+                ),
+                "",
+            )
+            with self.subTest(document=path.relative_to(ROOT)):
+                self.assertRegex(first_heading, r"[\u4e00-\u9fff]")
 
 
 if __name__ == "__main__":
