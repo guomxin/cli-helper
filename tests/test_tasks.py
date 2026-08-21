@@ -609,6 +609,108 @@ class TaskHubStoreTests(unittest.TestCase):
             1,
         )
 
+    def test_expires_only_stale_unreferenced_task_shells(self):
+        endpoint, _ = self._endpoint()
+        orphan, _ = self._task(endpoint["endpoint_id"])
+        linked, _ = self.store.ensure_task(
+            user_subject="user-a",
+            agent_host="openclaw",
+            host_task_key="session|linked",
+            origin_endpoint_id=endpoint["endpoint_id"],
+            active_conversation_ref=endpoint["conversation_ref"],
+            title="Linked task",
+        )
+        self.store.link_operation(
+            task_id=linked["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "operation-running",
+                "user_subject": "user-a",
+                "capability_name": "oa.workflow.pending.list",
+                "capability_effect": "read",
+                "status": "running",
+            },
+        )
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET created_at = '2000-01-01T00:00:00+00:00',
+                    updated_at = '2000-01-01T00:00:00+00:00'
+                WHERE task_id IN (?, ?)
+                """,
+                (orphan["task_id"], linked["task_id"]),
+            )
+
+        reopened = TaskHubStore(self.store.db_path)
+
+        self.assertEqual(
+            reopened.get_task(orphan["task_id"], user_subject="user-a")["status"],
+            "expired",
+        )
+        self.assertEqual(
+            reopened.get_task(linked["task_id"], user_subject="user-a")["status"],
+            "running",
+        )
+        self.assertEqual(
+            [
+                event["event_type"]
+                for event in reopened.list_events(
+                    task_id=orphan["task_id"],
+                    user_subject="user-a",
+                )
+            ],
+            ["task.created"],
+        )
+
+    def test_central_service_finishes_unreferenced_host_tasks(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        succeeded = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="session|success",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="Successful no-reference tool",
+        )
+        failed = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="session|failure",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="Failed no-reference tool",
+        )
+
+        succeeded_result = service.finish_host_task(
+            user_subject="user-a",
+            task_id=succeeded["task"]["taskId"],
+            outcome="succeeded",
+        )
+        failed_result = service.finish_host_task(
+            user_subject="user-a",
+            task_id=failed["task"]["taskId"],
+            outcome="failed",
+            error_code="SESSION_CHECK_UNAVAILABLE",
+            message="Session check is temporarily unavailable.",
+        )
+
+        self.assertEqual(succeeded_result["task"]["status"], "succeeded")
+        self.assertEqual(failed_result["task"]["status"], "failed")
+        self.assertEqual(
+            failed_result["task"]["summary"]["failure"]["code"],
+            "SESSION_CHECK_UNAVAILABLE",
+        )
+
     def test_cross_endpoint_continuation_choices_persist_and_select_owned_task(self):
         workspace, _ = self.store.ensure_endpoint(
             user_subject="user-a",

@@ -1671,6 +1671,44 @@ class CentralCapabilityService:
             "task": task_response(task),
         }
 
+    def finish_host_task(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        outcome: str,
+        reason: str | None = None,
+        error_code: str | None = None,
+        message: str | None = None,
+        causation_ref: str | None = None,
+    ) -> dict:
+        normalized_outcome = str(outcome or "").strip().lower()
+        if normalized_outcome == "succeeded":
+            task = self.tasks.complete_task(
+                task_id=task_id,
+                user_subject=user_subject,
+                reason=reason or "host_tool_completed_without_follow_up",
+                causation_ref=causation_ref,
+            )
+        elif normalized_outcome == "failed":
+            task = self.tasks.fail_task(
+                task_id=task_id,
+                user_subject=user_subject,
+                error_code=error_code or "HOST_TOOL_FAILED",
+                message=(
+                    message
+                    or "The host tool failed before producing a resumable result."
+                ),
+                causation_ref=causation_ref,
+            )
+        else:
+            raise ValueError("outcome must be succeeded or failed")
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "task": task_response(task),
+        }
+
     def recover_host_tasks(
         self,
         *,

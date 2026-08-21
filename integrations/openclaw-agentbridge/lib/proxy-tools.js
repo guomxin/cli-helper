@@ -39,6 +39,23 @@ const AGENTBRIDGE_GOVERNED_ENTRY_TOOLS = new Set(
 const INDEPENDENT_WORKSPACE_TASK_TOOLS = new Set([
   "oa_workflow_revoke_prepare",
 ]);
+const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
+const UNREFERENCED_FAILURE_STATUSES = new Set([
+  "canceled",
+  "deferred",
+  "error",
+  "expired",
+  "failed",
+  "not_found",
+  "outcome_unknown",
+  "pending",
+  "processing",
+  "rejected",
+  "requires_user_action",
+  "running",
+  "unknown",
+  "waiting_user",
+]);
 const AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG = Object.freeze(
   AGENTBRIDGE_TOOL_CATALOG.filter(
     (descriptor) =>
@@ -231,28 +248,55 @@ function createProxyTool({
         taskRunRefResolver,
         logger,
       });
-      const result = await identity.client.callToolResult(
-        descriptor.name,
-        params,
-        {
-          signal,
-          meta: taskId
-            ? {
-                [TASK_CONTEXT_META_KEY]: {
-                  taskId,
-                },
-              }
-            : undefined,
-        },
-      );
+      let result;
+      try {
+        result = await identity.client.callToolResult(
+          descriptor.name,
+          params,
+          {
+            signal,
+            meta: taskId
+              ? {
+                  [TASK_CONTEXT_META_KEY]: {
+                    taskId,
+                  },
+                }
+              : undefined,
+          },
+        );
+      } catch (error) {
+        if (taskId) {
+          await finishHostTask({
+            client: identity.client,
+            taskId,
+            outcome: {
+              status: "failed",
+              errorCode: safeErrorCode(error),
+              message: safeErrorMessage(error),
+            },
+            logger,
+            causationRef: boundedText(toolCallId, 256),
+          });
+        }
+        throw error;
+      }
       if (taskId) {
-        await observeTaskResult({
+        const hasReferences = await observeTaskResult({
           client: identity.client,
           taskId,
           result,
           logger,
           signal,
         });
+        if (!hasReferences) {
+          await finishHostTask({
+            client: identity.client,
+            taskId,
+            outcome: taskOutcomeForUnreferencedResult(result),
+            logger,
+            causationRef: boundedText(toolCallId, 256),
+          });
+        }
       }
       return {
         ...result,
@@ -388,7 +432,7 @@ async function observeTaskResult({ client, taskId, result, logger, signal }) {
     references.operationIds.length === 0 &&
     references.interactionIds.length === 0
   ) {
-    return;
+    return false;
   }
   try {
     await client.callTool(
@@ -406,6 +450,72 @@ async function observeTaskResult({ client, taskId, result, logger, signal }) {
       `AgentBridge task observation unavailable; business result preserved (${safeErrorCode(error)})`,
     );
   }
+  return true;
+}
+
+async function finishHostTask({
+  client,
+  taskId,
+  outcome,
+  logger,
+  causationRef,
+}) {
+  try {
+    await client.callTool(
+      "agentbridge_host_task_finish",
+      {
+        agent_host: "openclaw",
+        task_id: taskId,
+        outcome: outcome.status,
+        reason: outcome.reason || null,
+        error_code: outcome.errorCode || null,
+        message: outcome.message || null,
+        causation_ref: causationRef || null,
+      },
+      {
+        signal: AbortSignal.timeout(TASK_FINALIZATION_TIMEOUT_MS),
+        meta: hostContextMeta(),
+      },
+    );
+  } catch (error) {
+    logger?.warn?.(
+      `AgentBridge task finalization unavailable; stale-task reconciliation will retry (${safeErrorCode(error)})`,
+    );
+  }
+}
+
+export function taskOutcomeForUnreferencedResult(result) {
+  const payload = extractToolPayload(result);
+  const status = boundedText(payload?.status, 80)?.toLowerCase() || "";
+  const error =
+    payload?.error && typeof payload.error === "object"
+      ? payload.error
+      : null;
+  const errorCode = boundedText(
+    error?.code || payload?.errorCode,
+    120,
+  );
+  const errorMessage = boundedText(
+    error?.message || payload?.errorMessage,
+    500,
+  );
+  if (
+    result?.isError === true ||
+    errorCode ||
+    UNREFERENCED_FAILURE_STATUSES.has(status)
+  ) {
+    return {
+      status: "failed",
+      errorCode: errorCode || "HOST_RESULT_MISSING_REFERENCE",
+      message:
+        errorMessage ||
+        "The tool did not produce an operation or trusted-interaction reference.",
+    };
+  }
+  return {
+    status: "succeeded",
+    reason: "host_tool_completed_without_follow_up",
+  };
 }
 
 export function collectTaskReferences(value) {
@@ -497,6 +607,13 @@ function safeErrorCode(error) {
     .toUpperCase()
     .replace(/[^A-Z0-9_.-]/g, "_")
     .slice(0, 80);
+}
+
+function safeErrorMessage(error) {
+  return (
+    boundedText(error?.message, 500) ||
+    "AgentBridge business tool call failed before producing a result."
+  );
 }
 
 function jsonToolResult(value) {

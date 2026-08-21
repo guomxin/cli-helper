@@ -3497,6 +3497,45 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_task_finish",
+        title="Finish Host-Owned AgentBridge Task",
+        description=(
+            "Host-private terminal task control for tool results that have no "
+            "operation or trusted-interaction reference."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_task_finish(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        outcome: Annotated[str, Field(pattern="^(succeeded|failed)$")],
+        reason: Annotated[str | None, Field(max_length=120)] = None,
+        error_code: Annotated[str | None, Field(max_length=120)] = None,
+        message: Annotated[str | None, Field(max_length=500)] = None,
+        causation_ref: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        _require_host_context(ctx, agent_host=agent_host)
+        identity = _request_identity(identity_store)
+        return await _run_host_control(
+            "agentbridge_host_task_finish",
+            service.finish_host_task,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            outcome=outcome,
+            reason=reason,
+            error_code=error_code,
+            message=message,
+            causation_ref=causation_ref,
+        )
+
+    @mcp.tool(
         name="agentbridge_host_task_recovery_list",
         title="List Recoverable Host-Owned AgentBridge Tasks",
         description=(

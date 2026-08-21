@@ -34,6 +34,7 @@ ARTIFACT_DELIVERY_STATES = {
 REFRESHABLE_ARTIFACT_TYPES = {"certificate_scan", "smartlight_report"}
 
 PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
+ORPHAN_TASK_MAX_AGE_MINUTES = 15
 
 
 class TaskNotFound(KeyError):
@@ -243,6 +244,7 @@ class TaskHubStore:
             )
             self._migrate_task_interaction_observations(connection)
             self._repair_terminal_task_statuses(connection)
+            self._expire_orphan_task_shells(connection)
             self._reconcile_pull_based_deliveries(connection)
 
     @staticmethod
@@ -468,6 +470,46 @@ class TaskHubStore:
               )
             """
         )
+
+    @staticmethod
+    def _expire_orphan_task_shells(
+        connection: sqlite3.Connection,
+        *,
+        max_age_minutes: int = ORPHAN_TASK_MAX_AGE_MINUTES,
+    ) -> int:
+        """Expire stale task rows that never reached an operation or interaction."""
+        cutoff = _utc_before(minutes=max_age_minutes)
+        cursor = connection.execute(
+            """
+            UPDATE agent_tasks
+            SET status = 'expired',
+                version = version + 1,
+                finished_at = COALESCE(finished_at, updated_at)
+            WHERE status IN ('active', 'waiting_user', 'running')
+              AND created_at <= ?
+              AND current_operation_id IS NULL
+              AND current_interaction_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_operations
+                  WHERE task_operations.task_id = agent_tasks.task_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_interactions
+                  WHERE task_interactions.task_id = agent_tasks.task_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_artifacts
+                  WHERE task_artifacts.task_id = agent_tasks.task_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_events
+                  WHERE task_events.task_id = agent_tasks.task_id
+                    AND task_events.event_type <> 'task.created'
+              )
+            """,
+            (cutoff,),
+        )
+        return max(int(cursor.rowcount or 0), 0)
 
     @staticmethod
     def _reconcile_pull_based_deliveries(
@@ -1825,6 +1867,7 @@ class TaskHubStore:
     ) -> list[dict]:
         limit = min(max(int(limit), 1), 500)
         with self._connect() as connection:
+            self._expire_orphan_task_shells(connection)
             endpoint = self._select_endpoint(connection, endpoint_id)
             if endpoint["user_subject"] != user_subject:
                 raise TaskNotFound("client endpoint not found")
@@ -1868,6 +1911,7 @@ class TaskHubStore:
         query += " ORDER BY updated_at DESC LIMIT ?"
         parameters.append(limit)
         with self._connect() as connection:
+            self._expire_orphan_task_shells(connection)
             rows = connection.execute(query, parameters).fetchall()
         return [_task_from_row(row) for row in rows]
 
@@ -1914,6 +1958,7 @@ class TaskHubStore:
         parameters.append(limit)
 
         with self._connect() as connection:
+            self._expire_orphan_task_shells(connection)
             endpoint = self._select_endpoint(connection, endpoint_id)
             if (
                 endpoint["user_subject"] != user_subject

@@ -280,6 +280,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("agentbridge_host_task_ensure", names)
         self.assertIn("agentbridge_host_identity_profile", names)
         self.assertIn("agentbridge_host_task_observe", names)
+        self.assertIn("agentbridge_host_task_finish", names)
         self.assertIn("agentbridge_host_task_recovery_list", names)
         self.assertIn("agentbridge_host_task_list", names)
         self.assertIn("agentbridge_host_task_continuation_resolve", names)
@@ -1436,6 +1437,51 @@ class CentralMcpTests(unittest.TestCase):
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
             task_scope="user_turn",
+        )
+
+    def test_host_task_finish_uses_token_identity_and_private_metadata(self):
+        with self._server() as (service, _store, token, client):
+            service.finish_host_task.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "task": {
+                    "taskId": "task-1234567890-abcdef",
+                    "status": "failed",
+                },
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=621,
+                token=token,
+                params={
+                    "name": "agentbridge_host_task_finish",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "task_id": "task-1234567890-abcdef",
+                        "outcome": "failed",
+                        "error_code": "MCP_UNREACHABLE",
+                        "message": "AgentBridge MCP is unreachable",
+                        "causation_ref": "tool-call-1",
+                    },
+                    "_meta": {
+                        "io.agentbridge/host": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                        }
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"])
+        service.finish_host_task.assert_called_once_with(
+            user_subject="user-a",
+            task_id="task-1234567890-abcdef",
+            outcome="failed",
+            reason=None,
+            error_code="MCP_UNREACHABLE",
+            message="AgentBridge MCP is unreachable",
+            causation_ref="tool-call-1",
         )
 
     def test_workspace_session_bind_persists_turn_reference(self):

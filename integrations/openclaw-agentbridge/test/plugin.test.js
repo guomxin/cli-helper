@@ -7,6 +7,7 @@ import {
 } from "../lib/coordinator.js";
 import { normalizeInteraction } from "../lib/interaction.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
+import { createAgentBridgeProxyTools } from "../lib/proxy-tools.js";
 import {
   CARD_ORIGIN,
   CARD_URL,
@@ -283,6 +284,113 @@ test("does not treat an in-request business task sequence as host task continuat
 
   assert.equal(result, undefined);
   assert.deepEqual(calls, []);
+});
+
+test("finishes a no-reference host task from the returned tool outcome", async () => {
+  const calls = [];
+  const taskId = "12345678-1234-4123-8123-123456789001";
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_host_task_ensure") {
+        return { status: "succeeded", task: { taskId } };
+      }
+      if (name === "agentbridge_host_task_finish") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool: ${name}`);
+    },
+    async callToolResult() {
+      return {
+        structuredContent: {
+          status: "requires_user_action",
+          error: {
+            code: "SESSION_CHECK_UNAVAILABLE",
+            message: "Session check is temporarily unavailable.",
+          },
+          nextAction: { type: "retry_session_check" },
+        },
+      };
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      sessionKey,
+      runId: "run-login",
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+    identityRouter: taskIdentityRouter({ sessionKey, client }),
+    serverName: "agentbridge",
+  });
+
+  const result = await tools
+    .find((tool) => tool.name === "smartlight_session_login")
+    .execute("tool-login", {});
+
+  assert.equal(result.details.agentbridgeTaskId, taskId);
+  const finish = calls.find(
+    (call) => call.name === "agentbridge_host_task_finish",
+  );
+  assert.deepEqual(finish.arguments_, {
+    agent_host: "openclaw",
+    task_id: taskId,
+    outcome: "failed",
+    reason: null,
+    error_code: "SESSION_CHECK_UNAVAILABLE",
+    message: "Session check is temporarily unavailable.",
+    causation_ref: "tool-login",
+  });
+});
+
+test("best-effort fails an ensured task when the business MCP call throws", async () => {
+  const calls = [];
+  const taskId = "12345678-1234-4123-8123-123456789002";
+  const sessionKey = "agent:main:telegram:direct:user-a";
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      if (name === "agentbridge_host_task_ensure") {
+        return { status: "succeeded", task: { taskId } };
+      }
+      if (name === "agentbridge_host_task_finish") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool: ${name}`);
+    },
+    async callToolResult() {
+      const error = new Error("AgentBridge MCP is unreachable");
+      error.code = "MCP_UNREACHABLE";
+      throw error;
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      sessionKey,
+      runId: "run-pending",
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+    identityRouter: taskIdentityRouter({ sessionKey, client }),
+    serverName: "agentbridge",
+  });
+
+  await assert.rejects(
+    tools
+      .find((tool) => tool.name === "oa_workflow_pending_list")
+      .execute("tool-pending", { limit: 5 }),
+    /unreachable/,
+  );
+
+  const finish = calls.find(
+    (call) => call.name === "agentbridge_host_task_finish",
+  );
+  assert.equal(finish.arguments_.outcome, "failed");
+  assert.equal(finish.arguments_.error_code, "MCP_UNREACHABLE");
+  assert.equal(finish.arguments_.causation_ref, "tool-pending");
 });
 
 test("allows report export while selecting a previous task choice", async () => {
@@ -1027,7 +1135,11 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
             task: { taskId: "task-workspace-shared-1234567890" },
           }
         : toolName === "oa_workflow_pending_list"
-          ? { status: "succeeded", result: { count: 0, items: [] } }
+          ? {
+              status: "succeeded",
+              operationId: "operation-workspace-pending",
+              result: { count: 0, items: [] },
+            }
           : { status: "succeeded" };
     return new Response(
       JSON.stringify({
@@ -1079,13 +1191,14 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
 
   assert.equal(responses[0].ok, true);
   assert.equal(result.details.structuredContent.status, "succeeded");
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
   assert.deepEqual(
     requests.map((request) => request.body.params.name),
     [
       "agentbridge_host_workspace_session_bind",
       "agentbridge_host_task_ensure",
       "oa_workflow_pending_list",
+      "agentbridge_host_task_observe",
     ],
   );
   const taskEnsure = requests.find(
@@ -5461,6 +5574,33 @@ function preparedDocumentBatchResult(entries, { taskId = null } = {}) {
       structuredContent,
       ...(taskId ? { agentbridgeTaskId: taskId } : {}),
     },
+  };
+}
+
+function taskIdentityRouter({ sessionKey, client }) {
+  const identity = {
+    bound: true,
+    binding: {
+      key: "telegram:*:user-a",
+      channel: "telegram",
+      senderId: "user-a",
+      accountId: "default",
+      label: "User A",
+    },
+    client,
+  };
+  return {
+    enabled: true,
+    resolveToolContext() {
+      return identity;
+    },
+    endpointKeyForSession(value) {
+      return value === sessionKey ? "telegram:*:user-a" : null;
+    },
+    clientForSession() {
+      return client;
+    },
+    removeSession() {},
   };
 }
 
