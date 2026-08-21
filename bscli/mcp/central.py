@@ -2668,7 +2668,9 @@ def create_central_mcp_server(
         description=(
             "查询关灯时段电流页面记录，默认最近 24 小时，最长 7 天。"
             "有电流记录不自动等同于漏电、偷电或设备故障。连续追问沿用已有时间、"
-            "设备和筛选条件；空结果不得自行扩大范围。"
+            "设备和筛选条件；空结果不得自行扩大范围。答复必须区分实际查询范围和"
+            "currentPolicyWindow 当前开关灯策略快照；策略时间缺失或相同则说明无法据此"
+            "确定有效关灯时段。"
         ),
         annotations=read_annotations,
         structured_output=True,

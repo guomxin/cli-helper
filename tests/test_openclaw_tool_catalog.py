@@ -90,6 +90,14 @@ class OpenClawToolCatalogTests(unittest.TestCase):
                 "不得自行扩大范围",
                 tools_by_name[tool_name]["description"],
             )
+        self.assertIn(
+            "必须区分实际查询范围",
+            tools_by_name["smartlight_off_hours_current_list"]["description"],
+        )
+        self.assertIn(
+            "currentPolicyWindow",
+            tools_by_name["smartlight_off_hours_current_list"]["description"],
+        )
 
 
 if __name__ == "__main__":
