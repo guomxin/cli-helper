@@ -89,8 +89,12 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
     SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+    SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY,
+    SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+    SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
+    SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
     SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
@@ -98,10 +102,14 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+    SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
     SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY,
     SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
 )
@@ -211,6 +219,14 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "smartlight_lamp_alarm_list": frozenset({"smartlight:read"}),
     "smartlight_lamp_alarm_analysis": frozenset({"smartlight:read"}),
     "smartlight_rtu_survey_records": frozenset({"smartlight:read"}),
+    "smartlight_energy_record_list": frozenset({"smartlight:read"}),
+    "smartlight_energy_analysis": frozenset({"smartlight:read"}),
+    "smartlight_lamp_survey_records": frozenset({"smartlight:read"}),
+    "smartlight_rtu_leakage_alarm_list": frozenset({"smartlight:read"}),
+    "smartlight_rtu_leakage_analysis": frozenset({"smartlight:read"}),
+    "smartlight_off_hours_current_list": frozenset({"smartlight:read"}),
+    "smartlight_inspection_log_list": frozenset({"smartlight:read"}),
+    "smartlight_maintenance_record_list": frozenset({"smartlight:read"}),
     "smartlight_lamppost_list": frozenset({"smartlight:read"}),
     "smartlight_alarm_list": frozenset({"smartlight:read"}),
     "smartlight_alarm_remark_get": frozenset({"smartlight:read"}),
@@ -2449,6 +2465,317 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="smartlight_energy_record_list",
+        title="查询照明 RTU 用电记录",
+        description=(
+            "读取用电量记录页面按日返回的 RTU 用电显示值。默认最近 7 天，最长 92 天；"
+            "下游未返回单位时会明确提示，不猜测单位，也不通过累计读数差分造数。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_energy_record_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        device_id: Annotated[str | None, Field(max_length=200)] = None,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=92)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        for name, value in (
+            ("keyword", keyword),
+            ("device_id", device_id),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_energy_analysis",
+        title="分析照明 RTU 用电",
+        description=(
+            "分析用电量页面按日直接返回的显示值，给出趋势和 RTU 排行。默认最近 30 天，"
+            "最长 366 天，最多分析 500 台 RTU；不把缺失值或单位不明的数据强行汇总。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_energy_analysis(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        device_id: Annotated[str | None, Field(max_length=200)] = None,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=366)] = None,
+        top_n: Annotated[int, Field(ge=1, le=20)] = 10,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"top_n": top_n}
+        for name, value in (
+            ("keyword", keyword),
+            ("device_id", device_id),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_lamp_survey_records",
+        title="查询单灯巡测记录",
+        description=(
+            "查询灯杆和单灯控制器的历史遥测，默认最近 24 小时，最长 7 天。"
+            "这是设备巡测数据，不是人员巡检任务或巡检日志。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_lamp_survey_records(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        lamp_post_id: Annotated[str | None, Field(max_length=200)] = None,
+        start_time: Annotated[str | None, Field(max_length=19)] = None,
+        end_time: Annotated[str | None, Field(max_length=19)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        for name, value in (
+            ("keyword", keyword),
+            ("lamp_post_id", lamp_post_id),
+            ("start_time", start_time),
+            ("end_time", end_time),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_rtu_leakage_alarm_list",
+        title="查询 RTU 支路漏电报警",
+        description=(
+            "读取漏电管理页面的真实 RTU 支路漏电报警，默认最近 30 天，最长 366 天。"
+            "普通自然语言“漏电”应优先选择本工具，不得选择旧的单灯告警兼容入口。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_rtu_leakage_alarm_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_state: Annotated[Literal["all", "current", "cleared"], Field()] = "all",
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=366)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "alarm_state": alarm_state,
+            "page": page,
+            "size": size,
+        }
+        for name, value in (
+            ("keyword", keyword),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_rtu_leakage_analysis",
+        title="分析 RTU 支路漏电报警",
+        description=(
+            "在最多 500 条真实 RTU 支路漏电记录上分析日期趋势、RTU、控制箱和支路排行。"
+            "未返回电流单位或阈值时会保留为空，不自行推断。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_rtu_leakage_analysis(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        alarm_state: Annotated[Literal["all", "current", "cleared"], Field()] = "all",
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=366)] = None,
+        top_n: Annotated[int, Field(ge=1, le=20)] = 10,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"alarm_state": alarm_state, "top_n": top_n}
+        for name, value in (
+            ("keyword", keyword),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_off_hours_current_list",
+        title="查询关灯时段电流",
+        description=(
+            "查询关灯时段电流页面记录，默认最近 24 小时，最长 7 天。"
+            "有电流记录不自动等同于漏电、偷电或设备故障。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_off_hours_current_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        start_time: Annotated[str | None, Field(max_length=19)] = None,
+        end_time: Annotated[str | None, Field(max_length=19)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        for name, value in (
+            ("keyword", keyword),
+            ("start_time", start_time),
+            ("end_time", end_time),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_inspection_log_list",
+        title="查询照明巡检日志统计",
+        description=(
+            "查询巡检日志页面的巡检组统计，默认最近 30 天，最长 366 天。"
+            "该页面不返回逐人、逐设备打卡明细，因此不得把统计行描述成具体巡检事件。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_inspection_log_list(
+        ctx: Context,
+        plan_id: Annotated[str | None, Field(max_length=200)] = None,
+        group: Annotated[str | None, Field(max_length=200)] = None,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=366)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"page": page, "size": size}
+        for name, value in (
+            ("plan_id", plan_id),
+            ("group", group),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
+        name="smartlight_maintenance_record_list",
+        title="查询照明检修记录",
+        description=(
+            "分页查询 RTU 和灯杆检修记录，可按设备编号、检修人员和设备类型筛选。"
+            "默认最近 30 天，最长 366 天；本期不开放缺少稳定记录 ID 的统一详情。"
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def smartlight_maintenance_record_list(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        overhaul_user: Annotated[str | None, Field(max_length=200)] = None,
+        device_type: Annotated[Literal["all", "rtu", "lamppost"], Field()] = "all",
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
+        last_days: Annotated[int | None, Field(ge=1, le=366)] = None,
+        page: Annotated[int, Field(ge=1, le=10000)] = 1,
+        size: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "device_type": device_type,
+            "page": page,
+            "size": size,
+        }
+        for name, value in (
+            ("keyword", keyword),
+            ("overhaul_user", overhaul_user),
+            ("start_date", start_date),
+            ("end_date", end_date),
+            ("last_days", last_days),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"smartlight:read"},
+        )
+
+    @mcp.tool(
         name="smartlight_lamppost_list",
         title="查询照明灯杆",
         description="List lamp posts visible to the authenticated lighting-system user.",
@@ -2802,8 +3129,8 @@ def create_central_mcp_server(
         title="导出照明系统 CSV 报告",
         description=(
             "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 "
-            "alarm_analysis、lamp_alarm_analysis、asset_inventory 或 "
-            "inspection_progress。设施清单必须传 asset_type；巡检报告必须传 "
+            "告警、资产、巡检，以及四期新增的用电、单灯巡测、RTU 支路漏电、"
+            "巡检日志统计和检修记录。设施清单必须传 asset_type；巡检报告必须传 "
             "task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。"
             "leakage_analysis 仅是单灯告警报告的旧兼容别名，不得用于自然语言"
             "漏电请求。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，"
@@ -2821,6 +3148,13 @@ def create_central_mcp_server(
                 "leakage_analysis",
                 "asset_inventory",
                 "inspection_progress",
+                "energy_records",
+                "energy_analysis",
+                "lamp_survey_records",
+                "rtu_leakage_alarms",
+                "rtu_leakage_analysis",
+                "inspection_logs",
+                "maintenance_records",
             ],
             Field(),
         ],
@@ -2844,6 +3178,17 @@ def create_central_mcp_server(
         detail_date: Annotated[str | None, Field(max_length=10)] = None,
         clockin_user: Annotated[str | None, Field(max_length=200)] = None,
         has_issues: Annotated[bool | None, Field()] = None,
+        device_id: Annotated[str | None, Field(max_length=200)] = None,
+        lamp_post_id: Annotated[str | None, Field(max_length=200)] = None,
+        start_time: Annotated[str | None, Field(max_length=19)] = None,
+        end_time: Annotated[str | None, Field(max_length=19)] = None,
+        plan_id: Annotated[str | None, Field(max_length=200)] = None,
+        group: Annotated[str | None, Field(max_length=200)] = None,
+        overhaul_user: Annotated[str | None, Field(max_length=200)] = None,
+        device_type: Annotated[
+            Literal["all", "rtu", "lamppost"] | None,
+            Field(),
+        ] = None,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {"report_type": report_type}
@@ -2858,6 +3203,14 @@ def create_central_mcp_server(
             ("detail_date", detail_date),
             ("clockin_user", clockin_user),
             ("has_issues", has_issues),
+            ("device_id", device_id),
+            ("lamp_post_id", lamp_post_id),
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("plan_id", plan_id),
+            ("group", group),
+            ("overhaul_user", overhaul_user),
+            ("device_type", device_type),
         ):
             if value is not None:
                 arguments[name] = value
@@ -2865,7 +3218,11 @@ def create_central_mcp_server(
             arguments["alarm_state"] = alarm_state
             arguments["time_field"] = time_field
             arguments["top_n"] = top_n
-        elif report_type == "leakage_analysis":
+        elif report_type in {
+            "leakage_analysis",
+            "energy_analysis",
+            "rtu_leakage_analysis",
+        }:
             arguments["top_n"] = top_n
         return await invoke(
             ctx,

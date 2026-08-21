@@ -824,6 +824,16 @@ class CentralMcpTests(unittest.TestCase):
                     },
                 },
             )
+            fourth_phase_read = self._request(
+                client,
+                "tools/call",
+                request_id=34,
+                token=smartlight_reader["token"],
+                params={
+                    "name": "smartlight_rtu_leakage_alarm_list",
+                    "arguments": {"last_days": 30},
+                },
+            )
             write_denied = self._request(
                 client,
                 "tools/call",
@@ -879,6 +889,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(allowed.json()["result"]["isError"])
         self.assertFalse(relative_range.json()["result"]["isError"])
         self.assertFalse(report.json()["result"]["isError"])
+        self.assertFalse(fourth_phase_read.json()["result"]["isError"])
         self.assertTrue(write_denied.json()["result"]["isError"])
         self.assertFalse(write_allowed.json()["result"]["isError"])
         self.assertFalse(submit_allowed.json()["result"]["isError"])

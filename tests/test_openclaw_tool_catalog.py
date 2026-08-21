@@ -50,6 +50,14 @@ class OpenClawToolCatalogTests(unittest.TestCase):
                 "smartlight_lamp_alarm_list",
                 "smartlight_lamp_alarm_analysis",
                 "smartlight_rtu_survey_records",
+                "smartlight_energy_record_list",
+                "smartlight_energy_analysis",
+                "smartlight_lamp_survey_records",
+                "smartlight_rtu_leakage_alarm_list",
+                "smartlight_rtu_leakage_analysis",
+                "smartlight_off_hours_current_list",
+                "smartlight_inspection_log_list",
+                "smartlight_maintenance_record_list",
             }.issubset(tools_by_name)
         )
         self.assertIn(
@@ -59,6 +67,14 @@ class OpenClawToolCatalogTests(unittest.TestCase):
         self.assertIn(
             "设备遥测",
             tools_by_name["smartlight_rtu_survey_records"]["description"],
+        )
+        self.assertIn(
+            "真实 RTU 支路漏电报警",
+            tools_by_name["smartlight_rtu_leakage_alarm_list"]["description"],
+        )
+        self.assertIn(
+            "不是人员巡检任务",
+            tools_by_name["smartlight_lamp_survey_records"]["description"],
         )
 
 

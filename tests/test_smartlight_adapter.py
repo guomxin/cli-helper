@@ -19,19 +19,27 @@ from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
     SMARTLIGHT_ASSET_DETAIL_CAPABILITY,
     SMARTLIGHT_ASSET_SEARCH_CAPABILITY,
+    SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY,
+    SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+    SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_DETAIL_CAPABILITY,
     SMARTLIGHT_INSPECTION_TASK_LIST_CAPABILITY,
     SMARTLIGHT_LAMPPOST_LIST_CAPABILITY,
     SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY,
     SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY,
+    SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_LEAKAGE_SUMMARY_CAPABILITY,
     SMARTLIGHT_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
     SMARTLIGHT_RTU_STATUS_LIST_CAPABILITY,
+    SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY,
+    SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY,
     SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY,
     SMARTLIGHT_RUNTIME_OVERVIEW_CAPABILITY,
+    SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
     SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
     SmartlightAlarmActionOutcomeUnknown,
@@ -689,6 +697,109 @@ class SmartlightAdapterTests(unittest.TestCase):
                 {"last_days": 30, "start_date": "2026-08-01"}
             )
 
+    def test_fourth_phase_reads_use_dedicated_sources_and_bounded_semantics(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        energy = self.adapter.invoke_capability(
+            SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+            worker,
+            {"start_date": "2026-08-01", "end_date": "2026-08-07"},
+        )
+        energy_analysis = self.adapter.invoke_capability(
+            SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY,
+            worker,
+            {"last_days": 30},
+        )
+        lamp_survey = self.adapter.invoke_capability(
+            SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
+            worker,
+            {
+                "start_time": "2026-08-20 08:00",
+                "end_time": "2026-08-21 08:00",
+            },
+        )
+        leakage = self.adapter.invoke_capability(
+            SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY,
+            worker,
+            {"last_days": 30},
+        )
+        leakage_analysis = self.adapter.invoke_capability(
+            SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY,
+            worker,
+            {"last_days": 30},
+        )
+        off_hours = self.adapter.invoke_capability(
+            SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY,
+            worker,
+            {
+                "start_time": "2026-08-20 08:00",
+                "end_time": "2026-08-21 08:00",
+            },
+        )
+        inspection_logs = self.adapter.invoke_capability(
+            SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY,
+            worker,
+            {"last_days": 30},
+        )
+        maintenance = self.adapter.invoke_capability(
+            SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY,
+            worker,
+            {
+                "start_date": "2024-08-01",
+                "end_date": "2024-09-30",
+            },
+        )
+
+        self.assertEqual(energy["sourceKind"], "downstream_daily_energy_matrix")
+        self.assertEqual(energy["items"][0]["periodValues"][0]["value"], "1.25")
+        self.assertIn("未明确返回单位", energy["warnings"][0])
+        self.assertEqual(energy_analysis["totalValue"], 3.5)
+        self.assertEqual(energy_analysis["topDevices"][0]["deviceId"], "rtu-1")
+        self.assertEqual(lamp_survey["sourceKind"], "single_lamp_telemetry_history")
+        self.assertEqual(lamp_survey["items"][0]["voltage"], 220.1)
+        self.assertEqual(leakage["sourceKind"], "rtu_branch_leakage_alarm")
+        self.assertEqual(leakage["items"][0]["branch"], "支路1")
+        self.assertEqual(leakage_analysis["currentUnclearedCount"], 1)
+        self.assertEqual(off_hours["sourceKind"], "off_hours_current_observation")
+        self.assertIn("不自动判定漏电", off_hours["warnings"][0])
+        self.assertEqual(inspection_logs["scope"], "inspection_log_group_summary")
+        self.assertEqual(inspection_logs["items"][0]["shouldChecked"], 2)
+        self.assertEqual(maintenance["items"][0]["deviceType"], "rtu")
+        self.assertFalse(maintenance["items"][0]["stableDetailAvailable"])
+
+        paths = [request["path"] for request in worker.api_requests]
+        self.assertIn("/smartlight/rEnergyReport/getDateByEnergy", paths)
+        self.assertIn("/smartlight/lHisCoplog/getDataByCondition", paths)
+        self.assertIn("/smartlight/rHisHitchAlarm/getDataByRtuLeakageAlarm", paths)
+        self.assertNotIn("/smartlight/lHisCoplog/getDataByLampElectricLeakage", paths)
+
+        leakage_request = next(
+            request
+            for request in worker.api_requests
+            if request["path"].endswith("/rHisHitchAlarm/getDataByRtuLeakageAlarm")
+        )
+        leakage_query = json.loads(parse_qs(leakage_request["body"])["json"][0])
+        self.assertEqual(leakage_query["_include_hitchDicIds"], ["htch047"])
+
+    def test_fourth_phase_rejects_unbounded_date_and_time_ranges(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        with self.assertRaisesRegex(ValueError, "cannot exceed 92 days"):
+            self.adapter.invoke_capability(
+                SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+                worker,
+                {"start_date": "2026-01-01", "end_date": "2026-06-01"},
+            )
+        with self.assertRaisesRegex(ValueError, "cannot exceed 7 days"):
+            self.adapter.invoke_capability(
+                SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
+                worker,
+                {
+                    "start_time": "2026-08-01 00:00",
+                    "end_time": "2026-08-09 00:01",
+                },
+            )
+
     def test_report_export_returns_bounded_rows_and_csv_contract_metadata(self):
         worker = FakeSmartlightWorker(authenticated=True)
 
@@ -711,6 +822,24 @@ class SmartlightAdapterTests(unittest.TestCase):
                 "detail_date": "2026-08-12",
             },
         )
+        energy_report = self.adapter.invoke_capability(
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            worker,
+            {
+                "report_type": "energy_records",
+                "start_date": "2026-08-01",
+                "end_date": "2026-08-07",
+            },
+        )
+        maintenance_report = self.adapter.invoke_capability(
+            SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
+            worker,
+            {
+                "report_type": "maintenance_records",
+                "start_date": "2024-08-01",
+                "end_date": "2024-09-30",
+            },
+        )
 
         self.assertEqual(alarm_report["reportType"], "alarm_analysis")
         self.assertEqual(alarm_report["metadata"]["exportedCount"], 1)
@@ -719,14 +848,18 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(asset_report["rows"][0]["code"], "RTU-001")
         self.assertEqual(inspection_report["metadata"]["exportedCount"], 1)
         self.assertEqual(inspection_report["rows"][0]["deviceCode"], "LP-001")
+        self.assertEqual(energy_report["reportTitle"], "照明RTU用电记录")
+        self.assertEqual(energy_report["rows"][0]["date"], "2026-08-01")
+        self.assertEqual(maintenance_report["reportTitle"], "照明检修记录")
+        self.assertEqual(maintenance_report["rows"][0]["recordId"], "overhaul-1")
 
     def test_registry_contains_read_and_reversible_write_capabilities(self):
         capabilities = build_smartlight_capability_registry().list()
 
-        self.assertEqual(len(capabilities), 26)
+        self.assertEqual(len(capabilities), 34)
         self.assertEqual(
             sum(spec.effect == "read" for spec in capabilities),
-            18,
+            26,
         )
         self.assertEqual(
             {
@@ -1648,6 +1781,136 @@ class FakeSmartlightWorker:
                             "onRelayIds": [1],
                             "offRelayIds": [2],
                             "isSucceeded": 1,
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/rEnergyReport/getDateByEnergy"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "ID": "rtu-1",
+                            "name": "一号 RTU",
+                            "productModel": "RTU-X",
+                            "item": {
+                                "2026-08-01": "1.25",
+                                "2026-08-02": "2.25",
+                                "2026-08-03": "--",
+                            },
+                            "total": "3.50",
+                            "avg": "1.75",
+                            "rtuEmpty": False,
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/lHisCoplog/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "hisCoplogId": "lamp-survey-1",
+                            "lampPostId": "lp-1",
+                            "lampPostCode": "LP-001",
+                            "lampEffectName": "主道灯",
+                            "streetName": "测试路",
+                            "controlCabinetName": "一号箱变",
+                            "copDate": "2026-08-20 20:00:00",
+                            "deviceTime": "2026-08-20 19:59:58",
+                            "IsOnline": True,
+                            "IsSwitchOn": True,
+                            "U": 220.1,
+                            "I": 1.2,
+                            "Ap": 260.0,
+                            "Pf": 0.95,
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/rHisHitchAlarm/getDataByRtuLeakageAlarm"):
+            return _response(
+                {
+                    "RtuHisHitchAlarm": {
+                        "list": [
+                            {
+                                "hitchAlarmId": "leak-1",
+                                "rtuId": "rtu-1",
+                                "rtuCode": "RTU-001",
+                                "rtuName": "一号 RTU",
+                                "controlCabinetName": "一号箱变",
+                                "relayId": "relay-1",
+                                "relayName": "支路1",
+                                "leakageCurrent": "0.15",
+                                "occurDate": "2026-08-20 20:00:00",
+                                "lastDate": "2026-08-20 20:05:00",
+                                "conductStatue": 131,
+                                "hitchName": "支路漏电报警",
+                                "isSubmitWorkArea": 0,
+                            }
+                        ],
+                        "total": 1,
+                    },
+                    "todayAlarm": 1,
+                    "yesterdayAlarm": 0,
+                    "untreated": 1,
+                }
+            )
+        if path.endswith("/rOnoffTime/getOpenCloseTime"):
+            return _response({"openLightTime": "18:30", "closeLightTime": "06:00"})
+        if path.endswith("/rHisCoplogPhase/getOffRelayLeakCurrent"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "hisCoplogPhaseId": "off-current-1",
+                            "rtuId": "rtu-1",
+                            "rtuCode": "RTU-001",
+                            "rtuName": "一号 RTU",
+                            "relayId": "relay-1",
+                            "relayName": "支路1",
+                            "addDateTime": "2026-08-20 08:30:00",
+                            "avgCurrent": "0.12",
+                            "maxCurrent": "0.18",
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        if path.endswith("/inspectionLog/getInspectionLog"):
+            return _response(
+                [
+                    {
+                        "groupId": "group-1",
+                        "groupName": "巡检一组",
+                        "shouldChecked": 2,
+                        "reality": 1,
+                        "normal": 1,
+                        "abnormal": 0,
+                        "oneLevel": 0,
+                        "twoLevel": 0,
+                        "threeLevel": 0,
+                    }
+                ]
+            )
+        if path.endswith("/inspectionOverhaul/getDataByCondition"):
+            return _response(
+                {
+                    "list": [
+                        {
+                            "id": "overhaul-1",
+                            "deviceId": "rtu-1",
+                            "deviceCode": "RTU-001",
+                            "deviceType": 1,
+                            "overhaulTimeStr": "2024-09-02 16:51:53",
+                            "overhaulUserId": "admin",
+                            "overhaulUserName": "管理员",
+                            "streetName": "测试路",
+                            "wgs84xTude": 117.0,
+                            "wgs84yTude": 36.6,
                         }
                     ],
                     "total": 1,

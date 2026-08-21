@@ -4736,6 +4736,875 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "读取用电量记录页面按日返回的 RTU 用电显示值。默认最近 7 天，最长 92 天；下游未返回单位时会明确提示，不猜测单位，也不通过累计读数差分造数。",
+      "inputSchema": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Id"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 92,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "smartlight_energy_record_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_energy_record_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_energy_record_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询照明 RTU 用电记录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "分析用电量页面按日直接返回的显示值，给出趋势和 RTU 排行。默认最近 30 天，最长 366 天，最多分析 500 台 RTU；不把缺失值或单位不明的数据强行汇总。",
+      "inputSchema": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Id"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_energy_analysisArguments",
+        "type": "object"
+      },
+      "name": "smartlight_energy_analysis",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_energy_analysisDictOutput",
+        "type": "object"
+      },
+      "title": "分析照明 RTU 用电"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "查询灯杆和单灯控制器的历史遥测，默认最近 24 小时，最长 7 天。这是设备巡测数据，不是人员巡检任务或巡检日志。",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "lamp_post_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lamp Post Id"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "smartlight_lamp_survey_recordsArguments",
+        "type": "object"
+      },
+      "name": "smartlight_lamp_survey_records",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_lamp_survey_recordsDictOutput",
+        "type": "object"
+      },
+      "title": "查询单灯巡测记录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "读取漏电管理页面的真实 RTU 支路漏电报警，默认最近 30 天，最长 366 天。普通自然语言“漏电”应优先选择本工具，不得选择旧的单灯告警兼容入口。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "cleared"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "smartlight_rtu_leakage_alarm_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_leakage_alarm_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_leakage_alarm_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询 RTU 支路漏电报警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "在最多 500 条真实 RTU 支路漏电记录上分析日期趋势、RTU、控制箱和支路排行。未返回电流单位或阈值时会保留为空，不自行推断。",
+      "inputSchema": {
+        "properties": {
+          "alarm_state": {
+            "default": "all",
+            "enum": [
+              "all",
+              "current",
+              "cleared"
+            ],
+            "title": "Alarm State",
+            "type": "string"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          },
+          "top_n": {
+            "default": 10,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Top N",
+            "type": "integer"
+          }
+        },
+        "title": "smartlight_rtu_leakage_analysisArguments",
+        "type": "object"
+      },
+      "name": "smartlight_rtu_leakage_analysis",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_rtu_leakage_analysisDictOutput",
+        "type": "object"
+      },
+      "title": "分析 RTU 支路漏电报警"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "查询关灯时段电流页面记录，默认最近 24 小时，最长 7 天。有电流记录不自动等同于漏电、偷电或设备故障。",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "smartlight_off_hours_current_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_off_hours_current_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_off_hours_current_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询关灯时段电流"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "查询巡检日志页面的巡检组统计，默认最近 30 天，最长 366 天。该页面不返回逐人、逐设备打卡明细，因此不得把统计行描述成具体巡检事件。",
+      "inputSchema": {
+        "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plan Id"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "smartlight_inspection_log_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_inspection_log_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_inspection_log_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询照明巡检日志统计"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "分页查询 RTU 和灯杆检修记录，可按设备编号、检修人员和设备类型筛选。默认最近 30 天，最长 366 天；本期不开放缺少稳定记录 ID 的统一详情。",
+      "inputSchema": {
+        "properties": {
+          "device_type": {
+            "default": "all",
+            "enum": [
+              "all",
+              "rtu",
+              "lamppost"
+            ],
+            "title": "Device Type",
+            "type": "string"
+          },
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "last_days": {
+            "anyOf": [
+              {
+                "maximum": 366,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Days"
+          },
+          "overhaul_user": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Overhaul User"
+          },
+          "page": {
+            "default": 1,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "size": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Size",
+            "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
+          }
+        },
+        "title": "smartlight_maintenance_record_listArguments",
+        "type": "object"
+      },
+      "name": "smartlight_maintenance_record_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "smartlight_maintenance_record_listDictOutput",
+        "type": "object"
+      },
+      "title": "查询照明检修记录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "List lamp posts visible to the authenticated lighting-system user.",
       "inputSchema": {
         "properties": {
@@ -5552,7 +6421,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 alarm_analysis、lamp_alarm_analysis、asset_inventory 或 inspection_progress。设施清单必须传 asset_type；巡检报告必须传 task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。leakage_analysis 仅是单灯告警报告的旧兼容别名，不得用于自然语言漏电请求。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。",
+      "description": "将照明系统只读数据导出为 UTF-8 CSV 附件。report_type 可选 告警、资产、巡检，以及四期新增的用电、单灯巡测、RTU 支路漏电、巡检日志统计和检修记录。设施清单必须传 asset_type；巡检报告必须传 task_id，传 detail_date 时导出当天打卡明细，否则导出每日进度。leakage_analysis 仅是单灯告警报告的旧兼容别名，不得用于自然语言漏电请求。单份最多 500 行，结果会明确标注截断。OpenClaw 会直接发送附件，不要重复输出 mediaUrl；Workspace 历史卡过期后可按原条件重新生成当前数据。",
       "inputSchema": {
         "properties": {
           "alarm_state": {
@@ -5621,6 +6490,36 @@
             "default": null,
             "title": "Detail Date"
           },
+          "device_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Id"
+          },
+          "device_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "all",
+                  "rtu",
+                  "lamppost"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Type"
+          },
           "end_date": {
             "anyOf": [
               {
@@ -5633,6 +6532,32 @@
             ],
             "default": null,
             "title": "End Date"
+          },
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group"
           },
           "has_issues": {
             "anyOf": [
@@ -5672,6 +6597,19 @@
             "default": null,
             "title": "Keyword"
           },
+          "lamp_post_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lamp Post Id"
+          },
           "last_days": {
             "anyOf": [
               {
@@ -5686,13 +6624,46 @@
             "default": null,
             "title": "Last Days"
           },
+          "overhaul_user": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Overhaul User"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plan Id"
+          },
           "report_type": {
             "enum": [
               "alarm_analysis",
               "lamp_alarm_analysis",
               "leakage_analysis",
               "asset_inventory",
-              "inspection_progress"
+              "inspection_progress",
+              "energy_records",
+              "energy_analysis",
+              "lamp_survey_records",
+              "rtu_leakage_alarms",
+              "rtu_leakage_analysis",
+              "inspection_logs",
+              "maintenance_records"
             ],
             "title": "Report Type",
             "type": "string"
@@ -5709,6 +6680,19 @@
             ],
             "default": null,
             "title": "Start Date"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 19,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
           },
           "task_id": {
             "anyOf": [

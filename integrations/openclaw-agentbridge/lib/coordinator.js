@@ -106,6 +106,38 @@ const LOGIN_READ_TOOLS = new Map([
     { kind: "smartlight_rtu_survey", system: "照明实验室测试系统", label: "RTU 巡测记录" },
   ],
   [
+    "smartlight_energy_record_list",
+    { kind: "smartlight_energy", system: "照明实验室测试系统", label: "RTU 用电记录" },
+  ],
+  [
+    "smartlight_energy_analysis",
+    { kind: "smartlight_energy", system: "照明实验室测试系统", label: "RTU 用电分析" },
+  ],
+  [
+    "smartlight_lamp_survey_records",
+    { kind: "smartlight_lamp_survey", system: "照明实验室测试系统", label: "单灯巡测记录" },
+  ],
+  [
+    "smartlight_rtu_leakage_alarm_list",
+    { kind: "smartlight_rtu_leakage", system: "照明实验室测试系统", label: "RTU 支路漏电报警" },
+  ],
+  [
+    "smartlight_rtu_leakage_analysis",
+    { kind: "smartlight_rtu_leakage", system: "照明实验室测试系统", label: "RTU 支路漏电分析" },
+  ],
+  [
+    "smartlight_off_hours_current_list",
+    { kind: "smartlight_off_hours_current", system: "照明实验室测试系统", label: "关灯时段电流" },
+  ],
+  [
+    "smartlight_inspection_log_list",
+    { kind: "smartlight_inspection_log", system: "照明实验室测试系统", label: "巡检日志统计" },
+  ],
+  [
+    "smartlight_maintenance_record_list",
+    { kind: "smartlight_maintenance", system: "照明实验室测试系统", label: "检修记录" },
+  ],
+  [
     "smartlight_lamppost_list",
     { kind: "smartlight_lamppost", system: "照明实验室测试系统", label: "灯杆" },
   ],

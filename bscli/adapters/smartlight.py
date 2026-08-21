@@ -42,6 +42,22 @@ SMARTLIGHT_LAMP_STATUS_LIST_CAPABILITY = "smartlight.lamp.status.list"
 SMARTLIGHT_LAMP_ALARM_LIST_CAPABILITY = "smartlight.lamp.alarm.list"
 SMARTLIGHT_LAMP_ALARM_ANALYSIS_CAPABILITY = "smartlight.lamp.alarm.analysis"
 SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY = "smartlight.rtu.survey.records"
+SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY = "smartlight.energy_record.list"
+SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY = "smartlight.energy.analysis"
+SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY = "smartlight.lamp.survey.records"
+SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY = (
+    "smartlight.rtu.leakage_alarm.list"
+)
+SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY = (
+    "smartlight.rtu.leakage_alarm.analysis"
+)
+SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY = (
+    "smartlight.rtu.off_hours_current.list"
+)
+SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY = "smartlight.inspection_log.list"
+SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY = (
+    "smartlight.maintenance_record.list"
+)
 SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY = (
     "smartlight.alarm.remark.update.prepare"
 )
@@ -119,6 +135,10 @@ _SMARTLIGHT_ANALYSIS_PAGE_SIZE = 100
 _SMARTLIGHT_ALARM_TIE_PROBE_SIZE = 20
 _SMARTLIGHT_RUNTIME_SCAN_LIMIT = 500
 _SMARTLIGHT_SURVEY_MAX_DAYS = 7
+_SMARTLIGHT_ENERGY_RECORD_MAX_DAYS = 92
+_SMARTLIGHT_ENERGY_ANALYSIS_MAX_DAYS = 366
+_SMARTLIGHT_RTU_LEAKAGE_MAX_DAYS = 366
+_SMARTLIGHT_OPERATION_LOG_MAX_DAYS = 366
 _SMARTLIGHT_ALARM_SORTS = {
     "occurred_at": ("occurredAt", "0"),
     "last_activity": ("lastActivityAt", "1"),
@@ -549,6 +569,22 @@ class SmartlightCentralAdapter:
             return self.analyze_lamp_alarms(worker, arguments)
         if capability_name == SMARTLIGHT_RTU_SURVEY_RECORDS_CAPABILITY:
             return self.list_rtu_survey_records(worker, arguments)
+        if capability_name == SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY:
+            return self.list_energy_records(worker, arguments)
+        if capability_name == SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY:
+            return self.analyze_energy(worker, arguments)
+        if capability_name == SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY:
+            return self.list_lamp_survey_records(worker, arguments)
+        if capability_name == SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY:
+            return self.list_rtu_leakage_alarms(worker, arguments)
+        if capability_name == SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY:
+            return self.analyze_rtu_leakage_alarms(worker, arguments)
+        if capability_name == SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY:
+            return self.list_off_hours_currents(worker, arguments)
+        if capability_name == SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY:
+            return self.list_inspection_logs(worker, arguments)
+        if capability_name == SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY:
+            return self.list_maintenance_records(worker, arguments)
         if capability_name == SMARTLIGHT_LAMPPOST_LIST_CAPABILITY:
             return self.list_lampposts(worker, arguments)
         if capability_name == SMARTLIGHT_ALARM_LIST_CAPABILITY:
@@ -1189,6 +1225,662 @@ class SmartlightCentralAdapter:
             "count": len(items),
             "source": "/rHisCoplogPhase/getDataByCondition",
             "items": items,
+        }
+
+    def list_energy_records(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_date, end_date, range_source, last_days = _resolve_bounded_date_range(
+            arguments,
+            default_days=7,
+            maximum_days=_SMARTLIGHT_ENERGY_RECORD_MAX_DAYS,
+            range_name="energy record",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        device_id = str(arguments.get("device_id") or "").strip()
+        payload = self._energy_record_page(
+            worker,
+            context,
+            start_date=start_date,
+            end_date=end_date,
+            keyword=keyword,
+            device_id=device_id,
+            page=page,
+            size=size,
+        )
+        items = [_normalize_energy_record(item) for item in _page_items(payload)]
+        return {
+            "scope": "rtu_energy_records",
+            "filters": {
+                "keyword": keyword or None,
+                "deviceId": device_id or None,
+                "startDate": start_date,
+                "endDate": end_date,
+                "rangeSource": range_source,
+                "lastDays": last_days,
+                "granularity": "day",
+            },
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "page": page,
+            "size": size,
+            "downstreamTotal": _page_total(payload),
+            "returnedCount": len(items),
+            "count": len(items),
+            "truncated": False,
+            "sourcePage": "智能监控管理/查询统计/用电量记录",
+            "sourceKind": "downstream_daily_energy_matrix",
+            "warnings": _energy_warnings(items),
+            "items": items,
+        }
+
+    def analyze_energy(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        start_date, end_date, range_source, last_days = _resolve_bounded_date_range(
+            arguments,
+            default_days=30,
+            maximum_days=_SMARTLIGHT_ENERGY_ANALYSIS_MAX_DAYS,
+            range_name="energy analysis",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        device_id = str(arguments.get("device_id") or "").strip()
+        top_n = _bounded_int(arguments.get("top_n"), default=10, minimum=1, maximum=20)
+        raw_items, downstream_total = self._collect_energy_records(
+            worker,
+            context,
+            start_date=start_date,
+            end_date=end_date,
+            keyword=keyword,
+            device_id=device_id,
+        )
+        items = [_normalize_energy_record(item) for item in raw_items]
+        trend_totals: dict[str, float] = {}
+        trend_counts: Counter[str] = Counter()
+        device_totals: list[dict] = []
+        units = {
+            str(item.get("unit"))
+            for item in items
+            if item.get("unit") not in (None, "")
+        }
+        for item in items:
+            numeric_total = 0.0
+            numeric_count = 0
+            for point in item.get("periodValues") or []:
+                numeric = _smartlight_number(point.get("value"))
+                if numeric is None:
+                    continue
+                date = str(point.get("date") or "")
+                trend_totals[date] = trend_totals.get(date, 0.0) + numeric
+                trend_counts[date] += 1
+                numeric_total += numeric
+                numeric_count += 1
+            if numeric_count:
+                device_totals.append(
+                    {
+                        "deviceId": item.get("deviceId"),
+                        "deviceName": item.get("deviceName"),
+                        "deviceCode": item.get("deviceCode"),
+                        "value": _rounded_number(numeric_total),
+                        "dataPointCount": numeric_count,
+                        "unit": item.get("unit"),
+                    }
+                )
+        device_totals.sort(
+            key=lambda item: (
+                float(item.get("value") or 0),
+                str(item.get("deviceName") or ""),
+            ),
+            reverse=True,
+        )
+        trend = [
+            {
+                "date": date,
+                "value": _rounded_number(trend_totals[date]),
+                "dataPointCount": trend_counts[date],
+                "unit": next(iter(units)) if len(units) == 1 else None,
+            }
+            for date in sorted(trend_totals)
+        ]
+        warnings = _energy_warnings(items)
+        if len(units) > 1:
+            warnings.append("下游返回了不一致的能耗单位，汇总值未标记统一单位。")
+        return {
+            "scope": "rtu_energy_analysis",
+            "filters": {
+                "keyword": keyword or None,
+                "deviceId": device_id or None,
+                "startDate": start_date,
+                "endDate": end_date,
+                "rangeSource": range_source,
+                "lastDays": last_days,
+                "granularity": "day",
+            },
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "downstreamTotal": downstream_total,
+            "retrievedCount": len(raw_items),
+            "analyzedCount": len(items),
+            "truncated": downstream_total > len(raw_items),
+            "analysisLimit": _SMARTLIGHT_ANALYSIS_LIMIT,
+            "sourcePage": "智能监控管理/查询统计/用电量记录",
+            "sourceKind": "bounded_downstream_daily_energy_analysis",
+            "valueSemantics": "页面按日直接返回的用电显示值，未由累计读数差分推算。",
+            "unit": next(iter(units)) if len(units) == 1 else None,
+            "totalValue": (
+                _rounded_number(sum(trend_totals.values())) if trend_totals else None
+            ),
+            "dailyTrend": trend,
+            "topDevices": device_totals[:top_n],
+            "warnings": warnings,
+        }
+
+    def _collect_energy_records(
+        self,
+        worker,
+        context: dict,
+        *,
+        start_date: str,
+        end_date: str,
+        keyword: str,
+        device_id: str,
+    ) -> tuple[list[dict], int]:
+        records: list[dict] = []
+        downstream_total = 0
+        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // 100) + 1):
+            payload = self._energy_record_page(
+                worker,
+                context,
+                start_date=start_date,
+                end_date=end_date,
+                keyword=keyword,
+                device_id=device_id,
+                page=page,
+                size=100,
+            )
+            page_items = _page_items(payload)
+            if page == 1:
+                downstream_total = _page_total(payload)
+            records.extend(page_items)
+            if (
+                not page_items
+                or len(records) >= downstream_total
+                or len(records) >= _SMARTLIGHT_ANALYSIS_LIMIT
+            ):
+                break
+        return records[:_SMARTLIGHT_ANALYSIS_LIMIT], downstream_total
+
+    def _energy_record_page(
+        self,
+        worker,
+        context: dict,
+        *,
+        start_date: str,
+        end_date: str,
+        keyword: str,
+        device_id: str,
+        page: int,
+        size: int,
+    ) -> Any:
+        query = {
+            "_like_params": keyword,
+            "startReportDate": start_date,
+            "endReportDate": end_date,
+            "reportTimeType": "D",
+            "organroleId": context["organroleId"],
+            "isTodayEnergy": "0",
+            "rtuIds": [device_id] if device_id else [],
+        }
+        return self._authorized_post_json(
+            worker,
+            "/rEnergyReport/getDateByEnergy",
+            {
+                "json": _json_text(query),
+                "organroleId": context["organroleId"],
+                "_like_params": keyword,
+                "pageNum": page,
+                "pageSize": size,
+            },
+        )
+
+    def list_lamp_survey_records(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_time, end_time, range_source = _resolve_bounded_time_range(
+            arguments,
+            default_hours=24,
+            maximum_days=_SMARTLIGHT_SURVEY_MAX_DAYS,
+            range_name="single-lamp survey",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        lamp_post_id = str(arguments.get("lamp_post_id") or "").strip()
+        payload = self._authorized_post_json(
+            worker,
+            "/lHisCoplog/getDataByCondition",
+            {
+                "json": _json_text(
+                    {
+                        "_include_lampPostId": [lamp_post_id] if lamp_post_id else [],
+                        "_like_lampPostCode": keyword,
+                        "_include_lampEffectId": [],
+                        "_include_streetId": [],
+                        "_timeend_copDate": end_time,
+                        "_timebegin_copDate": start_time,
+                        "selectSortNum": "1",
+                    }
+                ),
+                "orderBy": "l_his_coplog.cop_date",
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+        items = [_normalize_lamp_survey(item) for item in _page_items(payload)]
+        return _standard_page_result(
+            scope="single_lamp_survey_history",
+            filters={
+                "keyword": keyword or None,
+                "lampPostId": lamp_post_id or None,
+                "startTime": start_time,
+                "endTime": end_time,
+                "rangeSource": range_source,
+            },
+            page=page,
+            size=size,
+            payload=payload,
+            items=items,
+            source_page="单灯节能管理/查询统计/单灯巡测记录",
+            source_kind="single_lamp_telemetry_history",
+            warnings=[],
+        )
+
+    def list_rtu_leakage_alarms(self, worker, arguments: dict) -> dict:
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        payload, metadata = self._rtu_leakage_alarm_page(
+            worker,
+            arguments,
+            page=page,
+            size=size,
+        )
+        page_payload = payload.get("RtuHisHitchAlarm") if isinstance(payload, dict) else payload
+        items = [_normalize_rtu_leakage_alarm(item) for item in _page_items(page_payload)]
+        return _standard_page_result(
+            scope="rtu_branch_leakage_alarms",
+            filters=metadata["filters"],
+            page=page,
+            size=size,
+            payload=page_payload,
+            items=items,
+            source_page="漏电管理/RTU漏电查询/RTU支路漏电报警记录",
+            source_kind="rtu_branch_leakage_alarm",
+            warnings=_rtu_leakage_warnings(items),
+            extra={
+                "snapshot": {
+                    "todayAlarm": payload.get("todayAlarm") if isinstance(payload, dict) else None,
+                    "yesterdayAlarm": payload.get("yesterdayAlarm") if isinstance(payload, dict) else None,
+                    "untreated": payload.get("untreated") if isinstance(payload, dict) else None,
+                }
+            },
+        )
+
+    def analyze_rtu_leakage_alarms(self, worker, arguments: dict) -> dict:
+        top_n = _bounded_int(arguments.get("top_n"), default=10, minimum=1, maximum=20)
+        records: list[dict] = []
+        downstream_total = 0
+        metadata: dict = {}
+        snapshot: dict = {}
+        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // 100) + 1):
+            payload, metadata = self._rtu_leakage_alarm_page(
+                worker,
+                arguments,
+                page=page,
+                size=100,
+            )
+            page_payload = payload.get("RtuHisHitchAlarm") if isinstance(payload, dict) else payload
+            page_items = _page_items(page_payload)
+            if page == 1:
+                downstream_total = _page_total(page_payload)
+                if isinstance(payload, dict):
+                    snapshot = {
+                        "todayAlarm": payload.get("todayAlarm"),
+                        "yesterdayAlarm": payload.get("yesterdayAlarm"),
+                        "untreated": payload.get("untreated"),
+                    }
+            records.extend(page_items)
+            if (
+                not page_items
+                or len(records) >= downstream_total
+                or len(records) >= _SMARTLIGHT_ANALYSIS_LIMIT
+            ):
+                break
+        items = [_normalize_rtu_leakage_alarm(item) for item in records]
+        items.sort(
+            key=lambda item: str(item.get("lastActivityAt") or item.get("occurredAt") or ""),
+            reverse=True,
+        )
+        current_count = sum(item.get("stateCode") in {0, 131} for item in items)
+        return {
+            "scope": "rtu_branch_leakage_analysis",
+            "filters": metadata.get("filters", {}),
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "downstreamTotal": downstream_total,
+            "retrievedCount": len(records),
+            "analyzedCount": len(items),
+            "truncated": downstream_total > len(records),
+            "analysisLimit": _SMARTLIGHT_ANALYSIS_LIMIT,
+            "sourcePage": "漏电管理/RTU漏电查询/RTU支路漏电报警记录",
+            "sourceKind": "bounded_rtu_branch_leakage_analysis",
+            "currentUnclearedCount": current_count,
+            "dailyTrend": _daily_counts(items, "lastActivityAt"),
+            "topRtus": _top_counts(items, "rtuName", top_n),
+            "topCabinets": _top_counts(items, "cabinet", top_n),
+            "topBranches": _top_counts(items, "branch", top_n),
+            "snapshot": snapshot,
+            "recentEvents": items[:20],
+            "warnings": _rtu_leakage_warnings(items),
+        }
+
+    def _rtu_leakage_alarm_page(
+        self,
+        worker,
+        arguments: dict,
+        *,
+        page: int,
+        size: int,
+    ) -> tuple[Any, dict]:
+        context = self._principal_context(worker)
+        start_date, end_date, range_source, last_days = _resolve_bounded_date_range(
+            arguments,
+            default_days=30,
+            maximum_days=_SMARTLIGHT_RTU_LEAKAGE_MAX_DAYS,
+            range_name="RTU leakage alarm",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        alarm_state = _normalize_choice(
+            arguments.get("alarm_state"),
+            default="all",
+            allowed={"all", "current", "cleared"},
+            field_name="alarm_state",
+        )
+        state_values = {
+            "all": ["131", "132"],
+            "current": ["131"],
+            "cleared": ["132"],
+        }[alarm_state]
+        payload = self._authorized_post_json(
+            worker,
+            "/rHisHitchAlarm/getDataByRtuLeakageAlarm",
+            {
+                "json": _json_text(
+                    {
+                        "codeOrName": keyword,
+                        "_include_conductStatue": state_values,
+                        "_include_hitchDicIds": ["htch047"],
+                        "_include_weightFacto": [],
+                        "_include_isSubmitWorkArea": [],
+                        "conductStatue": [],
+                        "weightFacto": [1, 2, 3, 4, 5, 6],
+                        "hitchDicId": "htch047",
+                        "_timebegin_begin": f"{start_date} 00:00:00",
+                        "_timeend_end": f"{end_date} 23:59:59",
+                        "type": "3",
+                        "hideRelayAlarm": "0",
+                        "_include_groupId": [],
+                        "groupId": "",
+                        "dateType": "1",
+                        "showData": True,
+                        "userId": context["userId"],
+                        "leakageCurrent": "",
+                        "reporType": "",
+                        "workModelIds": [],
+                    }
+                ),
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+        return payload, {
+            "filters": {
+                "keyword": keyword or None,
+                "alarmState": alarm_state,
+                "startDate": start_date,
+                "endDate": end_date,
+                "rangeSource": range_source,
+                "lastDays": last_days,
+                "alarmTypeId": "htch047",
+            }
+        }
+
+    def list_off_hours_currents(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_time, end_time, range_source = _resolve_bounded_time_range(
+            arguments,
+            default_hours=24,
+            maximum_days=_SMARTLIGHT_SURVEY_MAX_DAYS,
+            range_name="off-hours current",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        policy = self._authorized_post_json(
+            worker,
+            "/rOnoffTime/getOpenCloseTime",
+            {"organroleId": context["organroleId"]},
+        )
+        payload = self._authorized_post_json(
+            worker,
+            "/rHisCoplogPhase/getOffRelayLeakCurrent",
+            {
+                "json": _json_text(
+                    {
+                        "_timebegin_addDateTime": start_time,
+                        "_timeend_addDateTime": end_time,
+                        "_avgCurrent": 0,
+                        "_rating": 0,
+                        "rtuCode": keyword,
+                    }
+                ),
+                "pageNum": page,
+                "pageSize": size,
+                "organroleId": context["organroleId"],
+            },
+        )
+        items = [_normalize_off_hours_current(item) for item in _page_items(payload)]
+        return _standard_page_result(
+            scope="rtu_off_hours_current_records",
+            filters={
+                "keyword": keyword or None,
+                "startTime": start_time,
+                "endTime": end_time,
+                "rangeSource": range_source,
+            },
+            page=page,
+            size=size,
+            payload=payload,
+            items=items,
+            source_page="漏电管理/RTU漏电查询/关灯时间段电流",
+            source_kind="off_hours_current_observation",
+            warnings=[
+                "结果仅表示目标页面记录了关灯时段电流，不自动判定漏电、偷电或设备故障。",
+                "currentPolicyWindow 仅是查询时的当前策略快照，不用于解释跨日历史记录。",
+            ],
+            extra={
+                "currentPolicyWindow": {
+                    "openLightTime": policy.get("openLightTime") if isinstance(policy, dict) else None,
+                    "closeLightTime": policy.get("closeLightTime") if isinstance(policy, dict) else None,
+                    "semantics": "query_time_snapshot",
+                }
+            },
+        )
+
+    def list_inspection_logs(self, worker, arguments: dict) -> dict:
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_date, end_date, range_source, last_days = _resolve_bounded_date_range(
+            arguments,
+            default_days=30,
+            maximum_days=_SMARTLIGHT_OPERATION_LOG_MAX_DAYS,
+            range_name="inspection log",
+        )
+        plan_id = str(arguments.get("plan_id") or "").strip()
+        group = str(arguments.get("group") or "").strip()
+        payload = self._authorized_post_json(
+            worker,
+            "/inspectionLog/getInspectionLog",
+            {
+                "json": _json_text(
+                    {
+                        "startTime": start_date,
+                        "startTimeTwo": f"{start_date} 00:00:00",
+                        "endTime": end_date,
+                        "endTimeTwo": f"{end_date} 23:59:59",
+                        "planId": plan_id,
+                    }
+                )
+            },
+        )
+        raw_items = _page_items(payload)
+        if group:
+            raw_items = [
+                item
+                for item in raw_items
+                if group.casefold() in str(item.get("groupName") or "").casefold()
+            ]
+        normalized = [_normalize_inspection_log_summary(item) for item in raw_items]
+        start = (page - 1) * size
+        selected = normalized[start : start + size]
+        return {
+            "scope": "inspection_log_group_summary",
+            "filters": {
+                "planId": plan_id or None,
+                "group": group or None,
+                "startDate": start_date,
+                "endDate": end_date,
+                "rangeSource": range_source,
+                "lastDays": last_days,
+                "groupFilterAppliedLocally": bool(group),
+            },
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "page": page,
+            "size": size,
+            "downstreamTotal": len(_page_items(payload)),
+            "returnedCount": len(selected),
+            "count": len(selected),
+            "truncated": False,
+            "sourcePage": "巡检管理/数据统计/巡检日志",
+            "sourceKind": "inspection_group_statistics",
+            "warnings": [
+                "该页面返回巡检组统计，不是逐人、逐设备的打卡明细；不会据此推断具体巡检人员或设备。"
+            ],
+            "items": selected,
+        }
+
+    def list_maintenance_records(self, worker, arguments: dict) -> dict:
+        context = self._principal_context(worker)
+        page = _bounded_int(arguments.get("page"), default=1, minimum=1, maximum=10000)
+        size = _bounded_int(arguments.get("size"), default=20, minimum=1, maximum=100)
+        start_date, end_date, range_source, last_days = _resolve_bounded_date_range(
+            arguments,
+            default_days=30,
+            maximum_days=_SMARTLIGHT_OPERATION_LOG_MAX_DAYS,
+            range_name="maintenance record",
+        )
+        keyword = str(arguments.get("keyword") or "").strip()
+        overhaul_user = str(arguments.get("overhaul_user") or "").strip()
+        device_type = _normalize_choice(
+            arguments.get("device_type"),
+            default="all",
+            allowed={"all", "rtu", "lamppost"},
+            field_name="device_type",
+        )
+        local_filter = device_type != "all"
+        query = {
+            "_deviceCode": keyword,
+            "_startTime": start_date,
+            "_endTime": end_date,
+            "_overhaulUser": overhaul_user,
+        }
+        raw_items: list[dict] = []
+        downstream_total = 0
+        if local_filter:
+            for downstream_page in range(
+                1,
+                (_SMARTLIGHT_ANALYSIS_LIMIT // _SMARTLIGHT_ANALYSIS_PAGE_SIZE) + 1,
+            ):
+                payload = self._authorized_post_json(
+                    worker,
+                    "/inspectionOverhaul/getDataByCondition",
+                    {
+                        "json": _json_text(query),
+                        "organroleId": context["organroleId"],
+                        "pageNum": downstream_page,
+                        "pageSize": _SMARTLIGHT_ANALYSIS_PAGE_SIZE,
+                    },
+                )
+                page_items = _page_items(payload)
+                if downstream_page == 1:
+                    downstream_total = _page_total(payload)
+                raw_items.extend(page_items)
+                if (
+                    not page_items
+                    or len(raw_items) >= downstream_total
+                    or len(raw_items) >= _SMARTLIGHT_ANALYSIS_LIMIT
+                ):
+                    break
+        else:
+            payload = self._authorized_post_json(
+                worker,
+                "/inspectionOverhaul/getDataByCondition",
+                {
+                    "json": _json_text(query),
+                    "organroleId": context["organroleId"],
+                    "pageNum": page,
+                    "pageSize": size,
+                },
+            )
+            raw_items = _page_items(payload)
+            downstream_total = _page_total(payload)
+        items = [_normalize_maintenance_record(item) for item in raw_items]
+        if local_filter:
+            items = [item for item in items if item.get("deviceType") == device_type]
+            start = (page - 1) * size
+            selected = items[start : start + size]
+            total = len(items)
+        else:
+            selected = items
+            total = _page_total(payload)
+        return {
+            "scope": "inspection_maintenance_records",
+            "filters": {
+                "keyword": keyword or None,
+                "overhaulUser": overhaul_user or None,
+                "deviceType": device_type,
+                "startDate": start_date,
+                "endDate": end_date,
+                "rangeSource": range_source,
+                "lastDays": last_days,
+                "deviceTypeFilterAppliedLocally": local_filter,
+            },
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+            "page": page,
+            "size": size,
+            "downstreamTotal": downstream_total,
+            "total": total,
+            "returnedCount": len(selected),
+            "count": len(selected),
+            "truncated": local_filter and downstream_total > len(raw_items),
+            "sourcePage": "巡检管理/数据统计/检修记录",
+            "sourceKind": "inspection_maintenance_record",
+            "warnings": [
+                "页面详情只按设备标识读取当前可见检查项，没有稳定传递检修记录 ID，因此本期不开放统一记录详情工具。"
+            ],
+            "items": selected,
         }
 
     def list_lampposts(self, worker, arguments: dict) -> dict:
@@ -1930,6 +2622,13 @@ class SmartlightCentralAdapter:
                 "leakage_analysis",
                 "asset_inventory",
                 "inspection_progress",
+                "energy_records",
+                "energy_analysis",
+                "lamp_survey_records",
+                "rtu_leakage_alarms",
+                "rtu_leakage_analysis",
+                "inspection_logs",
+                "maintenance_records",
             },
             field_name="report_type",
         )
@@ -2000,9 +2699,206 @@ class SmartlightCentralAdapter:
                     "canonicalReportType": "lamp_alarm_analysis",
                 },
             )
+        if report_type == "energy_records":
+            rows, metadata = self._collect_report_rows(
+                self.list_energy_records,
+                worker,
+                report_arguments,
+            )
+            flat_rows = [
+                {
+                    "deviceId": row.get("deviceId"),
+                    "deviceCode": row.get("deviceCode"),
+                    "deviceName": row.get("deviceName"),
+                    "productModel": row.get("productModel"),
+                    "date": point.get("date"),
+                    "value": point.get("value"),
+                    "unit": row.get("unit"),
+                }
+                for row in rows
+                for point in row.get("periodValues") or []
+            ]
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明RTU用电记录",
+                columns=(
+                    ("deviceId", "RTU ID"),
+                    ("deviceCode", "RTU编号"),
+                    ("deviceName", "RTU名称"),
+                    ("productModel", "产品型号"),
+                    ("date", "日期"),
+                    ("value", "页面用电值"),
+                    ("unit", "单位"),
+                ),
+                rows=flat_rows,
+                metadata=metadata,
+            )
+        if report_type == "energy_analysis":
+            analysis = self.analyze_energy(worker, report_arguments)
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明RTU用电分析",
+                columns=(
+                    ("date", "日期"),
+                    ("value", "合计值"),
+                    ("dataPointCount", "有效数据点"),
+                    ("unit", "单位"),
+                ),
+                rows=analysis["dailyTrend"],
+                metadata={
+                    "filters": analysis["filters"],
+                    "downstreamTotal": analysis["downstreamTotal"],
+                    "retrievedCount": analysis["retrievedCount"],
+                    "truncated": analysis["truncated"],
+                    "unit": analysis["unit"],
+                    "warnings": analysis["warnings"],
+                    "topDevices": analysis["topDevices"],
+                },
+            )
+        if report_type == "lamp_survey_records":
+            rows, metadata = self._collect_report_rows(
+                self.list_lamp_survey_records,
+                worker,
+                report_arguments,
+            )
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明单灯巡测记录",
+                columns=(
+                    ("id", "记录ID"),
+                    ("receivedAt", "平台接收时间"),
+                    ("deviceTime", "设备时间"),
+                    ("lampPostCode", "灯杆编号"),
+                    ("lampPostName", "灯杆名称"),
+                    ("lampName", "灯具"),
+                    ("road", "道路"),
+                    ("cabinet", "控制箱"),
+                    ("voltage", "电压"),
+                    ("current", "电流"),
+                    ("activePower", "有功功率"),
+                    ("powerFactor", "功率因数"),
+                    ("alarmContent", "异常内容"),
+                ),
+                rows=rows,
+                metadata=metadata,
+            )
+        if report_type in {"rtu_leakage_alarms", "rtu_leakage_analysis"}:
+            rows, metadata = self._collect_report_rows(
+                self.list_rtu_leakage_alarms,
+                worker,
+                report_arguments,
+            )
+            metadata["reportSemantics"] = (
+                "bounded_analysis_source_rows"
+                if report_type == "rtu_leakage_analysis"
+                else "alarm_rows"
+            )
+            return _smartlight_report_result(
+                report_type=report_type,
+                title=(
+                    "照明RTU支路漏电分析明细"
+                    if report_type == "rtu_leakage_analysis"
+                    else "照明RTU支路漏电报警"
+                ),
+                columns=(
+                    ("id", "告警ID"),
+                    ("occurredAt", "首次发生时间"),
+                    ("lastActivityAt", "最近活动时间"),
+                    ("rtuCode", "RTU编号"),
+                    ("rtuName", "RTU名称"),
+                    ("cabinet", "控制箱"),
+                    ("branch", "支路"),
+                    ("leakageCurrent", "漏电电流"),
+                    ("leakageUnit", "单位"),
+                    ("threshold", "阈值"),
+                    ("stateLabel", "状态"),
+                    ("remark", "备注"),
+                ),
+                rows=rows,
+                metadata=metadata,
+            )
+        if report_type == "inspection_logs":
+            rows, metadata = self._collect_report_rows(
+                self.list_inspection_logs,
+                worker,
+                report_arguments,
+            )
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明巡检日志统计",
+                columns=(
+                    ("groupId", "巡检组ID"),
+                    ("groupName", "巡检组"),
+                    ("shouldChecked", "应巡数量"),
+                    ("actuallyChecked", "实巡数量"),
+                    ("normal", "正常数量"),
+                    ("abnormal", "异常数量"),
+                ),
+                rows=rows,
+                metadata=metadata,
+            )
+        if report_type == "maintenance_records":
+            rows, metadata = self._collect_report_rows(
+                self.list_maintenance_records,
+                worker,
+                report_arguments,
+            )
+            return _smartlight_report_result(
+                report_type=report_type,
+                title="照明检修记录",
+                columns=(
+                    ("recordId", "检修记录ID"),
+                    ("overhauledAt", "检修时间"),
+                    ("overhaulUserName", "检修人员"),
+                    ("deviceType", "设备类型"),
+                    ("deviceCode", "设备编号"),
+                    ("road", "道路"),
+                ),
+                rows=rows,
+                metadata=metadata,
+            )
         if report_type == "asset_inventory":
             return self._export_asset_inventory(worker, report_arguments)
         return self._export_inspection_progress(worker, report_arguments)
+
+    def _collect_report_rows(self, method, worker, arguments: dict) -> tuple[list[dict], dict]:
+        rows: list[dict] = []
+        first_result: dict | None = None
+        fixed_arguments = dict(arguments)
+        for page in range(1, (_SMARTLIGHT_ANALYSIS_LIMIT // 100) + 1):
+            result = method(worker, {**fixed_arguments, "page": page, "size": 100})
+            if first_result is None:
+                first_result = result
+                filters = result.get("filters") if isinstance(result, dict) else None
+                if isinstance(filters, dict):
+                    for input_name, filter_name in (
+                        ("start_date", "startDate"),
+                        ("end_date", "endDate"),
+                        ("start_time", "startTime"),
+                        ("end_time", "endTime"),
+                    ):
+                        if filters.get(filter_name):
+                            fixed_arguments[input_name] = filters[filter_name]
+                    fixed_arguments.pop("last_days", None)
+            page_rows = result.get("items") if isinstance(result, dict) else None
+            if not isinstance(page_rows, list):
+                page_rows = []
+            rows.extend(item for item in page_rows if isinstance(item, dict))
+            total = int(result.get("total") or result.get("downstreamTotal") or 0)
+            if not page_rows or len(rows) >= total or len(rows) >= _SMARTLIGHT_ANALYSIS_LIMIT:
+                break
+        first_result = first_result or {}
+        downstream_total = int(first_result.get("downstreamTotal") or 0)
+        return rows[:_SMARTLIGHT_ANALYSIS_LIMIT], {
+            "filters": first_result.get("filters") or {},
+            "timezone": first_result.get("timezone"),
+            "sourcePage": first_result.get("sourcePage"),
+            "sourceKind": first_result.get("sourceKind"),
+            "warnings": first_result.get("warnings") or [],
+            "downstreamTotal": downstream_total,
+            "retrievedCount": len(rows),
+            "truncated": downstream_total > len(rows),
+        }
 
     def _export_asset_inventory(self, worker, arguments: dict) -> dict:
         context = self._principal_context(worker)
@@ -3268,6 +4164,163 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
             workflow="smartlight-rtu-survey-records-v1",
         ),
         CapabilitySpec(
+            name=SMARTLIGHT_ENERGY_RECORD_LIST_CAPABILITY,
+            version="0.1.0",
+            description="Read bounded daily RTU energy values from the energy-record page.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "device_id": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 92},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-energy-record-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_ENERGY_ANALYSIS_CAPABILITY,
+            version="0.1.0",
+            description="Analyze bounded downstream daily energy values without inventing units.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "device_id": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 366},
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-energy-analysis-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_LAMP_SURVEY_RECORDS_CAPABILITY,
+            version="0.1.0",
+            description="Read bounded single-lamp telemetry history, not inspection-task records.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "lamp_post_id": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-lamp-survey-records-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_LEAKAGE_ALARM_LIST_CAPABILITY,
+            version="0.1.0",
+            description="List real RTU branch-leakage alarms from the dedicated leakage page.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "alarm_state": {
+                        "type": "string",
+                        "enum": ["all", "current", "cleared"],
+                    },
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 366},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-leakage-alarm-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_RTU_LEAKAGE_ANALYSIS_CAPABILITY,
+            version="0.1.0",
+            description="Analyze at most 500 dedicated RTU branch-leakage alarm records.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "alarm_state": {
+                        "type": "string",
+                        "enum": ["all", "current", "cleared"],
+                    },
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 366},
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-rtu-leakage-analysis-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_OFF_HOURS_CURRENT_LIST_CAPABILITY,
+            version="0.1.0",
+            description="Read current observations recorded by the off-hours-current page.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-off-hours-current-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_INSPECTION_LOG_LIST_CAPABILITY,
+            version="0.1.0",
+            description="Read inspection-log group statistics without inferring person-level events.",
+            input_schema=_paged_schema(
+                {
+                    "plan_id": {"type": "string"},
+                    "group": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 366},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-inspection-log-list-v1",
+        ),
+        CapabilitySpec(
+            name=SMARTLIGHT_MAINTENANCE_RECORD_LIST_CAPABILITY,
+            version="0.1.0",
+            description="List bounded RTU and lamp-post maintenance records.",
+            input_schema=_paged_schema(
+                {
+                    "keyword": {"type": "string"},
+                    "overhaul_user": {"type": "string"},
+                    "device_type": {
+                        "type": "string",
+                        "enum": ["all", "rtu", "lamppost"],
+                    },
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "last_days": {"type": "integer", "minimum": 1, "maximum": 366},
+                }
+            ),
+            output_schema={"type": "object"},
+            effect="read",
+            adapter=SMARTLIGHT_ADAPTER_ID,
+            workflow="smartlight-maintenance-record-list-v1",
+        ),
+        CapabilitySpec(
             name=SMARTLIGHT_ALARM_LIST_CAPABILITY,
             version="0.3.0",
             description=(
@@ -3473,7 +4526,7 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
         ),
         CapabilitySpec(
             name=SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
-            version="0.1.0",
+            version="0.2.0",
             description=(
                 "Export a bounded Smartlight alarm, leakage, asset, or inspection "
                 "report through the generic AgentBridge file-delivery contract."
@@ -3489,6 +4542,13 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
                             "leakage_analysis",
                             "asset_inventory",
                             "inspection_progress",
+                            "energy_records",
+                            "energy_analysis",
+                            "lamp_survey_records",
+                            "rtu_leakage_alarms",
+                            "rtu_leakage_analysis",
+                            "inspection_logs",
+                            "maintenance_records",
                         ],
                     },
                     "asset_type": {
@@ -3513,6 +4573,17 @@ def build_smartlight_capability_registry() -> CapabilityRegistry:
                     "detail_date": {"type": "string"},
                     "clockin_user": {"type": "string"},
                     "has_issues": {"type": ["boolean", "null"]},
+                    "device_id": {"type": "string"},
+                    "lamp_post_id": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "plan_id": {"type": "string"},
+                    "group": {"type": "string"},
+                    "overhaul_user": {"type": "string"},
+                    "device_type": {
+                        "type": "string",
+                        "enum": ["all", "rtu", "lamppost"],
+                    },
                 },
                 "required": ["report_type"],
                 "additionalProperties": False,
@@ -4144,6 +5215,80 @@ def _resolve_survey_time_range(
     )
 
 
+def _resolve_bounded_date_range(
+    arguments: dict,
+    *,
+    default_days: int,
+    maximum_days: int,
+    range_name: str,
+    now: datetime | None = None,
+) -> tuple[str, str, str, int | None]:
+    start_text = str(arguments.get("start_date") or "").strip()
+    end_text = str(arguments.get("end_date") or "").strip()
+    raw_last_days = arguments.get("last_days")
+    if raw_last_days not in (None, "") and (start_text or end_text):
+        raise ValueError("last_days cannot be combined with start_date or end_date")
+    business_now = (now or datetime.now(_SMARTLIGHT_BUSINESS_TIMEZONE)).astimezone(
+        _SMARTLIGHT_BUSINESS_TIMEZONE
+    )
+    if raw_last_days not in (None, ""):
+        last_days = _bounded_int(
+            raw_last_days,
+            default=default_days,
+            minimum=1,
+            maximum=maximum_days,
+        )
+        end = business_now.date()
+        start = end - timedelta(days=last_days - 1)
+        return start.isoformat(), end.isoformat(), "last_days", last_days
+    if not start_text and not end_text:
+        end = business_now.date()
+        start = end - timedelta(days=default_days - 1)
+        return start.isoformat(), end.isoformat(), "default_last_days", default_days
+    if bool(start_text) != bool(end_text):
+        raise ValueError("start_date and end_date must be provided together")
+    start = datetime.strptime(_optional_date(start_text, "start_date"), "%Y-%m-%d").date()
+    end = datetime.strptime(_optional_date(end_text, "end_date"), "%Y-%m-%d").date()
+    if start > end:
+        raise ValueError("start_date cannot be after end_date")
+    if (end - start).days + 1 > maximum_days:
+        raise ValueError(f"{range_name} range cannot exceed {maximum_days} days")
+    return start.isoformat(), end.isoformat(), "explicit", None
+
+
+def _resolve_bounded_time_range(
+    arguments: dict,
+    *,
+    default_hours: int,
+    maximum_days: int,
+    range_name: str,
+    now: datetime | None = None,
+) -> tuple[str, str, str]:
+    start_text = str(arguments.get("start_time") or "").strip()
+    end_text = str(arguments.get("end_time") or "").strip()
+    if bool(start_text) != bool(end_text):
+        raise ValueError("start_time and end_time must be provided together")
+    if not start_text:
+        end = (now or datetime.now(_SMARTLIGHT_BUSINESS_TIMEZONE)).astimezone(
+            _SMARTLIGHT_BUSINESS_TIMEZONE
+        )
+        start = end - timedelta(hours=default_hours)
+        source = f"default_last_{default_hours}_hours"
+    else:
+        start = _parse_business_datetime(start_text, "start_time")
+        end = _parse_business_datetime(end_text, "end_time")
+        source = "explicit"
+    if start > end:
+        raise ValueError("start_time cannot be after end_time")
+    if end - start > timedelta(days=maximum_days):
+        raise ValueError(f"{range_name} range cannot exceed {maximum_days} days")
+    return (
+        start.strftime("%Y-%m-%d %H:%M:%S"),
+        end.strftime("%Y-%m-%d %H:%M:%S"),
+        source,
+    )
+
+
 def _parse_business_datetime(value: str, field_name: str) -> datetime:
     normalized = value.replace("T", " ")
     for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
@@ -4210,6 +5355,228 @@ def _normalize_rtu_survey(item: dict) -> dict:
         "alarmContent": _first(item, "hitchIntro", "alarmContent", "hitchContent")
         or ("正常" if _smartlight_int(item.get("isSucceeded")) == 1 else None),
     }
+
+
+def _normalize_energy_record(item: dict) -> dict:
+    values = item.get("item") if isinstance(item.get("item"), dict) else {}
+    period_values = [
+        {
+            "date": str(date),
+            "value": None if value in (None, "", "--") else value,
+            "rawValue": value,
+        }
+        for date, value in sorted(values.items(), key=lambda pair: str(pair[0]))
+    ]
+    return {
+        "deviceId": _first(item, "ID", "rtuId", "id"),
+        "deviceCode": _first(item, "code", "rtuCode", "deviceCode"),
+        "deviceName": _first(item, "name", "rtuName", "deviceName"),
+        "productModel": _first(item, "productModel", "rtuModel", "model"),
+        "reportDate": _first(item, "reportDate"),
+        "unit": _first(item, "unit", "unitName", "energyUnit"),
+        "periodValues": period_values,
+        "downstreamSummary": {
+            "total": _first(item, "total"),
+            "average": _first(item, "avg"),
+            "samePeriodAverage": _first(item, "savg"),
+            "realElectricity": _first(item, "realElectDegree"),
+            "theoreticalElectricity": _first(item, "theoryElectDegree"),
+            "savedElectricity": _first(item, "saveElectDegree"),
+            "savingRate": _first(item, "saveSlectDegree", "avgRate"),
+        },
+        "rtuEmpty": _smartlight_bool(item.get("rtuEmpty")),
+    }
+
+
+def _energy_warnings(items: list[dict]) -> list[str]:
+    warnings: list[str] = []
+    if items and not any(item.get("unit") not in (None, "") for item in items):
+        warnings.append("用电量页面响应未明确返回单位，结果保留原值且不猜测单位。")
+    missing = sum(
+        1
+        for item in items
+        for point in item.get("periodValues") or []
+        if point.get("value") is None
+    )
+    if missing:
+        warnings.append(f"下游以空值或 -- 返回了 {missing} 个缺失数据点。")
+    return warnings
+
+
+def _normalize_lamp_survey(item: dict) -> dict:
+    alarms = item.get("hitchAlarms") if isinstance(item.get("hitchAlarms"), list) else []
+    return {
+        "id": _first(item, "hisCoplogId", "coplogId", "id"),
+        "lampPostId": _first(item, "lampPostId", "LampPostID"),
+        "lampPostCode": _first(item, "lampPostCode", "LampPostCode"),
+        "lampPostName": _first(item, "lampPostName", "LampPostName"),
+        "lampId": _first(item, "aloneLampId", "lampId"),
+        "lampName": _first(item, "lampEffectName", "aloneLampName", "lampName"),
+        "controllerId": _first(item, "aloneLampControlId", "controllerId"),
+        "road": _first(item, "streetName", "roadName"),
+        "cabinet": _first(item, "controlCabinetName", "cabinetName"),
+        "rtu": _first(item, "rtuName", "rtuCode"),
+        "deviceTime": _first(item, "deviceTime", "lampDateTime", "rtuDateTime"),
+        "receivedAt": _first(item, "copDate", "addDateTime", "addDate"),
+        "controllerOnline": _smartlight_bool(_first(item, "IsOnline", "isOnline", "online")),
+        "switchOn": _smartlight_bool(_first(item, "IsSwitchOn", "isSwitchOn", "switchOn")),
+        "voltage": _first(item, "U", "voltage", "lampU"),
+        "current": _first(item, "I", "current", "lampIsp"),
+        "activePower": _first(item, "Ap", "activePower"),
+        "powerFactor": _first(item, "Pf", "powerFactor"),
+        "energy": _first(item, "energy", "electricDegree"),
+        "dimming": _first(item, "dimmingValue", "dimming"),
+        "alarmContent": _first(item, "hitchIntro", "alarmContent"),
+        "hasAlarm": bool(alarms),
+        "alarms": _bounded_json(alarms),
+    }
+
+
+def _normalize_rtu_leakage_alarm(item: dict) -> dict:
+    base = _normalize_alarm(item)
+    return {
+        "id": base.get("id"),
+        "rtuId": _first(item, "rtuId"),
+        "rtuCode": _first(item, "rtuCode", "deviceCode"),
+        "rtuName": _first(item, "rtuName", "deviceName", "controlCabinetName"),
+        "cabinet": _first(item, "controlCabinetName", "cabinetName"),
+        "branchId": _first(item, "relayId", "roadId", "branchId"),
+        "branch": _first(item, "relayName", "roadName", "branchName", "relayCode"),
+        "leakageCurrent": _first(
+            item,
+            "leakageCurrent",
+            "relayLeakCurrent",
+            "leakCurrent",
+            "currentValue",
+        ),
+        "leakageUnit": _first(item, "leakageUnit", "currentUnit", "unit"),
+        "threshold": _first(item, "leakageThreshold", "threshold", "alarmValue"),
+        "occurredAt": base.get("occurredAt"),
+        "lastActivityAt": base.get("lastActivityAt"),
+        "clearedAt": _first(item, "clearDate", "recoverTime", "endTime"),
+        "stateCode": base.get("stateCode"),
+        "stateLabel": base.get("stateLabel"),
+        "alarmType": base.get("type"),
+        "message": base.get("message"),
+        "remark": _first(item, "remark"),
+        "workArea": base.get("workArea"),
+        "workAreaSubmitted": base.get("workAreaSubmitted"),
+        "workAreaSubmitState": base.get("workAreaSubmitState"),
+    }
+
+
+def _rtu_leakage_warnings(items: list[dict]) -> list[str]:
+    warnings: list[str] = []
+    if items and not any(item.get("leakageUnit") not in (None, "") for item in items):
+        warnings.append("RTU 支路漏电响应未明确返回电流单位，结果不猜测单位。")
+    if items and not any(item.get("threshold") not in (None, "") for item in items):
+        warnings.append("下游记录未返回报警阈值，结果不自行推断阈值。")
+    return warnings
+
+
+def _normalize_off_hours_current(item: dict) -> dict:
+    return {
+        "id": _first(item, "hisCoplogPhaseId", "coplogId", "id"),
+        "rtuId": _first(item, "rtuId"),
+        "rtuCode": _first(item, "rtuCode", "deviceCode"),
+        "rtuName": _first(item, "rtuName", "deviceName"),
+        "cabinet": _first(item, "controlCabinetName", "cabinetName"),
+        "branchId": _first(item, "relayId", "roadId", "branchId"),
+        "branch": _first(item, "relayName", "roadName", "branchName"),
+        "observedAt": _first(item, "addDateTime", "copDate", "deviceTime"),
+        "current": _first(item, "current", "relayCurrent", "relayIsp", "avgCurrent"),
+        "averageCurrent": _first(item, "avgCurrent", "averageCurrent"),
+        "maximumCurrent": _first(item, "maxCurrent", "maximumCurrent"),
+        "unit": _first(item, "currentUnit", "unit"),
+        "downstreamRating": _first(item, "rating"),
+    }
+
+
+def _normalize_inspection_log_summary(item: dict) -> dict:
+    return {
+        "groupId": _first(item, "groupId"),
+        "groupName": _first(item, "groupName"),
+        "shouldChecked": _smartlight_int(item.get("shouldChecked")),
+        "actuallyChecked": _smartlight_int(_first(item, "reality", "actuallyChecked")),
+        "normal": _smartlight_int(item.get("normal")),
+        "abnormal": _smartlight_int(item.get("abnormal")),
+        "levelCounts": {
+            "statistical": _smartlight_int(item.get("statisLevel")),
+            "level1": _smartlight_int(item.get("oneLevel")),
+            "level2": _smartlight_int(item.get("twoLevel")),
+            "level3": _smartlight_int(item.get("threeLevel")),
+        },
+        "isTotalRow": str(item.get("groupName") or "").strip() == "合计",
+    }
+
+
+def _normalize_maintenance_record(item: dict) -> dict:
+    raw_type = _smartlight_int(item.get("deviceType"))
+    device_type = {1: "rtu", 2: "lamppost"}.get(raw_type, "unknown")
+    return {
+        "recordId": _first(item, "id", "overhaulId"),
+        "deviceId": _first(item, "deviceId"),
+        "deviceCode": _first(item, "deviceCode"),
+        "deviceType": device_type,
+        "deviceTypeCode": raw_type,
+        "overhauledAt": _first(item, "overhaulTimeStr", "overhaulTime"),
+        "overhaulUserId": _first(item, "overhaulUserId"),
+        "overhaulUserName": _first(item, "overhaulUserName", "overhaulUser"),
+        "road": _first(item, "streetName", "roadName"),
+        "location": {
+            "longitude": _first(item, "wgs84xTude", "longitude"),
+            "latitude": _first(item, "wgs84yTude", "latitude"),
+        },
+        "stableDetailAvailable": False,
+    }
+
+
+def _standard_page_result(
+    *,
+    scope: str,
+    filters: dict,
+    page: int,
+    size: int,
+    payload: Any,
+    items: list[dict],
+    source_page: str,
+    source_kind: str,
+    warnings: list[str],
+    extra: dict | None = None,
+) -> dict:
+    result = {
+        "scope": scope,
+        "filters": filters,
+        "observedAt": datetime.now(timezone.utc).isoformat(),
+        "timezone": _SMARTLIGHT_BUSINESS_TIMEZONE_NAME,
+        "page": page,
+        "size": size,
+        "downstreamTotal": _page_total(payload),
+        "returnedCount": len(items),
+        "count": len(items),
+        "truncated": False,
+        "sourcePage": source_page,
+        "sourceKind": source_kind,
+        "warnings": warnings,
+        "items": items,
+    }
+    if extra:
+        result.update(extra)
+    return result
+
+
+def _smartlight_number(value: Any) -> float | None:
+    if value in (None, "", "--") or isinstance(value, bool):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _rounded_number(value: float) -> int | float:
+    rounded = round(value, 6)
+    return int(rounded) if rounded.is_integer() else rounded
 
 
 def _survey_state_label(item: dict) -> Any:

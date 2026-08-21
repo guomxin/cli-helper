@@ -48,7 +48,7 @@ class CentralCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["protocolVersion"], "0.1")
-        self.assertEqual(len(payload["capabilities"]), 75)
+        self.assertEqual(len(payload["capabilities"]), 83)
         capabilities = {item["name"]: item for item in payload["capabilities"]}
         self.assertIn("oa.template.list", capabilities)
         self.assertIn("oa.workflow.pending.list", capabilities)
@@ -69,6 +69,14 @@ class CentralCliTests(unittest.TestCase):
             "smartlight.alarm.analysis",
             "smartlight.inspection_task.detail",
             "smartlight.leakage.analysis",
+            "smartlight.energy_record.list",
+            "smartlight.energy.analysis",
+            "smartlight.lamp.survey.records",
+            "smartlight.rtu.leakage_alarm.list",
+            "smartlight.rtu.leakage_alarm.analysis",
+            "smartlight.rtu.off_hours_current.list",
+            "smartlight.inspection_log.list",
+            "smartlight.maintenance_record.list",
             "smartlight.report.export",
         ):
             self.assertEqual(capabilities[capability_name]["effect"], "read")
