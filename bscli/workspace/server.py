@@ -258,18 +258,46 @@ def create_workspace_http_server(
                     return
                 if route.path == "/api/timeline":
                     after_value = _query_value(query, "after")
+                    before_value = _query_value(query, "before")
                     after_sequence = (
                         int(after_value) if after_value is not None else None
                     )
+                    before_sequence = (
+                        int(before_value) if before_value is not None else None
+                    )
+                    entry_type = _query_value(query, "entry_type")
+                    requested_limit = min(
+                        max(_query_int(query, "limit", 200), 1),
+                        500,
+                    )
+                    items = application.list_timeline(
+                        account,
+                        after_sequence=after_sequence,
+                        before_sequence=before_sequence,
+                        entry_type=entry_type,
+                        limit=requested_limit + 1,
+                    )
+                    has_more = len(items) > requested_limit
+                    if has_more:
+                        items = (
+                            items[:requested_limit]
+                            if after_sequence is not None
+                            else items[-requested_limit:]
+                        )
+                    global_cursor = application.timeline_cursor(account)
                     self._json(
                         200,
                         {
-                            "items": application.list_timeline(
-                                account,
-                                after_sequence=after_sequence,
-                                limit=_query_int(query, "limit", 200),
+                            "items": items,
+                            "cursor": (
+                                items[-1]["sequence"]
+                                if has_more and after_sequence is not None
+                                else global_cursor
                             ),
-                            "cursor": application.timeline_cursor(account),
+                            "oldestSequence": (
+                                items[0]["sequence"] if items else None
+                            ),
+                            "hasMore": has_more,
                         },
                     )
                     return

@@ -13,6 +13,9 @@ const state = {
   clientVersionTimer: null,
   clientVersionCheckActive: false,
   timelineCursor: 0,
+  chatTimelineOldestSequence: 0,
+  chatTimelineHasOlder: false,
+  chatTimelineLoadingOlder: false,
   liveMessages: new Map(),
   activeStreams: new Map(),
   historyMessages: new Map(),
@@ -258,6 +261,9 @@ async function logout() {
   state.taskCardMeta.clear();
   state.composerAttachments = [];
   state.timelineCursor = 0;
+  state.chatTimelineOldestSequence = 0;
+  state.chatTimelineHasOlder = false;
+  state.chatTimelineLoadingOlder = false;
   state.account = null;
   location.reload();
 }
@@ -294,9 +300,10 @@ async function loadGatewayStatus() {
 async function loadChat() {
   const container = $("#chat-messages");
   try {
-    const [history, timeline] = await Promise.all([
+    const [history, taskTimeline, chatTimeline] = await Promise.all([
       api("/api/chat/history?limit=120"),
-      api("/api/timeline?limit=240"),
+      api("/api/timeline?entry_type=task_event&limit=240"),
+      api("/api/timeline?entry_type=chat_message&limit=500"),
     ]);
     state.historyMessages.clear();
     history.messages.forEach((message, index) => {
@@ -310,10 +317,24 @@ async function loadChat() {
       state.historyMessages.set(key, item);
     });
     state.localMessages.clear();
-    timeline.items.forEach((entry) => ingestTimelineEntry(entry, false));
+    taskTimeline.items.forEach((entry) => ingestTimelineEntry(entry, false));
+    chatTimeline.items.forEach((entry) => ingestTimelineEntry(entry, false));
+    state.chatTimelineOldestSequence = Math.min(
+      ...[
+        Number(chatTimeline.oldestSequence) || 0,
+        ...[...state.syncedMessages.values()].map(
+          (item) => Number(item.dataset.timelineOrder) || 0,
+        ),
+      ].filter((sequence) => sequence > 0),
+    );
+    if (!Number.isFinite(state.chatTimelineOldestSequence)) {
+      state.chatTimelineOldestSequence = 0;
+    }
+    state.chatTimelineHasOlder = Boolean(chatTimeline.hasMore);
     state.timelineCursor = Math.max(
       state.timelineCursor,
-      Number(timeline.cursor) || 0,
+      Number(taskTimeline.cursor) || 0,
+      Number(chatTimeline.cursor) || 0,
     );
     dismissTerminalLiveMessages();
     await hydrateTaskCards({ render: false });
@@ -439,7 +460,7 @@ function ingestTimelineEntry(entry, render = true) {
   state.timelineCursor = Math.max(state.timelineCursor, sequence);
   if (entry?.entry_type === "chat_message") {
     if (entry.source?.is_origin) {
-      reconcileOriginChatMessage(entry);
+      reconcileOriginChatMessage(entry, render);
       return;
     }
     if (!entry.entry_id || !entry.text) return;
@@ -514,7 +535,51 @@ function renderChatTimeline() {
     );
     return;
   }
-  container.replaceChildren(...stable, ...live);
+  const olderControl = state.chatTimelineHasOlder
+    ? [olderChatControl()]
+    : [];
+  container.replaceChildren(...olderControl, ...stable, ...live);
+}
+
+function olderChatControl() {
+  const wrapper = document.createElement("div");
+  wrapper.className = "chat-history-control";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary compact";
+  button.disabled = state.chatTimelineLoadingOlder;
+  button.textContent = state.chatTimelineLoadingOlder
+    ? "正在加载..."
+    : "加载更早消息";
+  button.addEventListener("click", loadOlderChatMessages);
+  wrapper.append(button);
+  return wrapper;
+}
+
+async function loadOlderChatMessages() {
+  const before = Number(state.chatTimelineOldestSequence) || 0;
+  if (!before || state.chatTimelineLoadingOlder) return;
+  const container = $("#chat-messages");
+  const previousHeight = container.scrollHeight;
+  const previousTop = container.scrollTop;
+  state.chatTimelineLoadingOlder = true;
+  renderChatTimeline();
+  try {
+    const result = await api(
+      `/api/timeline?entry_type=chat_message&before=${encodeURIComponent(before)}&limit=500`,
+    );
+    const items = Array.isArray(result.items) ? result.items : [];
+    items.forEach((entry) => ingestTimelineEntry(entry, false));
+    const oldest = Number(result.oldestSequence) || 0;
+    if (oldest) state.chatTimelineOldestSequence = oldest;
+    state.chatTimelineHasOlder = Boolean(result.hasMore);
+  } catch (error) {
+    toast(`加载更早消息失败：${friendlyError(error)}`, true);
+  } finally {
+    state.chatTimelineLoadingOlder = false;
+    renderChatTimeline();
+    container.scrollTop = previousTop + container.scrollHeight - previousHeight;
+  }
 }
 
 async function handleComposerPaste(event) {
@@ -909,12 +974,12 @@ function unregisterActiveStream(activeStream) {
   });
 }
 
-function reconcileOriginChatMessage(entry) {
+function reconcileOriginChatMessage(entry, render = true) {
   if (!entry?.text) return;
   const messageKey = String(entry.message_key || "");
   if (entry.role === "user") {
     const images = timelineEntryImages(entry);
-    if (images.length === 0 || !entry.entry_id) return;
+    if (!entry.entry_id) return;
     const localPrefix = "workspace:user:";
     if (messageKey.startsWith(localPrefix)) {
       state.localMessages.delete(messageKey.slice(localPrefix.length));
@@ -935,7 +1000,7 @@ function reconcileOriginChatMessage(entry) {
       createdAt: entry.created_at,
       order: Number(entry.sequence) || 0,
     });
-    renderChatTimeline();
+    if (render) renderChatTimeline();
     return;
   }
   if (entry.role !== "assistant") return;
@@ -983,7 +1048,7 @@ function reconcileOriginChatMessage(entry) {
     createdAt: entry.created_at,
     order: Number(entry.sequence) || 0,
   });
-  renderChatTimeline();
+  if (render) renderChatTimeline();
 }
 
 function timelineEntryImages(entry) {

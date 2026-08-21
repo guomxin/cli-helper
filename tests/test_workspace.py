@@ -1882,6 +1882,43 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                     json.dumps(timeline, ensure_ascii=False),
                 )
 
+                status, _, chat_page = _request(
+                    port,
+                    "GET",
+                    "/api/timeline?entry_type=chat_message&limit=2",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(chat_page["items"]), 2)
+                self.assertTrue(chat_page["hasMore"])
+                self.assertTrue(
+                    all(
+                        item["entry_type"] == "chat_message"
+                        for item in chat_page["items"]
+                    )
+                )
+                self.assertEqual(
+                    chat_page["oldestSequence"],
+                    chat_page["items"][0]["sequence"],
+                )
+
+                status, _, older_chat_page = _request(
+                    port,
+                    "GET",
+                    (
+                        "/api/timeline?entry_type=chat_message&limit=2&before="
+                        f"{chat_page['oldestSequence']}"
+                    ),
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(older_chat_page["items"]), 2)
+                self.assertFalse(older_chat_page["hasMore"])
+                self.assertLess(
+                    older_chat_page["items"][-1]["sequence"],
+                    chat_page["oldestSequence"],
+                )
+
                 status, _, endpoints = _request(
                     port,
                     "GET",
@@ -1958,7 +1995,19 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
         self.assertIn("streamFailure.safeToRetry === true", script)
         self.assertIn("hydrateTaskCards", script)
         self.assertIn("upsertTaskCard", script)
-        self.assertIn('api("/api/timeline?limit=240")', script)
+        self.assertIn(
+            'api("/api/timeline?entry_type=task_event&limit=240")',
+            script,
+        )
+        self.assertIn(
+            'api("/api/timeline?entry_type=chat_message&limit=500")',
+            script,
+        )
+        self.assertIn("loadOlderChatMessages", script)
+        self.assertIn("加载更早消息", script)
+        self.assertIn("chatTimelineOldestSequence", script)
+        self.assertIn("chat-history-control", stylesheet)
+        self.assertNotIn("images.length === 0 || !entry.entry_id", script)
         self.assertIn("openTimelineStream", script)
         self.assertIn("renderChatTimeline", script)
         self.assertEqual(script.count("dismissTerminalLiveMessages();"), 2)

@@ -1662,11 +1662,62 @@ class TaskHubStore:
         *,
         user_subject: str,
         after_sequence: int | None = None,
+        before_sequence: int | None = None,
+        entry_type: str | None = None,
         limit: int = 200,
     ) -> list[dict]:
-        limit = min(max(int(limit), 1), 500)
+        if after_sequence is not None and before_sequence is not None:
+            raise ValueError("after_sequence and before_sequence are mutually exclusive")
+        if entry_type not in {None, "chat_message", "task_event"}:
+            raise ValueError("entry_type must be chat_message or task_event")
+        limit = min(max(int(limit), 1), 1000)
         with self._connect() as connection:
-            if after_sequence is None:
+            if after_sequence is not None:
+                after_sequence = max(int(after_sequence), 0)
+                if entry_type is None:
+                    rows = connection.execute(
+                        """
+                        SELECT * FROM user_timeline
+                        WHERE user_subject = ? AND sequence > ?
+                        ORDER BY sequence
+                        LIMIT ?
+                        """,
+                        (user_subject, after_sequence, limit),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        """
+                        SELECT * FROM user_timeline
+                        WHERE user_subject = ? AND sequence > ? AND entry_type = ?
+                        ORDER BY sequence
+                        LIMIT ?
+                        """,
+                        (user_subject, after_sequence, entry_type, limit),
+                    ).fetchall()
+            elif before_sequence is not None:
+                before_sequence = max(int(before_sequence), 1)
+                if entry_type is None:
+                    rows = connection.execute(
+                        """
+                        SELECT * FROM user_timeline
+                        WHERE user_subject = ? AND sequence < ?
+                        ORDER BY sequence DESC
+                        LIMIT ?
+                        """,
+                        (user_subject, before_sequence, limit),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        """
+                        SELECT * FROM user_timeline
+                        WHERE user_subject = ? AND sequence < ? AND entry_type = ?
+                        ORDER BY sequence DESC
+                        LIMIT ?
+                        """,
+                        (user_subject, before_sequence, entry_type, limit),
+                    ).fetchall()
+                rows = list(reversed(rows))
+            elif entry_type is None:
                 rows = connection.execute(
                     """
                     SELECT * FROM user_timeline
@@ -1678,16 +1729,16 @@ class TaskHubStore:
                 ).fetchall()
                 rows = list(reversed(rows))
             else:
-                after_sequence = max(int(after_sequence), 0)
                 rows = connection.execute(
                     """
                     SELECT * FROM user_timeline
-                    WHERE user_subject = ? AND sequence > ?
-                    ORDER BY sequence
+                    WHERE user_subject = ? AND entry_type = ?
+                    ORDER BY sequence DESC
                     LIMIT ?
                     """,
-                    (user_subject, after_sequence, limit),
+                    (user_subject, entry_type, limit),
                 ).fetchall()
+                rows = list(reversed(rows))
         return [_timeline_from_row(row) for row in rows]
 
     def latest_timeline_sequence(self, *, user_subject: str) -> int:

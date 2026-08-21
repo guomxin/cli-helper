@@ -1649,6 +1649,66 @@ class TaskHubStoreTests(unittest.TestCase):
             )
         )
 
+    def test_timeline_filters_chat_messages_and_pages_backward(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        messages = []
+        for index, role in enumerate(("user", "assistant", "user"), start=1):
+            entry, reused = self.store.append_timeline_message(
+                user_subject="user-a",
+                source_endpoint_id=endpoint["endpoint_id"],
+                message_key=f"history-{index}",
+                role=role,
+                text=f"message {index}",
+                task_id=task["task_id"],
+            )
+            self.assertFalse(reused)
+            messages.append(entry)
+
+        latest = self.store.list_timeline(
+            user_subject="user-a",
+            entry_type="chat_message",
+            limit=2,
+        )
+        self.assertEqual(
+            [entry["entry_id"] for entry in latest],
+            [messages[1]["entry_id"], messages[2]["entry_id"]],
+        )
+
+        older = self.store.list_timeline(
+            user_subject="user-a",
+            before_sequence=latest[0]["sequence"],
+            entry_type="chat_message",
+            limit=2,
+        )
+        self.assertEqual(
+            [entry["entry_id"] for entry in older],
+            [messages[0]["entry_id"]],
+        )
+
+        after = self.store.list_timeline(
+            user_subject="user-a",
+            after_sequence=messages[0]["sequence"],
+            entry_type="chat_message",
+            limit=2,
+        )
+        self.assertEqual(
+            [entry["entry_id"] for entry in after],
+            [messages[1]["entry_id"], messages[2]["entry_id"]],
+        )
+
+        with self.assertRaises(ValueError):
+            self.store.list_timeline(
+                user_subject="user-a",
+                after_sequence=1,
+                before_sequence=2,
+            )
+        with self.assertRaises(ValueError):
+            self.store.list_timeline(
+                user_subject="user-a",
+                entry_type="unknown",
+            )
+
     def test_initialization_reconciles_legacy_web_push_deliveries(self):
         endpoint, _ = self._endpoint()
         task, _ = self._task(endpoint["endpoint_id"])

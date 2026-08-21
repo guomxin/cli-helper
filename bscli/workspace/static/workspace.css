@@ -418,6 +418,17 @@ code {
   padding: 8px max(0px, calc((100% - 850px) / 2)) 24px;
 }
 
+.chat-history-control {
+  display: flex;
+  justify-content: center;
+  min-height: 32px;
+  padding: 2px 0 10px;
+}
+
+.chat-history-control button {
+  width: auto;
+}
+
 .message {
   width: fit-content;
   max-width: min(720px, 88%);

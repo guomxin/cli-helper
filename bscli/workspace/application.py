@@ -334,6 +334,8 @@ class WorkspaceApplication:
         account: dict,
         *,
         after_sequence: int | None = None,
+        before_sequence: int | None = None,
+        entry_type: str | None = None,
         limit: int = 200,
     ) -> list[dict]:
         endpoints = {
@@ -355,6 +357,8 @@ class WorkspaceApplication:
             for entry in self.service.tasks.list_timeline(
                 user_subject=account["user_subject"],
                 after_sequence=after_sequence,
+                before_sequence=before_sequence,
+                entry_type=entry_type,
                 limit=limit,
             )
         ]
