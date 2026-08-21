@@ -494,6 +494,26 @@ class SmartlightAdapterTests(unittest.TestCase):
             [query["dateType"] for query in alarm_queries],
             ["0", "0", "1", "1"],
         )
+        self.assertTrue(all("codeOrName" in query for query in alarm_queries))
+        self.assertTrue(all("_like_params" not in query for query in alarm_queries))
+
+    def test_alarm_list_sends_keyword_using_the_downstream_device_filter(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+
+        self.adapter.invoke_capability(
+            SMARTLIGHT_ALARM_LIST_CAPABILITY,
+            worker,
+            {"keyword": "五一路东", "page": 1, "size": 20},
+        )
+
+        request = next(
+            item
+            for item in worker.api_requests
+            if item["path"].endswith("/rHisHitchAlarm/getDataByRtuAlarm")
+        )
+        query = json.loads(parse_qs(request["body"])["json"][0])
+        self.assertEqual(query["codeOrName"], "五一路东")
+        self.assertNotIn("_like_params", query)
 
     def test_runtime_name_filters_are_applied_without_sending_names_as_ids(self):
         worker = FakeSmartlightWorker(authenticated=True)

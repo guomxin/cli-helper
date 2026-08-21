@@ -2221,7 +2221,7 @@ class SmartlightCentralAdapter:
             {
                 "json": _json_text(
                     {
-                        "_like_params": keyword,
+                        "codeOrName": keyword,
                         "dateType": date_type,
                         "organroleId": context["organroleId"],
                     }
