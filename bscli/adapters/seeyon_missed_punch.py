@@ -363,13 +363,18 @@ def approve_missed_punch_request(
         if not isinstance(scheduled, dict) or scheduled.get("scheduled") is not True:
             raise MissedPunchOutcomeUnknown("OA did not schedule the approval submission.")
         deadline = time.monotonic() + max(timeout_seconds, 5)
+        last_verification_error: Exception | None = None
         while time.monotonic() < deadline:
             time.sleep(0.8)
-            pending = adapter.list_workflows(
-                worker,
-                collection="pending",
-                arguments={"limit": 100},
-            )
+            try:
+                pending = adapter.list_workflows(
+                    worker,
+                    collection="pending",
+                    arguments={"limit": 100},
+                )
+            except Exception as exc:
+                last_verification_error = exc
+                continue
             if not any(
                 str(item.get("affair_id") or "") == affair_id
                 for item in pending.get("items") or []
@@ -389,6 +394,15 @@ def approve_missed_punch_request(
                     },
                     "transport": "central_browser_session",
                 }
+            last_verification_error = None
+        if last_verification_error is not None:
+            error_type = type(last_verification_error).__name__
+            error_message = str(last_verification_error).strip()
+            error_detail = f"{error_type}: {error_message}" if error_message else error_type
+            raise MissedPunchOutcomeUnknown(
+                "The approval was scheduled, but pending-list verification did not "
+                f"recover before timeout. Last verification error: {error_detail}"
+            ) from last_verification_error
         raise MissedPunchOutcomeUnknown(
             "The approval was scheduled, but the affair remained in the pending list."
         )

@@ -124,6 +124,68 @@ class SeeyonMissedPunchTests(unittest.TestCase):
         self.assertTrue(result["workflow_approved"])
         self.assertEqual(result["verification"]["method"], "pending_disappearance")
 
+    def test_approval_verification_recovers_after_transient_pending_read_error(self):
+        adapter = FakeAdapter()
+        worker = FakeApprovalWorker()
+        prepared = prepare_missed_punch_approval(
+            adapter,
+            worker,
+            {"affair_id": "affair-1", "opinion": "同意"},
+        )
+
+        with (
+            patch("bscli.adapters.seeyon_missed_punch.time.sleep", return_value=None),
+            patch.object(
+                adapter,
+                "list_workflows",
+                side_effect=[RuntimeError("temporary pending read failure"), {"items": []}],
+            ) as pending_read,
+        ):
+            result = approve_missed_punch_request(
+                adapter,
+                worker,
+                prepared["plan"],
+                enter_commit_boundary=lambda: None,
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(pending_read.call_count, 2)
+        self.assertTrue(result["workflow_approved"])
+        self.assertTrue(result["verification"]["confirmed"])
+
+    def test_approval_verification_preserves_persistent_pending_read_error(self):
+        adapter = FakeAdapter()
+        worker = FakeApprovalWorker()
+        prepared = prepare_missed_punch_approval(
+            adapter,
+            worker,
+            {"affair_id": "affair-1", "opinion": "同意"},
+        )
+
+        with (
+            patch("bscli.adapters.seeyon_missed_punch.time.sleep", return_value=None),
+            patch(
+                "bscli.adapters.seeyon_missed_punch.time.monotonic",
+                side_effect=[0, 0, 6],
+            ),
+            patch.object(
+                adapter,
+                "list_workflows",
+                side_effect=RuntimeError("pending API unavailable"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                MissedPunchOutcomeUnknown,
+                "RuntimeError: pending API unavailable",
+            ):
+                approve_missed_punch_request(
+                    adapter,
+                    worker,
+                    prepared["plan"],
+                    enter_commit_boundary=lambda: None,
+                    timeout_seconds=5,
+                )
+
     def test_stale_approval_contract_blocks_before_consumption(self):
         plan = _approval_plan()
         plan["action_contract"]["fingerprint"] = "sha256:stale"
