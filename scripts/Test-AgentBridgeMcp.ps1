@@ -22,6 +22,14 @@ param(
         "SmartlightInspectionDetail",
         "SmartlightAlarmAnalysis",
         "SmartlightLeakageAnalysis",
+        "SmartlightEnergyRecords",
+        "SmartlightEnergyAnalysis",
+        "SmartlightLampSurvey",
+        "SmartlightRtuLeakageAlarms",
+        "SmartlightRtuLeakageAnalysis",
+        "SmartlightOffHoursCurrent",
+        "SmartlightInspectionLogs",
+        "SmartlightMaintenanceRecords",
         "SmartlightReport",
         "OaPendingRead",
         "OaPendingInspect",
@@ -64,7 +72,7 @@ param(
     [string]$YuqueDocument = "",
     [ValidateSet("cabinet", "rtu", "lamppost")]
     [string]$SmartlightAssetType = "rtu",
-    [ValidateSet("alarm_analysis", "lamp_alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress")]
+    [ValidateSet("alarm_analysis", "lamp_alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress", "energy_records", "energy_analysis", "lamp_survey_records", "rtu_leakage_alarms", "rtu_leakage_analysis", "inspection_logs", "maintenance_records")]
     [string]$SmartlightReportType = "alarm_analysis",
     [string]$SmartlightAssetId = "",
     [string]$SmartlightRtuId = "",

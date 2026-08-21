@@ -76,6 +76,20 @@ class OpenClawToolCatalogTests(unittest.TestCase):
             "不是人员巡检任务",
             tools_by_name["smartlight_lamp_survey_records"]["description"],
         )
+        for tool_name in (
+            "smartlight_energy_record_list",
+            "smartlight_energy_analysis",
+            "smartlight_lamp_survey_records",
+            "smartlight_rtu_leakage_alarm_list",
+            "smartlight_rtu_leakage_analysis",
+            "smartlight_off_hours_current_list",
+            "smartlight_inspection_log_list",
+            "smartlight_maintenance_record_list",
+        ):
+            self.assertIn(
+                "不得自行扩大范围",
+                tools_by_name[tool_name]["description"],
+            )
 
 
 if __name__ == "__main__":

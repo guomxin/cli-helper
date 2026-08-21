@@ -155,6 +155,75 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightEnergyRecords",
+    {
+      tool: "smartlight_energy_record_list",
+      arguments: { last_days: 7, page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightEnergyAnalysis",
+    {
+      tool: "smartlight_energy_analysis",
+      arguments: { last_days: 7, top_n: 5 },
+      kind: "smartlightAnalysis",
+    },
+  ],
+  [
+    "SmartlightLampSurvey",
+    {
+      tool: "smartlight_lamp_survey_records",
+      arguments: { page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightRtuLeakageAlarms",
+    {
+      tool: "smartlight_rtu_leakage_alarm_list",
+      arguments: { last_days: 30, page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightRtuLeakageAnalysis",
+    {
+      tool: "smartlight_rtu_leakage_analysis",
+      arguments: { last_days: 30, top_n: 5 },
+      kind: "smartlightAnalysis",
+    },
+  ],
+  [
+    "SmartlightOffHoursCurrent",
+    {
+      tool: "smartlight_off_hours_current_list",
+      arguments: { page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightInspectionLogs",
+    {
+      tool: "smartlight_inspection_log_list",
+      arguments: { last_days: 30, page: 1, size: 5 },
+      kind: "smartlightList",
+    },
+  ],
+  [
+    "SmartlightMaintenanceRecords",
+    {
+      tool: "smartlight_maintenance_record_list",
+      arguments: {
+        start_date: "2024-08-30",
+        end_date: "2024-09-02",
+        page: 1,
+        size: 5,
+      },
+      kind: "smartlightList",
+    },
+  ],
+  [
     "SmartlightReport",
     {
       tool: "smartlight_report_export",
@@ -330,6 +399,14 @@ const REQUIRED_RELEASE_TOOLS = [
   "smartlight_alarm_analysis",
   "smartlight_inspection_task_detail",
   "smartlight_leakage_analysis",
+  "smartlight_energy_record_list",
+  "smartlight_energy_analysis",
+  "smartlight_lamp_survey_records",
+  "smartlight_rtu_leakage_alarm_list",
+  "smartlight_rtu_leakage_analysis",
+  "smartlight_off_hours_current_list",
+  "smartlight_inspection_log_list",
+  "smartlight_maintenance_record_list",
   "smartlight_report_export",
   "smartlight_alarm_remark_update_prepare",
   "smartlight_alarm_remark_update",
@@ -653,6 +730,14 @@ try {
       "smartlight_alarm_analysis",
       "smartlight_inspection_task_detail",
       "smartlight_leakage_analysis",
+      "smartlight_energy_record_list",
+      "smartlight_energy_analysis",
+      "smartlight_lamp_survey_records",
+      "smartlight_rtu_leakage_alarm_list",
+      "smartlight_rtu_leakage_analysis",
+      "smartlight_off_hours_current_list",
+      "smartlight_inspection_log_list",
+      "smartlight_maintenance_record_list",
       "smartlight_report_export",
       "smartlight_alarm_remark_update_prepare",
       "smartlight_alarm_work_area_submit_prepare",

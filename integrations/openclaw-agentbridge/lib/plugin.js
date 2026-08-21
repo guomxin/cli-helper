@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.51";
+export const PLUGIN_VERSION = "0.4.52";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -412,7 +412,8 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
 }
 
 function withPreparedDocumentDeliveryReport(result, report) {
-  const structuredContent = result?.details?.structuredContent;
+  const structuredContent =
+    result?.structuredContent ?? result?.details?.structuredContent;
   if (
     !result ||
     !structuredContent ||
@@ -450,13 +451,13 @@ function withPreparedDocumentDeliveryReport(result, report) {
     : result.content;
   return {
     ...result,
-    ...(Object.hasOwn(result, "structuredContent")
-      ? { structuredContent: updatedStructuredContent }
-      : {}),
+    structuredContent: updatedStructuredContent,
     content,
     details: {
       ...result.details,
-      structuredContent: updatedStructuredContent,
+      ...(Object.hasOwn(result.details || {}, "structuredContent")
+        ? { structuredContent: updatedStructuredContent }
+        : {}),
     },
   };
 }

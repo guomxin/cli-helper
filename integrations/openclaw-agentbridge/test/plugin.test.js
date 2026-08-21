@@ -1190,7 +1190,8 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
   const result = await pendingTool.execute("workspace-pending", { limit: 5 });
 
   assert.equal(responses[0].ok, true);
-  assert.equal(result.details.structuredContent.status, "succeeded");
+  assert.equal(result.structuredContent.status, "succeeded");
+  assert.equal(Object.hasOwn(result.details, "structuredContent"), false);
   assert.equal(requests.length, 4);
   assert.deepEqual(
     requests.map((request) => request.body.params.name),
@@ -3023,6 +3024,43 @@ test("hydrates a trusted card when OpenClaw drops private MCP result metadata", 
     },
   );
   assert.equal(reply.payload.presentation.blocks.at(-1).buttons[0].url, CARD_URL);
+});
+
+test("hydrates a trusted card from top-level structured content", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const calls = [];
+  const client = {
+    async callTool(name, arguments_) {
+      calls.push({ name, arguments_ });
+      return toolResult();
+    },
+  };
+  registerAgentBridgeInteractions(harness.api, { mcpClient: client });
+  bindToolCall(harness, {
+    toolCallId: "tool-hydrate-standard",
+    runId: "run-hydrate-standard",
+    sessionKey: "agent:main:telegram:direct:7052061588",
+  });
+  const result = openClawPublicResult();
+  result.structuredContent = result.details.structuredContent;
+  delete result.details.structuredContent;
+
+  const replacement = await harness.middleware(
+    {
+      toolCallId: "tool-hydrate-standard",
+      toolName: "oa_session_login",
+      result,
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(replacement, undefined);
+  assert.deepEqual(calls, [
+    {
+      name: "agentbridge_interaction_get",
+      arguments_: { interaction_id: "interaction-1234567890" },
+    },
+  ]);
 });
 
 test("does not hydrate a public interaction reference from another MCP server", async () => {

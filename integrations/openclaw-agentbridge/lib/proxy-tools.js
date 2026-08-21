@@ -303,7 +303,6 @@ function createProxyTool({
         details: {
           mcpServer: serverName,
           mcpTool: descriptor.name,
-          structuredContent: result?.structuredContent || null,
           ...(taskId ? { agentbridgeTaskId: taskId } : {}),
         },
       };

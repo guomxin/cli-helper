@@ -2232,6 +2232,8 @@ function interactionDeadline(interaction) {
 
 function trustedAgentBridgeStructuredContent(result, serverName) {
   const details = result?.details;
+  const structuredContent =
+    result?.structuredContent ?? details?.structuredContent;
   if (
     !details ||
     typeof details !== "object" ||
@@ -2239,12 +2241,13 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
     details.mcpServer !== serverName ||
     typeof details.mcpTool !== "string" ||
     !details.mcpTool.trim() ||
-    !details.structuredContent ||
-    typeof details.structuredContent !== "object"
+    !structuredContent ||
+    typeof structuredContent !== "object" ||
+    Array.isArray(structuredContent)
   ) {
     return null;
   }
-  return details.structuredContent;
+  return structuredContent;
 }
 
 function taskIdFromToolResult(result) {

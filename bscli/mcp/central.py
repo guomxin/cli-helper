@@ -2470,6 +2470,7 @@ def create_central_mcp_server(
         description=(
             "读取用电量记录页面按日返回的 RTU 用电显示值。默认最近 7 天，最长 92 天；"
             "下游未返回单位时会明确提示，不猜测单位，也不通过累计读数差分造数。"
+            "连续追问沿用已有时间、设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2509,6 +2510,7 @@ def create_central_mcp_server(
         description=(
             "分析用电量页面按日直接返回的显示值，给出趋势和 RTU 排行。默认最近 30 天，"
             "最长 366 天，最多分析 500 台 RTU；不把缺失值或单位不明的数据强行汇总。"
+            "连续追问沿用已有时间、设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2546,7 +2548,8 @@ def create_central_mcp_server(
         title="查询单灯巡测记录",
         description=(
             "查询灯杆和单灯控制器的历史遥测，默认最近 24 小时，最长 7 天。"
-            "这是设备巡测数据，不是人员巡检任务或巡检日志。"
+            "这是设备巡测数据，不是人员巡检任务或巡检日志。连续追问沿用已有时间、"
+            "设备和筛选条件；上一结果为空时直接说明没有可展开记录，不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2584,6 +2587,7 @@ def create_central_mcp_server(
         description=(
             "读取漏电管理页面的真实 RTU 支路漏电报警，默认最近 30 天，最长 366 天。"
             "普通自然语言“漏电”应优先选择本工具，不得选择旧的单灯告警兼容入口。"
+            "连续追问沿用已有时间、设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2625,7 +2629,8 @@ def create_central_mcp_server(
         title="分析 RTU 支路漏电报警",
         description=(
             "在最多 500 条真实 RTU 支路漏电记录上分析日期趋势、RTU、控制箱和支路排行。"
-            "未返回电流单位或阈值时会保留为空，不自行推断。"
+            "未返回电流单位或阈值时会保留为空，不自行推断。连续追问沿用已有时间、"
+            "设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2662,7 +2667,8 @@ def create_central_mcp_server(
         title="查询关灯时段电流",
         description=(
             "查询关灯时段电流页面记录，默认最近 24 小时，最长 7 天。"
-            "有电流记录不自动等同于漏电、偷电或设备故障。"
+            "有电流记录不自动等同于漏电、偷电或设备故障。连续追问沿用已有时间、"
+            "设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2698,6 +2704,7 @@ def create_central_mcp_server(
         description=(
             "查询巡检日志页面的巡检组统计，默认最近 30 天，最长 366 天。"
             "该页面不返回逐人、逐设备打卡明细，因此不得把统计行描述成具体巡检事件。"
+            "连续追问沿用已有时间、巡检组和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2737,6 +2744,7 @@ def create_central_mcp_server(
         description=(
             "分页查询 RTU 和灯杆检修记录，可按设备编号、检修人员和设备类型筛选。"
             "默认最近 30 天，最长 366 天；本期不开放缺少稳定记录 ID 的统一详情。"
+            "连续追问沿用已有时间、设备和筛选条件；空结果不得自行扩大范围。"
         ),
         annotations=read_annotations,
         structured_output=True,

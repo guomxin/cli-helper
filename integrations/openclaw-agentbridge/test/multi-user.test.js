@@ -920,9 +920,44 @@ test("exposes the governed catalog and proxies raw MCP metadata for a bound user
   assert.equal(requests[0].body.params.name, "oa_session_status");
   assert.equal(result.details.mcpServer, "agentbridge");
   assert.equal(result.details.mcpTool, "oa_session_status");
+  assert.equal(Object.hasOwn(result.details, "structuredContent"), false);
   assert.equal(result.structuredContent.authenticated, true);
   assert.deepEqual(result._meta, {
     "io.agentbridge/test": { private: true },
+  });
+});
+
+test("keeps large MCP payloads out of middleware details", async () => {
+  const requests = [];
+  const items = Array.from({ length: 1_100 }, (_, index) => ({
+    id: `energy-${index}`,
+    value: index,
+  }));
+  const router = createRouter({
+    requests,
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseResult: {
+      content: [{ type: "text", text: JSON.stringify({ items }) }],
+      structuredContent: { status: "succeeded", result: { items } },
+    },
+  });
+  const tools = createAgentBridgeProxyTools({
+    context: toolContext("1001"),
+    identityRouter: router,
+    serverName: "agentbridge",
+  });
+
+  const energyList = tools.find(
+    (tool) => tool.name === "smartlight_energy_record_list",
+  );
+  const result = await energyList.execute("large-energy-list", {
+    last_days: 7,
+  });
+
+  assert.equal(result.structuredContent.result.items.length, 1_100);
+  assert.deepEqual(result.details, {
+    mcpServer: "agentbridge",
+    mcpTool: "smartlight_energy_record_list",
   });
 });
 
