@@ -79,6 +79,14 @@ const CHECKS = new Map([
     },
   ],
   [
+    "SmartlightAlarmRemark",
+    {
+      tool: "smartlight_alarm_remark_get",
+      arguments: { alarm_id: "" },
+      kind: "smartlightAlarmRemark",
+    },
+  ],
+  [
     "SmartlightInspectionTasks",
     {
       tool: "smartlight_inspection_task_list",
@@ -490,6 +498,15 @@ try {
     }
     check.arguments = { asset_type: assetType, asset_id: assetId };
   }
+  if (checkName === "SmartlightAlarmRemark") {
+    const alarmId = argument("--smartlight-alarm-id", "").trim();
+    if (!alarmId) {
+      throw Object.assign(new Error("Smartlight alarm ID is required"), {
+        code: "SMARTLIGHT_ALARM_ID_REQUIRED",
+      });
+    }
+    check.arguments = { alarm_id: alarmId };
+  }
   if (checkName === "SmartlightRtuSurvey") {
     const rtuId = argument("--smartlight-rtu-id", "").trim();
     const rtuKeyword = argument("--smartlight-rtu-keyword", "").trim();
@@ -539,6 +556,13 @@ try {
         "leakage_analysis",
         "asset_inventory",
         "inspection_progress",
+        "energy_records",
+        "energy_analysis",
+        "lamp_survey_records",
+        "rtu_leakage_alarms",
+        "rtu_leakage_analysis",
+        "inspection_logs",
+        "maintenance_records",
       ].includes(reportType)
     ) {
       throw Object.assign(new Error("Smartlight report type is invalid"), {
@@ -547,12 +571,29 @@ try {
     }
     check.arguments = { report_type: reportType };
     if (
-      ["alarm_analysis", "lamp_alarm_analysis", "leakage_analysis"].includes(
-        reportType,
-      )
+      [
+        "alarm_analysis",
+        "lamp_alarm_analysis",
+        "leakage_analysis",
+        "rtu_leakage_analysis",
+      ].includes(reportType)
     ) {
       check.arguments.last_days = 30;
       check.arguments.top_n = 5;
+    } else if (reportType === "energy_analysis") {
+      check.arguments.last_days = 7;
+      check.arguments.top_n = 5;
+    } else if (reportType === "energy_records") {
+      check.arguments.last_days = 7;
+    } else if (reportType === "lamp_survey_records") {
+      check.arguments.last_days = 1;
+    } else if (reportType === "rtu_leakage_alarms") {
+      check.arguments.last_days = 30;
+    } else if (reportType === "inspection_logs") {
+      check.arguments.last_days = 30;
+    } else if (reportType === "maintenance_records") {
+      check.arguments.start_date = "2024-08-30";
+      check.arguments.end_date = "2024-09-02";
     } else if (reportType === "asset_inventory") {
       if (!["cabinet", "rtu", "lamppost"].includes(assetType)) {
         throw Object.assign(new Error("Smartlight asset type is invalid"), {
@@ -980,6 +1021,14 @@ try {
               identityLabel,
               errorCode,
             })
+          : effectiveCheck.kind === "smartlightAlarmRemark"
+          ? smartlightAlarmRemarkSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "smartlightInspectionDetail"
           ? smartlightInspectionDetailSummary({
               payload,
@@ -1078,7 +1127,9 @@ function smartlightListSummary({
     check: checkName,
     identityLabel,
     itemCount: Number(result.count ?? result.items.length),
-    total: Number(result.total ?? result.count ?? result.items.length),
+    total: Number(
+      result.total ?? result.downstreamTotal ?? result.count ?? result.items.length,
+    ),
     summary: result.summary ?? null,
     dateRange: result.dateRange ?? null,
     rangeSummary: result.rangeSummary ?? null,
@@ -1245,6 +1296,37 @@ function smartlightAssetDetailSummary({
     name: result.detail.name ?? null,
     relayTotal: result.relayTotal ?? null,
     firstRelay: result.relays?.[0] ?? null,
+    errorCode: null,
+  };
+}
+
+function smartlightAlarmRemarkSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (
+    payload?.error ||
+    errorCode ||
+    !result ||
+    typeof result.alarmId !== "string" ||
+    typeof result.hasRemark !== "boolean"
+  ) {
+    throw Object.assign(new Error("Smartlight alarm remark failed"), {
+      code: errorCode || "SMARTLIGHT_ALARM_REMARK_FAILED",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    alarmId: result.alarmId,
+    hasRemark: result.hasRemark,
+    remark: result.remark ?? null,
+    createUser: result.createUser ?? null,
+    createTime: result.createTime ?? null,
     errorCode: null,
   };
 }

@@ -13,6 +13,7 @@ param(
         "SmartlightRtuSurvey",
         "SmartlightLampPosts",
         "SmartlightAlarms",
+        "SmartlightAlarmRemark",
         "SmartlightInspectionTasks",
         "SmartlightInspectionRunning",
         "SmartlightLeakage",
@@ -75,6 +76,7 @@ param(
     [ValidateSet("alarm_analysis", "lamp_alarm_analysis", "leakage_analysis", "asset_inventory", "inspection_progress", "energy_records", "energy_analysis", "lamp_survey_records", "rtu_leakage_alarms", "rtu_leakage_analysis", "inspection_logs", "maintenance_records")]
     [string]$SmartlightReportType = "alarm_analysis",
     [string]$SmartlightAssetId = "",
+    [string]$SmartlightAlarmId = "",
     [string]$SmartlightRtuId = "",
     [string]$SmartlightRtuKeyword = "",
     [string]$SmartlightStartTime = "",
@@ -302,6 +304,12 @@ try {
             "--smartlight-asset-type", $SmartlightAssetType,
             "--smartlight-asset-id", $SmartlightAssetId
         )
+    }
+    if ($Check -eq "SmartlightAlarmRemark") {
+        if ([string]::IsNullOrWhiteSpace($SmartlightAlarmId)) {
+            throw "SmartlightAlarmId is required for the selected check"
+        }
+        $nodeArguments += @("--smartlight-alarm-id", $SmartlightAlarmId)
     }
     if ($Check -eq "SmartlightRtuSurvey") {
         if (

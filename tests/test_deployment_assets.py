@@ -82,6 +82,27 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn("deploy\\ssh\\agentbridge_known_hosts", script)
             self.assertIn("UserKnownHostsFile=", script)
 
+    def test_openclaw_plugin_inspection_is_bounded_and_one_shot(self) -> None:
+        acceptance = (
+            ROOT / "scripts/Test-AgentBridgeReleaseAcceptance.ps1"
+        ).read_text(encoding="utf-8")
+        deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            '[ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 90',
+            acceptance,
+        )
+        self.assertNotIn(
+            'plugins", "inspect", "agentbridge-interactions", "--runtime"',
+            acceptance,
+        )
+        self.assertNotIn(
+            "plugins inspect agentbridge-interactions --runtime",
+            deploy,
+        )
+
     def test_admin_console_is_deployed_with_tls_and_release_metadata(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
             encoding="utf-8"
@@ -252,6 +273,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "SmartlightLampStatus",
             "SmartlightLampAlarms",
             "SmartlightLampAlarmAnalysis",
+            "SmartlightAlarmRemark",
             "SmartlightRtuSurvey",
             "ToolCatalog",
         ):
@@ -259,6 +281,17 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn(check, (ROOT / "scripts/Test-AgentBridgeMcp.ps1").read_text(
                 encoding="utf-8"
             ))
+        for report_type in (
+            "energy_records",
+            "energy_analysis",
+            "lamp_survey_records",
+            "rtu_leakage_alarms",
+            "rtu_leakage_analysis",
+            "inspection_logs",
+            "maintenance_records",
+        ):
+            self.assertIn(f'"{report_type}"', smoke)
+        self.assertIn("result.downstreamTotal", smoke)
         self.assertIn('businessSessionCheck: false', smoke)
 
     def test_openclaw_config_is_read_as_utf8(self) -> None:

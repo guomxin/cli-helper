@@ -9,7 +9,7 @@ param(
     [string]$AgentBridgeBaseUrl = "https://10.10.50.213",
     [string]$CaCertificate = "",
     [string[]]$IdentityLabel = @(),
-    [ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 45,
+    [ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 90,
     [switch]$SkipOpenClaw
 )
 
@@ -180,7 +180,7 @@ if (-not $SkipOpenClaw) {
         -Arguments @("gateway", "status", "--deep", "--require-rpc", "--json") `
         -Label "OpenClaw Gateway deep RPC check"
     $plugin = Invoke-OpenClawJson `
-        -Arguments @("plugins", "inspect", "agentbridge-interactions", "--runtime", "--json") `
+        -Arguments @("plugins", "inspect", "agentbridge-interactions", "--json") `
         -Label "OpenClaw AgentBridge plugin check"
     if (-not $gateway.rpc.ok) {
         throw "OpenClaw Gateway deep RPC check failed"

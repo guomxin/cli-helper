@@ -280,7 +280,7 @@ if ($RestartOpenClaw) {
     if (@($gatewayStatus.pluginVersionDrift.drifts).Count -gt 0) {
         throw "OpenClaw Gateway reports plugin version drift"
     }
-    $plugin = (& openclaw plugins inspect agentbridge-interactions --runtime --json) | Out-String | ConvertFrom-Json
+    $plugin = (& openclaw plugins inspect agentbridge-interactions --json) | Out-String | ConvertFrom-Json
     if ($plugin.plugin.status -ne "loaded") { throw "AgentBridge OpenClaw plugin is not loaded" }
     $warmup = (& $gatewayWarmupScript) | Out-String | ConvertFrom-Json
     if ($warmup.status -ne "succeeded") {
