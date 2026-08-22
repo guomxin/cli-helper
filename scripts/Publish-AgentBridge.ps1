@@ -9,6 +9,7 @@ param(
     [string]$AgentBridgeKnownHostsFile = "",
     [string[]]$IdentityLabel = @(),
     [switch]$SkipValidation,
+    [switch]$SkipOpenClawAcceptance,
     [switch]$RestartOpenClaw,
     [switch]$IncludeLoginReuseSmoke,
     [switch]$PlanOnly
@@ -119,6 +120,7 @@ $plan = [ordered]@{
     validation = -not $SkipValidation
     deployment = "root@10.10.50.213:/home/guomao/agentbridge"
     governanceAcceptance = $true
+    openClawAcceptance = -not [bool]$SkipOpenClawAcceptance
     isolationIdentities = @($IdentityLabel)
     restartOpenClaw = [bool]$RestartOpenClaw
     push = "$RemoteName/$BranchName"
@@ -168,6 +170,9 @@ if ($LASTEXITCODE -ne 0) {
 $acceptanceParameters = @{
     IdentityFile = (Resolve-Path $AgentBridgeIdentityFile).Path
     KnownHostsFile = (Resolve-Path $AgentBridgeKnownHostsFile).Path
+}
+if ($SkipOpenClawAcceptance) {
+    $acceptanceParameters["SkipOpenClaw"] = $true
 }
 if ($IdentityLabel.Count -gt 0) {
     $acceptanceParameters["IdentityLabel"] = $IdentityLabel

@@ -1,6 +1,6 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
@@ -27,6 +27,7 @@ from bscli.core.central_service import (
     CentralCapabilityService,
     _task_notification_message,
     capability_required_scopes,
+    session_response,
 )
 from bscli.core.interactions import InteractionNotFound
 from bscli.core.session_secrets import SessionStateAccessDenied
@@ -609,6 +610,46 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertIsNotNone(response["keepaliveEligibleUntil"])
             self.assertEqual(worker.restored, {"cookies": []})
             service.adapter.probe_session.assert_called_once_with(worker)
+
+    def test_outside_keepalive_lease_reports_last_confirmed_state(self):
+        old_activity = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        response = session_response(
+            {
+                "session_id": "session-a",
+                "system_id": "taihua",
+                "user_subject": "user-a",
+                "state": "active",
+                "last_user_activity_at": old_activity,
+                "last_keepalive_at": old_activity,
+            },
+            activity_lease_seconds=604_800,
+        )
+
+        self.assertEqual(response["keepaliveState"], "outside_lease")
+        self.assertFalse(response["keepaliveActive"])
+        self.assertEqual(response["sessionStateBasis"], "last_confirmed")
+        self.assertIn("not a current live guarantee", response["keepaliveExplanation"])
+
+    def test_session_status_records_adapter_session_recovery(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            session = self._activate(service)
+            service.adapter.probe_session = MagicMock(
+                return_value={
+                    "authenticated": True,
+                    "template_count": None,
+                    "transport": "central_cas_cookie_jwt",
+                    "session_recovery": "cas_sso",
+                }
+            )
+
+            response = service.session_status(user_subject="user-a")
+            latest_event = service.sessions.latest_event(session["session_id"])
+
+            self.assertEqual(response["status"], "active")
+            self.assertEqual(latest_event["event_type"], "session_recovered")
+            self.assertEqual(latest_event["source"], "session_status")
+            self.assertIn("cas_sso", latest_event["reason"])
 
     def test_session_status_reports_live_expiry_and_deletes_invalid_state(self):
         with TemporaryDirectory() as tmp:

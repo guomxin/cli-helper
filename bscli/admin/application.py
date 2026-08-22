@@ -493,6 +493,25 @@ class AdminControlPlane:
     def sessions(self) -> list[dict]:
         return [self._session_projection(item) for item in self.service.sessions.list(limit=1000)]
 
+    def session_events(self, *, session_id: str, limit: int = 100) -> list[dict]:
+        self.service.sessions.get(session_id)
+        return [
+            {
+                "event_id": item["event_id"],
+                "session_id": item["session_id"],
+                "event_type": item["event_type"],
+                "source": item["source"],
+                "previous_state": item.get("previous_state"),
+                "new_state": item.get("new_state"),
+                "reason": item.get("reason"),
+                "created_at": item["created_at"],
+            }
+            for item in self.service.sessions.list_events(
+                session_id=session_id,
+                limit=limit,
+            )
+        ]
+
     def invalidate_session(
         self,
         *,
@@ -506,6 +525,7 @@ class AdminControlPlane:
         after = self.service.sessions.mark_expired(
             session_id,
             f"Administratively invalidated: {reason}",
+            source="admin_invalidate",
         )
         self.service.session_states.delete(session_id)
         public_before = self._session_projection(before)
@@ -830,6 +850,7 @@ class AdminControlPlane:
             record,
             activity_lease_seconds=self.service.session_keepalive_lease_seconds,
         )
+        latest_event = self.service.sessions.latest_event(record["session_id"])
         return {
             "session_id": record["session_id"],
             "user_subject": record["user_subject"],
@@ -845,6 +866,21 @@ class AdminControlPlane:
             "last_keepalive_at": record.get("last_keepalive_at"),
             "keepalive_eligible_until": status.get("keepaliveEligibleUntil"),
             "keepalive_state": status.get("keepaliveState"),
+            "keepalive_active": status.get("keepaliveActive"),
+            "keepalive_explanation": status.get("keepaliveExplanation"),
+            "session_state_basis": status.get("sessionStateBasis"),
+            "latest_event": (
+                {
+                    "event_type": latest_event["event_type"],
+                    "source": latest_event["source"],
+                    "previous_state": latest_event.get("previous_state"),
+                    "new_state": latest_event.get("new_state"),
+                    "reason": latest_event.get("reason"),
+                    "created_at": latest_event["created_at"],
+                }
+                if latest_event
+                else None
+            ),
             "expired_at": record.get("expired_at"),
         }
 

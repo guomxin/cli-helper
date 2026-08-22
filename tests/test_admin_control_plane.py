@@ -691,6 +691,41 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertEqual(service.sessions.get(oa["session_id"])["state"], "active")
             self.assertEqual(control.audit.list()[0]["action"], "session.principal.rebind")
 
+    def test_session_projection_exposes_keepalive_semantics_and_event_history(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+                session_keepalive_lease_seconds=604_800,
+            )
+            control = AdminControlPlane(
+                service=service,
+                identity_store=McpIdentityTokenStore(service.db_path),
+            )
+            session = service.sessions.get_or_create(
+                user_subject="user-a",
+                system_id="oa",
+                expected_principal_ref="Alice OA",
+            )
+            service.sessions.activate(
+                session["session_id"],
+                observed_principal_ref="Alice OA",
+                source="credential_login",
+            )
+            service.sessions.mark_expired(
+                session["session_id"],
+                "OA keepalive detected an expired session.",
+                source="keepalive",
+            )
+
+            projected = control.sessions()[0]
+            events = control.session_events(session_id=session["session_id"])
+
+            self.assertEqual(projected["latest_event"]["source"], "keepalive")
+            self.assertEqual(projected["latest_event"]["new_state"], "expired")
+            self.assertFalse(projected["keepalive_active"])
+            self.assertEqual(events[0]["reason"], "OA keepalive detected an expired session.")
+
     def test_unknown_scope_is_rejected_before_identity_sessions_are_created(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
@@ -818,6 +853,23 @@ class AdminHttpServerTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertNotIn("token_secret", listed["items"][0])
 
+                status, _, sessions = _request(
+                    port,
+                    "GET",
+                    "/api/sessions",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                session_id = sessions["items"][0]["session_id"]
+                status, _, events = _request(
+                    port,
+                    "GET",
+                    f"/api/sessions/{session_id}/events",
+                    cookies=cookies,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(events["items"][0]["event_type"], "session_created")
+
                 status, _, coordination = _request(
                     port,
                     "GET",
@@ -932,6 +984,9 @@ class AdminStaticAssetTests(unittest.TestCase):
         self.assertIn('data-view="coordination"', page)
         self.assertIn("async function renderCoordination()", script)
         self.assertIn('api("/api/coordination?limit=300")', script)
+        self.assertIn("上次确认有效", script)
+        self.assertIn("未保活（超期）", script)
+        self.assertIn("openSessionHistory", script)
         self.assertIn("data-filter-search", script)
         self.assertNotIn('style="', page)
         self.assertNotIn("font-size: clamp(", stylesheet)

@@ -187,6 +187,18 @@ def create_admin_http_server(
                     )
                 elif route.path == "/api/sessions":
                     self._json(200, {"items": control_plane.sessions()})
+                elif session_events_match := re.fullmatch(
+                    r"/api/sessions/([0-9a-f-]{36})/events", route.path
+                ):
+                    self._json(
+                        200,
+                        {
+                            "items": control_plane.session_events(
+                                session_id=session_events_match.group(1),
+                                limit=_query_int(query, "limit", 100),
+                            )
+                        },
+                    )
                 elif route.path == "/api/capabilities":
                     self._json(200, {"items": control_plane.capabilities()})
                 elif route.path == "/api/policies":

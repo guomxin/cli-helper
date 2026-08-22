@@ -69,7 +69,10 @@ class CredentialBroker:
                         session["session_id"],
                         worker.capture_session_state(),
                     )
-            self.session_registry.mark_awaiting_login(session["session_id"])
+            self.session_registry.mark_awaiting_login(
+                session["session_id"],
+                source="credential_challenge",
+            )
         return prepared
 
     def authenticate(
@@ -97,7 +100,10 @@ class CredentialBroker:
             contract = adapter.authentication_contract()
             self._validate_bindings(challenge, session, contract)
             self._validate_credentials(challenge["fields"], credentials)
-            self.session_registry.mark_awaiting_login(session["session_id"])
+            self.session_registry.mark_awaiting_login(
+                session["session_id"],
+                source="credential_challenge",
+            )
 
             with self.worker_factory(session, adapter) as worker:
                 if callable(getattr(adapter, "prepare_authentication", None)):
@@ -120,6 +126,7 @@ class CredentialBroker:
                 active_session = self.session_registry.activate(
                     session["session_id"],
                     observed_principal_ref=authentication.get("observed_principal_ref"),
+                    source="credential_login",
                 )
                 self.session_state_store.save(
                     session["session_id"],
@@ -250,9 +257,17 @@ class CredentialBroker:
             if quarantine:
                 current = self.session_registry.get(session["session_id"])
                 if current["state"] != "quarantined":
-                    self.session_registry.quarantine(session["session_id"], message)
+                    self.session_registry.quarantine(
+                        session["session_id"],
+                        message,
+                        source="credential_login",
+                    )
             else:
-                self.session_registry.mark_expired(session["session_id"], message)
+                self.session_registry.mark_expired(
+                    session["session_id"],
+                    message,
+                    source="credential_login",
+                )
         challenge = self.challenge_store.fail(challenge_id, code=code, message=message)
         return {
             "status": "failed",

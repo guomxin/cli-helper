@@ -801,6 +801,7 @@ class CentralCapabilityService:
             session=session,
             record_verification=False,
             record_activity=True,
+            transition_source="session_status",
         )
         checked_at = _utc_now()
         if live_check is None:
@@ -845,6 +846,7 @@ class CentralCapabilityService:
             session=session,
             record_verification=False,
             record_activity=False,
+            transition_source="admin_live_check",
         )
         checked_at = _utc_now()
         if live_check is None:
@@ -902,6 +904,7 @@ class CentralCapabilityService:
             reuse_response = self._reuse_active_session(
                 user_subject=user_subject,
                 session=session,
+                transition_source="login_reuse",
             )
             if reuse_response is not None:
                 return reuse_response
@@ -922,6 +925,7 @@ class CentralCapabilityService:
         record_verification: bool = True,
         record_activity: bool = True,
         record_keepalive: bool = False,
+        transition_source: str = "session_reuse",
     ) -> dict | None:
         runtime = self._runtime_for_system(session["system_id"])
         if runtime is None:
@@ -945,6 +949,7 @@ class CentralCapabilityService:
                 self.sessions.mark_expired(
                     session["session_id"],
                     "Encrypted session state is missing.",
+                    source=transition_source,
                 )
                 return None
 
@@ -964,10 +969,20 @@ class CentralCapabilityService:
                         worker.capture_session_state(),
                     )
             except AdapterLoginRequired as exc:
-                self.sessions.mark_expired(session["session_id"], str(exc))
+                self.sessions.mark_expired(
+                    session["session_id"],
+                    str(exc),
+                    source=transition_source,
+                )
                 self.session_states.delete(session["session_id"])
                 return None
             except AdapterSessionCheckUnavailable as exc:
+                self.sessions.record_event(
+                    session["session_id"],
+                    event_type="check_deferred",
+                    source=transition_source,
+                    reason=str(exc),
+                )
                 if record_activity:
                     session = self.sessions.touch_activity(session["session_id"])
                 return _session_check_unavailable_response(
@@ -980,6 +995,12 @@ class CentralCapabilityService:
             except SessionSecretError:
                 return _session_state_unavailable_response(user_subject, session)
             except Exception as exc:
+                self.sessions.record_event(
+                    session["session_id"],
+                    event_type="check_deferred",
+                    source=transition_source,
+                    reason=f"{exc.__class__.__name__}: {exc}",
+                )
                 if record_activity:
                     session = self.sessions.touch_activity(session["session_id"])
                 return _session_check_unavailable_response(
@@ -988,10 +1009,21 @@ class CentralCapabilityService:
                     diagnostics=f"{exc.__class__.__name__}: {exc}",
                 )
 
+            if probe.get("session_recovery"):
+                self.sessions.record_event(
+                    session["session_id"],
+                    event_type="session_recovered",
+                    source=transition_source,
+                    reason=(
+                        "Downstream application session was renewed through the "
+                        f"existing {probe['session_recovery']} identity session."
+                    ),
+                )
             if record_verification:
                 session = self.sessions.activate(
                     session["session_id"],
                     observed_principal_ref=session.get("downstream_principal_ref"),
+                    source=transition_source,
                 )
             elif record_activity:
                 session = self.sessions.touch_activity(session["session_id"])
@@ -1053,6 +1085,7 @@ class CentralCapabilityService:
                 record_verification=False,
                 record_activity=False,
                 record_keepalive=True,
+                transition_source="keepalive",
             )
             if response is None:
                 current = self.sessions.get(session["session_id"])
@@ -2634,6 +2667,7 @@ class CentralCapabilityService:
                 expired_session = self.sessions.mark_expired(
                     session["session_id"],
                     "Encrypted session state is missing.",
+                    source=f"capability:{capability_name}",
                 )
                 raise login_required_action(user_subject, system_id, expired_session)
             prepare_definition = _TRUSTED_WRITE_DEFINITIONS.get(capability_name)
@@ -2756,10 +2790,20 @@ class CentralCapabilityService:
                         self.sessions.touch_activity(session["session_id"])
                     return result
             except AdapterLoginRequired as exc:
-                expired_session = self.sessions.mark_expired(session["session_id"], str(exc))
+                expired_session = self.sessions.mark_expired(
+                    session["session_id"],
+                    str(exc),
+                    source=f"capability:{capability_name}",
+                )
                 self.session_states.delete(session["session_id"])
                 raise login_required_action(user_subject, system_id, expired_session) from exc
             except AdapterSessionCheckUnavailable as exc:
+                self.sessions.record_event(
+                    session["session_id"],
+                    event_type="check_deferred",
+                    source=f"capability:{capability_name}",
+                    reason=str(exc),
+                )
                 raise _session_check_unavailable_action(
                     user_subject,
                     session,
@@ -2839,6 +2883,7 @@ class CentralCapabilityService:
                 self.sessions.mark_expired(
                     session["session_id"],
                     "OA session expired during certificate download.",
+                    source="document_download",
                 )
                 self.session_states.delete(session["session_id"])
                 raise
@@ -4045,6 +4090,29 @@ def session_response(
         keepalive_state = "eligible"
     else:
         keepalive_state = "outside_lease"
+    if keepalive_state == "eligible":
+        session_state_basis = "maintained"
+        keepalive_explanation = (
+            "Recent user activity is within the controlled keepalive lease."
+        )
+    elif keepalive_state == "outside_lease":
+        session_state_basis = "last_confirmed"
+        keepalive_explanation = (
+            "Background keepalive is paused because the recent-activity lease ended. "
+            "Active is the last confirmed state, not a current live guarantee."
+        )
+    elif keepalive_state == "activity_unknown":
+        session_state_basis = "last_confirmed"
+        keepalive_explanation = (
+            "Background keepalive eligibility cannot be calculated because recent "
+            "user activity is unknown."
+        )
+    elif keepalive_state == "inactive":
+        session_state_basis = "registry"
+        keepalive_explanation = "The downstream session is not active."
+    else:
+        session_state_basis = "registry"
+        keepalive_explanation = "Controlled keepalive is not configured."
     return {
         "protocolVersion": "0.1",
         "status": session["state"],
@@ -4059,6 +4127,9 @@ def session_response(
         "lastKeepaliveAt": session.get("last_keepalive_at"),
         "keepaliveEligibleUntil": eligible_until,
         "keepaliveState": keepalive_state,
+        "keepaliveActive": keepalive_state == "eligible",
+        "keepaliveExplanation": keepalive_explanation,
+        "sessionStateBasis": session_state_basis,
         "expiredAt": session.get("expired_at"),
         "lastError": session.get("last_error"),
     }

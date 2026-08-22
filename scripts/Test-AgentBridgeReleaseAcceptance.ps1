@@ -9,6 +9,7 @@ param(
     [string]$AgentBridgeBaseUrl = "https://10.10.50.213",
     [string]$CaCertificate = "",
     [string[]]$IdentityLabel = @(),
+    [ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 45,
     [switch]$SkipOpenClaw
 )
 
@@ -54,6 +55,53 @@ function Invoke-HealthCheck {
         throw "Health check returned an unexpected status: $Uri"
     }
     return $payload
+}
+
+function Invoke-OpenClawJson {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $command = Get-Command openclaw.cmd -ErrorAction SilentlyContinue
+    if (-not $command) {
+        $command = Get-Command openclaw -ErrorAction Stop
+    }
+    $nonce = [Guid]::NewGuid().ToString("N")
+    $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) "agentbridge-openclaw-$nonce.out"
+    $stderrPath = Join-Path ([IO.Path]::GetTempPath()) "agentbridge-openclaw-$nonce.err"
+    try {
+        $process = Start-Process `
+            -FilePath $command.Source `
+            -ArgumentList $Arguments `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -PassThru
+        if (-not $process.WaitForExit($OpenClawTimeoutSeconds * 1000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
+            throw "$Label timed out after $OpenClawTimeoutSeconds seconds"
+        }
+        $stdout = [IO.File]::ReadAllText($stdoutPath).Trim()
+        $stderr = [IO.File]::ReadAllText($stderrPath).Trim()
+        if ($process.ExitCode -ne 0) {
+            $detail = if ($stderr) { $stderr } elseif ($stdout) { $stdout } else { "no output" }
+            throw "$Label failed with exit code $($process.ExitCode): $detail"
+        }
+        if (-not $stdout) {
+            throw "$Label returned no JSON"
+        }
+        try {
+            return $stdout | ConvertFrom-Json
+        }
+        catch {
+            throw "$Label returned invalid JSON: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $mcpArguments = @{ Check = "Release" }
@@ -128,14 +176,12 @@ if ($remote.serviceState -ne "active" -or [int64]$remote.mainPid -le 0) {
 
 $openClaw = $null
 if (-not $SkipOpenClaw) {
-    $gateway = (
-        & openclaw gateway status --deep --require-rpc --json |
-            Out-String
-    ) | ConvertFrom-Json
-    $plugin = (
-        & openclaw plugins inspect agentbridge-interactions --runtime --json |
-            Out-String
-    ) | ConvertFrom-Json
+    $gateway = Invoke-OpenClawJson `
+        -Arguments @("gateway", "status", "--deep", "--require-rpc", "--json") `
+        -Label "OpenClaw Gateway deep RPC check"
+    $plugin = Invoke-OpenClawJson `
+        -Arguments @("plugins", "inspect", "agentbridge-interactions", "--runtime", "--json") `
+        -Label "OpenClaw AgentBridge plugin check"
     if (-not $gateway.rpc.ok) {
         throw "OpenClaw Gateway deep RPC check failed"
     }

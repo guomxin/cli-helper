@@ -185,6 +185,19 @@ class SmartlightAdapterTests(unittest.TestCase):
         self.assertEqual(worker.token_exchange_requests, 0)
         self.assertEqual(worker.refresh_requests, 1)
 
+    def test_keepalive_recovers_application_session_through_cas_sso(self):
+        worker = FakeSmartlightWorker(authenticated=True)
+        worker.principal_requires_cas_renewal = True
+
+        result = self.adapter.keepalive_session(worker)
+
+        self.assertTrue(result["authenticated"])
+        self.assertEqual(worker.cas_renewal_requests, 1)
+        self.assertEqual(worker.principal_requests, 2)
+        self.assertEqual(worker.token_exchange_requests, 1)
+        self.assertEqual(worker.refresh_requests, 0)
+        self.assertEqual(result["session_recovery"], "cas_sso")
+
     def test_probe_session_falls_back_to_cas_when_refresh_is_rejected(self):
         worker = FakeSmartlightWorker(authenticated=True)
         worker.reject_refresh_token = True
@@ -1272,6 +1285,8 @@ class FakeSmartlightWorker:
         self.refresh_temporarily_unavailable = False
         self.rotated_refresh_token = ""
         self.empty_principal = False
+        self.principal_requires_cas_renewal = False
+        self.cas_renewal_requests = 0
         self.refresh_requests = 0
         self.principal_requests = 0
         self.token_exchange_requests = 0
@@ -1312,7 +1327,9 @@ class FakeSmartlightWorker:
 
     def request_bytes(self, method: str, url: str, **kwargs) -> dict:
         path = urlparse(url).path
-        if method == "GET" and path == "/smartlight/" and not self.login_completed:
+        if method == "GET" and path == "/smartlight/" and (
+            not self.login_completed or self.empty_principal
+        ):
             return {
                 "status": 302,
                 "url": url,
@@ -1364,6 +1381,8 @@ class FakeSmartlightWorker:
                 "location": "/smartlight/?ticket=ST-test",
             }
         if method == "GET" and path == "/smartlight/":
+            self.cas_renewal_requests += 1
+            self.principal_requires_cas_renewal = False
             return {
                 "status": 200,
                 "url": url,
@@ -1378,7 +1397,7 @@ class FakeSmartlightWorker:
         path = urlparse(url).path
         if path == "/smartlight/userInfo/getCasLoginUser":
             self.principal_requests += 1
-            if self.empty_principal:
+            if self.empty_principal or self.principal_requires_cas_renewal:
                 return _response(
                     {
                         "dlzh": None,

@@ -170,7 +170,10 @@ class RemoteInteractiveBrowserBroker:
             self._gateway.ensure_started()
             allocation = self._allocate()
             self.session_state_store.delete(session["session_id"])
-            self.session_registry.mark_awaiting_login(session["session_id"])
+            self.session_registry.mark_awaiting_login(
+                session["session_id"],
+                source="remote_browser_challenge",
+            )
             run = _RemoteInteractiveRun(
                 challenge=challenge,
                 session=session,
@@ -326,7 +329,11 @@ class RemoteInteractiveBrowserBroker:
         message: str,
     ) -> dict:
         try:
-            self.session_registry.mark_expired(session["session_id"], message)
+            self.session_registry.mark_expired(
+                session["session_id"],
+                message,
+                source="remote_browser_login",
+            )
         except Exception:
             pass
         try:
@@ -640,6 +647,7 @@ class _RemoteInteractiveRun:
                             observed_principal_ref=probe.get(
                                 "observed_principal_ref"
                             ),
+                            source="remote_browser_login",
                         )
                         self.session_state_store.save(
                             self.session["session_id"],
@@ -703,9 +711,17 @@ class _RemoteInteractiveRun:
     ) -> None:
         try:
             if quarantine:
-                self.session_registry.quarantine(self.session["session_id"], message)
+                self.session_registry.quarantine(
+                    self.session["session_id"],
+                    message,
+                    source="remote_browser_login",
+                )
             else:
-                self.session_registry.mark_expired(self.session["session_id"], message)
+                self.session_registry.mark_expired(
+                    self.session["session_id"],
+                    message,
+                    source="remote_browser_login",
+                )
         except Exception:
             pass
         try:

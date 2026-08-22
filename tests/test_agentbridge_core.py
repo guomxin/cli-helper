@@ -413,6 +413,43 @@ class AgentBridgeCoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "active session"):
                 registry.touch_activity(active["session_id"])
 
+    def test_session_registry_preserves_state_history_after_reauthentication(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = SessionRegistry(root / "agentbridge.db", root / "profiles")
+            session = registry.get_or_create(
+                user_subject="user-a",
+                system_id="smartlight",
+                expected_principal_ref="Alice",
+            )
+            registry.activate(
+                session["session_id"],
+                observed_principal_ref="Alice",
+                source="credential_login",
+            )
+            registry.mark_expired(
+                session["session_id"],
+                "CAS renewal failed after application session expired.",
+                source="keepalive",
+            )
+            registry.activate(
+                session["session_id"],
+                observed_principal_ref="Alice",
+                source="credential_login",
+            )
+
+            events = registry.list_events(session_id=session["session_id"])
+
+            self.assertEqual(events[0]["source"], "credential_login")
+            self.assertEqual(events[0]["previous_state"], "expired")
+            keepalive_failure = next(
+                item
+                for item in events
+                if item["source"] == "keepalive" and item["new_state"] == "expired"
+            )
+            self.assertIn("CAS renewal failed", keepalive_failure["reason"])
+            self.assertIsNone(registry.get(session["session_id"])["last_error"])
+
     def test_session_registry_migrates_legacy_activity_timestamps(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

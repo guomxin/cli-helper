@@ -444,8 +444,13 @@ class SmartlightCentralAdapter:
             token_state = None
         if token_state is None:
             try:
-                principal = self._cas_principal(worker)
+                principal, application_session_renewed = (
+                    self._cas_principal_with_renewal(worker)
+                )
                 token_state = self._exchange_token(worker, principal)
+                token_state["session_recovery"] = (
+                    "cas_sso" if application_session_renewed else None
+                )
             except SmartlightLoginRequired as exc:
                 if refresh_error is None:
                     raise
@@ -478,8 +483,13 @@ class SmartlightCentralAdapter:
     def keepalive_session(self, worker) -> dict:
         """Keep the parent CAS session alive and renew the complete JWT pair."""
         try:
-            principal = self._cas_principal(worker)
+            principal, application_session_renewed = (
+                self._cas_principal_with_renewal(worker)
+            )
             token_state = self._exchange_token(worker, principal)
+            token_state["session_recovery"] = (
+                "cas_sso" if application_session_renewed else None
+            )
         except (
             SmartlightLoginRequired,
             SmartlightSessionCheckUnavailable,
@@ -497,6 +507,7 @@ class SmartlightCentralAdapter:
             "principal": token_state["principal"],
             "template_count": None,
             "transport": "central_cas_cookie_jwt",
+            "session_recovery": token_state.get("session_recovery"),
         }
 
     def _refresh_token(self, worker) -> dict | None:
@@ -3381,6 +3392,37 @@ class SmartlightCentralAdapter:
             "personId": str(payload.get("ryid") or ""),
             "userId": user_id,
         }
+
+    def _cas_principal_with_renewal(self, worker) -> tuple[dict, bool]:
+        """Recover an expired application session through a still-valid CAS SSO cookie."""
+        try:
+            return self._cas_principal(worker), False
+        except SmartlightLoginRequired as initial_error:
+            response = worker.request_bytes(
+                "GET",
+                self.base_url,
+                headers=_CAS_HTML_HEADERS,
+                timeout_seconds=20,
+            )
+            response = self._follow_login_redirects(
+                worker,
+                response,
+                timeout_seconds=20,
+            )
+            if response["status"] != 200:
+                raise SmartlightSessionCheckUnavailable(
+                    "Smartlight CAS renewal page is temporarily unavailable."
+                )
+            if "/cas/login" in str(response.get("url") or ""):
+                raise initial_error
+            try:
+                return self._cas_principal(worker), True
+            except SmartlightLoginRequired as renewed_error:
+                raise SmartlightLoginRequired(
+                    "Smartlight application session could not be renewed through CAS "
+                    f"({_session_error_summary(initial_error)}; "
+                    f"{_session_error_summary(renewed_error)})."
+                ) from renewed_error
 
     def _exchange_token(self, worker, principal: dict) -> dict:
         response = worker.request(

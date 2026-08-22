@@ -58,6 +58,28 @@ class SessionRegistry:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_events (
+                    event_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_subject TEXT NOT NULL,
+                    system_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    previous_state TEXT,
+                    new_state TEXT,
+                    reason TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_session_events_session_created
+                ON session_events (session_id, created_at DESC)
+                """
+            )
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
@@ -126,6 +148,18 @@ class SessionRegistry:
                         now,
                         now,
                     ),
+                )
+                self._insert_event(
+                    connection,
+                    session_id=session_id,
+                    user_subject=user_subject,
+                    system_id=system_id,
+                    event_type="session_created",
+                    source="registry",
+                    previous_state=None,
+                    new_state="new",
+                    reason=None,
+                    created_at=now,
                 )
             except sqlite3.IntegrityError:
                 existing = self.find(user_subject=user_subject, system_id=system_id)
@@ -256,6 +290,54 @@ class SessionRegistry:
             rows = connection.execute(query, parameters).fetchall()
         return [_session_from_row(row) for row in rows]
 
+    def list_events(self, *, session_id: str, limit: int = 50) -> list[dict]:
+        if limit < 1 or limit > 500:
+            raise ValueError("session event limit must be between 1 and 500")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM session_events
+                WHERE session_id = ?
+                ORDER BY created_at DESC, event_id DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_event(self, session_id: str) -> dict | None:
+        events = self.list_events(session_id=session_id, limit=1)
+        return events[0] if events else None
+
+    def record_event(
+        self,
+        session_id: str,
+        *,
+        event_type: str,
+        source: str,
+        reason: str | None = None,
+    ) -> dict:
+        session = self.get(session_id)
+        created_at = _utc_now()
+        with self._connect() as connection:
+            event_id = self._insert_event(
+                connection,
+                session_id=session_id,
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                event_type=event_type,
+                source=source,
+                previous_state=session["state"],
+                new_state=session["state"],
+                reason=reason,
+                created_at=created_at,
+            )
+            row = connection.execute(
+                "SELECT * FROM session_events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        return dict(row)
+
     def touch_activity(self, session_id: str) -> dict:
         now = _utc_now()
         with self._connect() as connection:
@@ -286,14 +368,46 @@ class SessionRegistry:
                 raise ValueError("only an active session can record keepalive")
         return self.get(session_id)
 
-    def mark_awaiting_login(self, session_id: str) -> dict:
-        return self._set_state(session_id, "awaiting_login", last_error=None)
+    def mark_awaiting_login(
+        self,
+        session_id: str,
+        *,
+        source: str = "authentication",
+    ) -> dict:
+        return self._set_state(
+            session_id,
+            "awaiting_login",
+            last_error=None,
+            source=source,
+        )
 
-    def mark_expired(self, session_id: str, message: str = "Downstream login expired.") -> dict:
-        return self._set_state(session_id, "expired", last_error=message)
+    def mark_expired(
+        self,
+        session_id: str,
+        message: str = "Downstream login expired.",
+        *,
+        source: str = "runtime",
+    ) -> dict:
+        return self._set_state(
+            session_id,
+            "expired",
+            last_error=message,
+            source=source,
+        )
 
-    def quarantine(self, session_id: str, message: str) -> dict:
-        return self._set_state(session_id, "quarantined", last_error=message)
+    def quarantine(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        source: str = "identity_validation",
+    ) -> dict:
+        return self._set_state(
+            session_id,
+            "quarantined",
+            last_error=message,
+            source=source,
+        )
 
     def rebind_expected_principal(
         self,
@@ -309,6 +423,12 @@ class SessionRegistry:
         now = _utc_now()
         message = f"Downstream principal binding changed; login required. Reason: {reason}"
         with self._connect() as connection:
+            before = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if before is None:
+                raise KeyError(f"session not found: {session_id}")
             cursor = connection.execute(
                 """
                 UPDATE sessions
@@ -322,15 +442,38 @@ class SessionRegistry:
             )
             if cursor.rowcount != 1:
                 raise KeyError(f"session not found: {session_id}")
+            self._insert_event(
+                connection,
+                session_id=session_id,
+                user_subject=before["user_subject"],
+                system_id=before["system_id"],
+                event_type="state_changed",
+                source="admin_rebind",
+                previous_state=before["state"],
+                new_state="expired",
+                reason=message,
+                created_at=now,
+            )
         return self.get(session_id)
 
-    def activate(self, session_id: str, *, observed_principal_ref: str | None) -> dict:
+    def activate(
+        self,
+        session_id: str,
+        *,
+        observed_principal_ref: str | None,
+        source: str = "authentication",
+    ) -> dict:
         session = self.get(session_id)
         expected = (session.get("expected_principal_ref") or "").strip()
         observed = (observed_principal_ref or "").strip()
         if not expected:
             message = "expected downstream principal is not configured"
-            self._set_state(session_id, "quarantined", last_error=message)
+            self._set_state(
+                session_id,
+                "quarantined",
+                last_error=message,
+                source="identity_validation",
+            )
             raise SessionPrincipalMismatch(message)
         if not observed:
             message = "downstream principal could not be verified"
@@ -343,6 +486,7 @@ class SessionRegistry:
                 "quarantined",
                 downstream_principal_ref=observed or None,
                 last_error=message,
+                source="identity_validation",
             )
             raise SessionPrincipalMismatch(message)
 
@@ -363,6 +507,7 @@ class SessionRegistry:
                     "quarantined",
                     downstream_principal_ref=observed,
                     last_error=message,
+                    source="identity_validation",
                 )
                 raise SessionPrincipalMismatch(message)
 
@@ -372,6 +517,7 @@ class SessionRegistry:
             downstream_principal_ref=observed or None,
             last_error=None,
             verified=True,
+            source=source,
         )
 
     def _update_expected(self, session_id: str, expected_principal_ref: str) -> dict:
@@ -395,9 +541,16 @@ class SessionRegistry:
         downstream_principal_ref: str | None = None,
         last_error: str | None,
         verified: bool = False,
+        source: str = "runtime",
     ) -> dict:
         now = _utc_now()
         with self._connect() as connection:
+            before = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if before is None:
+                raise KeyError(f"session not found: {session_id}")
             cursor = connection.execute(
                 """
                 UPDATE sessions
@@ -435,7 +588,57 @@ class SessionRegistry:
             )
             if cursor.rowcount != 1:
                 raise KeyError(f"session not found: {session_id}")
+            if before["state"] != state:
+                self._insert_event(
+                    connection,
+                    session_id=session_id,
+                    user_subject=before["user_subject"],
+                    system_id=before["system_id"],
+                    event_type="state_changed",
+                    source=source,
+                    previous_state=before["state"],
+                    new_state=state,
+                    reason=last_error,
+                    created_at=now,
+                )
         return self.get(session_id)
+
+    @staticmethod
+    def _insert_event(
+        connection: sqlite3.Connection,
+        *,
+        session_id: str,
+        user_subject: str,
+        system_id: str,
+        event_type: str,
+        source: str,
+        previous_state: str | None,
+        new_state: str | None,
+        reason: str | None,
+        created_at: str,
+    ) -> str:
+        event_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO session_events (
+                event_id, session_id, user_subject, system_id, event_type,
+                source, previous_state, new_state, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                session_id,
+                user_subject,
+                system_id,
+                str(event_type or "unknown")[:128],
+                str(source or "unknown")[:256],
+                previous_state,
+                new_state,
+                str(reason)[:2000] if reason is not None else None,
+                created_at,
+            ),
+        )
+        return event_id
 
     def _profile_path(self, *, user_subject: str, system_id: str) -> Path:
         safe_system = re.sub(r"[^a-zA-Z0-9_-]", "_", system_id)[:64] or "system"

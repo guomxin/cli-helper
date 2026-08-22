@@ -23,7 +23,7 @@ const statusText = {
   submitted: "已填写", approved: "已授权", rejected: "已拒绝", consumed: "已使用", superseded: "已替换",
   paused: "已暂停", available: "可用", selected: "已选择", awaiting_selection: "待选择",
   observe_only: "只读接续", resume: "恢复执行", follow_up: "后续操作", pull: "网页拉取", direct: "聊天直推",
-  eligible: "保活中", outside_lease: "租约外", activity_unknown: "活动未知", not_configured: "未配置",
+  eligible: "保活中", outside_lease: "未保活（超期）", activity_unknown: "活动未知", not_configured: "未配置",
   ready: "同步就绪", waiting_activity: "等待微信活动",
 };
 const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available"].includes(value) ? "ok" :
@@ -60,6 +60,12 @@ function fmtBytes(value) {
 }
 function shortId(value) { return value ? `${escapeHtml(value.slice(0, 8))}…` : "--"; }
 function badge(value) { return `<span class="status ${statusClass(value)}">${escapeHtml(statusText[value] || value || "未知")}</span>`; }
+function sessionStateBadge(session) {
+  if (session.state === "active" && session.session_state_basis === "last_confirmed") {
+    return `<span class="status warn" title="当前没有实时校验；这是最后一次确认成功时保存的状态">上次确认有效</span>`;
+  }
+  return badge(session.state);
+}
 function empty(message) { return `<div class="empty">${escapeHtml(message)}</div>`; }
 function table(headers, rows, filterable = false) {
   if (!rows.length) return empty("暂无记录");
@@ -205,8 +211,12 @@ async function renderUsers() {
 
 async function renderSessions() {
   const data = await api("/api/sessions");
-  const rows = data.items.map(session => filterRow(`${session.user_subject} ${session.system_id} ${session.expected_principal_ref} ${session.downstream_principal_ref} ${session.last_error}`, session.state, `<td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.expected_principal_ref || "--")}</td><td>${escapeHtml(session.downstream_principal_ref || "--")}</td><td>${badge(session.state)}</td><td>${badge(session.keepalive_state || "not_configured")}</td><td>${fmtTime(session.last_user_activity_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td>${fmtTime(session.keepalive_eligible_until)}</td><td class="truncate" title="${escapeHtml(session.last_error || "")}">${escapeHtml(session.last_error || "--")}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-check-session="${session.session_id}">实时检查</button><button class="button secondary small" data-rebind-session="${session.session_id}" data-expected-principal="${escapeHtml(session.expected_principal_ref || "")}">修改绑定</button>${session.state === "active" ? `<button class="button secondary small" data-invalidate-session="${session.session_id}">失效</button>` : ""}` : ""}</div></td>`));
-  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>区分最近用户活动、后台保活与实际登录状态；修改绑定只影响当前系统。</p></div></div>${filteredTable(["用户", "系统", "预期主体", "已验证主体", "登录状态", "保活资格", "最近用户活动", "最近保活", "保活截止", "错误", ""], rows, "搜索用户、系统、主体或错误", ["active", "expired", "awaiting_login", "new", "quarantined"])}`;
+  const rows = data.items.map(session => {
+    const latest = session.latest_event || {};
+    const latestSummary = [latest.source, latest.reason].filter(Boolean).join(" · ");
+    return filterRow(`${session.user_subject} ${session.system_id} ${session.expected_principal_ref} ${session.downstream_principal_ref} ${session.last_error} ${latestSummary}`, session.state, `<td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.expected_principal_ref || "--")}</td><td>${escapeHtml(session.downstream_principal_ref || "--")}</td><td>${sessionStateBadge(session)}</td><td title="${escapeHtml(session.keepalive_explanation || "")}">${badge(session.keepalive_state || "not_configured")}</td><td>${fmtTime(session.last_user_activity_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td>${fmtTime(session.keepalive_eligible_until)}</td><td class="truncate" title="${escapeHtml(latestSummary || session.last_error || "")}">${escapeHtml(latestSummary || session.last_error || "--")}</td><td><div class="actions"><button class="button secondary small" data-session-history="${session.session_id}">历史</button>${state.account.role === "admin" ? `<button class="button secondary small" data-check-session="${session.session_id}">实时检查</button><button class="button secondary small" data-rebind-session="${session.session_id}" data-expected-principal="${escapeHtml(session.expected_principal_ref || "")}">修改绑定</button>${session.state === "active" ? `<button class="button secondary small" data-invalidate-session="${session.session_id}">失效</button>` : ""}` : ""}</div></td>`);
+  });
+  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>“上次确认有效”表示注册表没有发现失效，但当前未做实时保证；“未保活（超期）”表示超过最近用户活动租约，后台已主动停止保活。实时检查不会延长租约。</p></div></div>${filteredTable(["用户", "系统", "预期主体", "已验证主体", "登录状态", "保活资格", "最近用户活动", "最近保活", "自动保活资格至", "最近事件", ""], rows, "搜索用户、系统、主体或事件", ["active", "expired", "awaiting_login", "new", "quarantined"])}`;
 }
 
 async function renderCapabilities() {
@@ -349,6 +359,11 @@ function openPause({ scopeType, scopeValue, version = "*", title }) {
 function openReasonAction({ title, submit, danger = false, request }) {
   openModal({ title, submit, danger, body: reasonField(), action: async form => { await request(form.get("reason")); closeModal(); toast(`${title}已完成`); await loadView(state.view); } });
 }
+async function openSessionHistory(sessionId) {
+  const data = await api(`/api/sessions/${sessionId}/events?limit=100`);
+  const rows = data.items.map(item => `<tr><td>${fmtTime(item.created_at)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.event_type)}</td><td>${escapeHtml(item.previous_state || "--")} → ${escapeHtml(item.new_state || "--")}</td><td class="truncate" title="${escapeHtml(item.reason || "")}">${escapeHtml(item.reason || "--")}</td></tr>`);
+  openModal({ kicker: "SESSION HISTORY", title: "会话状态历史", submit: "关闭", body: `<p class="muted">保留失效、延期检查、重新登录等原因；后续成功登录不会覆盖旧记录。</p>${table(["时间", "来源", "事件", "状态变化", "原因"], rows)}`, action: async () => closeModal() });
+}
 
 $("#login-form").addEventListener("submit", async event => {
   event.preventDefault(); $("#login-error").textContent = ""; const loginForm = event.currentTarget; const form = new FormData(loginForm);
@@ -377,6 +392,7 @@ content.addEventListener("click", async event => {
   else if (target.matches("[data-global-pause]")) openPause({ scopeType: "global", scopeValue: "*", title: "全局暂停所有写入" });
   else if (target.dataset.revokeToken) openReasonAction({ title: "撤销 Token", submit: "撤销", danger: true, request: reason => api(`/api/tokens/${target.dataset.revokeToken}/revoke`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.dataset.checkSession) openReasonAction({ title: "实时检查会话", submit: "检查", request: reason => api(`/api/sessions/${target.dataset.checkSession}/check`, { method: "POST", body: JSON.stringify({ reason }) }) });
+  else if (target.dataset.sessionHistory) await openSessionHistory(target.dataset.sessionHistory);
   else if (target.dataset.rebindSession) openRebindSession(target);
   else if (target.dataset.invalidateSession) openReasonAction({ title: "使会话失效", submit: "确认失效", danger: true, request: reason => api(`/api/sessions/${target.dataset.invalidateSession}/invalidate`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.dataset.resumePolicy) openReasonAction({ title: "恢复写入", submit: "恢复", request: reason => api(`/api/policies/${target.dataset.resumePolicy}/resume`, { method: "POST", body: JSON.stringify({ reason }) }) });
