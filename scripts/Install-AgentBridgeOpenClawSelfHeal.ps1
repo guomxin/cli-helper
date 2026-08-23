@@ -38,16 +38,17 @@ $task = New-ScheduledTask `
     -Description "Keeps the local OpenClaw Gateway available for AgentBridge clients after sign-in and process failures."
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing -and $existing.State -eq "Running") {
-    Stop-ScheduledTask -TaskName $TaskName
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
-    do {
-        Start-Sleep -Milliseconds 500
-        $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
-}
+$wasRunning = $existing -and $existing.State -eq "Running"
 Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
 if (-not $NoStart) {
+    if ($wasRunning) {
+        Stop-ScheduledTask -TaskName $TaskName
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+        do {
+            Start-Sleep -Milliseconds 500
+            $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
+    }
     Start-ScheduledTask -TaskName $TaskName
 }
 
