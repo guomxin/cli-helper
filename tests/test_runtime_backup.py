@@ -9,6 +9,7 @@ import unittest
 
 from bscli.core.runtime_backup import (
     create_runtime_backup,
+    run_runtime_restore_drill,
     validate_backup_manifest,
     validate_runtime_backup,
 )
@@ -91,6 +92,30 @@ class RuntimeBackupTests(unittest.TestCase):
         validation = validate_runtime_backup(incomplete)
         self.assertFalse(validation["passed"])
         self.assertIn("runtime_traces", validation["missingTables"])
+
+    def test_restore_drill_uses_an_isolated_read_only_copy(self) -> None:
+        backup = create_runtime_backup(
+            self.db_path,
+            self.root / "backups",
+            release_id="restore-test",
+        )
+
+        report = run_runtime_restore_drill(
+            backup["manifestPath"],
+            self.root / "restore-drills",
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["sourceHashMatches"])
+        self.assertTrue(report["readOnlyOpen"])
+        self.assertTrue(report["writeRejected"])
+        self.assertEqual(report["sourceReleaseId"], "restore-test")
+        self.assertEqual(report["businessCalls"], 0)
+        self.assertEqual(report["businessListReads"], 0)
+        self.assertEqual(report["businessWrites"], 0)
+        restored = Path(report["drillDirectory"]) / report["restoredDatabase"]
+        self.assertTrue(restored.is_file())
+        self.assertTrue(Path(report["reportPath"]).is_file())
 
 
 if __name__ == "__main__":

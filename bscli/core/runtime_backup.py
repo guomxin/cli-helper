@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 from typing import Any
+from uuid import uuid4
 
 
 REQUIRED_RUNTIME_TABLES = {
@@ -106,6 +108,106 @@ def validate_backup_manifest(manifest_path: Path | str) -> dict[str, Any]:
         "backupPath": str(backup_path),
         "manifestHashMatches": bool(expected_hash) and expected_hash == validation["sha256"],
         "passed": validation["passed"] and bool(expected_hash) and expected_hash == validation["sha256"],
+    }
+
+
+def run_runtime_restore_drill(
+    manifest_path: Path | str,
+    output_dir: Path | str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Restore one backup into an isolated read-only probe directory."""
+
+    source_manifest = Path(manifest_path)
+    manifest_validation = validate_backup_manifest(source_manifest)
+    if not manifest_validation["passed"]:
+        raise RuntimeError("backup manifest did not pass validation")
+
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    stamp = observed_at.strftime("%Y%m%dT%H%M%SZ")
+    drill_id = f"restore-{stamp}-{uuid4().hex[:8]}"
+    root = Path(output_dir) / drill_id
+    root.mkdir(parents=True, mode=0o700)
+    restored_path = root / "agentbridge.db"
+    report_path = root / "restore-report.json"
+    source_path = Path(manifest_validation["backupPath"])
+    shutil.copy2(source_path, restored_path)
+    restored_path.chmod(0o600)
+
+    restored_validation = validate_runtime_backup(restored_path)
+    read_only_open = False
+    write_rejected = False
+    schema_counts: dict[str, int] = {}
+    uri = f"{restored_path.resolve().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=10)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        read_only_open = True
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        for table in (
+            "mcp_identity_tokens",
+            "system_sessions",
+            "operations",
+            "interactions",
+            "agent_tasks",
+            "runtime_traces",
+            "runtime_incidents",
+            "runtime_observations",
+        ):
+            if table in tables:
+                schema_counts[table] = int(
+                    connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                )
+        try:
+            connection.execute("CREATE TABLE agentbridge_restore_write_probe (id INTEGER)")
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            write_rejected = "readonly" in message or "read-only" in message
+
+    source_hash_matches = (
+        manifest_validation["sha256"] == restored_validation["sha256"]
+    )
+    passed = bool(
+        manifest_validation["passed"]
+        and restored_validation["passed"]
+        and source_hash_matches
+        and read_only_open
+        and write_rejected
+    )
+    report = {
+        "schemaVersion": "agentbridge.runtime-restore-drill.v1",
+        "drillId": drill_id,
+        "createdAt": observed_at.isoformat(),
+        "sourceManifest": source_manifest.name,
+        "sourceReleaseId": json.loads(
+            source_manifest.read_text(encoding="utf-8")
+        ).get("releaseId"),
+        "restoredDatabase": restored_path.name,
+        "sourceHashMatches": source_hash_matches,
+        "readOnlyOpen": read_only_open,
+        "writeRejected": write_rejected,
+        "schemaCounts": schema_counts,
+        "validation": restored_validation,
+        "businessCalls": 0,
+        "businessListReads": 0,
+        "businessWrites": 0,
+        "passed": passed,
+    }
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    report_path.chmod(0o600)
+    return {
+        **report,
+        "drillDirectory": str(root),
+        "reportPath": str(report_path),
     }
 
 

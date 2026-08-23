@@ -838,6 +838,12 @@ class AdminHttpServerTests(unittest.TestCase):
                 trace_id=trace["trace_id"],
                 user_subject="user-a",
             )
+            observation, _ = service.runtime_governance.start_observation(
+                name="admin-shadow-observation",
+                duration_hours=24,
+                created_by="admin-test",
+            )
+            service.runtime_governance.capture_observation_snapshots(force=True)
             account = control.accounts.create(
                 username="admin",
                 password=PASSWORD,
@@ -953,6 +959,10 @@ class AdminHttpServerTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertIn("slo", governance)
+                self.assertEqual(
+                    governance["observations"][0]["observation_id"],
+                    observation["observation_id"],
+                )
                 status, _, incidents = _request(
                     port, "GET", "/api/incidents", cookies=cookies
                 )
@@ -1077,6 +1087,8 @@ class AdminStaticAssetTests(unittest.TestCase):
         self.assertIn("async function renderCoordination()", script)
         self.assertIn("async function renderTraces()", script)
         self.assertIn("async function renderIncidents", script)
+        self.assertIn("影子观察", script)
+        self.assertIn("governance.observations", script)
         self.assertIn('api("/api/coordination?limit=300")', script)
         self.assertIn("上次确认有效", script)
         self.assertIn("未保活（超期）", script)

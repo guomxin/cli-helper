@@ -213,6 +213,7 @@ class AdminControlPlane:
             "summary": self.service.runtime_governance.summary(),
             "evaluation": evaluation,
             "slo": slo,
+            "observations": self.service.runtime_governance.list_observations(limit=20),
             "recent_signals": self.service.runtime_governance.list_signals(limit=30),
             "recent_recoveries": self.service.runtime_governance.list_recovery_actions(limit=30),
         }

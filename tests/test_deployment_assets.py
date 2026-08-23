@@ -97,6 +97,41 @@ class DeploymentAssetTests(unittest.TestCase):
             deploy.index('systemctl start "$service-backup.service"'),
         )
 
+    def test_local_host_self_heal_and_restore_drill_are_bounded(self) -> None:
+        installer = (
+            ROOT / "scripts/Install-AgentBridgeOpenClawSelfHeal.ps1"
+        ).read_text(encoding="utf-8")
+        recovery = (
+            ROOT / "scripts/Test-AgentBridgeLocalHostRecovery.ps1"
+        ).read_text(encoding="utf-8")
+        restore = (
+            ROOT / "scripts/Test-AgentBridgeBackupRestore.ps1"
+        ).read_text(encoding="utf-8")
+
+        for marker in (
+            "-StartWhenAvailable",
+            "-ExecutionTimeLimit ([TimeSpan]::Zero)",
+            "-RestartCount 999",
+            "-MultipleInstances IgnoreNew",
+        ):
+            self.assertIn(marker, installer)
+        for marker in (
+            "ExerciseFailureRecovery",
+            '@("gateway", "status", "--deep", "--require-rpc", "--json")',
+            "listenerCount = 1",
+            "businessCalls = 0",
+            "businessListReads = 0",
+            "businessWrites = 0",
+        ):
+            self.assertIn(marker, recovery)
+        for marker in (
+            "backup-restore-drill",
+            "readOnlyOpen",
+            "writeRejected",
+            "businessWrites -ne 0",
+        ):
+            self.assertIn(marker, restore)
+
     def test_release_acceptance_uses_the_tracked_agentbridge_host_key(self) -> None:
         for path in (
             "scripts/Test-AgentBridgeReleaseAcceptance.ps1",

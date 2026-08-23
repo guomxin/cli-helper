@@ -42,9 +42,11 @@ from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.runtime_backup import (
     create_runtime_backup,
+    run_runtime_restore_drill,
     validate_backup_manifest,
     validate_runtime_backup,
 )
+from bscli.core.runtime_governance import RuntimeGovernanceStore
 from bscli.core.session_secrets import WindowsDpapiProtector
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
 from bscli.core.tasks import TaskHubStore
@@ -359,6 +361,16 @@ def build_parser() -> argparse.ArgumentParser:
     backup_create.add_argument("--release-id")
     backup_validate = diagnostics_sub.add_parser("backup-validate")
     backup_validate.add_argument("--backup", required=True)
+    restore_drill = diagnostics_sub.add_parser("backup-restore-drill")
+    restore_drill.add_argument("--manifest", required=True)
+    restore_drill.add_argument("--output-dir", required=True)
+    observation_start = diagnostics_sub.add_parser("observation-start")
+    observation_start.add_argument("--name", required=True)
+    observation_start.add_argument("--hours", type=int, default=168)
+    observation_start.add_argument("--created-by", default="operator")
+    observation_status = diagnostics_sub.add_parser("observation-status")
+    observation_status.add_argument("--state")
+    observation_status.add_argument("--capture", action="store_true")
 
     return parser
 
@@ -381,6 +393,66 @@ def handle_diagnostics(args: argparse.Namespace, home: Path) -> int:
         )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report["passed"] else 1
+    if args.action == "backup-restore-drill":
+        report = run_runtime_restore_drill(
+            Path(args.manifest),
+            Path(args.output_dir),
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
+    if args.action == "observation-start":
+        governance = RuntimeGovernanceStore(
+            _central_db_path(home),
+            release_id=os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development",
+        )
+        observation, reused = governance.start_observation(
+            name=args.name,
+            duration_hours=args.hours,
+            created_by=args.created_by,
+            policy={
+                "mode": "shadow",
+                "automaticBusinessRecovery": False,
+                "snapshotIntervalMinutes": 60,
+            },
+        )
+        captured = governance.capture_observation_snapshots(force=not reused)
+        observation = governance.observation_detail(
+            observation["observation_id"]
+        )["observation"]
+        print(
+            json.dumps(
+                {"status": "active", "reused": reused, "observation": observation,
+                 "capture": captured},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if args.action == "observation-status":
+        governance = RuntimeGovernanceStore(
+            _central_db_path(home),
+            release_id=os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development",
+        )
+        captured = (
+            governance.capture_observation_snapshots()
+            if args.capture
+            else None
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "succeeded",
+                    "capture": captured,
+                    "items": [
+                        governance.observation_detail(item["observation_id"])
+                        for item in governance.list_observations(state=args.state)
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
     if args.action != "omnichannel":
         raise ValueError(f"unknown diagnostics action: {args.action}")
     try:

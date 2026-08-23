@@ -217,7 +217,56 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
             result = CentralRuntimeGovernanceWorker(service).run_cycle()
             self.assertIn("evaluation", result)
             self.assertIn("slo", result)
+            self.assertIn("observations", result)
             self.assertIn("retention", result)
+
+    def test_shadow_observation_captures_hourly_and_completes_without_business_calls(self) -> None:
+        clock = MutableClock()
+        with TemporaryDirectory() as tmp:
+            store = RuntimeGovernanceStore(Path(tmp) / "agentbridge.db", clock=clock)
+            observation, reused = store.start_observation(
+                name="seven-day-shadow",
+                duration_hours=2,
+                created_by="test-operator",
+                policy={"mode": "shadow", "automaticBusinessRecovery": False},
+            )
+            self.assertFalse(reused)
+            first = store.capture_observation_snapshots()
+            self.assertEqual(first["captured"], 1)
+            self.assertEqual(first["items"][0]["collection"]["businessCalls"], 0)
+            self.assertEqual(first["items"][0]["collection"]["businessListReads"], 0)
+            self.assertEqual(first["items"][0]["collection"]["businessWrites"], 0)
+
+            self.assertEqual(store.capture_observation_snapshots()["captured"], 0)
+            clock.value += timedelta(minutes=60)
+            self.assertEqual(store.capture_observation_snapshots()["captured"], 1)
+            clock.value += timedelta(minutes=60)
+            completed = store.capture_observation_snapshots()
+            self.assertEqual(completed["completed"], 1)
+
+            detail = store.observation_detail(observation["observation_id"])
+            self.assertEqual(detail["observation"]["state"], "completed")
+            self.assertEqual(detail["observation"]["snapshot_count"], 3)
+            self.assertEqual(len(detail["snapshots"]), 3)
+            self.assertEqual(len(detail["dailySummaries"]), 1)
+            self.assertEqual(detail["dailySummaries"][0]["snapshotCount"], 3)
+            self.assertEqual(detail["dailySummaries"][0]["businessWrites"], 0)
+            self.assertEqual(store.summary()["active_observations"], 0)
+
+    def test_start_observation_reuses_active_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            store = RuntimeGovernanceStore(Path(tmp) / "agentbridge.db")
+            first, reused = store.start_observation(
+                name="shadow",
+                created_by="operator",
+            )
+            self.assertFalse(reused)
+            second, reused = store.start_observation(
+                name="shadow",
+                created_by="operator",
+            )
+            self.assertTrue(reused)
+            self.assertEqual(first["observation_id"], second["observation_id"])
 
     def test_detector_finds_stalled_operation_task_and_delivery_without_business_calls(self) -> None:
         with TemporaryDirectory() as tmp:

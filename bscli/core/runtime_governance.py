@@ -34,6 +34,7 @@ INCIDENT_STATES = {
     "suppressed",
 }
 INCIDENT_SEVERITIES = {"P0", "P1", "P2", "P3"}
+OBSERVATION_STATES = {"active", "completed", "cancelled"}
 
 _TERMINAL_TASK_STATUSES = {
     "succeeded",
@@ -241,6 +242,42 @@ class RuntimeGovernanceStore:
 
                 CREATE INDEX IF NOT EXISTS runtime_slo_rollups_window
                 ON runtime_slo_rollups (window_end DESC, metric_key);
+
+                CREATE TABLE IF NOT EXISTS runtime_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    duration_hours INTEGER NOT NULL,
+                    created_by TEXT NOT NULL,
+                    policy_json TEXT NOT NULL,
+                    baseline_json TEXT NOT NULL,
+                    latest_snapshot_json TEXT NOT NULL,
+                    snapshot_count INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ends_at TEXT NOT NULL,
+                    last_snapshot_at TEXT,
+                    completed_at TEXT
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS runtime_observations_active_name
+                ON runtime_observations (name)
+                WHERE state = 'active';
+
+                CREATE INDEX IF NOT EXISTS runtime_observations_state_started
+                ON runtime_observations (state, started_at DESC);
+
+                CREATE TABLE IF NOT EXISTS runtime_observation_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    observation_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    summary_json TEXT NOT NULL,
+                    slo_json TEXT NOT NULL,
+                    incident_counts_json TEXT NOT NULL,
+                    collection_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS runtime_observation_snapshots_observation
+                ON runtime_observation_snapshots (observation_id, observed_at);
                 """
             )
 
@@ -1505,6 +1542,220 @@ class RuntimeGovernanceStore:
             ).fetchall()
         return [_rollup_from_row(row) for row in rows]
 
+    def start_observation(
+        self,
+        *,
+        name: str,
+        duration_hours: int = 168,
+        created_by: str,
+        policy: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        normalized_name = _bounded_text(name, 160, required=True)
+        normalized_actor = _bounded_text(created_by, 160, required=True)
+        duration = min(max(int(duration_hours), 1), 24 * 31)
+        now = self._clock().astimezone(timezone.utc)
+        now_text = now.isoformat()
+        ends_at = (now + timedelta(hours=duration)).isoformat()
+        baseline = {
+            "summary": self.summary(),
+            "slo": self.refresh_slo_rollups(hours=24),
+            "incidentCounts": self._incident_counts(),
+        }
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM runtime_observations
+                WHERE name = ? AND state = 'active'
+                ORDER BY started_at DESC LIMIT 1
+                """,
+                (normalized_name,),
+            ).fetchone()
+            if existing is not None:
+                return _observation_from_row(existing), True
+            observation_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO runtime_observations (
+                    observation_id, name, state, duration_hours, created_by,
+                    policy_json, baseline_json, latest_snapshot_json,
+                    snapshot_count, started_at, ends_at
+                ) VALUES (?, ?, 'active', ?, ?, ?, ?, '{}', 0, ?, ?)
+                """,
+                (
+                    observation_id,
+                    normalized_name,
+                    duration,
+                    normalized_actor,
+                    _canonical_json(_safe_metadata(policy)),
+                    _canonical_json(baseline),
+                    now_text,
+                    ends_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM runtime_observations WHERE observation_id = ?",
+                (observation_id,),
+            ).fetchone()
+        return _observation_from_row(row), False
+
+    def capture_observation_snapshots(
+        self,
+        *,
+        slo: Mapping[str, Any] | None = None,
+        minimum_interval_minutes: int = 60,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        interval = timedelta(minutes=min(max(int(minimum_interval_minutes), 1), 24 * 60))
+        now = self._clock().astimezone(timezone.utc)
+        now_text = now.isoformat()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM runtime_observations
+                WHERE state = 'active' ORDER BY started_at
+                """
+            ).fetchall()
+        captured: list[dict[str, Any]] = []
+        completed = 0
+        effective_slo = dict(slo) if isinstance(slo, Mapping) else None
+        for row in rows:
+            observation = _observation_from_row(row)
+            ends_at = datetime.fromisoformat(observation["ends_at"])
+            last_at = (
+                datetime.fromisoformat(observation["last_snapshot_at"])
+                if observation.get("last_snapshot_at")
+                else None
+            )
+            is_complete = now >= ends_at
+            due = force or is_complete or last_at is None or now - last_at >= interval
+            if not due:
+                continue
+            snapshot = {
+                "snapshotId": str(uuid4()),
+                "observationId": observation["observation_id"],
+                "observedAt": now_text,
+                "summary": self.summary(),
+                "slo": effective_slo or self.refresh_slo_rollups(hours=24),
+                "incidentCounts": self._incident_counts(),
+                "collection": {
+                    "mode": "shadow",
+                    "businessCalls": 0,
+                    "businessListReads": 0,
+                    "businessWrites": 0,
+                    "automaticBusinessRecovery": False,
+                },
+            }
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO runtime_observation_snapshots (
+                        snapshot_id, observation_id, observed_at, summary_json,
+                        slo_json, incident_counts_json, collection_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot["snapshotId"],
+                        snapshot["observationId"],
+                        snapshot["observedAt"],
+                        _canonical_json(snapshot["summary"]),
+                        _canonical_json(snapshot["slo"]),
+                        _canonical_json(snapshot["incidentCounts"]),
+                        _canonical_json(snapshot["collection"]),
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE runtime_observations
+                    SET latest_snapshot_json = ?, snapshot_count = snapshot_count + 1,
+                        last_snapshot_at = ?, state = ?, completed_at = ?
+                    WHERE observation_id = ? AND state = 'active'
+                    """,
+                    (
+                        _canonical_json(snapshot),
+                        now_text,
+                        "completed" if is_complete else "active",
+                        now_text if is_complete else None,
+                        observation["observation_id"],
+                    ),
+                )
+            captured.append(snapshot)
+            completed += int(is_complete)
+        return {
+            "captured": len(captured),
+            "completed": completed,
+            "items": captured,
+        }
+
+    def list_observations(
+        self,
+        *,
+        state: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        if state is not None and state not in OBSERVATION_STATES:
+            raise ValueError(f"unsupported observation state: {state}")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if state is not None:
+            clauses.append("state = ?")
+            parameters.append(state)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(min(max(int(limit), 1), 500))
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM runtime_observations {where}
+                ORDER BY started_at DESC LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def observation_detail(self, observation_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM runtime_observations WHERE observation_id = ?",
+                (observation_id,),
+            ).fetchone()
+            snapshots = connection.execute(
+                """
+                SELECT * FROM runtime_observation_snapshots
+                WHERE observation_id = ? ORDER BY observed_at
+                """,
+                (observation_id,),
+            ).fetchall()
+        if row is None:
+            raise KeyError(f"runtime observation not found: {observation_id}")
+        converted_snapshots = [
+            _observation_snapshot_from_row(item) for item in snapshots
+        ]
+        return {
+            "observation": _observation_from_row(row),
+            "snapshots": converted_snapshots,
+            "dailySummaries": _observation_daily_summaries(converted_snapshots),
+        }
+
+    def _incident_counts(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT severity, state, COUNT(*) AS count
+                FROM runtime_incidents GROUP BY severity, state
+                """
+            ).fetchall()
+        active = 0
+        by_severity: dict[str, int] = {}
+        by_state: dict[str, int] = {}
+        for row in rows:
+            count = int(row["count"] or 0)
+            severity = str(row["severity"])
+            state = str(row["state"])
+            by_severity[severity] = by_severity.get(severity, 0) + count
+            by_state[state] = by_state.get(state, 0) + count
+            if state in _ACTIVE_INCIDENT_STATES:
+                active += count
+        return {"active": active, "bySeverity": by_severity, "byState": by_state}
+
     def summary(self) -> dict[str, Any]:
         with self._connect() as connection:
             row = connection.execute(
@@ -1520,7 +1771,11 @@ class RuntimeGovernanceStore:
                   (SELECT COUNT(*) FROM runtime_recovery_actions
                    WHERE status = 'running') AS running_recoveries,
                   (SELECT COUNT(*) FROM runtime_spans) AS span_count,
-                  (SELECT MAX(observed_at) FROM runtime_signals) AS last_signal_at
+                  (SELECT MAX(observed_at) FROM runtime_signals) AS last_signal_at,
+                  (SELECT COUNT(*) FROM runtime_observations
+                   WHERE state = 'active') AS active_observations,
+                  (SELECT MAX(last_snapshot_at) FROM runtime_observations)
+                    AS last_observation_at
                 """
             ).fetchone()
         return {key: row[key] for key in row.keys()}
@@ -1535,12 +1790,13 @@ class RuntimeGovernanceStore:
                     SELECT COUNT(*) FROM sqlite_master
                     WHERE type = 'table' AND name IN (
                       'operations', 'interactions', 'agent_tasks',
-                      'runtime_traces', 'runtime_incidents'
+                      'runtime_traces', 'runtime_incidents',
+                      'runtime_observations', 'runtime_observation_snapshots'
                     )
                     """
                 ).fetchone()[0]
             checks.append({"name": "database", "status": "healthy" if quick_check == "ok" else "unavailable"})
-            checks.append({"name": "schema", "status": "healthy" if int(schema) == 5 else "unavailable"})
+            checks.append({"name": "schema", "status": "healthy" if int(schema) == 7 else "unavailable"})
         except Exception as exc:
             checks.append({"name": "database", "status": "unavailable", "errorCode": exc.__class__.__name__})
         ready = all(item["status"] == "healthy" for item in checks)
@@ -1560,6 +1816,7 @@ class RuntimeGovernanceStore:
                 ("runtime_spans", "started_at", raw_cutoff),
                 ("runtime_signals", "observed_at", raw_cutoff),
                 ("runtime_slo_rollups", "window_end", rollup_cutoff),
+                ("runtime_observation_snapshots", "observed_at", rollup_cutoff),
             ):
                 cursor = connection.execute(
                     f"DELETE FROM {table} WHERE {column} < ?", (cutoff,)
@@ -1635,6 +1892,64 @@ def _rollup_from_row(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)
     value["dimensions"] = _decode_object(value.pop("dimension_key"))
     return value
+
+
+def _observation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    value = dict(row)
+    value["policy"] = _decode_object(value.pop("policy_json"))
+    value["baseline"] = _decode_object(value.pop("baseline_json"))
+    value["latest_snapshot"] = _decode_object(value.pop("latest_snapshot_json"))
+    value["snapshot_count"] = int(value.get("snapshot_count") or 0)
+    return value
+
+
+def _observation_snapshot_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    value = dict(row)
+    value["summary"] = _decode_object(value.pop("summary_json"))
+    value["slo"] = _decode_object(value.pop("slo_json"))
+    value["incidentCounts"] = _decode_object(value.pop("incident_counts_json"))
+    value["collection"] = _decode_object(value.pop("collection_json"))
+    return value
+
+
+def _observation_daily_summaries(
+    snapshots: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for snapshot in snapshots:
+        observed_at = datetime.fromisoformat(snapshot["observed_at"])
+        day = observed_at.astimezone(timezone.utc).date().isoformat()
+        grouped.setdefault(day, []).append(snapshot)
+    summaries: list[dict[str, Any]] = []
+    for day in sorted(grouped):
+        items = grouped[day]
+        incident_counts = [
+            int(item.get("incidentCounts", {}).get("active") or 0)
+            for item in items
+        ]
+        breached_metrics = sorted(
+            {
+                str(metric.get("metricKey") or "")
+                for item in items
+                for metric in item.get("slo", {}).get("metrics", [])
+                if metric.get("status") == "breached" and metric.get("metricKey")
+            }
+        )
+        summaries.append(
+            {
+                "date": day,
+                "snapshotCount": len(items),
+                "firstObservedAt": items[0]["observed_at"],
+                "lastObservedAt": items[-1]["observed_at"],
+                "maxActiveIncidents": max(incident_counts, default=0),
+                "latestActiveIncidents": incident_counts[-1] if incident_counts else 0,
+                "breachedMetrics": breached_metrics,
+                "businessCalls": 0,
+                "businessListReads": 0,
+                "businessWrites": 0,
+            }
+        )
+    return summaries
 
 
 def _slo_metric(

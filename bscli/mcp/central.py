@@ -444,8 +444,17 @@ class CentralRuntimeGovernanceWorker:
             task_diagnostics=task_diagnostics,
         )
         slo = self.service.runtime_governance.refresh_slo_rollups(hours=24)
+        observations = self.service.runtime_governance.capture_observation_snapshots(
+            slo=slo,
+            minimum_interval_minutes=60,
+        )
         retention = self.service.runtime_governance.prune()
-        return {"evaluation": evaluation, "slo": slo, "retention": retention}
+        return {
+            "evaluation": evaluation,
+            "slo": slo,
+            "observations": observations,
+            "retention": retention,
+        }
 
     def _run(self) -> None:
         if self._stop_event.wait(self.initial_delay_seconds):

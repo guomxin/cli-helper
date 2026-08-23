@@ -1,18 +1,23 @@
 [CmdletBinding()]
 param(
-    [string]$TaskName = "AgentBridge Workspace Tunnel",
+    [string]$TaskName = "OpenClaw Gateway",
+    [string]$GatewayLauncher = "$env:USERPROFILE\.openclaw\gateway.cmd",
+    [ValidateRange(0, 300)][int]$StartupDelaySeconds = 20,
     [switch]$NoStart
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$tunnelScript = (Resolve-Path (Join-Path $PSScriptRoot "Start-AgentBridgeWorkspaceTunnel.ps1")).Path
-$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
-$action = New-ScheduledTaskAction `
-    -Execute $powershell `
-    -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $tunnelScript)
+if (-not (Test-Path -LiteralPath $GatewayLauncher -PathType Leaf)) {
+    throw "OpenClaw Gateway launcher was not found: $GatewayLauncher"
+}
+$resolvedLauncher = (Resolve-Path -LiteralPath $GatewayLauncher).Path
+$action = New-ScheduledTaskAction -Execute $resolvedLauncher
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+if ($StartupDelaySeconds -gt 0) {
+    $trigger.Delay = "PT${StartupDelaySeconds}S"
+}
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -30,7 +35,8 @@ $task = New-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Keeps AgentBridge Workspace connected to the local OpenClaw Gateway across IP and network changes."
+    -Description "Keeps the local OpenClaw Gateway available for AgentBridge clients after sign-in and process failures."
+
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing -and $existing.State -eq "Running") {
     Stop-ScheduledTask -TaskName $TaskName
@@ -45,9 +51,18 @@ if (-not $NoStart) {
     Start-ScheduledTask -TaskName $TaskName
 }
 
+$installed = Get-ScheduledTask -TaskName $TaskName
 [ordered]@{
     status = "installed"
     taskName = $TaskName
     started = -not $NoStart
-    script = $tunnelScript
+    launcher = $resolvedLauncher
+    startupDelaySeconds = $StartupDelaySeconds
+    restartCount = $installed.Settings.RestartCount
+    restartInterval = $installed.Settings.RestartInterval.ToString()
+    executionTimeLimit = $installed.Settings.ExecutionTimeLimit.ToString()
+    multipleInstances = $installed.Settings.MultipleInstances.ToString()
+    businessCalls = 0
+    businessListReads = 0
+    businessWrites = 0
 } | ConvertTo-Json -Compress
