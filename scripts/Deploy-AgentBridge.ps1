@@ -216,8 +216,6 @@ $remoteTemplate = @(
     'chmod 0640 "$root/config/release.env"',
     'systemctl daemon-reload',
     'systemctl restart "$service"',
-    'systemctl enable --now "$service-backup.timer"',
-    'systemctl start "$service-backup.service"',
     'systemctl disable --now agentbridge-xvfb.service >/dev/null 2>&1 || true',
     'rm -f -- /etc/systemd/system/agentbridge-xvfb.service',
     'systemctl daemon-reload',
@@ -233,12 +231,21 @@ $remoteTemplate = @(
     '  sleep 1',
     'done',
     'if [ "$release_process_ready" -ne 1 ]; then printf ''service did not stabilize on the release unit\n'' >&2; exit 1; fi',
+    'command -v curl >/dev/null || { printf ''curl is required for deployment readiness checks\n'' >&2; exit 1; }',
+    'governance_ready=0',
+    'for attempt in $(seq 1 30); do',
+    '  if curl --insecure --fail --silent --max-time 3 "https://__HOST_NAME__:8782/readyz" | grep -Eq ''"status"[[:space:]]*:[[:space:]]*"ready"''; then governance_ready=1; break; fi',
+    '  sleep 1',
+    'done',
+    'if [ "$governance_ready" -ne 1 ]; then printf ''service readiness did not stabilize before backup\n'' >&2; exit 1; fi',
     'runtime_module="$(cd "$root" && runuser -u agentbridge -- env HOME="$root/data" AGENTBRIDGE_SESSION_KEY_FILE="$root/config/session.key" "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).resolve())'')"',
     'case "$runtime_module" in "$site_dir"/*) ;; *) printf ''service resolves unexpected bscli module: %s\n'' "$runtime_module" >&2; exit 1 ;; esac',
+    'systemctl enable --now "$service-backup.timer"',
+    'systemctl start "$service-backup.service"',
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"
-$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__BACKUP_SYSTEMD_UNIT_BASE64__", $backupSystemdUnitBase64).Replace("__BACKUP_SYSTEMD_TIMER_BASE64__", $backupSystemdTimerBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
+$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__HOST_NAME__", $HostName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__BACKUP_SYSTEMD_UNIT_BASE64__", $backupSystemdUnitBase64).Replace("__BACKUP_SYSTEMD_TIMER_BASE64__", $backupSystemdTimerBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"

@@ -46,6 +46,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "Assert-PrivateKeyReadable -Path $GitHubIdentityFile",
             "Assert-PrivateKeyReadable -Path $AgentBridgeIdentityFile",
             "& $validationScript -Mode Full",
+            "& $runtimeGovernanceScript",
             "SkipValidation = $true",
             "& $deployScript @deployParameters",
             "& $releaseAcceptanceScript @acceptanceParameters",
@@ -56,6 +57,10 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn(marker, script)
         self.assertLess(
             script.index("& $validationScript -Mode Full"),
+            script.index("& $runtimeGovernanceScript"),
+        )
+        self.assertLess(
+            script.index("& $runtimeGovernanceScript"),
             script.index("& $deployScript @deployParameters"),
         )
         self.assertLess(
@@ -70,6 +75,26 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn(
             "github.com ssh-ed25519 ",
             github_known_hosts.read_text(encoding="ascii"),
+        )
+
+    def test_backup_units_are_installed_only_after_runtime_readiness(self) -> None:
+        deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
+            encoding="utf-8"
+        )
+        backup_service = ROOT / "deploy/systemd/agentbridge-backup.service"
+        backup_timer = ROOT / "deploy/systemd/agentbridge-backup.timer"
+
+        self.assertTrue(backup_service.is_file())
+        self.assertTrue(backup_timer.is_file())
+        for marker in (
+            "service readiness did not stabilize before backup",
+            'systemctl enable --now "$service-backup.timer"',
+            'systemctl start "$service-backup.service"',
+        ):
+            self.assertIn(marker, deploy)
+        self.assertLess(
+            deploy.index("service readiness did not stabilize before backup"),
+            deploy.index('systemctl start "$service-backup.service"'),
         )
 
     def test_release_acceptance_uses_the_tracked_agentbridge_host_key(self) -> None:
