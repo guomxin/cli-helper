@@ -5,9 +5,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import threading
 from typing import Callable, Iterator
+from uuid import uuid4
 
 from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
@@ -195,6 +197,10 @@ from bscli.core.capability_runtime import (
     RequiresUserAction,
 )
 from bscli.core.operations import OperationStore
+from bscli.core.runtime_governance import (
+    RuntimeGovernanceStore,
+    classify_runtime_error,
+)
 from bscli.core.document_downloads import (
     DocumentDownloadAccessDenied,
     DocumentDownloadIntegrityError,
@@ -652,6 +658,10 @@ class CentralCapabilityService:
         self.tasks = TaskHubStore(self.db_path)
         self.workspace = WorkspaceStore(self.db_path)
         self.governance_policies = GovernancePolicyStore(self.db_path)
+        self.runtime_governance = RuntimeGovernanceStore(
+            self.db_path,
+            release_id=os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development",
+        )
         self.adapter = SeeyonCentralAdapter(base_url=base_url)
         self.worker_factory = worker_factory or self._default_worker_factory
         self._adapters_by_system: dict[str, object] = {"oa": self.adapter}
@@ -740,10 +750,27 @@ class CentralCapabilityService:
         idempotency_key: str | None = None,
         request_id: str | None = None,
         task_id: str | None = None,
+        host_type: str = "unknown",
+        host_instance_id: str | None = None,
+        host_run_id: str | None = None,
+        origin_endpoint_id: str | None = None,
     ) -> dict:
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
         system_id = self._adapter_systems.get(spec.adapter, spec.system)
+        effective_request_id = request_id or str(uuid4())
+        trace, _trace_reused = self.runtime_governance.ensure_trace(
+            user_subject=user_subject,
+            request_id=effective_request_id,
+            task_id=task_id,
+            origin_endpoint_id=origin_endpoint_id,
+            host_type=host_type,
+            host_instance_id=host_instance_id,
+            host_run_id=host_run_id,
+            request_kind="read" if spec.effect == "read" else "write",
+            system_id=system_id,
+            capability_name=capability_name,
+        )
         runtime = self._runtime_for_system(system_id)
         if runtime is None:
             engine.register_handler(
@@ -770,13 +797,49 @@ class CentralCapabilityService:
                     task_id=task_id,
                 ),
             )
-        return engine.invoke(
-            user_subject=user_subject,
-            capability_name=capability_name,
-            arguments=arguments,
-            idempotency_key=idempotency_key,
-            request_id=request_id,
+        try:
+            response = engine.invoke(
+                user_subject=user_subject,
+                capability_name=capability_name,
+                arguments=arguments,
+                idempotency_key=idempotency_key,
+                request_id=effective_request_id,
+                trace_id=trace["trace_id"],
+                task_id=task_id,
+            )
+        except Exception as exc:
+            failure = classify_runtime_error(exc)
+            self.runtime_governance.record_stage_once(
+                trace_id=trace["trace_id"],
+                stage="capability.invoke",
+                status="failed",
+                capability_name=capability_name,
+                system_id=system_id,
+                error_code=failure["code"],
+            )
+            self.runtime_governance.update_trace(
+                trace["trace_id"],
+                status="failed",
+                finished=True,
+            )
+            raise
+        operation = self.operations.get(response["operationId"])
+        self.runtime_governance.observe_operation(
+            trace_id=trace["trace_id"],
+            operation=operation,
+            capability_effect=spec.effect,
+            commit_capability=capability_name in _TRUSTED_WRITE_COMMITS,
         )
+        interaction = response.get("interaction")
+        if isinstance(interaction, dict) and interaction.get("interactionId"):
+            self.runtime_governance.observe_interaction(
+                trace_id=trace["trace_id"],
+                interaction_id=interaction["interactionId"],
+                interaction_type=str(interaction.get("type") or "unknown"),
+                state=str(interaction.get("state") or "pending"),
+                system_id=system_id,
+            )
+        return {**response, "runtimeTraceId": trace["trace_id"]}
 
     def session_status(self, *, user_subject: str, system_id: str = "oa") -> dict:
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)
@@ -1134,6 +1197,38 @@ class CentralCapabilityService:
                         ),
                     }
                 )
+        signal_status = (
+            "failed"
+            if summary["eligibleSessions"] and not summary["keptAlive"] and summary["expired"]
+            else "degraded"
+            if summary["expired"] or summary["deferred"] or summary["issues"]
+            else "succeeded"
+        )
+        self.runtime_governance.record_signal(
+            signal_type="session.keepalive.cycle",
+            source="central_service",
+            status=signal_status,
+            value={
+                key: value
+                for key, value in summary.items()
+                if key not in {"issues"}
+            },
+            observed_at=summary["checkedAt"],
+        )
+        for issue in summary["issues"]:
+            self.runtime_governance.record_signal(
+                signal_type="session.keepalive.issue",
+                source="central_service",
+                status=str(issue.get("outcome") or "degraded"),
+                system_id=str(issue.get("systemId") or "") or None,
+                user_subject=str(issue.get("userSubject") or "") or None,
+                value={
+                    "outcome": issue.get("outcome"),
+                    "errorCode": issue.get("errorCode"),
+                    "diagnostics": issue.get("diagnostics"),
+                },
+                observed_at=summary["checkedAt"],
+            )
         return summary
 
     def _create_login_challenge(
@@ -1296,6 +1391,27 @@ class CentralCapabilityService:
         )
         notifications = []
         for delivery in deliveries:
+            trace = (
+                self.runtime_governance.trace_for_task(
+                    delivery["task_id"], user_subject=user_subject
+                )
+                if delivery.get("task_id")
+                else None
+            )
+            if trace is not None:
+                self.runtime_governance.record_stage_once(
+                    trace_id=trace["trace_id"],
+                    stage="delivery.claimed",
+                    status="succeeded",
+                    delivery_id=delivery["delivery_id"],
+                    side_effect_boundary=trace["side_effect_boundary"],
+                    metadata={
+                        "endpointId": endpoint["endpoint_id"],
+                        "clientType": endpoint.get("client_type"),
+                        "attemptCount": delivery["attempt_count"],
+                        "payloadType": delivery.get("payload_type"),
+                    },
+                )
             event = delivery["payload"]
             if delivery["payload_type"] == "timeline_message":
                 notifications.append(
@@ -1424,6 +1540,47 @@ class CentralCapabilityService:
             retry_after_seconds=retry_after_seconds,
             defer_until_activity=defer_until_activity,
         )
+        if delivery.get("task_id"):
+            trace = self.runtime_governance.trace_for_task(
+                delivery["task_id"], user_subject=user_subject
+            )
+            if trace is not None:
+                delivery_state = str(delivery.get("state") or "failed")
+                span_status = (
+                    "succeeded"
+                    if delivery_state == "acknowledged"
+                    else "waiting"
+                    if delivery_state in {"deferred", "pending"}
+                    else "failed"
+                )
+                self.runtime_governance.record_stage_once(
+                    trace_id=trace["trace_id"],
+                    stage="delivery.result",
+                    status=span_status,
+                    delivery_id=delivery["delivery_id"],
+                    error_code=None if succeeded else "DELIVERY_FAILED",
+                    side_effect_boundary=trace["side_effect_boundary"],
+                    metadata={
+                        "endpointId": endpoint["endpoint_id"],
+                        "clientType": endpoint.get("client_type"),
+                        "deliveryState": delivery_state,
+                        "attemptCount": delivery.get("attempt_count"),
+                    },
+                )
+                if span_status == "failed":
+                    self.runtime_governance.record_signal(
+                        signal_type="delivery.failure",
+                        source="task_hub",
+                        status="failed",
+                        user_subject=user_subject,
+                        host_type=agent_host,
+                        trace_id=trace["trace_id"],
+                        value={
+                            "deliveryId": delivery["delivery_id"],
+                            "endpointId": endpoint["endpoint_id"],
+                            "attemptCount": delivery.get("attempt_count"),
+                        },
+                    )
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -1454,6 +1611,34 @@ class CentralCapabilityService:
             channel=channel,
             files=files,
         )
+        trace = self.runtime_governance.trace_for_task(
+            task_id, user_subject=user_subject
+        )
+        if trace is not None:
+            states = [str(item.get("state") or "") for item in files]
+            succeeded = bool(states) and all(
+                state in {"delivered", "succeeded", "acknowledged"}
+                for state in states
+            )
+            self.runtime_governance.record_stage_once(
+                trace_id=trace["trace_id"],
+                stage="artifact.delivery",
+                status="succeeded" if succeeded else "failed",
+                delivery_id=delivery_ref,
+                artifact_id=(
+                    str(files[0].get("artifact_id") or "") or None
+                    if files
+                    else None
+                ),
+                error_code=None if succeeded else "ARTIFACT_DELIVERY_FAILED",
+                side_effect_boundary=trace["side_effect_boundary"],
+                metadata={
+                    "channel": channel,
+                    "fileCount": len(files),
+                    "states": states,
+                    "reused": reused,
+                },
+            )
         return {
             "protocolVersion": "0.1",
             "schemaVersion": "agentbridge.host-artifact-delivery.v1",
@@ -1553,6 +1738,25 @@ class CentralCapabilityService:
             active_conversation_ref=conversation_ref,
             title=title,
         )
+        trace, _trace_reused = self.runtime_governance.ensure_trace(
+            user_subject=user_subject,
+            task_id=task["task_id"],
+            origin_endpoint_id=endpoint["endpoint_id"],
+            host_type=agent_host,
+            host_instance_id=f"{agent_host}:default",
+            host_run_id=host_task_key,
+            request_kind="interaction",
+        )
+        self.runtime_governance.record_stage_once(
+            trace_id=trace["trace_id"],
+            stage="host.accepted",
+            side_effect_boundary="B0_NO_EFFECT",
+            metadata={
+                "clientType": client_type,
+                "taskScope": task_scope,
+                "reused": task_reused,
+            },
+        )
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -1607,6 +1811,22 @@ class CentralCapabilityService:
             text=text,
             task_id=task_id,
         )
+        if task_id:
+            trace = self.runtime_governance.trace_for_task(
+                task_id,
+                user_subject=user_subject,
+            )
+            if trace is not None:
+                stage = (
+                    "host.first_progress"
+                    if role == "assistant"
+                    else "ingress.received"
+                )
+                self.runtime_governance.record_stage_once(
+                    trace_id=trace["trace_id"],
+                    stage=stage,
+                    metadata={"clientType": client_type, "role": role},
+                )
         reactivated_deliveries = 0
         if (
             role == "user"
@@ -1672,6 +1892,18 @@ class CentralCapabilityService:
                 interaction=interaction,
             )
             linked_interactions.append(interaction_id)
+            trace = self.runtime_governance.trace_for_task(
+                task_id,
+                user_subject=user_subject,
+            )
+            if trace is not None:
+                self.runtime_governance.observe_interaction(
+                    trace_id=trace["trace_id"],
+                    interaction_id=interaction_id,
+                    interaction_type=str(interaction.get("type") or "unknown"),
+                    state=str(interaction.get("state") or "pending"),
+                    system_id=record.get("system_id"),
+                )
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -2633,6 +2865,57 @@ class CentralCapabilityService:
                 yield worker
 
     def _invoke_adapter(
+        self,
+        *args,
+        **kwargs,
+    ) -> dict:
+        context = kwargs.get("context")
+        if context is None and args:
+            context = args[0]
+        trace_id = getattr(context, "trace_id", None)
+        if not trace_id:
+            return self._invoke_adapter_unobserved(*args, **kwargs)
+        capability_name = str(kwargs.get("capability_name") or context.spec.name)
+        system_id = str(kwargs.get("system_id") or context.spec.system)
+        if context.spec.effect == "read":
+            boundary = "B1_READ_ONLY"
+        elif capability_name in _TRUSTED_WRITE_COMMITS:
+            boundary = "B4_COMMIT_ATTEMPTED"
+        else:
+            boundary = "B2_INTERACTION_CREATED"
+        span = self.runtime_governance.start_span(
+            trace_id=trace_id,
+            stage="adapter.request",
+            operation_id=context.operation_id,
+            system_id=system_id,
+            capability_name=capability_name,
+            side_effect_boundary=boundary,
+        )
+        try:
+            result = self._invoke_adapter_unobserved(*args, **kwargs)
+        except Exception as exc:
+            failure = classify_runtime_error(exc)
+            self.runtime_governance.finish_span(
+                span["span_id"],
+                status="unknown" if failure["code"] == "RESULT_UNKNOWN" else "failed",
+                error_code=failure["code"],
+                side_effect_boundary=boundary,
+            )
+            raise
+        else:
+            finished_boundary = (
+                "B5_VERIFIED"
+                if capability_name in _TRUSTED_WRITE_COMMITS
+                else boundary
+            )
+            self.runtime_governance.finish_span(
+                span["span_id"],
+                status="succeeded",
+                side_effect_boundary=finished_boundary,
+            )
+            return result
+
+    def _invoke_adapter_unobserved(
         self,
         *,
         context: CapabilityContext,

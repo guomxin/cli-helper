@@ -651,7 +651,16 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
   assert.equal(businessCalls.length, 1);
   assert.equal(businessCalls[0].name, "oa_workflow_pending_list");
   assert.deepEqual(businessCalls[0].options.meta, {
-    "io.agentbridge/task": { taskId },
+    "io.agentbridge/host": {
+      version: "1",
+      agentHost: "openclaw",
+      hostInstanceId: "openclaw-gateway",
+    },
+    "io.agentbridge/task": {
+      taskId,
+      hostRunId: "tool-follow-up",
+      toolCallId: "tool-follow-up",
+    },
   });
   assert.equal(result.details.agentbridgeTaskId, taskId);
   assert.equal(
@@ -1051,6 +1060,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
       "io.agentbridge/host": {
         version: "1",
         agentHost: "openclaw",
+        hostInstanceId: "openclaw-gateway",
       },
     },
   });
@@ -1780,6 +1790,7 @@ test("restores a pending interaction and its original route on gateway start", a
     "io.agentbridge/host": {
       version: "1",
       agentHost: "openclaw",
+      hostInstanceId: "openclaw-gateway",
     },
   });
   assert.equal(coordinator.pendingForSession(sessionKey).length, 1);

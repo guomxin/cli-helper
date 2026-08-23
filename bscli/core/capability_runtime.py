@@ -14,6 +14,8 @@ class CapabilityContext:
     request_id: str
     operation_id: str
     spec: CapabilitySpec
+    trace_id: str | None = None
+    task_id: str | None = None
 
 
 class RequiresUserAction(RuntimeError):
@@ -59,6 +61,8 @@ class CapabilityEngine:
         arguments: dict,
         idempotency_key: str | None = None,
         request_id: str | None = None,
+        trace_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict:
         spec = self.registry.get(capability_name)
         _validate_json_object(arguments, spec.input_schema)
@@ -90,6 +94,8 @@ class CapabilityEngine:
             request_id=operation["request_id"],
             operation_id=operation["operation_id"],
             spec=spec,
+            trace_id=trace_id,
+            task_id=task_id,
         )
         try:
             result = handler(context, arguments)

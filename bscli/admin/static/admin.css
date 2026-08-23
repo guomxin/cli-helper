@@ -145,6 +145,14 @@ tbody tr:hover { background: #f8faf9; }
 .filter-empty { min-height: 88px; display: grid; place-items: center; color: var(--muted); background: #fff; border: 1px solid var(--line); border-top: 0; }
 .scope-pills { max-width: 420px; display: flex; flex-wrap: wrap; gap: 4px; white-space: normal; }
 .scope-pills span { display: inline-flex; min-height: 23px; align-items: center; padding: 2px 6px; color: #35524b; background: #e8eeeb; border-radius: 3px; font: 10px/1.2 var(--mono); }
+.boundary { display: inline-flex; min-height: 24px; align-items: center; padding: 3px 7px; color: #304b45; background: #e9efec; border-left: 3px solid var(--teal); font: 10px/1.2 var(--mono); }
+.detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); }
+.detail-grid > div { min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.detail-grid > div:nth-child(even) { border-right: 0; }
+.detail-grid > div:nth-last-child(-n+2) { border-bottom: 0; }
+.detail-grid dt { color: var(--muted); font-size: 10px; }
+.detail-grid dd { min-width: 0; margin: 5px 0 0; overflow-wrap: anywhere; }
+.modal-section-title { margin: 5px 0 0; font-size: 13px; }
 .segmented { display: flex; flex-wrap: wrap; width: fit-content; margin-bottom: 12px; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; }
 .segmented button { min-height: 36px; padding: 6px 12px; color: #52605c; background: #fff; border: 0; border-right: 1px solid var(--line); font-weight: 700; }
 .segmented button:last-child { border-right: 0; }
@@ -155,7 +163,7 @@ tbody tr:hover { background: #f8faf9; }
 .loading { min-height: 260px; display: grid; place-items: center; color: var(--muted); }
 .loading::before { content: ""; width: 24px; height: 24px; margin-right: 10px; border: 3px solid var(--line); border-top-color: var(--teal); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.modal { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 42px); padding: 0; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: var(--shadow); }
+.modal { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 42px); padding: 0; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 6px; box-shadow: var(--shadow); }
 .modal::backdrop { background: rgba(13,27,23,.56); }
 .modal form { display: grid; max-height: inherit; }
 .modal header, .modal footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; }
@@ -212,4 +220,8 @@ tbody tr:hover { background: #f8faf9; }
   .segmented { width: 100%; }
   .segmented button { flex: 1; min-width: 86px; }
   .checkbox-grid { grid-template-columns: 1fr; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .detail-grid > div { border-right: 0; }
+  .detail-grid > div:nth-last-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .detail-grid > div:last-child { border-bottom: 0; }
 }

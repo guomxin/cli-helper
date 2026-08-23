@@ -37,8 +37,16 @@ if ($RemoteRoot -notmatch '^/home/[A-Za-z0-9._/-]+$' -or $RemoteRoot.Contains(".
     throw "RemoteRoot must be a fixed path below /home"
 }
 $systemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName.service"
+$backupSystemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName-backup.service"
+$backupSystemdTimer = Join-Path $repoRoot "deploy\systemd\$ServiceName-backup.timer"
 if (-not (Test-Path -LiteralPath $systemdUnit -PathType Leaf)) {
     throw "Version-controlled systemd unit was not found: $systemdUnit"
+}
+if (-not (Test-Path -LiteralPath $backupSystemdUnit -PathType Leaf)) {
+    throw "Version-controlled backup systemd unit was not found: $backupSystemdUnit"
+}
+if (-not (Test-Path -LiteralPath $backupSystemdTimer -PathType Leaf)) {
+    throw "Version-controlled backup systemd timer was not found: $backupSystemdTimer"
 }
 
 if (-not $IdentityFile) {
@@ -86,7 +94,7 @@ $plan = [ordered]@{
     openClawGuardrails = [bool]$RestartOpenClaw
     openClawWarmup = [bool]$RestartOpenClaw
     installSystemDependencies = [bool]$InstallSystemDependencies
-    systemdUnit = $systemdUnit
+    systemdUnits = @($systemdUnit, $backupSystemdUnit, $backupSystemdTimer)
 }
 if ($PlanOnly) {
     $plan | ConvertTo-Json -Compress
@@ -154,6 +162,8 @@ $target = "$SshUser@$HostName"
 $remoteWheel = "/tmp/$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
 $systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
+$backupSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdUnit))
+$backupSystemdTimerBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdTimer))
 
 & $scp.Source @connectionArguments $wheel.FullName $remoteDestination
 if ($LASTEXITCODE -ne 0) {
@@ -171,8 +181,14 @@ $remoteTemplate = @(
     'release_wheel="$release_dir/__WHEEL_NAME__"',
     'unit_tmp_dir="/tmp/agentbridge-systemd-$release_id"',
     'unit_tmp="$unit_tmp_dir/$service.service"',
+    'backup_unit_tmp="$unit_tmp_dir/$service-backup.service"',
+    'backup_timer_tmp="$unit_tmp_dir/$service-backup.timer"',
     'unit_path="/etc/systemd/system/$service.service"',
+    'backup_unit_path="/etc/systemd/system/$service-backup.service"',
+    'backup_timer_path="/etc/systemd/system/$service-backup.timer"',
     'unit_b64=''__SYSTEMD_UNIT_BASE64__''',
+    'backup_unit_b64=''__BACKUP_SYSTEMD_UNIT_BASE64__''',
+    'backup_timer_b64=''__BACKUP_SYSTEMD_TIMER_BASE64__''',
     'install_system_dependencies=''__INSTALL_SYSTEM_DEPENDENCIES__''',
     'trap ''rm -f -- "$wheel"; rm -rf -- "$unit_tmp_dir"'' EXIT',
     'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify xauth; fi',
@@ -180,6 +196,7 @@ $remoteTemplate = @(
     'test -d /usr/share/novnc || { printf ''noVNC web root is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0700 "$unit_tmp_dir"',
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
+    'install -d -m 0700 -o agentbridge -g agentbridge "$root/backups"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
     '"$python" -m pip install --disable-pip-version-check --no-deps --force-reinstall "$release_wheel"',
     'site_dir="$(cd / && "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).parent.resolve())'')"',
@@ -187,14 +204,20 @@ $remoteTemplate = @(
     '"$python" -m compileall -q "$site_dir"',
     '"$python" -m pip check',
     'printf ''%s'' "$unit_b64" | base64 --decode > "$unit_tmp"',
-    'systemd-analyze verify "$unit_tmp"',
+    'printf ''%s'' "$backup_unit_b64" | base64 --decode > "$backup_unit_tmp"',
+    'printf ''%s'' "$backup_timer_b64" | base64 --decode > "$backup_timer_tmp"',
+    'systemd-analyze verify "$unit_tmp" "$backup_unit_tmp" "$backup_timer_tmp"',
     'install -m 0644 -o root -g root "$unit_tmp" "$unit_path"',
+    'install -m 0644 -o root -g root "$backup_unit_tmp" "$backup_unit_path"',
+    'install -m 0644 -o root -g root "$backup_timer_tmp" "$backup_timer_path"',
     'install -d -m 0750 -o root -g agentbridge "$root/config"',
     'printf ''AGENTBRIDGE_RELEASE_ID=%s\n'' "$release_id" > "$root/config/release.env"',
     'chown root:agentbridge "$root/config/release.env"',
     'chmod 0640 "$root/config/release.env"',
     'systemctl daemon-reload',
     'systemctl restart "$service"',
+    'systemctl enable --now "$service-backup.timer"',
+    'systemctl start "$service-backup.service"',
     'systemctl disable --now agentbridge-xvfb.service >/dev/null 2>&1 || true',
     'rm -f -- /etc/systemd/system/agentbridge-xvfb.service',
     'systemctl daemon-reload',
@@ -215,7 +238,7 @@ $remoteTemplate = @(
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"
-$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
+$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__BACKUP_SYSTEMD_UNIT_BASE64__", $backupSystemdUnitBase64).Replace("__BACKUP_SYSTEMD_TIMER_BASE64__", $backupSystemdTimerBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"

@@ -3038,6 +3038,73 @@ class TaskHubStore:
             )
         return int(cursor.rowcount)
 
+    def get_delivery(self, delivery_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM notification_outbox WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+        if row is None:
+            raise TaskNotFound("notification delivery not found")
+        return _outbox_from_row(row)
+
+    def requeue_delivery(self, delivery_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM notification_outbox WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound("notification delivery not found")
+            if row["state"] not in {"failed", "deferred", "archived"}:
+                raise TaskIntegrityError(
+                    "only failed, deferred, or archived delivery can be requeued"
+                )
+            connection.execute(
+                """
+                UPDATE notification_outbox
+                SET state = 'pending', attempt_count = 0,
+                    next_attempt_at = ?, updated_at = ?, acknowledged_at = NULL
+                WHERE delivery_id = ?
+                """,
+                (now, now, delivery_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM notification_outbox WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+        return _outbox_from_row(updated)
+
+    def archive_delivery(self, delivery_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM notification_outbox WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound("notification delivery not found")
+            if row["state"] not in {"failed", "acknowledged"}:
+                raise TaskIntegrityError(
+                    "only failed or acknowledged delivery can be archived"
+                )
+            connection.execute(
+                """
+                UPDATE notification_outbox
+                SET state = 'archived', updated_at = ?
+                WHERE delivery_id = ?
+                """,
+                (now, delivery_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM notification_outbox WHERE delivery_id = ?",
+                (delivery_id,),
+            ).fetchone()
+        return _outbox_from_row(updated)
+
     @staticmethod
     def _subscribe_companion_endpoints(
         connection: sqlite3.Connection,

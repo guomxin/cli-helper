@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AgentBridge runtime-state backup
+
+[Timer]
+OnCalendar=*-*-* 02:20:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=15m
+Unit=agentbridge-backup.service
+
+[Install]
+WantedBy=timers.target

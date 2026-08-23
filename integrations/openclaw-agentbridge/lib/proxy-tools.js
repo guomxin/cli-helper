@@ -255,13 +255,18 @@ function createProxyTool({
           params,
           {
             signal,
-            meta: taskId
-              ? {
+            meta: {
+              ...hostContextMeta(),
+              ...(taskId
+                ? {
                   [TASK_CONTEXT_META_KEY]: {
                     taskId,
+                    hostRunId: boundedText(toolCallId, 256),
+                    toolCallId: boundedText(toolCallId, 256),
                   },
                 }
-              : undefined,
+                : {}),
+            },
           },
         );
       } catch (error) {
@@ -570,6 +575,7 @@ export function hostContextMeta() {
     [HOST_CONTEXT_META_KEY]: {
       version: "1",
       agentHost: "openclaw",
+      hostInstanceId: "openclaw-gateway",
     },
   };
 }

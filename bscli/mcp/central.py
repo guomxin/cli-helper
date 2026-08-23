@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import ipaddress
 import json
 import logging
@@ -396,6 +396,83 @@ class CentralSessionKeepalive:
                     "AgentBridge session keepalive cycle failed: error=%s",
                     exc.__class__.__name__,
                 )
+                try:
+                    self.service.runtime_governance.record_signal(
+                        signal_type="session.keepalive.worker",
+                        source="central_session_keepalive",
+                        status="failed",
+                        value={"errorCode": exc.__class__.__name__},
+                    )
+                except Exception:
+                    pass
+            if self._stop_event.wait(self.interval_seconds):
+                return
+
+
+class CentralRuntimeGovernanceWorker:
+    def __init__(
+        self,
+        service: CentralCapabilityService,
+        *,
+        interval_seconds: float = 60,
+        initial_delay_seconds: float = 5,
+    ) -> None:
+        self.service = service
+        self.interval_seconds = max(float(interval_seconds), 15)
+        self.initial_delay_seconds = max(float(initial_delay_seconds), 0)
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("central runtime governance worker is already started")
+        self._thread = threading.Thread(
+            target=self._run,
+            name="agentbridge-runtime-governance",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+
+    def run_cycle(self) -> dict[str, Any]:
+        task_diagnostics = self.service.tasks.runtime_diagnostics()
+        evaluation = self.service.runtime_governance.evaluate_incidents(
+            task_diagnostics=task_diagnostics,
+        )
+        slo = self.service.runtime_governance.refresh_slo_rollups(hours=24)
+        retention = self.service.runtime_governance.prune()
+        return {"evaluation": evaluation, "slo": slo, "retention": retention}
+
+    def _run(self) -> None:
+        if self._stop_event.wait(self.initial_delay_seconds):
+            return
+        while not self._stop_event.is_set():
+            try:
+                result = self.run_cycle()
+                _LOGGER.info(
+                    "AgentBridge runtime governance cycle: open=%d observed=%d resolved=%d",
+                    result["evaluation"]["open"],
+                    result["evaluation"]["observed"],
+                    result["evaluation"]["resolved"],
+                )
+            except Exception as exc:
+                _LOGGER.warning(
+                    "AgentBridge runtime governance cycle failed: error=%s",
+                    exc.__class__.__name__,
+                )
+                try:
+                    self.service.runtime_governance.record_signal(
+                        signal_type="runtime.governance.worker",
+                        source="central_runtime_governance",
+                        status="failed",
+                        value={"errorCode": exc.__class__.__name__},
+                    )
+                except Exception:
+                    pass
             if self._stop_event.wait(self.interval_seconds):
                 return
 
@@ -632,6 +709,10 @@ def create_central_mcp_server(
             identity_store,
             required_scopes=required_scopes or {"oa:read"},
         )
+        request_id = str(ctx.request_id)
+        runtime_context = _request_runtime_context(ctx)
+        mcp_started_at = datetime.now(timezone.utc).isoformat()
+        mcp_started = perf_counter()
         task_id = _request_task_id(ctx)
         if task_id:
             await asyncio.to_thread(
@@ -648,10 +729,29 @@ def create_central_mcp_server(
                 capability_name=capability_name,
                 arguments=arguments,
                 idempotency_key=idempotency_key,
-                request_id=str(ctx.request_id),
+                request_id=request_id,
                 task_id=task_id,
+                host_type=runtime_context["hostType"],
+                host_instance_id=runtime_context.get("hostInstanceId"),
+                host_run_id=runtime_context.get("hostRunId"),
+                origin_endpoint_id=runtime_context.get("endpointId"),
             )
         except Exception as exc:
+            trace = service.runtime_governance.trace_for_request(
+                request_id,
+                user_subject=identity["user_subject"],
+            )
+            if trace is not None:
+                failure_code = getattr(exc, "code", None) or exc.__class__.__name__
+                service.runtime_governance.record_stage_once(
+                    trace_id=trace["trace_id"],
+                    stage="mcp.request",
+                    status="failed",
+                    error_code=str(failure_code)[:120],
+                    started_at=mcp_started_at,
+                    duration_ms=round((perf_counter() - mcp_started) * 1000),
+                    metadata={"requestId": request_id},
+                )
             if task_id:
                 try:
                     await asyncio.to_thread(
@@ -681,6 +781,24 @@ def create_central_mcp_server(
                     and interaction.get("interactionId")
                     else []
                 ),
+            )
+        trace_id = response.get("runtimeTraceId")
+        if trace_id:
+            service.runtime_governance.record_stage_once(
+                trace_id=trace_id,
+                stage="mcp.request",
+                status=(
+                    "unknown"
+                    if response.get("status") == "unknown"
+                    else "failed"
+                    if response.get("status") == "failed"
+                    else "succeeded"
+                ),
+                operation_id=response.get("operationId"),
+                error_code=(response.get("error") or {}).get("code"),
+                started_at=mcp_started_at,
+                duration_ms=round((perf_counter() - mcp_started) * 1000),
+                metadata={"requestId": request_id},
             )
         return package_interaction_result(response)
 
@@ -4409,12 +4527,14 @@ def serve_central_mcp(
         interval_seconds=keepalive_interval_seconds,
         activity_lease_seconds=keepalive_activity_lease_seconds,
     )
+    governance = CentralRuntimeGovernanceWorker(service)
     auth_thread.start()
     if admin_thread is not None:
         admin_thread.start()
     if workspace_thread is not None:
         workspace_thread.start()
     keepalive.start()
+    governance.start()
     try:
         mcp = create_central_mcp_server(
             service=service,
@@ -4431,6 +4551,7 @@ def serve_central_mcp(
             access_log=False,
         )
     finally:
+        governance.stop()
         keepalive.stop()
         interactive_broker.shutdown()
         if admin_server is not None:
@@ -4494,6 +4615,30 @@ def _request_task_id(ctx: Context) -> str | None:
     if len(normalized) < 16 or len(normalized) > 128:
         return None
     return normalized
+
+
+def _request_runtime_context(ctx: Context) -> dict[str, str | None]:
+    meta = _request_meta(ctx)
+    host_context = meta.get(HOST_CONTEXT_META_KEY)
+    task_context = meta.get(TASK_CONTEXT_META_KEY)
+    host = host_context if isinstance(host_context, Mapping) else {}
+    task = task_context if isinstance(task_context, Mapping) else {}
+
+    def text_value(value: Any, maximum: int) -> str | None:
+        if not isinstance(value, (str, int)):
+            return None
+        normalized = str(value).strip()
+        return normalized[:maximum] if normalized else None
+
+    return {
+        "hostType": text_value(host.get("agentHost"), 80) or "unknown",
+        "hostInstanceId": text_value(host.get("hostInstanceId"), 160),
+        "hostRunId": (
+            text_value(task.get("hostRunId"), 256)
+            or text_value(task.get("toolCallId"), 256)
+        ),
+        "endpointId": text_value(task.get("endpointId"), 128),
+    }
 
 
 def _is_loopback_host(host: str) -> bool:

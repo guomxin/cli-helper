@@ -195,6 +195,46 @@ class AdminStoreTests(unittest.TestCase):
 
 
 class GovernanceRuntimeTests(unittest.TestCase):
+    def test_running_recovery_action_is_reused_without_executing_again(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            control = AdminControlPlane(
+                service=service,
+                identity_store=McpIdentityTokenStore(service.db_path),
+            )
+            first, reused = service.runtime_governance.start_recovery_action(
+                action_type="retry_delivery",
+                target_type="delivery",
+                target_id="delivery-1",
+                actor="admin",
+                reason="unit test",
+                idempotency_key="retry-running-once",
+                side_effect_boundary="B0_NO_EFFECT",
+            )
+            self.assertFalse(reused)
+            self.assertEqual(first["status"], "running")
+
+            with patch.object(
+                service.tasks,
+                "get_delivery",
+                return_value={"delivery_id": "delivery-1", "state": "failed"},
+            ), patch.object(service.tasks, "requeue_delivery") as requeue:
+                second = control.runtime_recovery_action(
+                    actor={"account_id": "a", "username": "admin", "role": "admin"},
+                    request_ip="127.0.0.1",
+                    action_type="retry_delivery",
+                    target_id="delivery-1",
+                    reason="unit test",
+                    idempotency_key="retry-running-once",
+                )
+
+            self.assertEqual(second["action_id"], first["action_id"])
+            self.assertEqual(second["status"], "running")
+            requeue.assert_not_called()
+
     def test_paused_write_is_recorded_as_write_paused_before_downstream_login(self) -> None:
         registry = CapabilityRegistry()
         registry.register(
@@ -781,6 +821,23 @@ class AdminHttpServerTests(unittest.TestCase):
             )
             identities = McpIdentityTokenStore(service.db_path)
             control = AdminControlPlane(service=service, identity_store=identities)
+            trace, _ = service.runtime_governance.ensure_trace(
+                user_subject="user-a",
+                request_id="admin-http-test",
+                host_type="reference-host",
+                request_kind="read",
+                system_id="oa",
+                capability_name="oa.pending.list",
+            )
+            incident = service.runtime_governance.upsert_incident(
+                rule_id="test_runtime_event",
+                severity="P3",
+                symptom_code="TEST_SIGNAL",
+                actionability="current",
+                title="Test runtime event",
+                trace_id=trace["trace_id"],
+                user_subject="user-a",
+            )
             account = control.accounts.create(
                 username="admin",
                 password=PASSWORD,
@@ -800,6 +857,9 @@ class AdminHttpServerTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
+                status, _, ready = _request(port, "GET", "/readyz")
+                self.assertEqual(status, 200)
+                self.assertEqual(ready["status"], "ready")
                 status, headers, body = _request(
                     port,
                     "POST",
@@ -879,6 +939,36 @@ class AdminHttpServerTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertIn("summary", coordination)
                 self.assertIn("tasks", coordination)
+
+                status, _, traces = _request(port, "GET", "/api/traces", cookies=cookies)
+                self.assertEqual(status, 200)
+                self.assertEqual(traces["items"][0]["trace_id"], trace["trace_id"])
+                status, _, trace_detail = _request(
+                    port, "GET", f"/api/traces/{trace['trace_id']}", cookies=cookies
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(trace_detail["trace"]["user_subject"], "user-a")
+                status, _, governance = _request(
+                    port, "GET", "/api/governance", cookies=cookies
+                )
+                self.assertEqual(status, 200)
+                self.assertIn("slo", governance)
+                status, _, incidents = _request(
+                    port, "GET", "/api/incidents", cookies=cookies
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(incidents["items"][0]["incident_id"], incident["incident_id"])
+                status, _, transitioned = _request(
+                    port,
+                    "POST",
+                    f"/api/incidents/{incident['incident_id']}/acknowledge",
+                    body={"reason": "HTTP governance test"},
+                    origin=origin,
+                    cookies=cookies,
+                    csrf=cookies["agentbridge_admin_csrf"],
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(transitioned["state"], "acknowledged")
             finally:
                 server.shutdown()
                 server.server_close()
@@ -982,7 +1072,11 @@ class AdminStaticAssetTests(unittest.TestCase):
         self.assertIn("loginForm.reset();", script)
         self.assertNotIn("event.currentTarget.reset()", script)
         self.assertIn('data-view="coordination"', page)
+        self.assertIn('data-view="traces"', page)
+        self.assertIn('data-view="incidents"', page)
         self.assertIn("async function renderCoordination()", script)
+        self.assertIn("async function renderTraces()", script)
+        self.assertIn("async function renderIncidents", script)
         self.assertIn('api("/api/coordination?limit=300")', script)
         self.assertIn("上次确认有效", script)
         self.assertIn("未保活（超期）", script)

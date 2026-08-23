@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -39,6 +40,11 @@ from bscli.core.internal_pki import InternalCertificateAuthorityStore
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
+from bscli.core.runtime_backup import (
+    create_runtime_backup,
+    validate_backup_manifest,
+    validate_runtime_backup,
+)
 from bscli.core.session_secrets import WindowsDpapiProtector
 from bscli.core.sessions import SessionPrincipalMismatch, SessionRegistry
 from bscli.core.tasks import TaskHubStore
@@ -348,11 +354,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="USER_SUBJECT=CLIENT_TYPE",
         help="required active endpoint; may be repeated",
     )
+    backup_create = diagnostics_sub.add_parser("backup-create")
+    backup_create.add_argument("--output-dir", required=True)
+    backup_create.add_argument("--release-id")
+    backup_validate = diagnostics_sub.add_parser("backup-validate")
+    backup_validate.add_argument("--backup", required=True)
 
     return parser
 
 
 def handle_diagnostics(args: argparse.Namespace, home: Path) -> int:
+    if args.action == "backup-create":
+        report = create_runtime_backup(
+            _central_db_path(home),
+            Path(args.output_dir),
+            release_id=args.release_id or os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development",
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    if args.action == "backup-validate":
+        path = Path(args.backup)
+        report = (
+            validate_backup_manifest(path)
+            if path.name.endswith(".manifest.json")
+            else validate_runtime_backup(path)
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
     if args.action != "omnichannel":
         raise ValueError(f"unknown diagnostics action: {args.action}")
     try:

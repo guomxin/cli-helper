@@ -8,6 +8,8 @@ const titles = {
   capabilities: ["GOVERNANCE", "能力与策略"],
   operations: ["EXECUTION", "操作记录"],
   interactions: ["TRUSTED UX", "可信交互"],
+  traces: ["END TO END", "链路追踪"],
+  incidents: ["RELIABILITY", "事件治理"],
   coordination: ["TASK HUB", "多端任务"],
   runtime: ["RUNTIME", "系统运行"],
   audit: ["ADMIN AUDIT", "管理审计"],
@@ -19,16 +21,18 @@ const statusText = {
   awaiting_user: "当前等待用户", user_action_completed: "用户已处理", resumed: "已续办",
   user_action_expired: "交互已过期", user_action_rejected: "用户已拒绝", user_action_superseded: "已被替换",
   user_action_failed: "交互失败", user_action_handoff: "已转交用户",
-  running: "执行中", canceled: "已取消", pending: "待处理", delivering: "投递中", deferred: "等待端点活动", acknowledged: "已送达",
+  running: "执行中", canceled: "已取消", cancelled: "已取消", pending: "待处理", delivering: "投递中", deferred: "等待端点活动", acknowledged: "已送达",
   submitted: "已填写", approved: "已授权", rejected: "已拒绝", consumed: "已使用", superseded: "已替换",
   paused: "已暂停", available: "可用", selected: "已选择", awaiting_selection: "待选择",
   observe_only: "只读接续", resume: "恢复执行", follow_up: "后续操作", pull: "网页拉取", direct: "聊天直推",
   eligible: "保活中", outside_lease: "未保活（超期）", activity_unknown: "活动未知", not_configured: "未配置",
   ready: "同步就绪", waiting_activity: "等待微信活动",
+  waiting: "等待中", open: "待处理", investigating: "调查中", resolved: "已解决", suppressed: "已抑制", archived: "已归档",
+  healthy: "健康", unavailable: "不可用", meeting: "达标", breached: "未达标", insufficient_data: "数据不足",
 };
-const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available"].includes(value) ? "ok" :
-  ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed"].includes(value) ? "bad" :
-  ["pending", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected"].includes(value) ? "warn" :
+const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available", "healthy", "meeting", "resolved", "archived"].includes(value) ? "ok" :
+  ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed", "unavailable", "breached"].includes(value) ? "bad" :
+  ["pending", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "waiting", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected", "open", "acknowledged", "investigating"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
@@ -57,6 +61,23 @@ function fmtBytes(value) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+function fmtDuration(value) {
+  const duration = Number(value || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return "--";
+  if (duration < 1000) return `${Math.round(duration)} ms`;
+  if (duration < 60000) return `${(duration / 1000).toFixed(1)} 秒`;
+  return `${(duration / 60000).toFixed(1)} 分`;
+}
+function fmtMetric(metric) {
+  if (metric.value == null) return "--";
+  if (metric.metricKey.endsWith("_rate") || metric.metricKey.endsWith("_coverage")) return `${(metric.value * 100).toFixed(1)}%`;
+  if (metric.metricKey.endsWith("_ms")) return fmtDuration(metric.value);
+  return Number(metric.value).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+function boundaryLabel(value) {
+  const labels = { B0_NO_EFFECT: "B0 无副作用", B1_READ_ONLY: "B1 只读", B2_INTERACTION_CREATED: "B2 已创建交互", B3_PREPARED_AUTHORIZED: "B3 已准备/授权", B4_COMMIT_ATTEMPTED: "B4 已尝试提交", B5_VERIFIED: "B5 已权威核验" };
+  return labels[value] || value || "--";
 }
 function shortId(value) { return value ? `${escapeHtml(value.slice(0, 8))}…` : "--"; }
 function badge(value) { return `<span class="status ${statusClass(value)}">${escapeHtml(statusText[value] || value || "未知")}</span>`; }
@@ -158,8 +179,8 @@ async function loadView(view) {
   try {
     const renderers = {
       overview: renderOverview, users: renderUsers, sessions: renderSessions, capabilities: renderCapabilities,
-      operations: renderOperations, interactions: renderInteractions, coordination: renderCoordination,
-      runtime: renderRuntime, audit: renderAudit,
+      operations: renderOperations, interactions: renderInteractions, traces: renderTraces,
+      incidents: renderIncidents, coordination: renderCoordination, runtime: renderRuntime, audit: renderAudit,
     };
     await renderers[view]();
     $("#freshness").textContent = `刷新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
@@ -175,7 +196,7 @@ async function renderOverview() {
   const data = await api("/api/overview");
   $("#sidebar-release").textContent = data.runtime.release_id;
   const summary = data.summary;
-  const attention = summary.failed_operations_24h + summary.paused_policies + summary.isolation_violations;
+  const attention = summary.failed_operations_24h + summary.paused_policies + summary.isolation_violations + summary.critical_incidents;
   content.innerHTML = `
     <div class="metric-grid">
       ${metric("接入用户", summary.users, `${summary.active_tokens} 个有效令牌`)}
@@ -184,10 +205,10 @@ async function renderOverview() {
       ${metric("活动端点", summary.active_endpoints, "网页与聊天通道")}
       ${metric("待投递", summary.outstanding_deliveries, "尚未确认送达", summary.outstanding_deliveries ? "alert" : "")}
       ${metric("24h 异常", summary.failed_operations_24h, `${summary.operations_24h} 次操作`, summary.failed_operations_24h ? "alert" : "")}
-      ${metric("写暂停", summary.paused_policies, "当前生效策略", summary.paused_policies ? "alert" : "")}
-      ${metric("隔离异常", summary.isolation_violations, "跨用户完整性", summary.isolation_violations ? "alert" : "")}
+      ${metric("开放事件", summary.open_incidents, `${summary.critical_incidents} 个 P0/P1`, summary.critical_incidents ? "alert" : "")}
+      ${metric("治理约束", summary.paused_policies + summary.isolation_violations, `写暂停 ${summary.paused_policies} / 隔离异常 ${summary.isolation_violations}`, summary.paused_policies || summary.isolation_violations ? "alert" : "")}
     </div>
-    <div class="health-strip ${attention ? "attention" : "healthy"}"><div><strong>${attention ? "存在需要管理员关注的运行项" : "核心运行状态正常"}</strong><span>${attention ? "请查看操作记录、写暂停与隔离完整性。" : "任务隔离、写策略和近 24 小时执行未发现异常。"}</span></div><button class="button secondary small" data-open-view="coordination">查看多端任务</button></div>
+    <div class="health-strip ${attention ? "attention" : "healthy"}"><div><strong>${attention ? "存在需要管理员关注的运行项" : "核心运行状态正常"}</strong><span>${attention ? "请查看事件治理、操作记录与隔离完整性。" : "任务隔离、写策略和近 24 小时执行未发现异常。"}</span></div><button class="button secondary small" data-open-view="incidents">查看事件治理</button></div>
     <div class="split">
       <section class="panel"><div class="panel-head"><h3>系统状态</h3><span>按中心会话注册表统计</span></div><div class="system-list">${data.systems.map(system => `
         <div class="system-row"><div class="system-name"><strong>${escapeHtml(system.label)}</strong><span>${escapeHtml(system.system_id)}</span></div><div class="system-stat"><strong>${system.active_sessions}</strong><span>活动</span></div><div class="system-stat"><strong>${system.attention_sessions}</strong><span>需关注</span></div><div class="system-stat"><strong>${system.total_sessions}</strong><span>总计</span></div></div>`).join("")}</div></section>
@@ -244,6 +265,52 @@ async function renderInteractions() {
   content.innerHTML = `<div class="view-head"><div><h2>可信交互时间线</h2><p>只看交互状态；不展示卡片 URL、字段值、密码或授权计划。</p></div></div>${filteredTable(["Interaction ID", "用户", "系统", "类型", "标题", "状态", "创建", "到期"], rows, "搜索交互、用户、系统或标题", ["pending", "submitted", "approved", "rejected", "expired", "consumed", "superseded"])}`;
 }
 
+async function renderTraces() {
+  const data = await api("/api/traces?limit=400");
+  const rows = data.items.map(item => filterRow(
+    `${item.trace_id} ${item.request_id} ${item.user_subject} ${item.task_id} ${item.host_type} ${item.host_instance_id} ${item.system_id} ${item.capability_name} ${item.status} ${item.side_effect_boundary}`,
+    item.status,
+    `<td class="code">${shortId(item.trace_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.host_type || "--")}</td><td>${escapeHtml(item.request_kind || "--")}</td><td>${escapeHtml(item.system_id || "--")}</td><td class="truncate" title="${escapeHtml(item.capability_name || "")}">${escapeHtml(item.capability_name || "--")}</td><td>${badge(item.status)}</td><td><span class="boundary">${escapeHtml(boundaryLabel(item.side_effect_boundary))}</span></td><td>${item.stage_count || 0}</td><td>${fmtDuration(item.recorded_duration_ms)}</td><td>${fmtTime(item.started_at)}</td><td><button class="button secondary small" data-trace-detail="${escapeHtml(item.trace_id)}">详情</button></td>`,
+  ));
+  content.innerHTML = `<div class="view-head"><div><h2>端到端执行链路</h2><p>从宿主接收、MCP、能力、下游适配、可信交互到投递回执；不记录密码、Cookie、业务字段或下载地址。</p></div><button class="button secondary" data-open-view="incidents">查看异常事件</button></div>${filteredTable(["Trace ID", "用户", "宿主", "类型", "系统", "能力", "状态", "副作用边界", "阶段", "记录耗时", "开始", ""], rows, "搜索 Trace、用户、任务、系统或能力", ["active", "waiting", "succeeded", "failed", "unknown", "cancelled"])}`;
+}
+
+async function openTraceDetail(traceId) {
+  const data = await api(`/api/traces/${traceId}`);
+  const trace = data.trace;
+  const spanRows = data.spans.map((span, index) => `<tr><td>${index + 1}</td><td>${fmtTime(span.started_at)}</td><td class="code">${escapeHtml(span.stage)}</td><td>${badge(span.status)}</td><td>${fmtDuration(span.duration_ms)}</td><td><span class="boundary">${escapeHtml(boundaryLabel(span.side_effect_boundary))}</span></td><td class="truncate" title="${escapeHtml(span.error_code || "")}">${escapeHtml(span.error_code || "--")}</td></tr>`);
+  const incidentRows = data.incidents.map(item => `<tr><td>${escapeHtml(item.severity)}</td><td>${escapeHtml(item.title)}</td><td>${badge(item.state)}</td><td>${fmtTime(item.last_seen_at)}</td></tr>`);
+  openModal({
+    kicker: "TRACE DETAIL",
+    title: `链路 ${trace.trace_id.slice(0, 8)}`,
+    submit: "关闭",
+    body: `<dl class="detail-grid"><div><dt>用户</dt><dd>${escapeHtml(trace.user_subject)}</dd></div><div><dt>宿主</dt><dd>${escapeHtml(trace.host_type)} / ${escapeHtml(trace.host_instance_id || "--")}</dd></div><div><dt>任务</dt><dd class="code">${escapeHtml(trace.task_id || "--")}</dd></div><div><dt>能力</dt><dd class="code">${escapeHtml(trace.capability_name || "--")}</dd></div><div><dt>状态</dt><dd>${badge(trace.status)}</dd></div><div><dt>最远边界</dt><dd>${escapeHtml(boundaryLabel(trace.side_effect_boundary))}</dd></div><div><dt>开始</dt><dd>${fmtTime(trace.started_at)}</dd></div><div><dt>结束</dt><dd>${fmtTime(trace.finished_at)}</dd></div></dl><h3 class="modal-section-title">阶段时间线</h3>${table(["序", "时间", "阶段", "状态", "耗时", "副作用", "错误"], spanRows)}<h3 class="modal-section-title">关联事件</h3>${table(["级别", "事件", "状态", "最近出现"], incidentRows)}`,
+    action: async () => closeModal(),
+  });
+}
+
+function incidentStateBadge(value) {
+  const labels = { open: "待处理", acknowledged: "已确认", investigating: "调查中", resolved: "已解决", suppressed: "已抑制" };
+  return `<span class="status ${statusClass(value)}">${escapeHtml(labels[value] || value || "未知")}</span>`;
+}
+function severityBadge(value) {
+  const cls = ["P0", "P1"].includes(value) ? "bad" : value === "P2" ? "warn" : "neutral";
+  return `<span class="status ${cls}">${escapeHtml(value || "--")}</span>`;
+}
+async function renderIncidents(evaluate = false) {
+  const [governance, incidents] = await Promise.all([api(`/api/governance${evaluate ? "?evaluate=true" : ""}`), api("/api/incidents?limit=500")]);
+  const summary = governance.summary;
+  const incidentRows = incidents.items.map(item => {
+    const open = ["open", "acknowledged", "investigating"].includes(item.state);
+    const actions = state.account.role === "admin" && open ? `<div class="actions">${item.state === "open" ? `<button class="button secondary small" data-incident-action="acknowledge" data-incident-id="${item.incident_id}">确认</button>` : ""}${item.state !== "investigating" ? `<button class="button secondary small" data-incident-action="investigate" data-incident-id="${item.incident_id}">调查</button>` : ""}<button class="button secondary small" data-incident-action="resolve" data-incident-id="${item.incident_id}">解决</button><button class="button secondary small" data-incident-action="suppress" data-incident-id="${item.incident_id}">抑制</button></div>` : "";
+    return filterRow(`${item.incident_id} ${item.rule_id} ${item.title} ${item.symptom_code} ${item.root_cause_code} ${item.user_subject} ${item.system_id} ${item.object_id}`, item.state, `<td>${severityBadge(item.severity)}</td><td>${incidentStateBadge(item.state)}</td><td class="truncate" title="${escapeHtml(item.title)}"><strong>${escapeHtml(item.title)}</strong><br><span class="muted code">${escapeHtml(item.rule_id)}</span></td><td>${escapeHtml(item.user_subject || "--")}</td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td><td class="code">${escapeHtml(item.symptom_code || "--")}</td><td>${item.occurrence_count}</td><td>${fmtTime(item.last_seen_at)}</td><td>${actions}</td>`);
+  });
+  const sloRows = governance.slo.metrics.map(metricItem => `<tr><td class="code">${escapeHtml(metricItem.metricKey)}</td><td>${metricItem.sampleCount}</td><td><strong>${escapeHtml(fmtMetric(metricItem))}</strong></td><td>${metricItem.target == null ? "--" : escapeHtml(fmtMetric({ ...metricItem, value: metricItem.target }))}</td><td>${badge(metricItem.status)}</td></tr>`);
+  const signalRows = governance.recent_signals.map(item => `<tr><td>${fmtTime(item.observed_at)}</td><td class="code">${escapeHtml(item.signal_type)}</td><td>${escapeHtml(item.source)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.user_subject || "--")}</td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td></tr>`);
+  const recoveryRows = governance.recent_recoveries.map(item => `<tr><td>${fmtTime(item.created_at)}</td><td class="code">${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.target_type)}</td><td class="code">${shortId(item.target_id)}</td><td>${escapeHtml(item.actor)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.error_code || "--")}</td></tr>`);
+  content.innerHTML = `<div class="metric-grid">${metric("开放事件", summary.open_incidents, "待处理、已确认或调查中", summary.open_incidents ? "alert" : "")}${metric("P0/P1", summary.critical_incidents, "需要优先处置", summary.critical_incidents ? "alert" : "")}${metric("活动链路", summary.active_traces, "执行中或等待用户")}${metric("恢复动作", summary.running_recoveries, "当前执行中")}</div><div class="toolbar section-spaced"><div><strong>异常事件</strong><div class="muted">检测结果可以确认、调查、解决或抑制；系统不会自动重试结果未知的业务写入。</div></div>${state.account.role === "admin" ? '<button class="button secondary" data-evaluate-runtime>立即评估</button>' : ""}</div>${filteredTable(["级别", "状态", "事件", "用户", "系统/宿主", "症状", "次数", "最近出现", ""], incidentRows, "搜索规则、事件、用户、系统或对象", ["open", "acknowledged", "investigating", "resolved", "suppressed"])}<div class="split"><section><div class="view-head section-spaced"><div><h2>24 小时 SLO</h2><p>零隔离异常、写后核验覆盖率与关键阶段延迟。</p></div></div>${table(["指标", "样本", "当前值", "目标", "状态"], sloRows)}</section><section><div class="view-head section-spaced"><div><h2>最近信号</h2><p>非敏感运行信号。</p></div></div>${table(["时间", "信号", "来源", "状态", "用户", "系统/宿主"], signalRows)}</section></div><div class="view-head section-spaced"><div><h2>受控恢复账本</h2><p>所有恢复动作带幂等键、操作者与结果，失败不会静默重复。</p></div></div>${table(["时间", "动作", "对象", "对象 ID", "操作者", "状态", "错误"], recoveryRows)}`;
+}
+
 async function renderCoordination() {
   const data = await api("/api/coordination?limit=300");
   data.artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
@@ -251,7 +318,7 @@ async function renderCoordination() {
   const taskRows = data.tasks.map(item => filterRow(`${item.task_id} ${item.user_subject} ${item.title} ${item.origin_client_type} ${item.origin_label} ${item.current_operation_id} ${item.current_interaction_id}`, item.status, `<td class="code">${shortId(item.task_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.origin_label || item.origin_client_type || "--")}</td><td class="code">${shortId(item.current_operation_id)}</td><td class="code">${shortId(item.current_interaction_id)}</td><td>${fmtTime(item.updated_at)}</td><td>${fmtTime(item.finished_at)}</td>`));
   const endpointRows = data.endpoints.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.label} ${item.capabilities.join(" ")} ${item.delivery_state}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type)}</td><td>${badge(item.delivery_mode)}</td><td>${escapeHtml(item.label || "--")}</td><td>${scopeBadges(item.capabilities)}</td><td>${badge(item.state)}</td><td>${badge(item.delivery_state)}${item.deferred_delivery_count ? ` <span class="muted">${item.deferred_delivery_count}</span>` : ""}</td><td>${fmtTime(item.last_seen_at)}</td>`));
   const continuationRows = data.continuations.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.selected_task_id} ${item.reason}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type || "--")}</td><td>${badge(item.state)}</td><td>${badge(item.execution_mode)}</td><td class="code">${shortId(item.selected_task_id)}</td><td>${item.candidate_count}</td><td>${escapeHtml(item.reason || "--")}</td><td>${fmtTime(item.expires_at)}</td>`));
-  const deliveryRows = data.deliveries.map(item => filterRow(`${item.delivery_id} ${item.task_id} ${item.endpoint_id} ${item.user_subject} ${item.event_type}`, item.state, `<td class="code">${shortId(item.delivery_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.event_type || item.payload_type)}</td><td class="code">${shortId(item.endpoint_id)}</td><td>${badge(item.state)}</td><td>${item.attempt_count}</td><td>${fmtTime(item.next_attempt_at)}</td><td>${fmtTime(item.acknowledged_at)}</td><td>${fmtTime(item.updated_at)}</td>`));
+  const deliveryRows = data.deliveries.map(item => { const actions = state.account.role === "admin" ? `<div class="actions">${["failed", "deferred", "archived"].includes(item.state) ? `<button class="button secondary small" data-recovery-action="retry_delivery" data-recovery-target="${item.delivery_id}">重试</button>` : ""}${["failed", "acknowledged"].includes(item.state) ? `<button class="button secondary small" data-recovery-action="archive_delivery" data-recovery-target="${item.delivery_id}">归档</button>` : ""}</div>` : ""; return filterRow(`${item.delivery_id} ${item.task_id} ${item.endpoint_id} ${item.user_subject} ${item.event_type}`, item.state, `<td class="code">${shortId(item.delivery_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.event_type || item.payload_type)}</td><td class="code">${shortId(item.endpoint_id)}</td><td>${badge(item.state)}</td><td>${item.attempt_count}</td><td>${fmtTime(item.next_attempt_at)}</td><td>${fmtTime(item.acknowledged_at)}</td><td>${fmtTime(item.updated_at)}</td><td>${actions}</td>`); });
   const artifactRows = data.artifacts.map(item => filterRow(`${item.artifact_id} ${item.task_id} ${item.user_subject} ${item.filename} ${item.artifact_type} ${item.content_type}`, item.state, `<td class="code">${shortId(item.artifact_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</td><td>${escapeHtml(item.artifact_type)}</td><td>${escapeHtml(item.content_type)}</td><td>${fmtBytes(item.byte_size)}</td><td>${badge(item.state)}</td><td class="code">${shortId(item.task_id)}</td><td>${fmtTime(item.created_at)}</td><td>${fmtTime(item.expires_at)}</td>`));
   const violationRows = Object.entries(data.isolation?.violations || {}).map(([name, count]) => `<tr><td class="code">${escapeHtml(name)}</td><td>${count}</td><td>${badge(count === 0 ? "succeeded" : "failed")}</td></tr>`);
   content.innerHTML = `<div class="metric-grid">
@@ -277,7 +344,7 @@ async function renderCoordination() {
   <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "failed", "outcome_unknown", "canceled", "superseded"])}</section>
   <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "同步状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
   <section data-coordination-panel="continuations">${filteredTable(["Endpoint ID", "用户", "客户端", "状态", "执行模式", "选中任务", "候选", "原因", "到期"], continuationRows, "搜索用户、端点、任务或原因", ["selected", "awaiting_selection", "expired", "canceled"])}</section>
-  <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新"], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed"])}</section>
+  <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新", ""], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed", "archived"])}</section>
   <section data-coordination-panel="artifacts">${filteredTable(["Artifact ID", "用户", "文件", "类型", "内容类型", "大小", "状态", "Task ID", "创建", "到期"], artifactRows, "搜索文件、用户、任务或类型", ["ready", "expired"])}</section>
   <section data-coordination-panel="isolation">${table(["检查项", "异常数", "结果"], violationRows)}</section>`;
   selectCoordinationTab(state.coordinationTab);
@@ -298,6 +365,7 @@ async function renderRuntime() {
   const taskHub = data.coordination?.task_hub || { summary: {}, isolation: { passed: false, violations: {} } };
   const hostControl = data.coordination?.host_control || { operations: [], recent_slow_calls: [], slow_after_ms: 1000 };
   const workspaceGateway = data.workspace_gateway || { configured: false };
+  const governance = data.governance || { active_traces: 0, open_incidents: 0, critical_incidents: 0, running_recoveries: 0 };
   const gatewayHasCurrentError = Boolean(
     workspaceGateway.last_error_code &&
     (!workspaceGateway.last_success_at ||
@@ -310,11 +378,12 @@ async function renderRuntime() {
   content.innerHTML = `<div class="metric-grid">
     ${metric("发布版本", data.release_id, "当前服务构建")}${metric("启动时间", fmtTime(data.started_at), "中心进程")}${metric("管理 API", data.admin_api, "独立认证域")}${metric("数据库", data.database, "SQLite WAL")}
     ${metric("保活租约", data.session_keepalive.activity_lease_seconds ? `${Math.round(data.session_keepalive.activity_lease_seconds / 86400)} 天` : "关闭", "仅真实活动续租")}${metric("活动端点", taskHub.summary.active_endpoints ?? "--", `${taskHub.summary.users ?? 0} 个用户`)}${metric("待投递", taskHub.summary.outstanding_deliveries ?? "--", `失败 ${taskHub.summary.failed_deliveries ?? 0}`)}${metric("隔离完整性", taskHub.isolation?.passed ? "通过" : "异常", `${taskHub.summary.isolation_violation_count ?? "--"} 项异常`, taskHub.isolation?.passed ? "" : "alert")}
+    ${metric("活动链路", governance.active_traces, "执行中或等待用户")}${metric("开放事件", governance.open_incidents, `${governance.critical_incidents} 个 P0/P1`, governance.critical_incidents ? "alert" : "")}${metric("恢复动作", governance.running_recoveries, "当前执行中")}${metric("追踪阶段", governance.span_count ?? 0, `最近信号 ${fmtTime(governance.last_signal_at)}`)}
     ${metric("Workspace Gateway", workspaceGateway.configured ? workspaceGateway.target : "未配置", workspaceGateway.last_success_at ? `最近连通 ${fmtTime(workspaceGateway.last_success_at)}` : "尚无成功连接")}${metric("Gateway 最近错误", workspaceGateway.last_error_code || "无", workspaceGateway.last_error_at ? `${fmtTime(workspaceGateway.last_error_at)}${gatewayHasCurrentError ? "" : " · 已恢复"}` : "未记录错误", gatewayHasCurrentError ? "alert" : "")}
   </div>
   <div class="view-head section-spaced"><div><h2>已配置系统</h2><p>控制台只报告状态，不提供 systemd 重启或业务代操作。</p></div></div>${table(["系统 ID", "名称", "状态"], data.systems.map(system => `<tr><td class="code">${escapeHtml(system.system_id)}</td><td>${escapeHtml(system.label)}</td><td>${badge(system.configured ? "active" : "failed")}</td></tr>`))}
   <div class="view-head section-spaced"><div><h2>隔离完整性</h2><p>所有任务、时间线和通知都必须与所属用户和端点一致。</p></div><button class="button secondary small" data-open-view="coordination">打开多端任务</button></div>${table(["检查项", "异常数", "结果"], violationRows)}
-  <div class="view-head section-spaced"><div><h2>协调调用耗时</h2><p>慢调用阈值 ${hostControl.slow_after_ms} ms；统计随中心进程重启清零。</p></div></div>${filteredTable(["调用", "次数", "慢调用", "错误", "平均", "最大", "最近调用"], operationRows, "搜索调用名称", ["succeeded", "running", "failed"])}
+  <div class="view-head section-spaced"><div><h2>协调调用即时耗时</h2><p>慢调用阈值 ${hostControl.slow_after_ms} ms；此即时统计随中心进程重启清零，持久化历史请查看链路追踪。</p></div><button class="button secondary small" data-open-view="traces">打开链路追踪</button></div>${filteredTable(["调用", "次数", "慢调用", "错误", "平均", "最大", "最近调用"], operationRows, "搜索调用名称", ["succeeded", "running", "failed"])}
   <div class="view-head section-spaced"><div><h2>最近慢调用</h2><p>仅保留工具名、用户标识、耗时和错误类型。</p></div></div>${filteredTable(["时间", "用户", "调用", "耗时", "错误"], slowRows, "搜索用户、调用或错误", ["running", "failed"])}
   <div class="toolbar section-spaced"><div><strong>管理账户</strong><div class="muted">管理员可执行控制动作，审计员仅可查看。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-create-admin>新建账户</button>' : ""}</div>${filteredTable(["用户名", "角色", "状态", "初始密码", "最近登录", "创建时间"], accountRows, "搜索管理账户", ["active", "revoked"])}`;
 }
@@ -359,6 +428,9 @@ function openPause({ scopeType, scopeValue, version = "*", title }) {
 function openReasonAction({ title, submit, danger = false, request }) {
   openModal({ title, submit, danger, body: reasonField(), action: async form => { await request(form.get("reason")); closeModal(); toast(`${title}已完成`); await loadView(state.view); } });
 }
+function openRuntimeRecovery({ actionType, targetId, title, submit, danger = false }) {
+  openReasonAction({ title, submit, danger, request: reason => api("/api/recovery", { method: "POST", body: JSON.stringify({ action_type: actionType, target_id: targetId, reason, idempotency_key: crypto.randomUUID() }) }) });
+}
 async function openSessionHistory(sessionId) {
   const data = await api(`/api/sessions/${sessionId}/events?limit=100`);
   const rows = data.items.map(item => `<tr><td>${fmtTime(item.created_at)}</td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.event_type)}</td><td>${escapeHtml(item.previous_state || "--")} → ${escapeHtml(item.new_state || "--")}</td><td class="truncate" title="${escapeHtml(item.reason || "")}">${escapeHtml(item.reason || "--")}</td></tr>`);
@@ -384,6 +456,10 @@ content.addEventListener("click", async event => {
   const tab = event.target.closest("[data-coordination-tab]"); if (tab) { selectCoordinationTab(tab.dataset.coordinationTab); return; }
   const target = event.target.closest("button"); if (!target) return;
   if (target.dataset.openView) loadView(target.dataset.openView);
+  else if (target.dataset.traceDetail) await openTraceDetail(target.dataset.traceDetail);
+  else if (target.dataset.incidentAction) openReasonAction({ title: `${target.textContent.trim()}运行事件`, submit: target.textContent.trim(), danger: target.dataset.incidentAction === "suppress", request: reason => api(`/api/incidents/${target.dataset.incidentId}/${target.dataset.incidentAction}`, { method: "POST", body: JSON.stringify({ reason }) }) });
+  else if (target.matches("[data-evaluate-runtime]")) openRuntimeRecovery({ actionType: "evaluate_runtime", targetId: "runtime", title: "立即评估运行状态", submit: "开始评估" });
+  else if (target.dataset.recoveryAction) openRuntimeRecovery({ actionType: target.dataset.recoveryAction, targetId: target.dataset.recoveryTarget, title: target.dataset.recoveryAction === "retry_delivery" ? "重新投递通知" : "归档投递记录", submit: target.dataset.recoveryAction === "retry_delivery" ? "重新投递" : "归档", danger: target.dataset.recoveryAction === "archive_delivery" });
   else if (target.matches("[data-issue-token]")) openIssueToken();
   else if (target.matches("[data-create-admin]")) openAdminAccount();
   else if (target.dataset.pauseUser) openPause({ scopeType: "user", scopeValue: target.dataset.pauseUser, title: `暂停 ${target.dataset.pauseUser} 的写入` });

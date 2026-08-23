@@ -22,6 +22,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $gitDir = Join-Path $repoRoot ".gitrepo"
 $deployScript = Join-Path $PSScriptRoot "Deploy-AgentBridge.ps1"
 $validationScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeValidation.ps1"
+$runtimeGovernanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeRuntimeGovernance.ps1"
 $releaseAcceptanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeReleaseAcceptance.ps1"
 $gitArguments = @("--git-dir=$gitDir", "--work-tree=$repoRoot")
 
@@ -63,6 +64,9 @@ if (-not (Test-Path -LiteralPath $deployScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $validationScript -PathType Leaf)) {
     throw "The AgentBridge validation script was not found"
+}
+if (-not (Test-Path -LiteralPath $runtimeGovernanceScript -PathType Leaf)) {
+    throw "The AgentBridge runtime-governance validation script was not found"
 }
 if (-not (Test-Path -LiteralPath $releaseAcceptanceScript -PathType Leaf)) {
     throw "The AgentBridge release-acceptance script was not found"
@@ -151,6 +155,10 @@ if (-not $SkipValidation) {
     & $validationScript -Mode Full
     if ($LASTEXITCODE -ne 0) {
         throw "Full AgentBridge validation failed"
+    }
+    & $runtimeGovernanceScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runtime-governance fault-injection validation failed"
     }
 }
 

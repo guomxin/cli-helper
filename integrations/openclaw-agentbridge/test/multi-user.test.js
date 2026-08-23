@@ -1062,8 +1062,15 @@ test("creates and observes one host-owned task without model task arguments", as
     false,
   );
   assert.deepEqual(requests[1].body.params._meta, {
+    "io.agentbridge/host": {
+      version: "1",
+      agentHost: "openclaw",
+      hostInstanceId: "openclaw-gateway",
+    },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",
+      hostRunId: "tool-call-42",
+      toolCallId: "tool-call-42",
     },
   });
   assert.deepEqual(

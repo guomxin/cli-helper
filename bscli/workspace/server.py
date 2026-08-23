@@ -160,6 +160,17 @@ def create_workspace_http_server(
                     },
                 )
                 return
+            if route.path == "/readyz":
+                readiness = application.service.runtime_governance.readiness()
+                payload = {
+                    **readiness,
+                    "service": "agentbridge_workspace",
+                    "gatewayConfigured": application.gateway is not None,
+                }
+                ready = readiness["status"] == "ready" and application.gateway is not None
+                payload["status"] = "ready" if ready else "not_ready"
+                self._json(200 if ready else 503, payload)
+                return
             if route.path == "/api/client-version":
                 self._json(200, {"version": asset_version})
                 return

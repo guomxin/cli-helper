@@ -1,0 +1,20 @@
+[Unit]
+Description=AgentBridge consistent runtime-state backup
+After=agentbridge.service
+
+[Service]
+Type=oneshot
+User=agentbridge
+Group=agentbridge
+WorkingDirectory=/home/guomao/agentbridge
+Environment=HOME=/home/guomao/agentbridge/data
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/guomao/agentbridge/config/release.env
+ExecStart=/home/guomao/agentbridge/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data diagnostics backup-create --output-dir /home/guomao/agentbridge/backups
+ExecStart=/usr/bin/find /home/guomao/agentbridge/backups -maxdepth 1 -type f -mtime +30 -delete
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=/home/guomao/agentbridge/config
+ReadWritePaths=/home/guomao/agentbridge/data /home/guomao/agentbridge/backups

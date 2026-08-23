@@ -517,6 +517,13 @@ class WorkspaceApplication:
                 for item in source:
                     if item.get("type") == "accepted":
                         accepted_run_id = _safe_text(item.get("runId"), 256)
+                        if int(item.get("attempt") or 0) > 0:
+                            self._record_gateway_recovery(
+                                account=account,
+                                effective_key=effective_key,
+                                attempt=int(item.get("attempt") or 0),
+                                status="succeeded",
+                            )
                         _LOG.info(
                             "Workspace chat accepted account_id=%s run_id=%s "
                             "attempt=%s",
@@ -580,6 +587,14 @@ class WorkspaceApplication:
                     exc.details.get("recoveryUsed") is True,
                     exc.details.get("recoveryAttempt", 0),
                 )
+                if exc.details.get("recoveryUsed") is True:
+                    self._record_gateway_recovery(
+                        account=account,
+                        effective_key=effective_key,
+                        attempt=int(exc.details.get("recoveryAttempt") or 1),
+                        status="failed",
+                        error_code=exc.code,
+                    )
                 if not assistant_recorded:
                     self._append_workspace_failure(
                         account,
@@ -595,6 +610,43 @@ class WorkspaceApplication:
                     self._release_chat_account(account)
 
         return synchronized_stream()
+
+    def _record_gateway_recovery(
+        self,
+        *,
+        account: dict,
+        effective_key: str,
+        attempt: int,
+        status: str,
+        error_code: str | None = None,
+    ) -> None:
+        try:
+            action, reused = self.service.runtime_governance.start_recovery_action(
+                action_type="workspace_gateway_pre_accept_retry",
+                target_type="workspace_account",
+                target_id=str(account["account_id"]),
+                actor="agentbridge",
+                reason="Workspace Gateway failed before business tool activity.",
+                idempotency_key=(
+                    f"workspace:{account['account_id']}:{effective_key}:"
+                    f"gateway-recovery:{max(attempt, 1)}"
+                ),
+                side_effect_boundary="B0_NO_EFFECT",
+                before={"attempt": max(attempt - 1, 0)},
+            )
+            if reused and action["status"] != "running":
+                return
+            self.service.runtime_governance.finish_recovery_action(
+                action["action_id"],
+                status=status,
+                after={"attempt": max(attempt, 1)},
+                error_code=error_code,
+            )
+        except Exception as exc:
+            _LOG.warning(
+                "Workspace Gateway recovery ledger failed: error=%s",
+                exc.__class__.__name__,
+            )
 
     def send_chat(
         self,

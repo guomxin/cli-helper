@@ -150,6 +150,8 @@ class AdminControlPlane:
                 "active_endpoints": task_summary.get("active_endpoints", 0),
                 "outstanding_deliveries": task_summary.get("outstanding_deliveries", 0),
                 "isolation_violations": task_summary.get("isolation_violation_count", 0),
+                "open_incidents": runtime["governance"]["open_incidents"],
+                "critical_incidents": runtime["governance"]["critical_incidents"],
             },
             "operation_statuses_24h": dict(status_counts),
             "systems": systems,
@@ -158,6 +160,7 @@ class AdminControlPlane:
         }
 
     def runtime(self) -> dict:
+        governance = self.service.runtime_governance.summary()
         return {
             "service": "agentbridge",
             "release_id": self.release_id,
@@ -192,7 +195,173 @@ class AdminControlPlane:
                 "task_hub": self.service.tasks.runtime_diagnostics(),
                 "host_control": HOST_CONTROL_DIAGNOSTICS.snapshot(),
             },
+            "governance": governance,
         }
+
+    def readiness(self) -> dict:
+        return self.service.runtime_governance.readiness()
+
+    def runtime_governance(self, *, evaluate: bool = False) -> dict:
+        evaluation = None
+        if evaluate:
+            evaluation = self.service.runtime_governance.evaluate_incidents(
+                task_diagnostics=self.service.tasks.runtime_diagnostics(),
+            )
+        slo = self.service.runtime_governance.refresh_slo_rollups(hours=24)
+        return {
+            "generated_at": _utc_now(),
+            "summary": self.service.runtime_governance.summary(),
+            "evaluation": evaluation,
+            "slo": slo,
+            "recent_signals": self.service.runtime_governance.list_signals(limit=30),
+            "recent_recoveries": self.service.runtime_governance.list_recovery_actions(limit=30),
+        }
+
+    def runtime_traces(
+        self,
+        *,
+        user_subject: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        return self.service.runtime_governance.list_traces(
+            user_subject=user_subject,
+            status=status,
+            limit=limit,
+        )
+
+    def runtime_trace(self, trace_id: str) -> dict:
+        return self.service.runtime_governance.trace_detail(trace_id)
+
+    def runtime_incidents(
+        self,
+        *,
+        state: str | None = None,
+        severity: str | None = None,
+        limit: int = 300,
+    ) -> list[dict]:
+        return self.service.runtime_governance.list_incidents(
+            state=state,
+            severity=severity,
+            limit=limit,
+        )
+
+    def transition_runtime_incident(
+        self,
+        *,
+        actor: dict,
+        request_ip: str,
+        incident_id: str,
+        state: str,
+        reason: str,
+    ) -> dict:
+        _require_admin(actor)
+        before = next(
+            (
+                item
+                for item in self.service.runtime_governance.list_incidents(limit=1000)
+                if item["incident_id"] == incident_id
+            ),
+            None,
+        )
+        after = self.service.runtime_governance.transition_incident(
+            incident_id,
+            state=state,
+            actor=actor["username"],
+            reason=reason,
+        )
+        self.audit.append(
+            actor=actor,
+            action=f"runtime.incident.{state}",
+            target_type="runtime_incident",
+            target_id=incident_id,
+            request_ip=request_ip,
+            reason=reason,
+            before=before,
+            after=after,
+            result="succeeded",
+        )
+        return after
+
+    def runtime_recovery_action(
+        self,
+        *,
+        actor: dict,
+        request_ip: str,
+        action_type: str,
+        target_id: str,
+        reason: str,
+        idempotency_key: str,
+    ) -> dict:
+        _require_admin(actor)
+        allowed = {"retry_delivery", "archive_delivery", "evaluate_runtime"}
+        if action_type not in allowed:
+            raise ValueError("runtime recovery action is not allowed")
+        target_type = "runtime" if action_type == "evaluate_runtime" else "delivery"
+        before = (
+            {"status": "requested"}
+            if target_type == "runtime"
+            else self.service.tasks.get_delivery(target_id)
+        )
+        action, reused = self.service.runtime_governance.start_recovery_action(
+            action_type=action_type,
+            target_type=target_type,
+            target_id=target_id,
+            actor=actor["username"],
+            reason=reason,
+            idempotency_key=idempotency_key,
+            side_effect_boundary="B0_NO_EFFECT",
+            before=before,
+        )
+        # A repeated request must never execute the recovery body again, including
+        # while the original request is still running.
+        if reused:
+            return action
+        try:
+            if action_type == "retry_delivery":
+                after = self.service.tasks.requeue_delivery(target_id)
+            elif action_type == "archive_delivery":
+                after = self.service.tasks.archive_delivery(target_id)
+            else:
+                after = self.service.runtime_governance.evaluate_incidents(
+                    task_diagnostics=self.service.tasks.runtime_diagnostics(),
+                )
+        except Exception as exc:
+            finished = self.service.runtime_governance.finish_recovery_action(
+                action["action_id"],
+                status="failed",
+                error_code=exc.__class__.__name__,
+            )
+            self.audit.append(
+                actor=actor,
+                action=f"runtime.recovery.{action_type}",
+                target_type=target_type,
+                target_id=target_id,
+                request_ip=request_ip,
+                reason=reason,
+                before=before,
+                after=finished,
+                result="failed",
+                error=str(exc),
+            )
+            raise
+        finished = self.service.runtime_governance.finish_recovery_action(
+            action["action_id"],
+            status="succeeded",
+            after=after,
+        )
+        self.audit.append(
+            actor=actor,
+            action=f"runtime.recovery.{action_type}",
+            target_type=target_type,
+            target_id=target_id,
+            request_ip=request_ip,
+            reason=reason,
+            before=before,
+            after=after,
+            result="succeeded",
+        )
+        return finished
 
     def coordination(
         self,

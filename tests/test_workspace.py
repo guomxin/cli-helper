@@ -1611,6 +1611,13 @@ class WorkspaceHttpServerTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
+                status, _, health = _request(port, "GET", "/healthz")
+                self.assertEqual(status, 200)
+                self.assertEqual(health["status"], "ok")
+                status, _, ready = _request(port, "GET", "/readyz")
+                self.assertEqual(status, 200)
+                self.assertEqual(ready["status"], "ready")
+                self.assertTrue(ready["gatewayConfigured"])
                 status, version_headers, version = _request(
                     port,
                     "GET",

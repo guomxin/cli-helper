@@ -125,6 +125,10 @@ def create_admin_http_server(
                     },
                 )
                 return
+            if route.path == "/readyz":
+                readiness = control_plane.readiness()
+                self._json(200 if readiness["status"] == "ready" else 503, readiness)
+                return
             if route.path in {"/", "/index.html"}:
                 self._static("index.html")
                 return
@@ -164,6 +168,39 @@ def create_admin_http_server(
                     self._json(200, control_plane.overview())
                 elif route.path == "/api/runtime":
                     self._json(200, control_plane.runtime())
+                elif route.path == "/api/governance":
+                    self._json(
+                        200,
+                        control_plane.runtime_governance(
+                            evaluate=_query_value(query, "evaluate") == "true"
+                        ),
+                    )
+                elif route.path == "/api/traces":
+                    self._json(
+                        200,
+                        {
+                            "items": control_plane.runtime_traces(
+                                user_subject=_query_value(query, "user"),
+                                status=_query_value(query, "status"),
+                                limit=_query_int(query, "limit", 300),
+                            )
+                        },
+                    )
+                elif trace_match := re.fullmatch(
+                    r"/api/traces/([0-9a-f-]{36})", route.path
+                ):
+                    self._json(200, control_plane.runtime_trace(trace_match.group(1)))
+                elif route.path == "/api/incidents":
+                    self._json(
+                        200,
+                        {
+                            "items": control_plane.runtime_incidents(
+                                state=_query_value(query, "state"),
+                                severity=_query_value(query, "severity"),
+                                limit=_query_int(query, "limit", 500),
+                            )
+                        },
+                    )
                 elif route.path == "/api/coordination":
                     self._json(
                         200,
@@ -349,6 +386,38 @@ def create_admin_http_server(
                         reason=_required_string(body, "reason"),
                     )
                     self._json(201, policy)
+                    return
+                incident_match = re.fullmatch(
+                    r"/api/incidents/([0-9a-f-]{36})/"
+                    r"(acknowledge|investigate|resolve|suppress)",
+                    route.path,
+                )
+                if incident_match:
+                    state = {
+                        "acknowledge": "acknowledged",
+                        "investigate": "investigating",
+                        "resolve": "resolved",
+                        "suppress": "suppressed",
+                    }[incident_match.group(2)]
+                    result = control_plane.transition_runtime_incident(
+                        actor=actor,
+                        request_ip=self.client_address[0],
+                        incident_id=incident_match.group(1),
+                        state=state,
+                        reason=_required_string(body, "reason"),
+                    )
+                    self._json(200, result)
+                    return
+                if route.path == "/api/recovery":
+                    result = control_plane.runtime_recovery_action(
+                        actor=actor,
+                        request_ip=self.client_address[0],
+                        action_type=_required_string(body, "action_type"),
+                        target_id=_required_string(body, "target_id"),
+                        reason=_required_string(body, "reason"),
+                        idempotency_key=_required_string(body, "idempotency_key"),
+                    )
+                    self._json(200, result)
                     return
                 policy_match = re.fullmatch(
                     r"/api/policies/([0-9a-f-]{36})/resume", route.path

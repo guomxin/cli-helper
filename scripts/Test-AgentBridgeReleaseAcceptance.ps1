@@ -44,14 +44,17 @@ if (-not (Test-Path -LiteralPath $KnownHostsFile -PathType Leaf)) {
 }
 
 function Invoke-HealthCheck {
-    param([Parameter(Mandatory = $true)][string]$Uri)
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string[]]$ExpectedStatus = @("ok")
+    )
 
     $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 15
     if ($response.StatusCode -ne 200) {
         throw "Health check failed: $Uri"
     }
     $payload = $response.Content | ConvertFrom-Json
-    if ($payload.status -ne "ok") {
+    if ($payload.status -notin $ExpectedStatus) {
         throw "Health check returned an unexpected status: $Uri"
     }
     return $payload
@@ -117,8 +120,8 @@ if (-not $releaseRaw) {
 }
 $release = $releaseRaw | ConvertFrom-Json
 
-$adminHealth = Invoke-HealthCheck -Uri "$AgentBridgeBaseUrl`:8782/healthz"
-$workspaceHealth = Invoke-HealthCheck -Uri "$AgentBridgeBaseUrl`:8783/healthz"
+$adminHealth = Invoke-HealthCheck -Uri "$AgentBridgeBaseUrl`:8782/readyz" -ExpectedStatus @("ready")
+$workspaceHealth = Invoke-HealthCheck -Uri "$AgentBridgeBaseUrl`:8783/readyz" -ExpectedStatus @("ready")
 
 $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
 if (-not $ssh) { $ssh = Get-Command ssh -ErrorAction Stop }
@@ -134,10 +137,14 @@ $remoteCommand = @(
     "main_pid=`$(systemctl show '$ServiceName' -p MainPID --value)",
     "release_id=`$(sed -n 's/^AGENTBRIDGE_RELEASE_ID=//p' '$RemoteRoot/config/release.env' | head -n 1)",
     "error_count=`$(journalctl -q -u '$ServiceName' --since '-30 minutes' --priority=err --no-pager | wc -l)",
+    "backup_timer_state=`$(systemctl is-active '$ServiceName-backup.timer' || true)",
+    "backup_service_result=`$(systemctl show '$ServiceName-backup.service' -p Result --value)",
     'echo "serviceState=$state"',
     'echo "mainPid=$main_pid"',
     'echo "releaseId=$release_id"',
-    'echo "recentErrorCount=$error_count"'
+    'echo "recentErrorCount=$error_count"',
+    'echo "backupTimerState=$backup_timer_state"',
+    'echo "backupServiceResult=$backup_service_result"'
 ) -join "; "
 $remoteRaw = (
     & $ssh.Source @connectionArguments "$SshUser@$HostName" $remoteCommand |
@@ -157,6 +164,8 @@ $requiredRemoteKeys = @(
     "mainPid",
     "releaseId",
     "recentErrorCount"
+    "backupTimerState"
+    "backupServiceResult"
 )
 foreach ($key in $requiredRemoteKeys) {
     if (-not $remoteValues.ContainsKey($key)) {
@@ -169,9 +178,14 @@ $remote = [ordered]@{
     mainPid = [int64]$remoteValues["mainPid"]
     releaseId = $remoteValues["releaseId"]
     recentErrorCount = [int]$remoteValues["recentErrorCount"]
+    backupTimerState = $remoteValues["backupTimerState"]
+    backupServiceResult = $remoteValues["backupServiceResult"]
 }
 if ($remote.serviceState -ne "active" -or [int64]$remote.mainPid -le 0) {
     throw "AgentBridge service is not active"
+}
+if ($remote.backupTimerState -ne "active" -or $remote.backupServiceResult -ne "success") {
+    throw "AgentBridge backup timer or latest consistent backup is not healthy"
 }
 
 $openClaw = $null
