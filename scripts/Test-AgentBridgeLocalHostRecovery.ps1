@@ -77,12 +77,28 @@ function Invoke-OpenClawJson {
 
 $gatewayTask = Get-ScheduledTask -TaskName $GatewayTaskName -ErrorAction Stop
 $tunnelTask = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
-if ($gatewayTask.Settings.RestartCount -lt 1) { throw "Gateway task has no restart policy" }
-if ([string]$gatewayTask.Settings.ExecutionTimeLimit -ne "PT0S") {
-    throw "Gateway task still has an execution time limit"
-}
-if (-not $gatewayTask.Settings.StartWhenAvailable) {
-    throw "Gateway task is not configured to start when available"
+$nativeGatewaySelfHeal = (
+    $gatewayTask.Settings.RestartCount -ge 1 -and
+    [string]$gatewayTask.Settings.ExecutionTimeLimit -eq "PT0S" -and
+    $gatewayTask.Settings.StartWhenAvailable
+)
+$guardStatusPath = Join-Path $env:LOCALAPPDATA "AgentBridge\openclaw-guard-status.json"
+$guardStatus = $null
+if (-not $nativeGatewaySelfHeal) {
+    if (-not (Test-Path -LiteralPath $guardStatusPath -PathType Leaf)) {
+        throw "Gateway task has no native self-heal policy and the startup guard is absent"
+    }
+    $guardStatus = Get-Content -LiteralPath $guardStatusPath -Raw | ConvertFrom-Json
+    $guardAge = [DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($guardStatus.observedAt)
+    if ($guardAge.TotalSeconds -gt 90) { throw "OpenClaw startup guard heartbeat is stale" }
+    if ($guardStatus.businessCalls -ne 0 -or
+        $guardStatus.businessListReads -ne 0 -or
+        $guardStatus.businessWrites -ne 0) {
+        throw "OpenClaw startup guard crossed its zero-business boundary"
+    }
+    if (-not (Get-Process -Id $guardStatus.processId -ErrorAction SilentlyContinue)) {
+        throw "OpenClaw startup guard process is not running"
+    }
 }
 if ($gatewayTask.Settings.MultipleInstances.ToString() -ne "IgnoreNew") {
     throw "Gateway task does not reject duplicate instances"
@@ -91,7 +107,7 @@ if ($tunnelTask.Settings.RestartCount -lt 1) { throw "Tunnel task has no restart
 if ([string]$tunnelTask.Settings.ExecutionTimeLimit -ne "PT0S") {
     throw "Tunnel task still has an execution time limit"
 }
-if (-not $tunnelTask.Settings.StartWhenAvailable) {
+if (-not $tunnelTask.Settings.StartWhenAvailable -and -not $guardStatus) {
     throw "Tunnel task is not configured to start when available"
 }
 
@@ -141,6 +157,7 @@ if ($tunnelTask.State -ne "Running") { throw "Workspace tunnel task is not runni
     status = "succeeded"
     checkedAt = [DateTimeOffset]::UtcNow.ToString("o")
     gateway = [ordered]@{
+        selfHealMode = if ($nativeGatewaySelfHeal) { "scheduled_task" } else { "startup_guard" }
         taskState = $gatewayTask.State.ToString()
         listenerPid = [int]$listener.OwningProcess
         listenerCount = 1
@@ -149,6 +166,7 @@ if ($tunnelTask.State -ne "Running") { throw "Workspace tunnel task is not runni
         gatewayVersion = $gateway.gateway.version
         pluginStatus = $plugin.plugin.status
         pluginVersion = $plugin.plugin.version
+        guardObservedAt = if ($guardStatus) { $guardStatus.observedAt } else { $null }
     }
     tunnel = [ordered]@{
         taskState = $tunnelTask.State.ToString()

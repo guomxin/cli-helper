@@ -39,29 +39,68 @@ $task = New-ScheduledTask `
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $wasRunning = $existing -and $existing.State -eq "Running"
-Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
-if (-not $NoStart) {
-    if ($wasRunning) {
-        Stop-ScheduledTask -TaskName $TaskName
-        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
-        do {
-            Start-Sleep -Milliseconds 500
-            $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
+$mode = "scheduled_task"
+$nativeTaskUpdated = $false
+try {
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -InputObject $task `
+        -Force `
+        -ErrorAction Stop | Out-Null
+    $nativeTaskUpdated = $true
+    if (-not $NoStart) {
+        if ($wasRunning) {
+            Stop-ScheduledTask -TaskName $TaskName
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+            do {
+                Start-Sleep -Milliseconds 500
+                $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+            } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
+        }
+        Start-ScheduledTask -TaskName $TaskName
     }
-    Start-ScheduledTask -TaskName $TaskName
+}
+catch {
+    if ($_.Exception.Message -notmatch "Access is denied|拒绝访问") { throw }
+    $mode = "startup_guard"
+    $guardScript = (Resolve-Path (
+        Join-Path $PSScriptRoot "Start-AgentBridgeOpenClawGuard.ps1"
+    )).Path
+    $startup = [Environment]::GetFolderPath("Startup")
+    if (-not $startup) { throw "Windows Startup folder was not found" }
+    $guardLauncher = Join-Path $startup "AgentBridge-OpenClaw-Guard.cmd"
+    $launcherContent = @(
+        "@echo off",
+        ('start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $guardScript)
+    ) -join "`r`n"
+    [IO.File]::WriteAllText(
+        $guardLauncher,
+        "$launcherContent`r`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    if (-not $NoStart) {
+        Start-Process `
+            -FilePath powershell.exe `
+            -ArgumentList @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden", "-File", $guardScript
+            ) `
+            -WindowStyle Hidden
+    }
 }
 
 $installed = Get-ScheduledTask -TaskName $TaskName
 [ordered]@{
     status = "installed"
+    mode = $mode
+    nativeTaskUpdated = $nativeTaskUpdated
     taskName = $TaskName
     started = -not $NoStart
     launcher = $resolvedLauncher
     startupDelaySeconds = $StartupDelaySeconds
     restartCount = $installed.Settings.RestartCount
-    restartInterval = $installed.Settings.RestartInterval.ToString()
-    executionTimeLimit = $installed.Settings.ExecutionTimeLimit.ToString()
+    restartInterval = [string]$installed.Settings.RestartInterval
+    executionTimeLimit = [string]$installed.Settings.ExecutionTimeLimit
     multipleInstances = $installed.Settings.MultipleInstances.ToString()
     businessCalls = 0
     businessListReads = 0

@@ -33,7 +33,11 @@ $task = New-ScheduledTask `
     -Description "Keeps AgentBridge Workspace connected to the local OpenClaw Gateway across IP and network changes."
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $wasRunning = $existing -and $existing.State -eq "Running"
-Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -InputObject $task `
+    -Force `
+    -ErrorAction Stop | Out-Null
 if (-not $NoStart) {
     if ($wasRunning) {
         Stop-ScheduledTask -TaskName $TaskName

@@ -101,6 +101,9 @@ class DeploymentAssetTests(unittest.TestCase):
         installer = (
             ROOT / "scripts/Install-AgentBridgeOpenClawSelfHeal.ps1"
         ).read_text(encoding="utf-8")
+        guard = (
+            ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"
+        ).read_text(encoding="utf-8")
         recovery = (
             ROOT / "scripts/Test-AgentBridgeLocalHostRecovery.ps1"
         ).read_text(encoding="utf-8")
@@ -115,6 +118,15 @@ class DeploymentAssetTests(unittest.TestCase):
             "-MultipleInstances IgnoreNew",
         ):
             self.assertIn(marker, installer)
+        for marker in (
+            "AgentBridgeOpenClawGuard",
+            "Start-ScheduledTask",
+            "gatewayListening",
+            "businessCalls = 0",
+            "businessListReads = 0",
+            "businessWrites = 0",
+        ):
+            self.assertIn(marker, guard)
         for marker in (
             "ExerciseFailureRecovery",
             '@("gateway", "status", "--deep", "--require-rpc", "--json")',
