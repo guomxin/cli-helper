@@ -30,6 +30,64 @@ foreach ($path in @($IdentityFile, $KnownHostsFile)) {
     }
 }
 
+$mutexName = "Local\AgentBridgeWorkspaceTunnel-{0}-{1}-{2}-{3}" -f (
+    $env:USERNAME,
+    ($HostName -replace '[^A-Za-z0-9]', '_'),
+    $RemotePort,
+    $LocalPort
+)
+$createdNew = $false
+$mutex = [Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
+if (-not $createdNew) { exit 0 }
+
+$stateRoot = Join-Path $env:LOCALAPPDATA "AgentBridge"
+$logRoot = Join-Path $stateRoot "logs"
+$statusPath = Join-Path $stateRoot "workspace-tunnel-status.json"
+$statusTempPath = "$statusPath.tmp"
+$sshErrorPath = Join-Path $logRoot "workspace-tunnel-ssh.log"
+New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+
+function Write-TunnelStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$State,
+        [Nullable[int]]$SshProcessId,
+        [Nullable[int]]$ExitCode = $null
+    )
+    $status = [ordered]@{
+        schemaVersion = "agentbridge.workspace-tunnel.v1"
+        processId = $PID
+        observedAt = [DateTimeOffset]::UtcNow.ToString("o")
+        state = $State
+        sshProcessId = $SshProcessId
+        exitCode = $ExitCode
+        hostName = $HostName
+        localPort = $LocalPort
+        remotePort = $RemotePort
+        businessCalls = 0
+        businessListReads = 0
+        businessWrites = 0
+    }
+    [IO.File]::WriteAllText(
+        $statusTempPath,
+        ($status | ConvertTo-Json -Compress),
+        [Text.UTF8Encoding]::new($false)
+    )
+    Move-Item -LiteralPath $statusTempPath -Destination $statusPath -Force
+}
+
+function Get-ExistingTunnelProcess {
+    $forwardMarker = "-R 127.0.0.1:${RemotePort}:127.0.0.1:${LocalPort}"
+    $targetMarker = "${SshUser}@${HostName}"
+    return Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" `
+        -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -like "*$forwardMarker*" -and
+            $_.CommandLine -like "*$targetMarker*"
+        } |
+        Sort-Object CreationDate |
+        Select-Object -First 1
+}
+
 $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
 if (-not $ssh) { $ssh = Get-Command ssh -ErrorAction Stop }
 $arguments = @(
@@ -46,9 +104,39 @@ $arguments = @(
     "${SshUser}@${HostName}"
 )
 
-do {
-    & $ssh.Source @arguments
-    $exitCode = $LASTEXITCODE
-    if ($Once) { exit $exitCode }
-    Start-Sleep -Seconds $ReconnectDelaySeconds
-} while ($true)
+try {
+    do {
+        $existing = Get-ExistingTunnelProcess
+        if ($existing) {
+            Write-TunnelStatus -State "existing_tunnel_observed" `
+                -SshProcessId $existing.ProcessId
+            if ($Once) { exit 0 }
+            Wait-Process -Id $existing.ProcessId -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds $ReconnectDelaySeconds
+            continue
+        }
+
+        if (Test-Path -LiteralPath $sshErrorPath) {
+            Remove-Item -LiteralPath $sshErrorPath -Force
+        }
+        $sshProcess = Start-Process `
+            -FilePath $ssh.Source `
+            -ArgumentList $arguments `
+            -NoNewWindow `
+            -RedirectStandardError $sshErrorPath `
+            -PassThru
+        Write-TunnelStatus -State "connection_started" `
+            -SshProcessId $sshProcess.Id
+        $sshProcess.WaitForExit()
+        $exitCode = $sshProcess.ExitCode
+        Write-TunnelStatus -State "connection_exited" `
+            -SshProcessId $sshProcess.Id `
+            -ExitCode $exitCode
+        if ($Once) { exit $exitCode }
+        Start-Sleep -Seconds $ReconnectDelaySeconds
+    } while ($true)
+}
+finally {
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+}

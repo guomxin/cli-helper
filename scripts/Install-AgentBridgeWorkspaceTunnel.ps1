@@ -47,6 +47,17 @@ if (-not $NoStart) {
             $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
     }
+
+    $forwardMarker = "-R 127.0.0.1:18789:127.0.0.1:18789"
+    Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" `
+        -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -like "*$forwardMarker*" -and
+            $_.CommandLine -like "*root@10.10.50.213*"
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
     Start-ScheduledTask -TaskName $TaskName
 }
 

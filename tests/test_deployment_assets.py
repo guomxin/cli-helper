@@ -460,10 +460,17 @@ class DeploymentAssetTests(unittest.TestCase):
             "ServerAliveInterval=30",
             "ServerAliveCountMax=3",
             '127.0.0.1:${RemotePort}:127.0.0.1:${LocalPort}',
+            "AgentBridgeWorkspaceTunnel",
+            "Get-ExistingTunnelProcess",
+            '"existing_tunnel_observed"',
+            '"workspace-tunnel-status.json"',
+            "-RedirectStandardError $sshErrorPath",
         ):
             self.assertIn(marker, tunnel)
         self.assertIn("New-ScheduledTaskTrigger -AtLogOn", installer)
         self.assertIn("-WindowStyle Hidden", installer)
+        self.assertIn("Get-CimInstance Win32_Process", installer)
+        self.assertIn("Stop-Process -Id $_.ProcessId", installer)
         self.assertIn("--workspace-gateway-url ws://127.0.0.1:18789", unit)
         self.assertNotIn("--workspace-gateway-url ws://10.90.20.210:18789", unit)
 
