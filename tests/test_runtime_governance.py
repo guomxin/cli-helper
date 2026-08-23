@@ -281,6 +281,19 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
                 input_summary={},
                 idempotency_key="stalled-read",
             )
+            trace, _ = service.runtime_governance.ensure_trace(
+                user_subject="user-a",
+                request_id="stalled-read-request",
+                request_kind="read",
+                system_id="oa",
+                capability_name="oa.pending.list",
+            )
+            service.runtime_governance.observe_operation(
+                trace_id=trace["trace_id"],
+                operation=operation,
+                capability_effect="read",
+                commit_capability=False,
+            )
             task = service.ensure_host_task(
                 user_subject="user-a",
                 token_id="token-a",
@@ -315,6 +328,44 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
                 set(),
             )
             self.assertEqual(result["evaluation"]["observed"], 3)
+
+    def test_historical_orphans_do_not_pollute_current_incidents_or_slo(self) -> None:
+        clock = MutableClock()
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp,
+                base_url="http://127.0.0.1:8000/seeyon",
+            )
+            service.runtime_governance._clock = clock
+            operation, _ = service.operations.create(
+                user_subject="user-a",
+                capability_name="oa.leave.submit",
+                capability_version="1.0.0",
+                input_summary={},
+                idempotency_key="historical-unknown",
+            )
+            service.operations.mark_unknown(
+                operation["operation_id"],
+                code="RESULT_UNKNOWN",
+                message="historical test",
+            )
+            with closing(sqlite3.connect(service.db_path)) as connection:
+                connection.execute(
+                    "UPDATE operations SET updated_at = '2026-07-01T00:00:00+00:00' "
+                    "WHERE operation_id = ?",
+                    (operation["operation_id"],),
+                )
+                connection.commit()
+
+            service.runtime_governance.evaluate_incidents()
+            slo = service.runtime_governance.refresh_slo_rollups(hours=24)
+            metrics = {item["metricKey"]: item for item in slo["metrics"]}
+
+            self.assertEqual(metrics["write_outcome_unknown"]["value"], 0.0)
+            self.assertEqual(
+                service.runtime_governance.list_incidents()[0]["actionability"],
+                "manual_reconciliation",
+            )
 
     def test_prune_removes_raw_history_but_keeps_incidents(self) -> None:
         clock = MutableClock()

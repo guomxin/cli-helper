@@ -1140,6 +1140,7 @@ class RuntimeGovernanceStore:
                 )
 
             operation_cutoff = (now_dt - timedelta(seconds=operation_stalled_seconds)).isoformat()
+            untraced_historical_cutoff = (now_dt - timedelta(hours=24)).isoformat()
             stalled_operations = (
                 connection.execute(
                     """
@@ -1157,6 +1158,11 @@ class RuntimeGovernanceStore:
                 else []
             )
             for row in stalled_operations:
+                if (
+                    row["trace_id"] is None
+                    and str(row["updated_at"]) <= untraced_historical_cutoff
+                ):
+                    continue
                 detect(
                     rule_id="operation_stalled",
                     severity="P2",
@@ -1216,7 +1222,10 @@ class RuntimeGovernanceStore:
                     (delivery_cutoff,),
                 ).fetchall()
                 for row in deliveries:
-                    historical = row["task_status"] in _TERMINAL_TASK_STATUSES
+                    historical = (
+                        not row["task_status"]
+                        or row["task_status"] in _TERMINAL_TASK_STATUSES
+                    )
                     if historical:
                         continue
                     detect(
@@ -1401,14 +1410,22 @@ class RuntimeGovernanceStore:
                 """,
                 (start_text, end_text),
             ).fetchone()
-            unknown = connection.execute(
-                """
-                SELECT COUNT(*) AS count FROM runtime_incidents
-                WHERE rule_id = 'write_outcome_unknown'
-                  AND first_seen_at >= ? AND first_seen_at < ?
-                """,
-                (start_text, end_text),
-            ).fetchone()
+            unknown = (
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM runtime_incidents AS incident
+                    JOIN operations AS operation
+                      ON operation.operation_id = incident.object_id
+                    WHERE incident.rule_id = 'write_outcome_unknown'
+                      AND incident.object_type = 'operation'
+                      AND operation.updated_at >= ? AND operation.updated_at < ?
+                    """,
+                    (start_text, end_text),
+                ).fetchone()
+                if _table_exists(connection, "operations")
+                else {"count": 0}
+            )
             verified = connection.execute(
                 """
                 SELECT COUNT(DISTINCT CASE WHEN side_effect_boundary = 'B5_VERIFIED'
