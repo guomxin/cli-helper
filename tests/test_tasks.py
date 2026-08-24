@@ -4,6 +4,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.interactions import InteractionStore
@@ -2153,6 +2154,109 @@ class TaskHubStoreTests(unittest.TestCase):
                 agent_host="openclaw",
                 endpoint_key="telegram:*:1001",
             )
+
+    def test_central_service_recovers_workspace_tasks_for_the_same_user(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="telegram-companion",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            title="Companion endpoint",
+            route={"channel": "telegram", "to": "1001"},
+        )
+        workspace = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="openclaw",
+            host_task_key="workspace|run",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="Approve from Workspace",
+            route={"channel": "webchat", "to": "account-a"},
+        )
+        session = service.sessions.get_or_create(
+            user_subject="user-a",
+            system_id="oa",
+        )
+        challenge = service.challenges.create(
+            user_subject="user-a",
+            system_id="oa",
+            system_name="OA",
+            session_id=session["session_id"],
+            origin="http://oa.example.test",
+            page_fingerprint="login-page",
+            nonce=None,
+            fields=[],
+            card_base_url="https://cards.example.test",
+            challenge_type="interactive_browser_login",
+        )
+        interaction = service._credential_interaction(challenge)
+        service.observe_host_task(
+            user_subject="user-a",
+            task_id=workspace["task"]["taskId"],
+            interaction_ids=[interaction["interactionId"]],
+        )
+
+        direct_only = service.recover_host_tasks(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+        all_endpoints = service.recover_host_tasks(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            include_user_endpoints=True,
+        )
+
+        self.assertEqual(direct_only["count"], 0)
+        self.assertEqual(all_endpoints["count"], 1)
+        self.assertEqual(
+            all_endpoints["recoveries"][0]["task"]["taskId"],
+            workspace["task"]["taskId"],
+        )
+        self.assertEqual(
+            all_endpoints["recoveries"][0]["endpoint"]["clientType"],
+            "web",
+        )
+
+        completed = {
+            **interaction,
+            "state": "completed",
+            "resume": {
+                "tool": "agentbridge_interaction_resume",
+                "ready": True,
+                "completed": False,
+            },
+        }
+        with patch.object(
+            service,
+            "_load_interaction",
+            return_value=({}, {}, completed),
+        ):
+            resumable = service.recover_host_tasks(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                include_user_endpoints=True,
+            )
+        self.assertEqual(resumable["count"], 1)
+        self.assertEqual(
+            resumable["recoveries"][0]["interaction"]["state"],
+            "completed",
+        )
 
     def test_central_service_presents_one_authorization_on_multiple_endpoints(self):
         service = CentralCapabilityService(

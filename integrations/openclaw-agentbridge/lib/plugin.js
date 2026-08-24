@@ -21,7 +21,7 @@ import {
 } from "./proxy-tools.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.55";
+export const PLUGIN_VERSION = "0.4.56";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -1042,6 +1042,7 @@ async function recoverHostTasks({ coordinator, identityRouter, logger }) {
           agent_host: "openclaw",
           endpoint_key: binding.key,
           limit: 50,
+          include_user_endpoints: true,
         },
         { meta: hostContextMeta() },
       );
@@ -1059,14 +1060,19 @@ async function recoverHostTasks({ coordinator, identityRouter, logger }) {
       const endpoint = item?.endpoint;
       const sessionKey = safeText(endpoint?.conversationRef, 1024);
       const route = endpoint?.route;
+      const workspaceRecovery =
+        endpoint?.clientType === "web" &&
+        isWorkspaceSessionKey(sessionKey);
+      const directRecovery =
+        endpoint?.clientType === binding.channel &&
+        endpoint?.externalSubject === binding.senderId &&
+        (binding.accountId === null ||
+          endpoint?.accountId === binding.accountId);
       if (
         !taskId ||
         !interaction ||
         !sessionKey ||
-        endpoint?.clientType !== binding.channel ||
-        endpoint?.externalSubject !== binding.senderId ||
-        (binding.accountId !== null &&
-          endpoint?.accountId !== binding.accountId) ||
+        (!workspaceRecovery && !directRecovery) ||
         !route ||
         typeof route !== "object" ||
         Array.isArray(route)
@@ -1097,6 +1103,7 @@ async function recoverHostTasks({ coordinator, identityRouter, logger }) {
           taskId,
           interaction,
           sessionKey,
+          mcpClient: client,
         })
       ) {
         recovered += 1;

@@ -1981,37 +1981,67 @@ class CentralCapabilityService:
         agent_host: str,
         endpoint_key: str,
         limit: int = 100,
+        include_user_endpoints: bool = False,
     ) -> dict:
         endpoint = self.tasks.endpoint_for_key(
             user_subject=user_subject,
             agent_host=agent_host,
             endpoint_key=endpoint_key,
         )
-        recoveries = []
-        for candidate in self.tasks.recovery_candidates(
-            user_subject=user_subject,
-            endpoint_id=endpoint["endpoint_id"],
-            limit=limit,
-        ):
-            try:
-                _record, _resource, interaction = self._load_interaction(
+        endpoints = [endpoint]
+        if include_user_endpoints:
+            endpoints = [
+                candidate
+                for candidate in self.tasks.list_endpoints(
                     user_subject=user_subject,
-                    interaction_id=candidate["interaction_id"],
+                    active_only=True,
+                    limit=500,
                 )
-            except (KeyError, InteractionIntegrityError):
-                continue
-            if interaction["state"] not in {"pending", "processing"}:
-                continue
-            recoveries.append(
-                {
-                    "task": task_response(candidate["task"]),
-                    "endpoint": endpoint_response(candidate["endpoint"]),
-                    "interaction": {
-                        **interaction,
-                        "taskId": candidate["task"]["task_id"],
-                    },
-                }
-            )
+                if candidate.get("agent_host") == agent_host
+            ]
+        recoveries = []
+        recovered_task_ids = set()
+        for recovery_endpoint in endpoints:
+            for candidate in self.tasks.recovery_candidates(
+                user_subject=user_subject,
+                endpoint_id=recovery_endpoint["endpoint_id"],
+                limit=limit,
+            ):
+                task_id = candidate["task"]["task_id"]
+                if task_id in recovered_task_ids:
+                    continue
+                try:
+                    _record, _resource, interaction = self._load_interaction(
+                        user_subject=user_subject,
+                        interaction_id=candidate["interaction_id"],
+                    )
+                except (KeyError, InteractionIntegrityError):
+                    continue
+                resumable_completed = (
+                    interaction["state"] == "completed"
+                    and interaction.get("resume", {}).get("ready") is True
+                    and interaction.get("resume", {}).get("completed") is not True
+                )
+                if (
+                    interaction["state"] not in {"pending", "processing"}
+                    and not resumable_completed
+                ):
+                    continue
+                recoveries.append(
+                    {
+                        "task": task_response(candidate["task"]),
+                        "endpoint": endpoint_response(candidate["endpoint"]),
+                        "interaction": {
+                            **interaction,
+                            "taskId": task_id,
+                        },
+                    }
+                )
+                recovered_task_ids.add(task_id)
+                if len(recoveries) >= limit:
+                    break
+            if len(recoveries) >= limit:
+                break
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",

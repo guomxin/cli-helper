@@ -1793,6 +1793,10 @@ test("restores a pending interaction and its original route on gateway start", a
       hostInstanceId: "openclaw-gateway",
     },
   });
+  assert.equal(
+    requests[1].params.arguments.include_user_endpoints,
+    true,
+  );
   assert.equal(coordinator.pendingForSession(sessionKey).length, 1);
   assert.equal(
     coordinator.activeTaskForSession(sessionKey),
@@ -1804,6 +1808,65 @@ test("restores a pending interaction and its original route on gateway start", a
     CARD_URL,
   );
   coordinator.stopAll();
+});
+
+test("resumes a completed workspace interaction restored after restart", async () => {
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  const completed = interaction({
+    interactionId: "interaction-recovered-completed-1234567890",
+    type: "business_input",
+    state: "completed",
+    resume: {
+      tool: "agentbridge_interaction_resume",
+      ready: true,
+      completed: false,
+    },
+  });
+  const authorization = interaction({
+    interactionId: "interaction-recovered-authorization-1234567890",
+    type: "execution_authorization",
+    title: "确认提交审批",
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params, options) {
+      calls.push({ name, params, options });
+      assert.equal(name, "agentbridge_interaction_resume");
+      return toolResult(authorization);
+    },
+  };
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey: workspaceSessionKey,
+    channel: "webchat",
+    to: "workspace-account-a",
+  });
+
+  const restored = await coordinator.restoreRecoveredInteraction({
+    taskId: "task-workspace-recovered-1234567890",
+    interaction: completed,
+    sessionKey: workspaceSessionKey,
+    mcpClient: client,
+  });
+
+  assert.equal(restored, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].params.interaction_id, completed.interactionId);
+  assert.equal(
+    calls[0].options.meta["io.agentbridge/task"].taskId,
+    "task-workspace-recovered-1234567890",
+  );
+  assert.equal(
+    coordinator
+      .pendingForSession(workspaceSessionKey)
+      .some((item) => item.interactionId === authorization.interactionId),
+    true,
+  );
+  assert.equal(harness.sentPayloads.length, 0);
 });
 
 test("delivers a non-origin authorization and acknowledges its outbox item", async () => {

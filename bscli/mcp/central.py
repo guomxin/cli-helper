@@ -4043,6 +4043,7 @@ def create_central_mcp_server(
         agent_host: Annotated[str, Field(min_length=1, max_length=80)],
         endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        include_user_endpoints: bool = False,
     ) -> dict[str, Any]:
         _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
@@ -4052,6 +4053,7 @@ def create_central_mcp_server(
             agent_host=agent_host,
             endpoint_key=endpoint_key,
             limit=limit,
+            include_user_endpoints=include_user_endpoints,
         )
 
     @mcp.tool(

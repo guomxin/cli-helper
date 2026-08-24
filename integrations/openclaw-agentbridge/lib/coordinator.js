@@ -840,6 +840,14 @@ export class InteractionCoordinator {
       taskId,
     });
     record.mcpClient ||= mcpClient;
+    if (
+      record.interaction.state === "completed" &&
+      record.interaction.resume?.ready === true &&
+      record.interaction.resume?.completed !== true
+    ) {
+      await this.resume(record, new AbortController().signal);
+      return true;
+    }
     this.startPolling(record);
     if (!alreadyDelivered) {
       await this.deliverInteractionsDirect(sessionKey, presented);
