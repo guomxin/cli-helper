@@ -818,6 +818,7 @@ export class InteractionCoordinator {
     interaction,
     sessionKey,
     runId = null,
+    mcpClient = null,
   }) {
     if (!isPrivateSessionKey(sessionKey) || !taskId || !interaction) {
       return false;
@@ -838,6 +839,7 @@ export class InteractionCoordinator {
       runId,
       taskId,
     });
+    record.mcpClient ||= mcpClient;
     this.startPolling(record);
     if (!alreadyDelivered) {
       await this.deliverInteractionsDirect(sessionKey, presented);
@@ -1046,6 +1048,10 @@ export class InteractionCoordinator {
       let delivered = false;
       const sessionKey = endpoint?.conversationRef;
       const route = endpoint?.route;
+      await this.restoreWorkspaceInteractionFromNotification(
+        notification,
+        client,
+      );
       if (
         notification?.deliveryMode === "origin_handled" ||
         notification?.deliveryMode === "no_op"
@@ -1155,6 +1161,41 @@ export class InteractionCoordinator {
     return Array.isArray(response?.notifications)
       ? response.notifications.length
       : 0;
+  }
+
+  async restoreWorkspaceInteractionFromNotification(notification, client) {
+    if (
+      notification?.deliveryMode !== "trusted_interaction" ||
+      !notification.interaction ||
+      !notification.task?.taskId
+    ) {
+      return false;
+    }
+    const sessionKey = safeRoutePart(
+      notification.task.activeConversationRef,
+    );
+    if (!isWorkspaceSessionKey(sessionKey)) {
+      return false;
+    }
+    this.bindDeliveryRoute({
+      sessionKey,
+      channel: "webchat",
+      to: notification.task.originEndpointId || sessionKey,
+      accountId: null,
+      threadId: null,
+    });
+    const restored = await this.restoreRecoveredInteraction({
+      taskId: notification.task.taskId,
+      interaction: notification.interaction,
+      sessionKey,
+      mcpClient: client,
+    });
+    if (restored) {
+      this.api.logger.info(
+        "AgentBridge restored Workspace interaction polling from the companion endpoint notification",
+      );
+    }
+    return restored;
   }
 
   async waitForIdle() {
@@ -3041,6 +3082,13 @@ function safeRoutePart(value) {
   }
   const normalized = String(value).trim();
   return normalized ? normalized.slice(0, 512) : null;
+}
+
+function isWorkspaceSessionKey(sessionKey) {
+  return Boolean(
+    typeof sessionKey === "string" &&
+      /^agent:[^:]+:agentbridge-workspace:direct:/i.test(sessionKey.trim()),
+  );
 }
 
 function normalizeThreadId(value) {

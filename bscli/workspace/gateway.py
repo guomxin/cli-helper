@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import threading
-from typing import Any, Iterator
+import time
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 
@@ -23,6 +24,7 @@ _PRE_ACCEPT_RETRY_CODES = {
     "GATEWAY_TIMEOUT",
 }
 _PRE_ACCEPT_RETRY_STAGES = {"connect", "preflight_abort", "bind"}
+_PRE_ACCEPT_RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0)
 
 
 class GatewayRequestError(RuntimeError):
@@ -41,6 +43,7 @@ class OpenClawGatewayClient:
         state_dir: Path | str,
         node_executable: str = "node",
         script_path: Path | str | None = None,
+        retry_sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.url = str(url or "").strip()
         self.token_file = Path(token_file)
@@ -49,6 +52,7 @@ class OpenClawGatewayClient:
         self.script_path = Path(script_path or Path(__file__).with_name(
             "gateway_client.mjs"
         ))
+        self._retry_sleep = retry_sleep or time.sleep
         if not self.url.startswith(("ws://", "wss://")):
             raise ValueError("OpenClaw Gateway URL must use ws:// or wss://")
         self._diagnostics_lock = threading.Lock()
@@ -185,7 +189,9 @@ class OpenClawGatewayClient:
             terminal = False
             source = None
             try:
-                for attempt in range(2):
+                for attempt in range(
+                    len(_PRE_ACCEPT_RETRY_DELAYS_SECONDS) + 1
+                ):
                     accepted = False
                     source = self._stream_payload(payload)
                     try:
@@ -213,10 +219,11 @@ class OpenClawGatewayClient:
                             raise
                         _LOG.warning(
                             "Retrying OpenClaw Gateway before run acceptance "
-                            "code=%s stage=%s attempt=%s",
+                            "code=%s stage=%s attempt=%s delay_seconds=%s",
                             exc.code,
                             str(exc.details.get("stage") or "unknown"),
                             attempt + 1,
+                            _PRE_ACCEPT_RETRY_DELAYS_SECONDS[attempt],
                         )
                         yield {
                             "type": "progress",
@@ -225,6 +232,9 @@ class OpenClawGatewayClient:
                             "phase": "retry",
                             "label": "OpenClaw connection is recovering",
                         }
+                        self._retry_sleep(
+                            _PRE_ACCEPT_RETRY_DELAYS_SECONDS[attempt]
+                        )
                     finally:
                         close = getattr(source, "close", None)
                         if callable(close):
@@ -448,7 +458,11 @@ def _should_retry_before_accept(
     accepted: bool,
     attempt: int,
 ) -> bool:
-    if accepted or attempt >= 1 or error.code not in _PRE_ACCEPT_RETRY_CODES:
+    if (
+        accepted
+        or attempt >= len(_PRE_ACCEPT_RETRY_DELAYS_SECONDS)
+        or error.code not in _PRE_ACCEPT_RETRY_CODES
+    ):
         return False
     stage = str(error.details.get("stage") or "").strip()
     if stage:

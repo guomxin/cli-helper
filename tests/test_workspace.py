@@ -1461,6 +1461,7 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 url="ws://127.0.0.1:18789",
                 token_file=token_file,
                 state_dir=root / "state",
+                retry_sleep=lambda _seconds: None,
             )
             payloads = []
 
@@ -1516,6 +1517,78 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 ["progress", "accepted", "chat"],
             )
             self.assertEqual(events[0]["phase"], "retry")
+
+    def test_gateway_send_stream_waits_for_a_recovering_reverse_tunnel(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            retry_delays = []
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                retry_sleep=retry_delays.append,
+            )
+            payloads = []
+
+            def stream_payload(payload):
+                payloads.append(payload)
+                if len(payloads) <= 3:
+                    def failed_stream():
+                        raise GatewayRequestError(
+                            "GATEWAY_CONNECTION_FAILED",
+                            "reverse tunnel is reconnecting",
+                            {"stage": "connect", "accepted": False},
+                        )
+                        yield  # pragma: no cover
+
+                    return failed_stream()
+                return iter(
+                    [
+                        {
+                            "type": "accepted",
+                            "runId": "run-tunnel-recovery-1",
+                            "status": "started",
+                        },
+                        {
+                            "type": "chat",
+                            "runId": "run-tunnel-recovery-1",
+                            "state": "final",
+                            "text": "done",
+                        },
+                    ]
+                )
+
+            with patch.object(
+                client,
+                "_stream_payload",
+                side_effect=stream_payload,
+            ):
+                events = list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="List five pending workflows",
+                        idempotency_key="run-tunnel-recovery-1",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(len(payloads), 4)
+            self.assertEqual(retry_delays, [2.0, 5.0, 10.0])
+            self.assertEqual(
+                [event["type"] for event in events],
+                ["progress", "progress", "progress", "accepted", "chat"],
+            )
 
     def test_gateway_send_stream_does_not_retry_after_send_started(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -1875,6 +1875,128 @@ test("delivers a non-origin authorization and acknowledges its outbox item", asy
   assert.equal(calls.at(-1).params.succeeded, true);
 });
 
+test("continues a workspace interaction after its field card is delivered to a companion endpoint", async () => {
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  const companionSessionKey = "agent:main:telegram:direct:7052061588";
+  const fieldInteraction = interaction({
+    interactionId: "interaction-workspace-field-1234567890",
+    type: "business_input",
+    title: "填写补签审批意见",
+  });
+  const completedFieldInteraction = interaction({
+    ...fieldInteraction,
+    state: "completed",
+    resume: {
+      tool: "agentbridge_interaction_resume",
+      ready: true,
+      completed: false,
+    },
+  });
+  const authorization = interaction({
+    interactionId: "interaction-workspace-authorization-1234567890",
+    type: "execution_authorization",
+    title: "确认提交补签审批",
+  });
+  let sleepCount = 0;
+  const sleep = async (_milliseconds, signal) => {
+    sleepCount += 1;
+    if (sleepCount === 1) {
+      return;
+    }
+    await new Promise((resolve) => {
+      signal.addEventListener("abort", resolve, { once: true });
+    });
+  };
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const calls = [];
+  let resumeObserved;
+  const resumed = new Promise((resolve) => {
+    resumeObserved = resolve;
+  });
+  const client = {
+    async callTool(name, params, options) {
+      calls.push({ name, params, options });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: companionSessionKey,
+            route: { channel: "telegram", to: "7052061588" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-workspace-field-1234567890",
+              deliveryMode: "trusted_interaction",
+              task: {
+                taskId: "task-workspace-approval-1234567890",
+                originEndpointId: "workspace-endpoint-1234567890",
+                activeConversationRef: workspaceSessionKey,
+              },
+              interaction: fieldInteraction,
+            },
+          ],
+        };
+      }
+      if (name === "agentbridge_interaction_get") {
+        return {
+          status: "succeeded",
+          interaction: completedFieldInteraction,
+        };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        resumeObserved();
+        return toolResult(authorization);
+      }
+      return { status: "succeeded" };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+    sleep,
+  });
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:7052061588",
+      channel: "telegram",
+      senderId: "7052061588",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+  await resumed;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const resumeCall = calls.find(
+    (item) => item.name === "agentbridge_interaction_resume",
+  );
+  assert.equal(resumeCall.params.interaction_id, fieldInteraction.interactionId);
+  assert.equal(
+    resumeCall.options.meta["io.agentbridge/task"].taskId,
+    "task-workspace-approval-1234567890",
+  );
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(harness.sentPayloads[0].to, "7052061588");
+  assert.equal(
+    coordinator
+      .pendingForSession(workspaceSessionKey)
+      .some((item) => item.interactionId === authorization.interactionId),
+    true,
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+
+  coordinator.stopAll();
+  await coordinator.waitForIdle();
+});
+
 test("acknowledges pull-based workspace notifications without direct webchat delivery", async () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
