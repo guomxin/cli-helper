@@ -2011,7 +2011,7 @@ class CentralCapabilityService:
                 if task_id in recovered_task_ids:
                     continue
                 try:
-                    _record, _resource, interaction = self._load_interaction(
+                    record, _resource, interaction = self._load_interaction(
                         user_subject=user_subject,
                         interaction_id=candidate["interaction_id"],
                     )
@@ -2026,6 +2026,18 @@ class CentralCapabilityService:
                     interaction["state"] not in {"pending", "processing"}
                     and not resumable_completed
                 ):
+                    if interaction["state"] in {
+                        "declined",
+                        "expired",
+                        "failed",
+                        "superseded",
+                    }:
+                        self.tasks.link_interaction(
+                            task_id=task_id,
+                            user_subject=user_subject,
+                            interaction_record=record,
+                            interaction=interaction,
+                        )
                     continue
                 recoveries.append(
                     {

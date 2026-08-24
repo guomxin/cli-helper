@@ -2258,6 +2258,37 @@ class TaskHubStoreTests(unittest.TestCase):
             "completed",
         )
 
+        expired = {
+            **interaction,
+            "state": "expired",
+            "resume": {
+                "tool": "agentbridge_interaction_resume",
+                "ready": False,
+                "completed": False,
+            },
+        }
+        record = service.interactions.get(
+            interaction["interactionId"],
+            user_subject="user-a",
+        )
+        with patch.object(
+            service,
+            "_load_interaction",
+            return_value=(record, {}, expired),
+        ):
+            terminal = service.recover_host_tasks(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                include_user_endpoints=True,
+            )
+        reconciled = service.tasks.get_task(
+            workspace["task"]["taskId"],
+            user_subject="user-a",
+        )
+        self.assertEqual(terminal["count"], 0)
+        self.assertEqual(reconciled["status"], "expired")
+
     def test_central_service_presents_one_authorization_on_multiple_endpoints(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),
