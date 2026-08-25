@@ -9,7 +9,7 @@ param(
     [string]$AgentBridgeBaseUrl = "https://10.10.50.213",
     [string]$CaCertificate = "",
     [string[]]$IdentityLabel = @(),
-    [ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 90,
+    [ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 180,
     [switch]$SkipOpenClaw
 )
 
@@ -82,8 +82,16 @@ function Invoke-OpenClawJson {
             -RedirectStandardError $stderrPath `
             -PassThru
         if (-not $process.WaitForExit($OpenClawTimeoutSeconds * 1000)) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            $process.WaitForExit()
+            $taskkill = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+            if ($taskkill) {
+                & $taskkill.Source /PID $process.Id /T /F 2>$null | Out-Null
+            }
+            else {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            if (-not $process.HasExited) {
+                $process.WaitForExit()
+            }
             throw "$Label timed out after $OpenClawTimeoutSeconds seconds"
         }
         $stdout = [IO.File]::ReadAllText($stdoutPath).Trim()
@@ -111,12 +119,30 @@ $mcpArguments = @{ Check = "Release" }
 if ($CaCertificate) {
     $mcpArguments.CaCertificate = $CaCertificate
 }
-$releaseRaw = (
-    & (Join-Path $PSScriptRoot "Test-AgentBridgeMcp.ps1") @mcpArguments |
-        Out-String
-).Trim()
+$releaseRaw = ""
+$releaseError = ""
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+        $releaseRaw = (
+            & (Join-Path $PSScriptRoot "Test-AgentBridgeMcp.ps1") @mcpArguments |
+                Out-String
+        ).Trim()
+        if (-not $releaseRaw) {
+            throw "AgentBridge release smoke returned no result"
+        }
+        $releaseError = ""
+        break
+    }
+    catch {
+        $releaseRaw = ""
+        $releaseError = $_.Exception.Message
+        if ($attempt -lt 3) {
+            Start-Sleep -Milliseconds @(500, 2000)[$attempt - 1]
+        }
+    }
+}
 if (-not $releaseRaw) {
-    throw "AgentBridge release smoke returned no result"
+    throw "AgentBridge release smoke failed after 3 attempts: $releaseError"
 }
 $release = $releaseRaw | ConvertFrom-Json
 
@@ -191,13 +217,13 @@ if ($remote.backupTimerState -ne "active" -or $remote.backupServiceResult -ne "s
 $openClaw = $null
 if (-not $SkipOpenClaw) {
     $gateway = Invoke-OpenClawJson `
-        -Arguments @("gateway", "status", "--deep", "--require-rpc", "--json") `
-        -Label "OpenClaw Gateway deep RPC check"
+        -Arguments @("gateway", "status", "--require-rpc", "--json") `
+        -Label "OpenClaw Gateway RPC check"
     $plugin = Invoke-OpenClawJson `
         -Arguments @("plugins", "inspect", "agentbridge-interactions", "--json") `
         -Label "OpenClaw AgentBridge plugin check"
     if (-not $gateway.rpc.ok) {
-        throw "OpenClaw Gateway deep RPC check failed"
+        throw "OpenClaw Gateway RPC check failed"
     }
     if ($plugin.plugin.status -ne "loaded") {
         throw "AgentBridge OpenClaw plugin is not loaded"

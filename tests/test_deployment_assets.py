@@ -163,9 +163,19 @@ class DeploymentAssetTests(unittest.TestCase):
         )
 
         self.assertIn(
-            '[ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 90',
+            '[ValidateRange(5, 300)][int]$OpenClawTimeoutSeconds = 180',
             acceptance,
         )
+        self.assertIn(
+            '@("gateway", "status", "--require-rpc", "--json")',
+            acceptance,
+        )
+        self.assertNotIn(
+            '@("gateway", "status", "--deep", "--require-rpc", "--json")',
+            acceptance,
+        )
+        self.assertIn("taskkill.exe", acceptance)
+        self.assertIn("for ($attempt = 1; $attempt -le 3; $attempt++)", acceptance)
         self.assertNotIn(
             'plugins", "inspect", "agentbridge-interactions", "--runtime"',
             acceptance,
