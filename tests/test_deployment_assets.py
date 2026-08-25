@@ -467,11 +467,16 @@ class DeploymentAssetTests(unittest.TestCase):
 
         for marker in (
             "ExitOnForwardFailure=yes",
-            "ServerAliveInterval=30",
-            "ServerAliveCountMax=3",
+            "ServerAliveInterval=10",
+            "ServerAliveCountMax=2",
             '127.0.0.1:${RemotePort}:127.0.0.1:${LocalPort}',
             "AgentBridgeWorkspaceTunnel",
             "Get-ExistingTunnelProcess",
+            "Get-NetworkFingerprint",
+            '"network_change_detected"',
+            '"active_network_changed"',
+            '"connected"',
+            "$sshProcess.WaitForExit($NetworkPollSeconds * 1000)",
             '"existing_tunnel_observed"',
             '"workspace-tunnel-status.json"',
             "-RedirectStandardError $sshErrorPath",

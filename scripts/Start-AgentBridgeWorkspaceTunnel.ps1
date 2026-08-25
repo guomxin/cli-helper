@@ -7,6 +7,7 @@ param(
     [int]$LocalPort = 18789,
     [int]$RemotePort = 18789,
     [int]$ReconnectDelaySeconds = 5,
+    [int]$NetworkPollSeconds = 2,
     [switch]$Once
 )
 
@@ -23,6 +24,9 @@ if ($LocalPort -lt 1 -or $LocalPort -gt 65535) { throw "LocalPort is invalid" }
 if ($RemotePort -lt 1 -or $RemotePort -gt 65535) { throw "RemotePort is invalid" }
 if ($ReconnectDelaySeconds -lt 1 -or $ReconnectDelaySeconds -gt 300) {
     throw "ReconnectDelaySeconds is invalid"
+}
+if ($NetworkPollSeconds -lt 1 -or $NetworkPollSeconds -gt 30) {
+    throw "NetworkPollSeconds is invalid"
 }
 foreach ($path in @($IdentityFile, $KnownHostsFile)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -51,7 +55,8 @@ function Write-TunnelStatus {
     param(
         [Parameter(Mandatory = $true)][string]$State,
         [Nullable[int]]$SshProcessId,
-        [Nullable[int]]$ExitCode = $null
+        [Nullable[int]]$ExitCode = $null,
+        [string]$Reason = ""
     )
     $status = [ordered]@{
         schemaVersion = "agentbridge.workspace-tunnel.v1"
@@ -63,6 +68,7 @@ function Write-TunnelStatus {
         hostName = $HostName
         localPort = $LocalPort
         remotePort = $RemotePort
+        reason = $Reason
         businessCalls = 0
         businessListReads = 0
         businessWrites = 0
@@ -73,6 +79,47 @@ function Write-TunnelStatus {
         [Text.UTF8Encoding]::new($false)
     )
     Move-Item -LiteralPath $statusTempPath -Destination $statusPath -Force
+}
+
+function Get-NetworkFingerprint {
+    $entries = @(
+        [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+            Where-Object {
+                $_.OperationalStatus -eq [Net.NetworkInformation.OperationalStatus]::Up -and
+                $_.NetworkInterfaceType -ne [Net.NetworkInformation.NetworkInterfaceType]::Loopback
+            } |
+            ForEach-Object {
+                try {
+                    $properties = $_.GetIPProperties()
+                    $addresses = @(
+                        $properties.UnicastAddresses |
+                            Where-Object {
+                                $_.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+                                $_.Address.ToString() -notlike "169.254.*"
+                            } |
+                            ForEach-Object { $_.Address.ToString() } |
+                            Sort-Object
+                    )
+                    if ($addresses.Count -gt 0) {
+                        $gateways = @(
+                            $properties.GatewayAddresses |
+                                Where-Object {
+                                    $_.Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+                                    $_.Address.ToString() -ne "0.0.0.0"
+                                } |
+                                ForEach-Object { $_.Address.ToString() } |
+                                Sort-Object
+                        )
+                        "{0}|{1}|{2}" -f $_.Id, ($addresses -join ","), ($gateways -join ",")
+                    }
+                }
+                catch {
+                    # Ignore an adapter that disappears while the snapshot is collected.
+                }
+            } |
+            Sort-Object
+    )
+    return $entries -join ";"
 }
 
 function Get-ExistingTunnelProcess {
@@ -94,8 +141,8 @@ $arguments = @(
     "-N", "-T",
     "-o", "BatchMode=yes",
     "-o", "ExitOnForwardFailure=yes",
-    "-o", "ServerAliveInterval=30",
-    "-o", "ServerAliveCountMax=3",
+    "-o", "ServerAliveInterval=10",
+    "-o", "ServerAliveCountMax=2",
     "-o", "ConnectTimeout=10",
     "-o", "IdentitiesOnly=yes",
     "-o", "UserKnownHostsFile=$((Resolve-Path $KnownHostsFile).Path)",
@@ -127,13 +174,41 @@ try {
             -PassThru
         Write-TunnelStatus -State "connection_started" `
             -SshProcessId $sshProcess.Id
-        $sshProcess.WaitForExit()
+        $networkFingerprint = Get-NetworkFingerprint
+        $connectedReported = $false
+        $networkChanged = $false
+        while (-not $sshProcess.WaitForExit($NetworkPollSeconds * 1000)) {
+            $currentFingerprint = Get-NetworkFingerprint
+            if ($currentFingerprint -ne $networkFingerprint) {
+                $networkChanged = $true
+                Write-TunnelStatus -State "network_change_detected" `
+                    -SshProcessId $sshProcess.Id `
+                    -Reason "active_network_changed"
+                Stop-Process -Id $sshProcess.Id -Force -ErrorAction SilentlyContinue
+                if (-not $sshProcess.HasExited) {
+                    $sshProcess.WaitForExit()
+                }
+                break
+            }
+            if (-not $connectedReported) {
+                Write-TunnelStatus -State "connected" `
+                    -SshProcessId $sshProcess.Id
+                $connectedReported = $true
+            }
+        }
         $exitCode = $sshProcess.ExitCode
         Write-TunnelStatus -State "connection_exited" `
             -SshProcessId $sshProcess.Id `
-            -ExitCode $exitCode
+            -ExitCode $exitCode `
+            -Reason $(if ($networkChanged) { "active_network_changed" } else { "ssh_exited" })
         if ($Once) { exit $exitCode }
-        Start-Sleep -Seconds $ReconnectDelaySeconds
+        $delaySeconds = if ($networkChanged) {
+            [Math]::Min(2, $ReconnectDelaySeconds)
+        }
+        else {
+            $ReconnectDelaySeconds
+        }
+        Start-Sleep -Seconds $delaySeconds
     } while ($true)
 }
 finally {

@@ -10,6 +10,9 @@ const state = {
   timelineReconnectTimer: null,
   timelineReconcileTimer: null,
   timelineReconcileActive: false,
+  gatewayStatusTimer: null,
+  gatewayStatusPolling: false,
+  gatewayStatusCheckActive: false,
   clientVersionTimer: null,
   clientVersionCheckActive: false,
   timelineCursor: 0,
@@ -31,6 +34,8 @@ const state = {
 const MAX_COMPOSER_IMAGES = 4;
 const MAX_COMPOSER_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_COMPOSER_IMAGES_TOTAL_BYTES = 12 * 1024 * 1024;
+const GATEWAY_STATUS_ONLINE_POLL_MS = 30000;
+const GATEWAY_STATUS_OFFLINE_POLL_MS = 5000;
 const SUPPORTED_COMPOSER_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -83,7 +88,10 @@ function bindActions() {
   composer.addEventListener("dragover", handleComposerDragOver);
   composer.addEventListener("dragleave", handleComposerDragLeave);
   composer.addEventListener("drop", handleComposerDrop);
-  $("#refresh-chat").addEventListener("click", loadChat);
+  $("#refresh-chat").addEventListener("click", () => {
+    loadChat();
+    loadGatewayStatus();
+  });
   $("#refresh-tasks").addEventListener("click", loadTasks);
   $("#active-only").addEventListener("change", loadTasks);
   $("#refresh-endpoints").addEventListener("click", loadEndpoints);
@@ -284,16 +292,38 @@ function switchView(view) {
 }
 
 async function loadGatewayStatus() {
+  if (
+    !state.account ||
+    !state.gatewayStatusPolling ||
+    state.gatewayStatusCheckActive
+  ) {
+    return;
+  }
   const element = $("#gateway-state");
   const dot = element.querySelector(".status-dot");
+  clearTimeout(state.gatewayStatusTimer);
+  state.gatewayStatusTimer = null;
+  state.gatewayStatusCheckActive = true;
+  let available = false;
   try {
     const result = await api("/api/gateway");
-    dot.className = `status-dot ${result.available ? "online" : "offline"}`;
-    element.title = result.available
+    available = Boolean(result.available);
+    dot.className = `status-dot ${available ? "online" : "offline"}`;
+    element.title = available
       ? `OpenClaw ${result.version || "已连接"}`
       : `OpenClaw 不可用：${result.code}`;
   } catch {
     dot.className = "status-dot offline";
+  } finally {
+    state.gatewayStatusCheckActive = false;
+    if (state.account && state.gatewayStatusPolling) {
+      state.gatewayStatusTimer = setTimeout(
+        loadGatewayStatus,
+        available
+          ? GATEWAY_STATUS_ONLINE_POLL_MS
+          : GATEWAY_STATUS_OFFLINE_POLL_MS,
+      );
+    }
   }
 }
 
@@ -1847,19 +1877,25 @@ async function loadEndpoints() {
 function startWorkspaceObservers() {
   clearInterval(state.timelineReconcileTimer);
   clearInterval(state.clientVersionTimer);
+  clearTimeout(state.gatewayStatusTimer);
+  state.gatewayStatusPolling = true;
   state.timelineReconcileTimer = setInterval(reconcileTimeline, 10000);
   state.clientVersionTimer = setInterval(checkClientVersion, 30000);
+  loadGatewayStatus();
 }
 
 function stopWorkspaceObservers() {
   state.eventSource?.close();
   state.eventSource = null;
   clearTimeout(state.timelineReconnectTimer);
+  clearTimeout(state.gatewayStatusTimer);
   clearInterval(state.timelineReconcileTimer);
   clearInterval(state.clientVersionTimer);
   state.timelineReconnectTimer = null;
+  state.gatewayStatusTimer = null;
   state.timelineReconcileTimer = null;
   state.clientVersionTimer = null;
+  state.gatewayStatusPolling = false;
   state.timelineReconcileActive = false;
   state.clientVersionCheckActive = false;
 }
@@ -1868,6 +1904,7 @@ function refreshWorkspaceState() {
   if (!state.account || document.visibilityState === "hidden") return;
   reconcileTimeline();
   checkClientVersion();
+  loadGatewayStatus();
   if (!state.eventSource) openTimelineStream();
 }
 
