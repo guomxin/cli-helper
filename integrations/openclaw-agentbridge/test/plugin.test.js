@@ -393,6 +393,85 @@ test("best-effort fails an ensured task when the business MCP call throws", asyn
   assert.equal(finish.arguments_.causation_ref, "tool-pending");
 });
 
+test("adds a stable idempotency key and bounded retry policy to governed prepare tools", async () => {
+  const businessCalls = [];
+  const logMessages = [];
+  const client = {
+    async callToolResult(name, arguments_, options) {
+      businessCalls.push({ name, arguments_, options });
+      const transportError = new Error("AgentBridge MCP is unreachable");
+      transportError.code = "MCP_UNREACHABLE";
+      transportError.transportCode = "ECONNRESET";
+      await options.retry.onRetry({
+        attempt: 1,
+        nextAttempt: 2,
+        delayMs: 500,
+        error: transportError,
+      });
+      await options.retry.onRecovered({
+        attempts: 2,
+        lastError: transportError,
+      });
+      return {
+        structuredContent: {
+          status: "requires_user_action",
+          operationId: "operation-approval-1",
+        },
+      };
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: {
+      runId: "run-approval-1",
+      messageProvider: "telegram",
+      senderId: "user-a",
+      chatId: "user-a",
+    },
+    identityRouter: {
+      resolveToolContext() {
+        return {
+          bound: true,
+          binding: { key: "telegram:*:user-a" },
+          client,
+        };
+      },
+    },
+    serverName: "agentbridge",
+    logger: {
+      warn(message) {
+        logMessages.push(message);
+      },
+      info(message) {
+        logMessages.push(message);
+      },
+    },
+  });
+
+  const result = await tools
+    .find((tool) => tool.name === "oa_missed_punch_approval_prepare")
+    .execute("tool-approval-1", {
+      affair_id: "affair-approval-1",
+      opinion: "同意",
+    });
+
+  assert.equal(businessCalls.length, 1);
+  assert.equal(
+    businessCalls[0].arguments_.idempotency_key,
+    "openclaw:tool-approval-1",
+  );
+  assert.deepEqual(
+    businessCalls[0].options.retry.delaysMs,
+    [500, 2_000],
+  );
+  assert.deepEqual(result.details.agentbridgeTransportRecovery, {
+    attempts: 2,
+    transportCode: "ECONNRESET",
+  });
+  assert.equal(logMessages.length, 2);
+  assert.match(logMessages[0], /transport retry/);
+  assert.match(logMessages[1], /transport recovered/);
+});
+
 test("allows report export while selecting a previous task choice", async () => {
   const calls = [];
   const sessionKey = "agent:main:telegram:direct:user-a";

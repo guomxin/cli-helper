@@ -35,6 +35,11 @@ CSRF_COOKIE = "agentbridge_workspace_csrf"
 ENROLLMENT_COOKIE = "agentbridge_workspace_enrollment"
 STATIC_ROOT = Path(__file__).with_name("static")
 ASSET_VERSION_PLACEHOLDER = "__WORKSPACE_ASSET_VERSION__"
+_CLIENT_DISCONNECT_ERRORS = (
+    BrokenPipeError,
+    ConnectionResetError,
+    ssl.SSLEOFError,
+)
 
 
 def _workspace_asset_version() -> str:
@@ -598,7 +603,7 @@ def create_workspace_http_server(
                     time.sleep(1)
                 self.wfile.write(b": keepalive\n\n")
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except _CLIENT_DISCONNECT_ERRORS:
                 return
 
         def _timeline_stream(
@@ -655,22 +660,25 @@ def create_workspace_http_server(
                     time.sleep(1)
                 self.wfile.write(b": keepalive\n\n")
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except _CLIENT_DISCONNECT_ERRORS:
                 return
 
         def _chat_send_stream(self, account: dict, body: dict) -> None:
             message = _required_string(body, "message")
             idempotency_key = _optional_string(body, "idempotencyKey")
-            self.close_connection = True
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Connection", "close")
-            self.send_header("X-Accel-Buffering", "no")
-            self._security_headers()
-            self.end_headers()
             stream = None
             try:
+                self.close_connection = True
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "text/event-stream; charset=utf-8",
+                )
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.send_header("X-Accel-Buffering", "no")
+                self._security_headers()
+                self.end_headers()
                 self.wfile.write(b"retry: 1000\n\n")
                 self.wfile.flush()
                 stream = application.send_chat_stream(
@@ -711,9 +719,9 @@ def create_workspace_http_server(
                         ).encode("utf-8")
                     )
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except _CLIENT_DISCONNECT_ERRORS:
                     return
-            except (BrokenPipeError, ConnectionResetError):
+            except _CLIENT_DISCONNECT_ERRORS:
                 return
             finally:
                 close = getattr(stream, "close", None)

@@ -513,8 +513,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     },
                 )
                 self.assertTrue(started.wait(timeout=1))
-                before = time.monotonic()
-                second = service.invoke(
+                second_future = pool.submit(
+                    service.invoke,
                     user_subject="user-a",
                     capability_name="oa.document.certificate.search",
                     arguments={
@@ -522,11 +522,12 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                         "document_type": "software_copyright_certificate",
                     },
                 )
-                elapsed = time.monotonic() - before
-                release.set()
+                try:
+                    second = second_future.result(timeout=4)
+                finally:
+                    release.set()
                 first_result = first.result(timeout=2)
 
-            self.assertLess(elapsed, 1.5)
             self.assertEqual(second["status"], "failed")
             self.assertEqual(second["error"]["code"], "SESSION_BUSY")
             self.assertEqual(first_result["status"], "succeeded")

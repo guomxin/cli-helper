@@ -40,6 +40,7 @@ const INDEPENDENT_WORKSPACE_TASK_TOOLS = new Set([
   "oa_workflow_revoke_prepare",
 ]);
 const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
+const SAFE_MCP_RETRY_DELAYS_MS = Object.freeze([500, 2_000]);
 const UNREFERENCED_FAILURE_STATUSES = new Set([
   "canceled",
   "deferred",
@@ -201,6 +202,12 @@ function createProxyTool({
           toolName: descriptor.name,
           params: normalizedParams,
         }) || normalizedParams;
+      const callParams = paramsWithStableIdempotencyKey({
+        descriptor,
+        params,
+        toolCallId,
+        runId: context.runId,
+      });
       if (descriptor.name === "agentbridge_interaction_get") {
         const guarded = interactionGetGuard?.({
           sessionKey: context.sessionKey,
@@ -249,10 +256,16 @@ function createProxyTool({
         logger,
       });
       let result;
+      const transportRecovery = {};
+      const retry = safeTransportRetryPolicy({
+        descriptor,
+        logger,
+        transportRecovery,
+      });
       try {
         result = await identity.client.callToolResult(
           descriptor.name,
-          params,
+          callParams,
           {
             signal,
             meta: {
@@ -267,6 +280,7 @@ function createProxyTool({
                 }
                 : {}),
             },
+            ...(retry ? { retry } : {}),
           },
         );
       } catch (error) {
@@ -309,10 +323,97 @@ function createProxyTool({
           mcpServer: serverName,
           mcpTool: descriptor.name,
           ...(taskId ? { agentbridgeTaskId: taskId } : {}),
+          ...(transportRecovery.recovered
+            ? {
+                agentbridgeTransportRecovery: {
+                  attempts: transportRecovery.attempts,
+                  transportCode: transportRecovery.transportCode,
+                },
+              }
+            : {}),
         },
       };
     },
   };
+}
+
+function paramsWithStableIdempotencyKey({
+  descriptor,
+  params,
+  toolCallId,
+  runId,
+}) {
+  if (
+    !AGENTBRIDGE_GOVERNED_ENTRY_TOOLS.has(descriptor.name) ||
+    !Object.hasOwn(descriptor.inputSchema?.properties || {}, "idempotency_key") ||
+    boundedText(params.idempotency_key, 256)
+  ) {
+    return params;
+  }
+  const callRef =
+    boundedText(toolCallId, 240) || boundedText(runId, 240);
+  if (!callRef) {
+    return params;
+  }
+  return {
+    ...params,
+    idempotency_key: boundedText(`openclaw:${callRef}`, 256),
+  };
+}
+
+function safeTransportRetryPolicy({
+  descriptor,
+  logger,
+  transportRecovery,
+}) {
+  if (!supportsSafeTransportRetry(descriptor)) {
+    return null;
+  }
+  return {
+    delaysMs: SAFE_MCP_RETRY_DELAYS_MS,
+    onRetry({ attempt, nextAttempt, delayMs, error }) {
+      const transportCode = safeTransportCode(error);
+      logger?.warn?.(
+        `AgentBridge MCP transport retry tool=${descriptor.name} ` +
+          `attempt=${attempt} nextAttempt=${nextAttempt} ` +
+          `delayMs=${delayMs} cause=${transportCode}`,
+      );
+    },
+    onRecovered({ attempts, lastError }) {
+      const transportCode = safeTransportCode(lastError);
+      transportRecovery.recovered = true;
+      transportRecovery.attempts = attempts;
+      transportRecovery.transportCode = transportCode;
+      logger?.info?.(
+        `AgentBridge MCP transport recovered tool=${descriptor.name} ` +
+          `attempts=${attempts} cause=${transportCode}`,
+      );
+    },
+  };
+}
+
+function supportsSafeTransportRetry(descriptor) {
+  if (descriptor.annotations?.readOnlyHint === true) {
+    return descriptor.annotations?.idempotentHint === true;
+  }
+  return (
+    AGENTBRIDGE_GOVERNED_ENTRY_TOOLS.has(descriptor.name) &&
+    descriptor.annotations?.idempotentHint === true &&
+    descriptor.annotations?.destructiveHint !== true
+  );
+}
+
+function safeTransportCode(error) {
+  const value =
+    error?.transportCode ||
+    error?.cause?.code ||
+    error?.code ||
+    error?.name ||
+    "UNKNOWN_TRANSPORT_ERROR";
+  return String(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9_.-]/g, "_")
+    .slice(0, 80);
 }
 
 async function resolveTaskId({

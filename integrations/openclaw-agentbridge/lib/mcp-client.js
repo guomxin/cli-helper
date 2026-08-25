@@ -3,10 +3,22 @@ import { randomUUID } from "node:crypto";
 import { resolveMcpServer } from "./config.js";
 
 export class McpCallError extends Error {
-  constructor(code, message = code) {
-    super(message);
+  constructor(
+    code,
+    message = code,
+    {
+      cause = null,
+      transportCode = null,
+      retryable = false,
+      attempts = 1,
+    } = {},
+  ) {
+    super(message, cause ? { cause } : undefined);
     this.name = "McpCallError";
     this.code = code;
+    this.transportCode = transportCode;
+    this.retryable = retryable;
+    this.attempts = attempts;
   }
 }
 
@@ -34,24 +46,64 @@ export function createAgentBridgeMcpClient({
       const result = await request("tools/list", {}, { signal });
       return Array.isArray(result?.tools) ? result.tools : [];
     },
-    async callToolResult(name, arguments_, { signal, meta } = {}) {
+    async callToolResult(name, arguments_, { signal, meta, retry } = {}) {
       return request(
         "tools/call",
         toolCallParams(name, arguments_, meta),
-        { signal },
+        { signal, retry },
       );
     },
-    async callTool(name, arguments_, { signal, meta } = {}) {
+    async callTool(name, arguments_, { signal, meta, retry } = {}) {
       const result = await request(
         "tools/call",
         toolCallParams(name, arguments_, meta),
-        { signal },
+        { signal, retry },
       );
       return extractToolPayload(result);
     },
   });
 
-  async function request(method, params, { signal } = {}) {
+  async function request(method, params, { signal, retry } = {}) {
+    const policy = normalizeRetryPolicy(retry);
+    let attempt = 0;
+    let lastError = null;
+    while (true) {
+      attempt += 1;
+      try {
+        const result = await requestOnce(method, params, { signal });
+        if (attempt > 1) {
+          await invokeObserver(policy?.onRecovered, {
+            attempts: attempt,
+            lastError,
+          });
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof McpCallError) {
+          error.attempts = attempt;
+        }
+        const delayMs = policy?.delaysMs[attempt - 1];
+        if (
+          !(error instanceof McpCallError) ||
+          error.retryable !== true ||
+          delayMs === undefined ||
+          signal?.aborted
+        ) {
+          throw error;
+        }
+        lastError = error;
+        await invokeObserver(policy.onRetry, {
+          attempt,
+          nextAttempt: attempt + 1,
+          delayMs,
+          error,
+        });
+        await policy.sleep(delayMs, signal);
+      }
+    }
+  }
+
+  async function requestOnce(method, params, { signal } = {}) {
     const timeoutSignal = AbortSignal.timeout(
       connection.timeoutSeconds * 1000,
     );
@@ -78,14 +130,50 @@ export function createAgentBridgeMcpClient({
       });
     } catch (error) {
       if (requestSignal.aborted) {
-        throw new McpCallError("MCP_TIMEOUT", "AgentBridge MCP request timed out");
+        throw new McpCallError(
+          "MCP_TIMEOUT",
+          "AgentBridge MCP request timed out",
+          { cause: error },
+        );
       }
-      throw new McpCallError("MCP_UNREACHABLE", "AgentBridge MCP is unreachable");
+      throw new McpCallError(
+        "MCP_UNREACHABLE",
+        "AgentBridge MCP is unreachable",
+        {
+          cause: error,
+          transportCode: transportErrorCode(error),
+          retryable: true,
+        },
+      );
     }
     if (!response.ok) {
-      throw new McpCallError(`MCP_HTTP_${response.status}`);
+      throw new McpCallError(`MCP_HTTP_${response.status}`, undefined, {
+        transportCode: `HTTP_${response.status}`,
+        retryable: [502, 503, 504].includes(response.status),
+      });
     }
-    const rpc = parseMcpResponse(await response.text());
+    let rawResponse;
+    try {
+      rawResponse = await response.text();
+    } catch (error) {
+      if (requestSignal.aborted) {
+        throw new McpCallError(
+          "MCP_TIMEOUT",
+          "AgentBridge MCP request timed out",
+          { cause: error },
+        );
+      }
+      throw new McpCallError(
+        "MCP_RESPONSE_READ_FAILED",
+        "AgentBridge MCP response could not be read",
+        {
+          cause: error,
+          transportCode: transportErrorCode(error),
+          retryable: true,
+        },
+      );
+    }
+    const rpc = parseMcpResponse(rawResponse);
     if (rpc.error) {
       throw new McpCallError(
         normalizeErrorCode(rpc.error.code, "MCP_RPC_ERROR"),
@@ -94,6 +182,75 @@ export function createAgentBridgeMcpClient({
     }
     return rpc.result;
   }
+}
+
+async function invokeObserver(observer, event) {
+  if (typeof observer !== "function") {
+    return;
+  }
+  try {
+    await observer(event);
+  } catch {
+    // Diagnostic observers must never change the business-call outcome.
+  }
+}
+
+function normalizeRetryPolicy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const delaysMs = Array.isArray(value.delaysMs)
+    ? value.delaysMs
+        .filter(
+          (item) => Number.isFinite(item) && item >= 0 && item <= 5_000,
+        )
+        .slice(0, 3)
+    : [];
+  if (delaysMs.length === 0) {
+    return null;
+  }
+  return {
+    delaysMs,
+    sleep:
+      typeof value.sleep === "function" ? value.sleep : abortableDelay,
+    onRetry:
+      typeof value.onRetry === "function" ? value.onRetry : null,
+    onRecovered:
+      typeof value.onRecovered === "function" ? value.onRecovered : null,
+  };
+}
+
+function abortableDelay(delayMs, signal) {
+  if (signal?.aborted) {
+    return Promise.reject(
+      new McpCallError("MCP_ABORTED", "AgentBridge MCP request was aborted"),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(
+        new McpCallError("MCP_ABORTED", "AgentBridge MCP request was aborted"),
+      );
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function transportErrorCode(error) {
+  let current = error;
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    const value = normalizeErrorCode(current.code, "");
+    if (value) {
+      return value;
+    }
+    current = current.cause;
+  }
+  return null;
 }
 
 function toolCallParams(name, arguments_, meta) {

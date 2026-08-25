@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   createAgentBridgeMcpClient,
   extractToolPayload,
+  McpCallError,
   parseMcpResponse,
 } from "../lib/mcp-client.js";
 
@@ -78,6 +79,123 @@ test("lists tools through the same authenticated MCP transport", async () => {
   assert.deepEqual(await client.listTools(), [{ name: "oa_missed_punch_prepare" }]);
   assert.equal(requestBody.method, "tools/list");
   assert.deepEqual(requestBody.params, {});
+});
+
+test("preserves the underlying transport cause when MCP is unreachable", async () => {
+  const socketError = new Error("socket closed");
+  socketError.code = "ECONNRESET";
+  const fetchError = new TypeError("fetch failed", { cause: socketError });
+  const client = createAgentBridgeMcpClient({
+    endpoint: {
+      url: "https://agentbridge.example.test/mcp",
+      timeoutSeconds: 5,
+    },
+    tokenEnv: "TOKEN",
+    env: { TOKEN: "secret-token" },
+    fetchImpl: async () => {
+      throw fetchError;
+    },
+  });
+
+  await assert.rejects(
+    client.callTool("oa_workflow_pending_list", { limit: 5 }),
+    (error) => {
+      assert.equal(error instanceof McpCallError, true);
+      assert.equal(error.code, "MCP_UNREACHABLE");
+      assert.equal(error.transportCode, "ECONNRESET");
+      assert.equal(error.retryable, true);
+      assert.equal(error.cause, fetchError);
+      assert.equal(error.attempts, 1);
+      return true;
+    },
+  );
+});
+
+test("retries a caller-approved idempotent MCP call and reports recovery", async () => {
+  const retries = [];
+  const recoveries = [];
+  const sleeps = [];
+  let attempts = 0;
+  const client = createAgentBridgeMcpClient({
+    endpoint: {
+      url: "https://agentbridge.example.test/mcp",
+      timeoutSeconds: 5,
+    },
+    tokenEnv: "TOKEN",
+    env: { TOKEN: "secret-token" },
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const socketError = new Error("connection reset");
+        socketError.code = "ECONNRESET";
+        throw new TypeError("fetch failed", { cause: socketError });
+      }
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "response-id",
+          result: {
+            structuredContent: { status: "succeeded" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  const result = await client.callTool(
+    "oa_missed_punch_approval_prepare",
+    {
+      affair_id: "affair-123",
+      opinion: "同意",
+      idempotency_key: "openclaw:tool-123",
+    },
+    {
+      retry: {
+        delaysMs: [500, 2_000],
+        sleep: async (delayMs) => sleeps.push(delayMs),
+        onRetry: (event) => retries.push(event),
+        onRecovered: (event) => recoveries.push(event),
+      },
+    },
+  );
+
+  assert.deepEqual(result, { status: "succeeded" });
+  assert.equal(attempts, 2);
+  assert.deepEqual(sleeps, [500]);
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].error.transportCode, "ECONNRESET");
+  assert.equal(retries[0].nextAttempt, 2);
+  assert.equal(recoveries.length, 1);
+  assert.equal(recoveries[0].attempts, 2);
+  assert.equal(recoveries[0].lastError.transportCode, "ECONNRESET");
+});
+
+test("does not retry an unauthorized MCP response", async () => {
+  let attempts = 0;
+  const client = createAgentBridgeMcpClient({
+    endpoint: {
+      url: "https://agentbridge.example.test/mcp",
+      timeoutSeconds: 5,
+    },
+    tokenEnv: "TOKEN",
+    env: { TOKEN: "secret-token" },
+    fetchImpl: async () => {
+      attempts += 1;
+      return new Response("unauthorized", { status: 401 });
+    },
+  });
+
+  await assert.rejects(
+    client.callTool("oa_workflow_pending_list", {}, {
+      retry: {
+        delaysMs: [1, 1],
+        sleep: async () => {},
+      },
+    }),
+    (error) => error.code === "MCP_HTTP_401" && error.retryable === false,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("places trusted host metadata beside tool arguments", async () => {

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import socket
 import sqlite3
+import ssl
 import threading
 from tempfile import TemporaryDirectory
 import unittest
@@ -24,6 +25,7 @@ from bscli.workspace.gateway import (
     OpenClawGatewayClient,
 )
 from bscli.workspace.server import (
+    _CLIENT_DISCONNECT_ERRORS,
     _public_gateway_stream_error,
     create_workspace_http_server,
     validate_workspace_server_config,
@@ -1644,6 +1646,9 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
 
 
 class WorkspaceHttpServerTests(unittest.TestCase):
+    def test_tls_eof_is_classified_as_a_normal_client_disconnect(self) -> None:
+        self.assertIn(ssl.SSLEOFError, _CLIENT_DISCONNECT_ERRORS)
+
     def test_stream_error_exposes_only_safe_retry_diagnostics(self) -> None:
         payload = _public_gateway_stream_error(
             GatewayRequestError(
