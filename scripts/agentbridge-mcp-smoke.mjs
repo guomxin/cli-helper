@@ -252,6 +252,38 @@ const CHECKS = new Map([
     },
   ],
   [
+    "OaAddressbookOrganization",
+    {
+      tool: "oa_addressbook_organization_tree",
+      arguments: { limit: 20 },
+      kind: "addressbookList",
+    },
+  ],
+  [
+    "OaAddressbookPersonSearch",
+    {
+      tool: "oa_addressbook_person_search",
+      arguments: { query: "辛国茂", search_type: "name", limit: 5 },
+      kind: "addressbookList",
+    },
+  ],
+  [
+    "OaAddressbookGroups",
+    {
+      tool: "oa_addressbook_group_list",
+      arguments: {},
+      kind: "addressbookList",
+    },
+  ],
+  [
+    "OaAddressbookPrivateContacts",
+    {
+      tool: "oa_addressbook_private_contact_search",
+      arguments: { limit: 5 },
+      kind: "addressbookList",
+    },
+  ],
+  [
     "CertificateSearch",
     {
       tool: "oa_certificate_search",
@@ -489,6 +521,15 @@ try {
         check.arguments.document_type,
       ),
     };
+  }
+  if (checkName === "OaAddressbookPersonSearch") {
+    const query = argument("--addressbook-query", "辛国茂").trim();
+    if (!query) {
+      throw Object.assign(new Error("Addressbook query is required"), {
+        code: "ADDRESSBOOK_QUERY_REQUIRED",
+      });
+    }
+    check.arguments = { query, search_type: "name", limit: 5 };
   }
   if (checkName === "SmartlightAssetDetail") {
     const assetId = argument("--smartlight-asset-id", "").trim();
@@ -975,6 +1016,14 @@ try {
               total: Number(result?.total ?? result?.count ?? result?.items?.length ?? 0),
               errorCode,
             }
+          : effectiveCheck.kind === "addressbookList"
+          ? addressbookListSummary({
+              payload,
+              result,
+              checkName,
+              identityLabel,
+              errorCode,
+            })
           : effectiveCheck.kind === "smartlightOverview"
           ? smartlightOverviewSummary({
               payload,
@@ -1139,6 +1188,35 @@ function smartlightListSummary({
     sort: result.sort ?? null,
     latestGroup: result.latestGroup ?? null,
     filters: result.filters ?? null,
+    firstItem: result.items[0] ?? null,
+    errorCode: null,
+  };
+}
+
+function addressbookListSummary({
+  payload,
+  result,
+  checkName,
+  identityLabel,
+  errorCode,
+}) {
+  if (payload?.error || errorCode) {
+    throw Object.assign(new Error("OA addressbook read failed"), {
+      code: errorCode || "OA_ADDRESSBOOK_READ_FAILED",
+    });
+  }
+  if (!result || !Array.isArray(result.items)) {
+    throw Object.assign(new Error("OA addressbook list contract mismatch"), {
+      code: "OA_ADDRESSBOOK_LIST_CONTRACT_MISMATCH",
+    });
+  }
+  return {
+    status: "succeeded",
+    check: checkName,
+    identityLabel,
+    itemCount: Number(result.count ?? result.items.length),
+    total: Number(result.total ?? result.source_total ?? result.items.length),
+    organization: result.organization ?? null,
     firstItem: result.items[0] ?? null,
     errorCode: null,
   };

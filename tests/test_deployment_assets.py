@@ -251,6 +251,18 @@ class DeploymentAssetTests(unittest.TestCase):
             "gatewayProcessCount",
         ):
             self.assertIn(marker, guard)
+
+        smoke = (ROOT / "scripts/agentbridge-mcp-smoke.mjs").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "OaAddressbookOrganization",
+            "OaAddressbookPersonSearch",
+            "OaAddressbookGroups",
+            "OaAddressbookPrivateContacts",
+            "addressbookListSummary",
+        ):
+            self.assertIn(marker, smoke)
         for marker in (
             'sessionKey = "agent:${AgentId}:agentbridge-release-warmup"',
             '--message $message',

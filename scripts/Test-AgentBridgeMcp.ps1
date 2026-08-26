@@ -34,6 +34,10 @@ param(
         "SmartlightReport",
         "OaPendingRead",
         "OaPendingInspect",
+        "OaAddressbookOrganization",
+        "OaAddressbookPersonSearch",
+        "OaAddressbookGroups",
+        "OaAddressbookPrivateContacts",
         "CertificateSearch",
         "TaihuaMyLogs",
         "YuqueSessionStatus",
@@ -64,6 +68,7 @@ param(
     [ValidateSet("", "web", "webchat", "telegram", "openclaw-weixin")]
     [string]$SourceClientType = "web",
     [string]$ExpectedText = "",
+    [string]$AddressbookQuery = "辛国茂",
     [string]$CertificateName = "",
     [string[]]$CertificateNames = @(),
     [ValidateSet("all", "patent_certificate", "software_copyright_certificate")]
@@ -282,6 +287,12 @@ try {
     }
     if ($Check -eq "CertificateSearch" -and $CertificateName) {
         $nodeArguments += @("--certificate-name", $CertificateName)
+    }
+    if ($Check -eq "OaAddressbookPersonSearch") {
+        if ([string]::IsNullOrWhiteSpace($AddressbookQuery)) {
+            throw "AddressbookQuery is required for the selected check"
+        }
+        $nodeArguments += @("--addressbook-query", $AddressbookQuery)
     }
     if ($Check -eq "CertificateSearch" -and $CertificateNames.Count -gt 0) {
         $namesJson = ConvertTo-Json -InputObject $CertificateNames -Compress
