@@ -21,6 +21,7 @@ from bscli.workspace.gateway import OpenClawGatewayClient
 
 MCP_SCOPES = (
     "oa:read",
+    "oa:read:addressbook",
     "oa:write:draft",
     "oa:write:approval",
     "oa:write:meeting",

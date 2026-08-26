@@ -1785,6 +1785,647 @@
       "title": "List OA Workflow Opinions"
     },
     {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List the authenticated user's visible OA organization and department tree. Use department_id from this result with oa_addressbook_department_members.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 200,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_addressbook_organization_treeArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_organization_tree",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_organization_treeDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Organization Directory"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List visible members of one department returned by the organization-tree tool. Preserve OA-masked phone values and do not claim they are missing.",
+      "inputSchema": {
+        "properties": {
+          "department_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Department Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "include_descendants": {
+            "default": false,
+            "title": "Include Descendants",
+            "type": "boolean"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "search_type": {
+            "default": "name",
+            "enum": [
+              "name",
+              "all"
+            ],
+            "title": "Search Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "department_id"
+        ],
+        "title": "oa_addressbook_department_membersArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_department_members",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_department_membersDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Department Members"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Search the authenticated user's visible organization directory. Return all plausible matches when names are ambiguous; never choose a person by guessing.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "search_type": {
+            "default": "name",
+            "enum": [
+              "name",
+              "all"
+            ],
+            "title": "Search Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "oa_addressbook_person_searchArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_person_search",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_person_searchDictOutput",
+        "type": "object"
+      },
+      "title": "Search OA People"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Resolve one exact person_ref returned by oa_addressbook_person_search. The detail remains limited to fields OA exposes to the authenticated user.",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "person_ref": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "Person Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "person_ref"
+        ],
+        "title": "oa_addressbook_person_getArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_person_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_person_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get OA Person Detail"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List visible private-contact, personal, system, and project groups. Use the returned group_type and group_id together for member lookup.",
+      "inputSchema": {
+        "properties": {
+          "group_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "private",
+                  "personal",
+                  "system",
+                  "project"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group Type"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_addressbook_group_listArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_group_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_group_listDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Address-book Groups"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List visible members of one exact private, personal, system, or project group.",
+      "inputSchema": {
+        "properties": {
+          "group_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Group Id",
+            "type": "string"
+          },
+          "group_type": {
+            "enum": [
+              "private",
+              "personal",
+              "system",
+              "project"
+            ],
+            "title": "Group Type",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "search_type": {
+            "default": "name",
+            "enum": [
+              "name",
+              "all"
+            ],
+            "title": "Search Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_type",
+          "group_id"
+        ],
+        "title": "oa_addressbook_group_membersArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_group_members",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_group_membersDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Address-book Group Members"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Search the authenticated user's private OA contacts, optionally within one private-contact group. This tool never creates or changes contacts.",
+      "inputSchema": {
+        "properties": {
+          "group_id": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group Id"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          },
+          "search_type": {
+            "default": "name",
+            "enum": [
+              "name",
+              "all"
+            ],
+            "title": "Search Type",
+            "type": "string"
+          }
+        },
+        "title": "oa_addressbook_private_contact_searchArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_private_contact_search",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_private_contact_searchDictOutput",
+        "type": "object"
+      },
+      "title": "Search OA Private Contacts"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Resolve one exact contact_ref returned by OA private-contact search.",
+      "inputSchema": {
+        "properties": {
+          "contact_ref": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "Contact Ref",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "contact_ref"
+        ],
+        "title": "oa_addressbook_private_contact_getArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_private_contact_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_private_contact_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get OA Private Contact Detail"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Export up to 500 visible organization-directory, department, group, or private-contact rows as a governed CSV file. Use identifiers from the corresponding read tool; OA-masked values remain masked in the export.",
+      "inputSchema": {
+        "properties": {
+          "department_id": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Department Id"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group Id"
+          },
+          "group_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "private",
+                  "personal",
+                  "system",
+                  "project"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Group Type"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "include_descendants": {
+            "default": false,
+            "title": "Include Descendants",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 500,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          },
+          "search_type": {
+            "default": "name",
+            "enum": [
+              "name",
+              "all"
+            ],
+            "title": "Search Type",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "person_search",
+              "department_members",
+              "group_members",
+              "private_contacts"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "oa_addressbook_exportArguments",
+        "type": "object"
+      },
+      "name": "oa_addressbook_export",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_addressbook_exportDictOutput",
+        "type": "object"
+      },
+      "title": "Export OA Address-book Results"
+    },
+    {
       "_meta": {
         "ui": {
           "resourceUri": "ui://agentbridge/trusted-interaction.html",

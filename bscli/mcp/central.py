@@ -180,6 +180,15 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_workflow_tracked_list": frozenset({"oa:read"}),
     "oa_workflow_detail_get": frozenset({"oa:read"}),
     "oa_workflow_opinions_list": frozenset({"oa:read"}),
+    "oa_addressbook_organization_tree": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_department_members": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_person_search": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_person_get": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_group_list": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_group_members": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_private_contact_search": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_private_contact_get": frozenset({"oa:read:addressbook"}),
+    "oa_addressbook_export": frozenset({"oa:read:addressbook"}),
     "oa_session_status": frozenset({"oa:read"}),
     "oa_session_login": frozenset({"oa:read"}),
     "oa_efficiency_data_approval_prepare": frozenset({"oa:write:approval"}),
@@ -1279,6 +1288,280 @@ def create_central_mcp_server(
             "oa.workflow.opinions.list",
             {"collection": collection, "affair_id": affair_id, "limit": limit},
             idempotency_key,
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_organization_tree",
+        title="List OA Organization Directory",
+        description=(
+            "List the authenticated user's visible OA organization and department tree. "
+            "Use department_id from this result with oa_addressbook_department_members."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_organization_tree(
+        ctx: Context,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 200,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        if keyword:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            "oa.addressbook.organization.tree",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_department_members",
+        title="List OA Department Members",
+        description=(
+            "List visible members of one department returned by the organization-tree "
+            "tool. Preserve OA-masked phone values and do not claim they are missing."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_department_members(
+        ctx: Context,
+        department_id: Annotated[str, Field(min_length=1, max_length=40)],
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        search_type: Literal["name", "all"] = "name",
+        include_descendants: bool = False,
+        limit: Annotated[int, Field(ge=1, le=500)] = 50,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "department_id": department_id,
+            "search_type": search_type,
+            "include_descendants": include_descendants,
+            "limit": limit,
+        }
+        if keyword:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            "oa.addressbook.department.members",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_person_search",
+        title="Search OA People",
+        description=(
+            "Search the authenticated user's visible organization directory. Return all "
+            "plausible matches when names are ambiguous; never choose a person by guessing."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_person_search(
+        ctx: Context,
+        query: Annotated[str, Field(min_length=1, max_length=200)],
+        search_type: Literal["name", "all"] = "name",
+        limit: Annotated[int, Field(ge=1, le=500)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            "oa.addressbook.person.search",
+            {"query": query, "search_type": search_type, "limit": limit},
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_person_get",
+        title="Get OA Person Detail",
+        description=(
+            "Resolve one exact person_ref returned by oa_addressbook_person_search. "
+            "The detail remains limited to fields OA exposes to the authenticated user."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_person_get(
+        ctx: Context,
+        person_ref: Annotated[str, Field(min_length=8, max_length=1024)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            "oa.addressbook.person.get",
+            {"person_ref": person_ref},
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_group_list",
+        title="List OA Address-book Groups",
+        description=(
+            "List visible private-contact, personal, system, and project groups. "
+            "Use the returned group_type and group_id together for member lookup."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_group_list(
+        ctx: Context,
+        group_type: Literal["private", "personal", "system", "project"] | None = None,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        if group_type:
+            arguments["group_type"] = group_type
+        if keyword:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            "oa.addressbook.group.list",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_group_members",
+        title="List OA Address-book Group Members",
+        description=(
+            "List visible members of one exact private, personal, system, or project group."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_group_members(
+        ctx: Context,
+        group_type: Literal["private", "personal", "system", "project"],
+        group_id: Annotated[str, Field(min_length=1, max_length=40)],
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        search_type: Literal["name", "all"] = "name",
+        limit: Annotated[int, Field(ge=1, le=500)] = 50,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "group_type": group_type,
+            "group_id": group_id,
+            "search_type": search_type,
+            "limit": limit,
+        }
+        if keyword:
+            arguments["keyword"] = keyword
+        return await invoke(
+            ctx,
+            "oa.addressbook.group.members",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_private_contact_search",
+        title="Search OA Private Contacts",
+        description=(
+            "Search the authenticated user's private OA contacts, optionally within one "
+            "private-contact group. This tool never creates or changes contacts."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_private_contact_search(
+        ctx: Context,
+        query: Annotated[str | None, Field(max_length=200)] = None,
+        search_type: Literal["name", "all"] = "name",
+        group_id: Annotated[str | None, Field(max_length=40)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 50,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"search_type": search_type, "limit": limit}
+        if query:
+            arguments["query"] = query
+        if group_id:
+            arguments["group_id"] = group_id
+        return await invoke(
+            ctx,
+            "oa.addressbook.private_contact.search",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_private_contact_get",
+        title="Get OA Private Contact Detail",
+        description=(
+            "Resolve one exact contact_ref returned by OA private-contact search."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_private_contact_get(
+        ctx: Context,
+        contact_ref: Annotated[str, Field(min_length=8, max_length=1024)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            "oa.addressbook.private_contact.get",
+            {"contact_ref": contact_ref},
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
+        )
+
+    @mcp.tool(
+        name="oa_addressbook_export",
+        title="Export OA Address-book Results",
+        description=(
+            "Export up to 500 visible organization-directory, department, group, or private-"
+            "contact rows as a governed CSV file. Use identifiers from the corresponding "
+            "read tool; OA-masked values remain masked in the export."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_addressbook_export(
+        ctx: Context,
+        source: Literal[
+            "person_search", "department_members", "group_members", "private_contacts"
+        ],
+        query: Annotated[str | None, Field(max_length=200)] = None,
+        search_type: Literal["name", "all"] = "name",
+        department_id: Annotated[str | None, Field(max_length=40)] = None,
+        include_descendants: bool = False,
+        group_type: Literal["private", "personal", "system", "project"] | None = None,
+        group_id: Annotated[str | None, Field(max_length=40)] = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 500,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "source": source,
+            "search_type": search_type,
+            "include_descendants": include_descendants,
+            "limit": limit,
+        }
+        for name, value in {
+            "query": query,
+            "department_id": department_id,
+            "group_type": group_type,
+            "group_id": group_id,
+        }.items():
+            if value:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            "oa.addressbook.export",
+            arguments,
+            idempotency_key,
+            required_scopes={"oa:read:addressbook"},
         )
 
     @mcp.tool(

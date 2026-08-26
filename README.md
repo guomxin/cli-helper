@@ -48,7 +48,7 @@ Telegram / 微信 / Agent Workspace / 其他 MCP 宿主
 - 中心节点能够访问目标遗留系统；
 - Linux 使用权限受限的 32 字节会话密钥；
 - 远程访问使用固定私网 IP、HTTPS 和内部 CA；
-- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.54`。
+- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.59`。
 
 本地开发安装：
 
@@ -68,11 +68,11 @@ python -m bscli.cli.main --home .bscli capability describe oa.template.list
 python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prepare
 ```
 
-截至 2026-08-21，中央注册表包含 83 个业务能力：
+截至 2026-08-26，中央注册表包含 94 个业务能力：
 
 | 系统 | 数量 | 主要范围 |
 | --- | ---: | --- |
-| 协同办公 | 40 | 模板、待办、已发、已办、跟踪、详情、意见、证书下载、发起、审批、知会、确认、会议、撤销 |
+| 协同办公 | 51 | 模板、流程与意见、证书、组织通讯录、发起、审批、知会、确认、会议、撤销 |
 | 泰华日志 | 5 | 个人日志、团队日志、项目搜索、日志填写与创建 |
 | 语雀部门信息库 | 4 | 知识库、跨库目录、组织搜索、结构化文档读取 |
 | 照明实验室 | 34 | 静态资产、运行态、RTU/单灯告警、能耗、RTU/单灯巡测、真实支路漏电、巡检与检修、报告、RTU 告警受控写入 |
@@ -92,12 +92,19 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 - `oa.workflow.detail.get`
 - `oa.workflow.opinions.list`
 - `oa.document.certificate.search`
+- `oa.addressbook.organization.tree`
+- `oa.addressbook.department.members`
+- `oa.addressbook.person.search` / `person.get`
+- `oa.addressbook.group.list` / `group.members`
+- `oa.addressbook.private_contact.search` / `private_contact.get`
+- `oa.addressbook.export`
 
 写入能力按具体业务流程组织，已覆盖出差、请假、补签、效能数据、差旅费、劳动合同续签、
 知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
 准备入口；最终提交能力由可信授权续办，不作为普通模型工具公开。
 
-协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)。
+协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)和
+[OA 通讯录只读能力](docs/系统适配/协同办公系统/通讯录只读能力.md)。
 
 ### 泰华日志能力
 

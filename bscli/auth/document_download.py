@@ -239,6 +239,7 @@ def _render_download_form(record: dict, *, csrf_token: str, nonce: str) -> str:
         "patent_certificate": "专利证书",
         "software_copyright_certificate": "软件著作权证书",
         "smartlight_csv_report": "照明分析报告",
+        "oa_addressbook_csv_report": "OA 通讯录",
     }.get(record["document_type"], "文件")
     action_label = (
         "下载证书扫描件"

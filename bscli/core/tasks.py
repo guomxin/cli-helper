@@ -31,7 +31,11 @@ ARTIFACT_DELIVERY_STATES = {
     "fallback_link_sent",
     "failed",
 }
-REFRESHABLE_ARTIFACT_TYPES = {"certificate_scan", "smartlight_report"}
+REFRESHABLE_ARTIFACT_TYPES = {
+    "certificate_scan",
+    "oa_addressbook_report",
+    "smartlight_report",
+}
 
 PULL_BASED_CLIENT_TYPES = {"web", "webchat"}
 ORPHAN_TASK_MAX_AGE_MINUTES = 15

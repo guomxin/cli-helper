@@ -187,6 +187,34 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
                 )
             )
 
+    def test_addressbook_read_scope_is_independent_from_general_oa_read(self):
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
+            general = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read"],
+                ttl_seconds=3600,
+            )
+            addressbook = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:read:addressbook"],
+                ttl_seconds=3600,
+            )
+
+            self.assertIsNone(
+                store.verify(
+                    general["token"], required_scopes={"oa:read:addressbook"}
+                )
+            )
+            self.assertIsNotNone(
+                store.verify(
+                    addressbook["token"],
+                    required_scopes={"oa:read:addressbook"},
+                )
+            )
+
     def test_taihua_read_and_worklog_write_scopes_are_independent(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

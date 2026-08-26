@@ -26,6 +26,15 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(
             names,
             [
+                "oa.addressbook.department.members",
+                "oa.addressbook.export",
+                "oa.addressbook.group.list",
+                "oa.addressbook.group.members",
+                "oa.addressbook.organization.tree",
+                "oa.addressbook.person.get",
+                "oa.addressbook.person.search",
+                "oa.addressbook.private_contact.get",
+                "oa.addressbook.private_contact.search",
                 "oa.attendance_confirmation.confirm",
                 "oa.attendance_confirmation.prepare",
                 "oa.business_trip.prepare",

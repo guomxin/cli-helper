@@ -16,6 +16,7 @@ from bscli.adapters.seeyon_central import (
     build_central_capability_registry,
 )
 from bscli.adapters.seeyon_documents import DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY
+from bscli.adapters.seeyon_addressbook import ADDRESSBOOK_EXPORT_CAPABILITY
 from bscli.adapters.base import (
     AdapterBusinessRuleRejected,
     AdapterLoginRequired,
@@ -215,10 +216,17 @@ from bscli.core.document_downloads import (
     PREPARED_DOCUMENT_TTL_SECONDS,
 )
 from bscli.core.report_exports import (
+    ADDRESSBOOK_REPORT_ARTIFACT_TYPE,
+    ADDRESSBOOK_REPORT_CONTENT_TYPE,
+    ADDRESSBOOK_REPORT_DOCUMENT_TYPE,
     SMARTLIGHT_REPORT_ARTIFACT_TYPE,
     SMARTLIGHT_REPORT_CONTENT_TYPE,
     SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+    addressbook_report_filename,
+    addressbook_report_recipe,
+    is_addressbook_report_recipe,
     is_smartlight_report_recipe,
+    render_addressbook_report_csv,
     render_smartlight_report_csv,
     smartlight_report_filename,
     smartlight_report_recipe,
@@ -3130,6 +3138,13 @@ class CentralCapabilityService:
                                 report=result,
                                 task_id=task_id,
                             )
+                        elif capability_name == ADDRESSBOOK_EXPORT_CAPABILITY:
+                            result = self._materialize_addressbook_report(
+                                session=session,
+                                arguments=arguments,
+                                report=result,
+                                task_id=task_id,
+                            )
                     self.session_states.save(
                         session["session_id"],
                         worker.capture_session_state(),
@@ -3309,6 +3324,95 @@ class CentralCapabilityService:
             "status": "succeeded",
             "report": {
                 "reportType": report_type,
+                "title": report.get("reportTitle"),
+                "rowCount": len(report.get("rows") or []),
+                "metadata": metadata,
+                "regenerationSemantics": "rerun_current_data_with_original_filters",
+            },
+            "file": _prepared_document_file(
+                ready,
+                artifact=artifact,
+                artifact_reused=artifact_reused,
+            ),
+            "hostDelivery": {
+                "mode": "direct_attachment",
+                "oneFilePerMessage": True,
+                "handledByHost": True,
+                "state": "prepared",
+                "completionMeaning": "file_ready_not_endpoint_acknowledged",
+            },
+        }
+
+    def _materialize_addressbook_report(
+        self,
+        *,
+        session: dict,
+        arguments: dict,
+        report: dict,
+        task_id: str | None,
+    ) -> dict:
+        source = str(report.get("reportType") or "").strip()
+        if source != str(arguments.get("source") or "").strip():
+            raise ValueError("OA address-book report source does not match the request")
+        body = render_addressbook_report_csv(report)
+        filename = addressbook_report_filename(report)
+        download = self.document_downloads.create(
+            user_subject=session["user_subject"],
+            system_id=session["system_id"],
+            session_id=session["session_id"],
+            document=addressbook_report_recipe(arguments=arguments),
+            filename=filename,
+            document_type=ADDRESSBOOK_REPORT_DOCUMENT_TYPE,
+            display_size=_display_file_size(len(body)),
+            card_base_url=self.trusted_card_base_url,
+            ttl_seconds=PREPARED_DOCUMENT_TTL_SECONDS,
+        )
+        self.document_downloads.claim_for_prepare(
+            download["download_id"],
+            user_subject=session["user_subject"],
+        )
+        try:
+            ready = self.document_downloads.mark_ready(
+                download["download_id"],
+                body=body,
+                content_type=ADDRESSBOOK_REPORT_CONTENT_TYPE,
+            )
+        except Exception:
+            try:
+                self.document_downloads.release(download["download_id"])
+            except DocumentDownloadStateError:
+                pass
+            raise
+
+        artifact = None
+        artifact_reused = False
+        if task_id:
+            artifact, artifact_reused = self.tasks.link_artifact(
+                task_id=task_id,
+                user_subject=session["user_subject"],
+                artifact={
+                    "artifact_type": ADDRESSBOOK_REPORT_ARTIFACT_TYPE,
+                    "source_ref": ready["download_id"],
+                    "filename": ready["filename"],
+                    "content_type": ready["content_type"],
+                    "byte_size": ready["prepared_size"],
+                    "download_url": f"{ready['card_url']}/file",
+                    "expires_at": ready["expires_at"],
+                },
+            )
+            self.tasks.complete_task(
+                task_id=task_id,
+                user_subject=session["user_subject"],
+                reason="oa_addressbook_report_ready",
+                causation_ref=ready["download_id"],
+            )
+        metadata = dict(report.get("metadata") or {})
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.document_delivery.v1",
+            "status": "succeeded",
+            "report": {
+                "reportType": source,
                 "title": report.get("reportTitle"),
                 "rowCount": len(report.get("rows") or []),
                 "metadata": metadata,
@@ -3588,6 +3692,7 @@ class CentralCapabilityService:
             artifact_type = artifact["artifact_type"]
             if artifact_type not in {
                 "certificate_scan",
+                ADDRESSBOOK_REPORT_ARTIFACT_TYPE,
                 SMARTLIGHT_REPORT_ARTIFACT_TYPE,
             }:
                 return _document_delivery_failure(
@@ -3625,9 +3730,17 @@ class CentralCapabilityService:
                     card_base_url=self.trusted_card_base_url,
                     ttl_seconds=600,
                 )
-            elif (
+            elif artifact_type == SMARTLIGHT_REPORT_ARTIFACT_TYPE and (
                 source["document_type"] != SMARTLIGHT_REPORT_DOCUMENT_TYPE
                 or not is_smartlight_report_recipe(source["document"])
+            ):
+                return _document_delivery_failure(
+                    "ARTIFACT_REISSUE_INVALID",
+                    retryable=False,
+                )
+            elif artifact_type == ADDRESSBOOK_REPORT_ARTIFACT_TYPE and (
+                source["document_type"] != ADDRESSBOOK_REPORT_DOCUMENT_TYPE
+                or not is_addressbook_report_recipe(source["document"])
             ):
                 return _document_delivery_failure(
                     "ARTIFACT_REISSUE_INVALID",
@@ -3650,7 +3763,7 @@ class CentralCapabilityService:
                 user_subject=user_subject,
                 download_id=replacement["download_id"],
             )
-        else:
+        elif artifact_type == SMARTLIGHT_REPORT_ARTIFACT_TYPE:
             recipe = source["document"]
             report_arguments = dict(recipe["arguments"])
             report_arguments["report_type"] = recipe["reportType"]
@@ -3658,6 +3771,25 @@ class CentralCapabilityService:
                 user_subject=user_subject,
                 capability_name=SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
                 arguments=report_arguments,
+            )
+            if operation.get("status") != "succeeded":
+                error_code = str(
+                    (operation.get("error") or {}).get("code")
+                    or "REPORT_REGENERATION_FAILED"
+                )
+                return _document_delivery_failure(
+                    "LOGIN_REQUIRED"
+                    if error_code == "LOGIN_REQUIRED"
+                    else "REPORT_REGENERATION_FAILED",
+                    retryable=True,
+                )
+            prepared = operation.get("result") or {}
+        else:
+            recipe = source["document"]
+            operation = self.invoke(
+                user_subject=user_subject,
+                capability_name=ADDRESSBOOK_EXPORT_CAPABILITY,
+                arguments=dict(recipe["arguments"]),
             )
             if operation.get("status") != "succeeded":
                 error_code = str(

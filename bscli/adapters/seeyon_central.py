@@ -23,6 +23,20 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_SAVE_CAPABILITY,
     BUSINESS_TRIP_SAVE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_addressbook import (
+    ADDRESSBOOK_CAPABILITIES,
+    ADDRESSBOOK_DEPARTMENT_MEMBERS_CAPABILITY,
+    ADDRESSBOOK_EXPORT_CAPABILITY,
+    ADDRESSBOOK_GROUP_LIST_CAPABILITY,
+    ADDRESSBOOK_GROUP_MEMBERS_CAPABILITY,
+    ADDRESSBOOK_INPUT_SCHEMAS,
+    ADDRESSBOOK_ORGANIZATION_TREE_CAPABILITY,
+    ADDRESSBOOK_PERSON_GET_CAPABILITY,
+    ADDRESSBOOK_PERSON_SEARCH_CAPABILITY,
+    ADDRESSBOOK_PRIVATE_CONTACT_GET_CAPABILITY,
+    ADDRESSBOOK_PRIVATE_CONTACT_SEARCH_CAPABILITY,
+    invoke_addressbook_capability,
+)
 from bscli.adapters.seeyon_business_trip_submit import (
     BUSINESS_TRIP_SUBMIT_CAPABILITY,
     BUSINESS_TRIP_SUBMIT_INPUT_SCHEMA,
@@ -683,6 +697,48 @@ def build_central_capability_registry() -> CapabilityRegistry:
             workflow="workflow-opinions-v1",
         )
     )
+    addressbook_descriptions = {
+        ADDRESSBOOK_ORGANIZATION_TREE_CAPABILITY: (
+            "List the visible OA organization and department hierarchy."
+        ),
+        ADDRESSBOOK_DEPARTMENT_MEMBERS_CAPABILITY: (
+            "List visible members of one OA department, optionally including descendants."
+        ),
+        ADDRESSBOOK_PERSON_SEARCH_CAPABILITY: (
+            "Search the visible OA organization directory by name or multiple fields."
+        ),
+        ADDRESSBOOK_PERSON_GET_CAPABILITY: (
+            "Resolve one exact visible OA person returned by address-book search."
+        ),
+        ADDRESSBOOK_GROUP_LIST_CAPABILITY: (
+            "List visible private, personal, system, and project address-book groups."
+        ),
+        ADDRESSBOOK_GROUP_MEMBERS_CAPABILITY: (
+            "List visible members of one exact OA address-book group."
+        ),
+        ADDRESSBOOK_PRIVATE_CONTACT_SEARCH_CAPABILITY: (
+            "Search the current OA user's private contacts without changing them."
+        ),
+        ADDRESSBOOK_PRIVATE_CONTACT_GET_CAPABILITY: (
+            "Resolve one exact private contact returned by private-contact search."
+        ),
+        ADDRESSBOOK_EXPORT_CAPABILITY: (
+            "Export a bounded visible OA address-book result as a governed CSV artifact."
+        ),
+    }
+    for capability_name, description in addressbook_descriptions.items():
+        registry.register(
+            CapabilitySpec(
+                name=capability_name,
+                version="0.1.0",
+                description=description,
+                input_schema=ADDRESSBOOK_INPUT_SCHEMAS[capability_name],
+                output_schema={"type": "object"},
+                effect="read",
+                adapter="seeyon-central",
+                workflow="addressbook-read-v1",
+            )
+        )
     return registry
 
 
@@ -847,6 +903,13 @@ class SeeyonCentralAdapter:
             return self.get_workflow_detail(worker, arguments=arguments)
         if capability_name == "oa.workflow.opinions.list":
             return self.list_workflow_opinions(worker, arguments=arguments)
+        if capability_name in ADDRESSBOOK_CAPABILITIES:
+            return invoke_addressbook_capability(
+                capability_name,
+                worker,
+                base_url=self.base_url,
+                arguments=arguments,
+            )
         raise KeyError(f"unsupported Seeyon central capability: {capability_name}")
 
     def fetch_certificate_document(self, worker, reference: dict) -> dict:

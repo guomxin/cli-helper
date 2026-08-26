@@ -697,6 +697,60 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
         self.assertEqual(call["arguments"], {})
 
+    def test_addressbook_tools_require_the_dedicated_read_scope(self):
+        with self._server() as (service, store, read_token, client):
+            addressbook_identity = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read", "oa:read:addressbook"],
+                ttl_seconds=3600,
+            )
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "addressbook-scope",
+                "operationId": "addressbook-op",
+                "status": "succeeded",
+                "result": {"count": 1, "items": [{"name": "Alice"}]},
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "interaction": None,
+                "reused": False,
+            }
+            parameters = {
+                "name": "oa_addressbook_person_search",
+                "arguments": {"query": "Alice"},
+            }
+            denied = self._request(
+                client,
+                "tools/call",
+                request_id=70,
+                token=read_token,
+                params=parameters,
+            )
+            allowed = self._request(
+                client,
+                "tools/call",
+                request_id=71,
+                token=addressbook_identity["token"],
+                params=parameters,
+            )
+
+        self.assertTrue(denied.json()["result"]["isError"])
+        self.assertFalse(allowed.json()["result"]["isError"])
+        self.assertEqual(
+            service.invoke.call_args.kwargs["capability_name"],
+            "oa.addressbook.person.search",
+        )
+        self.assertNotIn(
+            "oa_addressbook_person_search",
+            agent_facing_tools_for_scopes(["oa:read"]),
+        )
+        self.assertIn(
+            "oa_addressbook_person_search",
+            agent_facing_tools_for_scopes(["oa:read", "oa:read:addressbook"]),
+        )
+
     def test_taihua_tools_enforce_read_and_worklog_scopes(self):
         with self._server() as (service, store, oa_read_token, client):
             taihua_reader = store.issue(

@@ -11,6 +11,8 @@ import sqlite3
 from typing import Any, Callable, Iterator
 
 from bscli.core.report_exports import (
+    ADDRESSBOOK_REPORT_CONTENT_TYPE,
+    ADDRESSBOOK_REPORT_DOCUMENT_TYPE,
     SMARTLIGHT_REPORT_CONTENT_TYPE,
     SMARTLIGHT_REPORT_DOCUMENT_TYPE,
 )
@@ -21,12 +23,14 @@ SUPPORTED_DOCUMENT_TYPES = {
     "patent_certificate",
     "software_copyright_certificate",
     SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+    ADDRESSBOOK_REPORT_DOCUMENT_TYPE,
 }
 SUPPORTED_DOCUMENT_CONTENT_TYPES = {
     "application/pdf",
     "image/jpeg",
     "image/png",
     SMARTLIGHT_REPORT_CONTENT_TYPE,
+    ADDRESSBOOK_REPORT_CONTENT_TYPE,
 }
 
 

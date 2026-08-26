@@ -35,7 +35,7 @@ const statusClass = value => ["active", "succeeded", "approved", "submitted", "c
   ["pending", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "waiting", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected", "open", "acknowledged", "investigating"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
-  { label: "致远 OA", items: ["oa:read", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
+  { label: "致远 OA", items: ["oa:read", "oa:read:addressbook", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
   { label: "泰华日志", items: ["taihua:read", "taihua:write:worklog"] },
   { label: "部门信息库", items: ["yuque:read"] },
   { label: "照明实验室", items: ["smartlight:read", "smartlight:write:alarm_remark", "smartlight:write:alarm_work_area_submit", "smartlight:write:alarm_work_area_revoke", "smartlight:write:alarm_disposition"] },
