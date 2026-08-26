@@ -522,6 +522,10 @@ try {
       ),
     };
   }
+  if (checkName === "OaAddressbookOrganization") {
+    const keyword = argument("--addressbook-query", "").trim();
+    check.arguments = { keyword: keyword || undefined, limit: 200 };
+  }
   if (checkName === "OaAddressbookPersonSearch") {
     const query = argument("--addressbook-query", "辛国茂").trim();
     if (!query) {

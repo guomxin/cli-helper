@@ -104,6 +104,12 @@ class DeploymentAssetTests(unittest.TestCase):
         guard = (
             ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"
         ).read_text(encoding="utf-8")
+        lifecycle = (
+            ROOT / "scripts/Restart-AgentBridgeOpenClawGateway.ps1"
+        ).read_text(encoding="utf-8")
+        foreground = (
+            ROOT / "scripts/Invoke-AgentBridgeOpenClawGatewayForeground.ps1"
+        ).read_text(encoding="utf-8")
         recovery = (
             ROOT / "scripts/Test-AgentBridgeLocalHostRecovery.ps1"
         ).read_text(encoding="utf-8")
@@ -112,15 +118,18 @@ class DeploymentAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         for marker in (
-            "-StartWhenAvailable",
-            "-ExecutionTimeLimit ([TimeSpan]::Zero)",
+            "AgentBridge visible Gateway task shim",
+            "GatewayRuntimeLauncher",
+            "AgentBridge OpenClaw Guard",
             "-RestartCount 999",
-            "-MultipleInstances IgnoreNew",
+            "startupLauncherRetired = $true",
+            'mode = "startup_guard_visible_gateway"',
+            "visibleForeground = $true",
         ):
             self.assertIn(marker, installer)
         for marker in (
             "AgentBridgeOpenClawGuard",
-            "Start-ScheduledTask",
+            "Invoke-GatewayLifecycle",
             "gatewayListening",
             "businessCalls = 0",
             "businessListReads = 0",
@@ -128,8 +137,31 @@ class DeploymentAssetTests(unittest.TestCase):
         ):
             self.assertIn(marker, guard)
         for marker in (
+            "Remove-StaleGatewayLocks",
+            "AgentBridgeOpenClawLifecycle",
+            "Start-VisibleGateway",
+            "Get-VisibleGatewayForeground",
+            "AgentBridgeGateway",
+            "WindowsTerminal",
+            "visibleForeground = $visibleForeground",
+            "businessWrites = 0",
+        ):
+            self.assertIn(marker, lifecycle)
+        for marker in (
+            "Test-GatewayVisibleForeground",
+            "hidden_gateway_replaced",
+        ):
+            self.assertIn(marker, guard)
+        for marker in (
+            'WindowTitle = "AgentBridge OpenClaw Gateway"',
+            "Closing it stops the Gateway",
+        ):
+            self.assertIn(marker, foreground)
+        for marker in (
             "ExerciseFailureRecovery",
-            '@("gateway", "status", "--deep", "--require-rpc", "--json")',
+            "Get-GatewayReadyState",
+            'http://127.0.0.1:$GatewayPort/readyz',
+            "Get-LatestAgentBridgePluginRegistration",
             "listenerCount = 1",
             "businessCalls = 0",
             "businessListReads = 0",
@@ -232,19 +264,34 @@ class DeploymentAssetTests(unittest.TestCase):
             "$diagnosticsAlreadyConfigured",
             "already configured; skipping config write",
             "--batch-file",
-            "gateway status --deep --require-rpc --json",
-            "OpenClaw CLI and Gateway versions do not match",
-            "OpenClaw Gateway reports plugin version drift",
+            "$gatewayRuntimeScript",
+            "Test-AgentBridgeOpenClawRuntime.ps1",
+            "OpenClaw Gateway runtime or AgentBridge plugin is not healthy",
             "$gatewayWarmupScript",
             'if ($warmup.status -ne "succeeded")',
         ):
             self.assertIn(marker, deploy)
+        self.assertNotIn("gateway status --deep --require-rpc --json", deploy)
+        self.assertNotIn("plugins inspect agentbridge-interactions --json", deploy)
+
+        runtime_check = (
+            ROOT / "scripts/Test-AgentBridgeOpenClawRuntime.ps1"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            'http://127.0.0.1:$GatewayPort/readyz',
+            "integrations\\openclaw-agentbridge\\package.json",
+            "AgentBridge interaction plugin registered",
+            "was not registered by the current Gateway process",
+            "plugin runtime version does not match its manifest",
+            "businessWrites = 0",
+        ):
+            self.assertIn(marker, runtime_check)
 
         guard = (
             ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"
         ).read_text(encoding="utf-8")
         for marker in (
-            "GatewayStartupGraceSeconds = 600",
+            "GatewayStartupGraceSeconds = 180",
             "startup_in_progress",
             "duplicates_removed",
             "stale_start_replaced",

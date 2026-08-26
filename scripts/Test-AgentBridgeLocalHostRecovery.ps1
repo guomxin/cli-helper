@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$GatewayTaskName = "OpenClaw Gateway",
+    [string]$LegacyGatewayTaskName = "OpenClaw Gateway",
+    [string]$GuardTaskName = "AgentBridge OpenClaw Guard",
     [string]$TunnelTaskName = "AgentBridge Workspace Tunnel",
     [ValidateRange(5, 300)][int]$TimeoutSeconds = 180,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
@@ -17,17 +18,19 @@ function Wait-Until {
         [Parameter(Mandatory = $true)][string]$Description
     )
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
     do {
         try {
             $value = & $Condition
             if ($value) { return $value }
         }
         catch {
-            # Transient errors are expected while the process is restarting.
+            $lastError = $_.Exception.Message
         }
         Start-Sleep -Seconds 2
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw "Timed out waiting for $Description"
+    $suffix = if ($lastError) { "; last error: $lastError" } else { "" }
+    throw "Timed out waiting for $Description$suffix"
 }
 
 function Get-GatewayListener {
@@ -39,87 +42,118 @@ function Get-GatewayListener {
     return $listeners[0]
 }
 
-function Invoke-OpenClawJson {
-    param(
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$Label
-    )
-    $command = Get-Command openclaw.cmd -ErrorAction SilentlyContinue
-    if (-not $command) { $command = Get-Command openclaw -ErrorAction Stop }
-    $nonce = [Guid]::NewGuid().ToString("N")
-    $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) "agentbridge-host-$nonce.out"
-    $stderrPath = Join-Path ([IO.Path]::GetTempPath()) "agentbridge-host-$nonce.err"
+function Get-GatewayReadyState {
+    $listener = Get-GatewayListener
+    if (-not $listener) { return $null }
     try {
-        $process = Start-Process `
-            -FilePath $command.Source `
-            -ArgumentList $Arguments `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -PassThru
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            $process.WaitForExit()
-            throw "$Label timed out"
+        $ready = Invoke-RestMethod `
+            -Uri "http://127.0.0.1:$GatewayPort/readyz" `
+            -TimeoutSec 5 `
+            -Method Get
+        if ([bool]$ready.ready -and @($ready.failing).Count -eq 0) {
+            return [ordered]@{
+                listener = $listener
+                readiness = $ready
+            }
         }
-        $stdout = [IO.File]::ReadAllText($stdoutPath).Trim()
-        $stderr = [IO.File]::ReadAllText($stderrPath).Trim()
-        if ($process.ExitCode -ne 0 -or -not $stdout) {
-            $detail = if ($stderr) { $stderr } else { $stdout }
-            throw "$Label failed: $detail"
-        }
-        return $stdout | ConvertFrom-Json
     }
-    finally {
-        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    catch {
+        return $null
     }
+    return $null
 }
 
-$gatewayTask = Get-ScheduledTask -TaskName $GatewayTaskName -ErrorAction Stop
-$tunnelTask = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
-$nativeGatewaySelfHeal = (
-    $gatewayTask.Settings.RestartCount -ge 1 -and
-    [string]$gatewayTask.Settings.ExecutionTimeLimit -eq "PT0S" -and
-    $gatewayTask.Settings.StartWhenAvailable
-)
-$guardStatusPath = Join-Path $env:LOCALAPPDATA "AgentBridge\openclaw-guard-status.json"
-$guardStatus = $null
-if (-not $nativeGatewaySelfHeal) {
-    if (-not (Test-Path -LiteralPath $guardStatusPath -PathType Leaf)) {
-        throw "Gateway task has no native self-heal policy and the startup guard is absent"
+function Get-LatestAgentBridgePluginRegistration {
+    param([DateTimeOffset]$NotBefore)
+
+    $logPath = Join-Path (
+        Join-Path ([IO.Path]::GetTempPath()) "openclaw"
+    ) ("openclaw-{0}.log" -f [DateTime]::Now.ToString("yyyy-MM-dd"))
+    if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) { return $null }
+    $registrations = @()
+    foreach ($raw in @(Get-Content -LiteralPath $logPath -Tail 600)) {
+        try { $entry = $raw | ConvertFrom-Json } catch { continue }
+        if (-not $entry.PSObject.Properties["message"] -or
+            -not $entry.PSObject.Properties["time"]) {
+            continue
+        }
+        if ($entry.message -notmatch
+            'AgentBridge interaction plugin registered \(version=([^,\)]+)') {
+            continue
+        }
+        $version = $Matches[1]
+        $registeredAt = [DateTimeOffset]::Parse([string]$entry.time)
+        if ($registeredAt -lt $NotBefore) { continue }
+        $registrations += [pscustomobject]@{
+            registeredAt = $registeredAt.ToString("o")
+            version = $version
+        }
     }
-    $guardStatus = Get-Content -LiteralPath $guardStatusPath -Raw | ConvertFrom-Json
-    $guardAge = [DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($guardStatus.observedAt)
-    if ($guardAge.TotalSeconds -gt 90) { throw "OpenClaw startup guard heartbeat is stale" }
-    if ($guardStatus.businessCalls -ne 0 -or
-        $guardStatus.businessListReads -ne 0 -or
-        $guardStatus.businessWrites -ne 0) {
-        throw "OpenClaw startup guard crossed its zero-business boundary"
-    }
-    if (-not (Get-Process -Id $guardStatus.processId -ErrorAction SilentlyContinue)) {
-        throw "OpenClaw startup guard process is not running"
-    }
+    return $registrations | Select-Object -Last 1
 }
-if ($gatewayTask.Settings.MultipleInstances.ToString() -ne "IgnoreNew") {
-    throw "Gateway task does not reject duplicate instances"
+
+$tunnelTask = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
+$guardStatusPath = Join-Path $env:LOCALAPPDATA "AgentBridge\openclaw-guard-status.json"
+if (-not (Test-Path -LiteralPath $guardStatusPath -PathType Leaf)) {
+    throw "OpenClaw startup guard status is absent"
+}
+$guardStatus = Get-Content -LiteralPath $guardStatusPath -Raw | ConvertFrom-Json
+$guardAge = [DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($guardStatus.observedAt)
+if ($guardAge.TotalSeconds -gt 90) { throw "OpenClaw startup guard heartbeat is stale" }
+if ($guardStatus.businessCalls -ne 0 -or
+    $guardStatus.businessListReads -ne 0 -or
+    $guardStatus.businessWrites -ne 0) {
+    throw "OpenClaw startup guard crossed its zero-business boundary"
+}
+if (-not $guardStatus.gatewayVisibleForeground) {
+    throw "OpenClaw startup guard does not require a visible Gateway"
+}
+if (-not (Get-Process -Id $guardStatus.processId -ErrorAction SilentlyContinue)) {
+    throw "OpenClaw startup guard process is not running"
+}
+$guardTask = Get-ScheduledTask -TaskName $GuardTaskName -ErrorAction Stop
+if ($guardTask.State -ne "Running") {
+    throw "OpenClaw guard scheduled task is not running"
+}
+if ($guardTask.Settings.RestartCount -lt 1 -or
+    [string]$guardTask.Settings.ExecutionTimeLimit -ne "PT0S" -or
+    $guardTask.Settings.MultipleInstances.ToString() -ne "IgnoreNew") {
+    throw "OpenClaw guard scheduled task is missing its recovery policy"
+}
+$legacyGatewayTask = Get-ScheduledTask `
+    -TaskName $LegacyGatewayTaskName `
+    -ErrorAction SilentlyContinue
+$gatewayTaskLauncher = Join-Path $env:USERPROFILE ".openclaw\gateway.cmd"
+if (-not (Test-Path -LiteralPath $gatewayTaskLauncher -PathType Leaf) -or
+    (Get-Content -LiteralPath $gatewayTaskLauncher -Raw) -notmatch
+        'AgentBridge visible Gateway task shim') {
+    throw "OpenClaw Gateway task does not use the visible lifecycle shim"
 }
 if ($tunnelTask.Settings.RestartCount -lt 1) { throw "Tunnel task has no restart policy" }
 if ([string]$tunnelTask.Settings.ExecutionTimeLimit -ne "PT0S") {
     throw "Tunnel task still has an execution time limit"
 }
-if (-not $tunnelTask.Settings.StartWhenAvailable -and -not $guardStatus) {
+if (-not $tunnelTask.Settings.StartWhenAvailable) {
     throw "Tunnel task is not configured to start when available"
 }
 
-$before = Wait-Until -Description "one OpenClaw Gateway listener" -Condition { Get-GatewayListener }
+$beforeState = Wait-Until -Description "one ready OpenClaw Gateway" -Condition {
+    Get-GatewayReadyState
+}
+$before = $beforeState.listener
+$pluginNotBefore = [DateTimeOffset]::MinValue
 $failureRecovery = $null
 if ($ExerciseFailureRecovery) {
+    $pluginNotBefore = [DateTimeOffset]::Now
     $oldPid = [int]$before.OwningProcess
     Stop-Process -Id $oldPid -Force
-    $after = Wait-Until -Description "scheduled Gateway failure recovery" -Condition {
-        $candidate = Get-GatewayListener
-        if ($candidate -and [int]$candidate.OwningProcess -ne $oldPid) { $candidate }
+    $afterState = Wait-Until -Description "guarded visible Gateway failure recovery" -Condition {
+        $candidate = Get-GatewayReadyState
+        if ($candidate -and [int]$candidate.listener.OwningProcess -ne $oldPid) {
+            $candidate
+        }
     }
+    $after = $afterState.listener
     $failureRecovery = [ordered]@{
         exercised = $true
         previousPid = $oldPid
@@ -138,35 +172,37 @@ if ($ExerciseTunnelRestart) {
     } | Out-Null
 }
 
-$listener = Wait-Until -Description "one OpenClaw Gateway listener" -Condition { Get-GatewayListener }
-$gateway = Invoke-OpenClawJson `
-    -Arguments @("gateway", "status", "--deep", "--require-rpc", "--json") `
-    -Label "OpenClaw Gateway deep RPC check"
-$plugin = Invoke-OpenClawJson `
-    -Arguments @("plugins", "inspect", "agentbridge-interactions", "--json") `
-    -Label "AgentBridge plugin check"
-if (-not $gateway.rpc.ok) { throw "OpenClaw Gateway RPC is unavailable" }
-if ($plugin.plugin.status -ne "loaded") { throw "AgentBridge plugin is not loaded" }
+$readyState = Wait-Until -Description "one ready OpenClaw Gateway" -Condition {
+    Get-GatewayReadyState
+}
+$listener = $readyState.listener
+$plugin = Wait-Until -Description "AgentBridge plugin registration log" -Condition {
+    Get-LatestAgentBridgePluginRegistration -NotBefore $pluginNotBefore
+}
 
-$gatewayTask = Get-ScheduledTask -TaskName $GatewayTaskName
 $tunnelTask = Get-ScheduledTask -TaskName $TunnelTaskName
-if ($gatewayTask.State -ne "Running") { throw "Gateway task is not running" }
+$guardTask = Get-ScheduledTask -TaskName $GuardTaskName
+if ($guardTask.State -ne "Running") { throw "OpenClaw guard task is not running" }
 if ($tunnelTask.State -ne "Running") { throw "Workspace tunnel task is not running" }
 
 [ordered]@{
     status = "succeeded"
     checkedAt = [DateTimeOffset]::UtcNow.ToString("o")
     gateway = [ordered]@{
-        selfHealMode = if ($nativeGatewaySelfHeal) { "scheduled_task" } else { "startup_guard" }
-        taskState = $gatewayTask.State.ToString()
+        selfHealMode = "startup_guard_visible_gateway"
+        guardTaskState = $guardTask.State.ToString()
+        legacyTaskState = if ($legacyGatewayTask) {
+            $legacyGatewayTask.State.ToString()
+        } else {
+            "absent"
+        }
         listenerPid = [int]$listener.OwningProcess
         listenerCount = 1
-        rpc = "ok"
-        cliVersion = $gateway.cli.version
-        gatewayVersion = $gateway.gateway.version
-        pluginStatus = $plugin.plugin.status
-        pluginVersion = $plugin.plugin.version
-        guardObservedAt = if ($guardStatus) { $guardStatus.observedAt } else { $null }
+        visibleForeground = $true
+        readyEndpoint = "ok"
+        pluginStatus = "loaded"
+        pluginVersion = $plugin.version
+        guardObservedAt = $guardStatus.observedAt
     }
     tunnel = [ordered]@{
         taskState = $tunnelTask.State.ToString()

@@ -1,107 +1,131 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "OpenClaw Gateway",
-    [string]$GatewayLauncher = "$env:USERPROFILE\.openclaw\gateway.cmd",
-    [ValidateRange(0, 300)][int]$StartupDelaySeconds = 20,
+    [string]$GuardTaskName = "AgentBridge OpenClaw Guard",
+    [string]$GatewayTaskLauncher = "$env:USERPROFILE\.openclaw\gateway.cmd",
+    [string]$GatewayRuntimeLauncher = (
+        "$env:LOCALAPPDATA\AgentBridge\openclaw-gateway-runtime.cmd"
+    ),
     [switch]$NoStart
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path -LiteralPath $GatewayLauncher -PathType Leaf)) {
-    throw "OpenClaw Gateway launcher was not found: $GatewayLauncher"
+if (-not (Test-Path -LiteralPath $GatewayTaskLauncher -PathType Leaf)) {
+    throw "OpenClaw Gateway task launcher was not found: $GatewayTaskLauncher"
 }
-$resolvedLauncher = (Resolve-Path -LiteralPath $GatewayLauncher).Path
-$action = New-ScheduledTaskAction -Execute $resolvedLauncher
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-if ($StartupDelaySeconds -gt 0) {
-    $trigger.Delay = "PT${StartupDelaySeconds}S"
+
+$guardScript = (Resolve-Path (
+    Join-Path $PSScriptRoot "Start-AgentBridgeOpenClawGuard.ps1"
+)).Path
+$lifecycleScript = (Resolve-Path (
+    Join-Path $PSScriptRoot "Restart-AgentBridgeOpenClawGateway.ps1"
+)).Path
+$foregroundScript = (Resolve-Path (
+    Join-Path $PSScriptRoot "Invoke-AgentBridgeOpenClawGatewayForeground.ps1"
+)).Path
+
+$stateRoot = Split-Path -Parent $GatewayRuntimeLauncher
+New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+$taskLauncherContent = Get-Content -LiteralPath $GatewayTaskLauncher -Raw
+$shimMarker = "AgentBridge visible Gateway task shim"
+if ($taskLauncherContent -notmatch [regex]::Escape($shimMarker)) {
+    [IO.File]::WriteAllText(
+        $GatewayRuntimeLauncher,
+        $taskLauncherContent,
+        [Text.UTF8Encoding]::new($false)
+    )
 }
-$settings = New-ScheduledTaskSettingsSet `
+elseif (-not (Test-Path -LiteralPath $GatewayRuntimeLauncher -PathType Leaf)) {
+    throw "Gateway task launcher is already shimmed but the runtime launcher is absent"
+}
+
+$taskShim = @(
+    "@echo off",
+    "rem $shimMarker",
+    (
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -StartOnly -GatewayLauncher "{1}"' -f `
+            $lifecycleScript, $GatewayRuntimeLauncher
+    )
+) -join "`r`n"
+[IO.File]::WriteAllText(
+    $GatewayTaskLauncher,
+    "$taskShim`r`n",
+    [Text.UTF8Encoding]::new($false)
+)
+
+$guardAction = New-ScheduledTaskAction `
+    -Execute powershell.exe `
+    -Argument (
+        '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f `
+            $guardScript
+    )
+$guardTrigger = New-ScheduledTaskTrigger `
+    -AtLogOn `
+    -User "$env:USERDOMAIN\$env:USERNAME"
+$guardSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
+    -DontStopOnIdleEnd `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 999 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew
-$principal = New-ScheduledTaskPrincipal `
+$guardPrincipal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType Interactive `
     -RunLevel Limited
-$task = New-ScheduledTask `
-    -Action $action `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Principal $principal `
-    -Description "Keeps the local OpenClaw Gateway available for AgentBridge clients after sign-in and process failures."
+$guardTask = New-ScheduledTask `
+    -Action $guardAction `
+    -Trigger $guardTrigger `
+    -Settings $guardSettings `
+    -Principal $guardPrincipal `
+    -Description "Keeps one visible AgentBridge OpenClaw Gateway available."
 
-$existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-$wasRunning = $existing -and $existing.State -eq "Running"
-$mode = "scheduled_task"
-$nativeTaskUpdated = $false
-try {
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -InputObject $task `
+$existingGuardTask = Get-ScheduledTask `
+    -TaskName $GuardTaskName `
+    -ErrorAction SilentlyContinue
+if ($existingGuardTask -and $existingGuardTask.State -eq "Running") {
+    Stop-ScheduledTask -TaskName $GuardTaskName
+    Start-Sleep -Seconds 1
+}
+Register-ScheduledTask `
+    -TaskName $GuardTaskName `
+    -InputObject $guardTask `
+    -Force | Out-Null
+
+$startup = [Environment]::GetFolderPath("Startup")
+if ($startup) {
+    $retiredStartupLauncher = Join-Path $startup "AgentBridge-OpenClaw-Guard.cmd"
+    Remove-Item -LiteralPath $retiredStartupLauncher `
         -Force `
-        -ErrorAction Stop | Out-Null
-    $nativeTaskUpdated = $true
-    if (-not $NoStart) {
-        if ($wasRunning) {
-            Stop-ScheduledTask -TaskName $TaskName
-            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
-            do {
-                Start-Sleep -Milliseconds 500
-                $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-            } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
-        }
-        Start-ScheduledTask -TaskName $TaskName
-    }
-}
-catch {
-    if ($_.Exception.Message -notmatch "Access is denied|拒绝访问") { throw }
-    $mode = "startup_guard"
-    $guardScript = (Resolve-Path (
-        Join-Path $PSScriptRoot "Start-AgentBridgeOpenClawGuard.ps1"
-    )).Path
-    $startup = [Environment]::GetFolderPath("Startup")
-    if (-not $startup) { throw "Windows Startup folder was not found" }
-    $guardLauncher = Join-Path $startup "AgentBridge-OpenClaw-Guard.cmd"
-    $launcherContent = @(
-        "@echo off",
-        ('start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $guardScript)
-    ) -join "`r`n"
-    [IO.File]::WriteAllText(
-        $guardLauncher,
-        "$launcherContent`r`n",
-        [Text.UTF8Encoding]::new($false)
-    )
-    if (-not $NoStart) {
-        Start-Process `
-            -FilePath powershell.exe `
-            -ArgumentList @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-WindowStyle", "Hidden", "-File", $guardScript
-            ) `
-            -WindowStyle Hidden
-    }
+        -ErrorAction SilentlyContinue
 }
 
-$installed = Get-ScheduledTask -TaskName $TaskName
+if (-not $NoStart) {
+    Start-ScheduledTask -TaskName $GuardTaskName
+}
+
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$installedGuardTask = Get-ScheduledTask -TaskName $GuardTaskName
 [ordered]@{
     status = "installed"
-    mode = $mode
-    nativeTaskUpdated = $nativeTaskUpdated
+    mode = "startup_guard_visible_gateway"
     taskName = $TaskName
+    taskState = if ($task) { $task.State.ToString() } else { "absent" }
+    guardTaskName = $GuardTaskName
+    guardTaskState = $installedGuardTask.State.ToString()
+    taskShimInstalled = $true
     started = -not $NoStart
-    launcher = $resolvedLauncher
-    startupDelaySeconds = $StartupDelaySeconds
-    restartCount = $installed.Settings.RestartCount
-    restartInterval = [string]$installed.Settings.RestartInterval
-    executionTimeLimit = [string]$installed.Settings.ExecutionTimeLimit
-    multipleInstances = $installed.Settings.MultipleInstances.ToString()
+    gatewayTaskLauncher = (Resolve-Path -LiteralPath $GatewayTaskLauncher).Path
+    gatewayRuntimeLauncher = (Resolve-Path -LiteralPath $GatewayRuntimeLauncher).Path
+    guardScript = $guardScript
+    lifecycleScript = $lifecycleScript
+    foregroundScript = $foregroundScript
+    startupLauncherRetired = $true
+    visibleForeground = $true
     businessCalls = 0
     businessListReads = 0
     businessWrites = 0

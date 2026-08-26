@@ -1,15 +1,21 @@
 [CmdletBinding()]
 param(
-    [string]$GatewayTaskName = "OpenClaw Gateway",
     [string]$TunnelTaskName = "AgentBridge Workspace Tunnel",
     [ValidateRange(5, 300)][int]$IntervalSeconds = 15,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
-    [ValidateRange(30, 1800)][int]$GatewayStartupGraceSeconds = 600,
+    [ValidateRange(30, 600)][int]$GatewayStartupGraceSeconds = 180,
+    [string]$GatewayLifecycleScript = "",
     [switch]$Once
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not $GatewayLifecycleScript) {
+    $GatewayLifecycleScript = Join-Path `
+        $PSScriptRoot `
+        "Restart-AgentBridgeOpenClawGateway.ps1"
+}
 
 $createdNew = $false
 $mutex = [Threading.Mutex]::new(
@@ -25,6 +31,11 @@ $statusPath = Join-Path $stateRoot "openclaw-guard-status.json"
 $statusTempPath = "$statusPath.tmp"
 $logPath = Join-Path $logRoot "openclaw-guard.log"
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+
+if (-not (Test-Path -LiteralPath $GatewayLifecycleScript -PathType Leaf)) {
+    throw "OpenClaw Gateway lifecycle script was not found: $GatewayLifecycleScript"
+}
+$resolvedLifecycleScript = (Resolve-Path -LiteralPath $GatewayLifecycleScript).Path
 
 function Write-GuardLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -55,6 +66,31 @@ function Get-GatewayProcesses {
     )
 }
 
+function Test-GatewayVisibleForeground {
+    param([Parameter(Mandatory = $true)][int]$GatewayProcessId)
+
+    $currentId = $GatewayProcessId
+    for ($depth = 0; $depth -lt 10 -and $currentId -gt 0; $depth++) {
+        $current = Get-CimInstance Win32_Process `
+            -Filter "ProcessId = $currentId" `
+            -ErrorAction SilentlyContinue
+        if (-not $current) { return $false }
+        if ($current.Name -eq "powershell.exe" -and
+            $current.CommandLine -match 'Invoke-AgentBridgeOpenClawGatewayForeground\.ps1') {
+            $terminal = Get-Process -Id $current.ParentProcessId `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.ProcessName -eq "WindowsTerminal" -and
+                    $_.MainWindowHandle -ne 0
+                }
+            return [bool]$terminal
+        }
+        if ([int]$current.ParentProcessId -eq $currentId) { return $false }
+        $currentId = [int]$current.ParentProcessId
+    }
+    return $false
+}
+
 function Stop-GatewayProcess {
     param([Parameter(Mandatory = $true)]$Process)
 
@@ -68,6 +104,21 @@ function Stop-GatewayProcess {
     }
     Stop-Process -Id $current.ProcessId -Force -ErrorAction Stop
     return $true
+}
+
+function Invoke-GatewayLifecycle {
+    param([switch]$StartOnly)
+
+    $parameters = @{
+        GatewayPort = $GatewayPort
+        ReadyTimeoutSeconds = 300
+    }
+    if ($StartOnly) { $parameters.StartOnly = $true }
+    $result = & $resolvedLifecycleScript @parameters | Out-String | ConvertFrom-Json
+    if ($result.status -ne "succeeded") {
+        throw "OpenClaw Gateway lifecycle operation did not succeed"
+    }
+    return $result
 }
 
 try {
@@ -98,6 +149,15 @@ try {
                 if ($duplicates.Count -gt 0) {
                     $gatewayAction = "duplicates_removed"
                 }
+                if (-not (Test-GatewayVisibleForeground `
+                    -GatewayProcessId ([int]$listener.OwningProcess))) {
+                    $replacement = Invoke-GatewayLifecycle -StartOnly
+                    $gatewayAction = "hidden_gateway_replaced"
+                    Write-GuardLog (
+                        "Gateway was not attached to a visible foreground window; " +
+                        "lifecycle recovery created PID $($replacement.gatewayProcessId)."
+                    )
+                }
             }
             elseif ($gatewayProcesses.Count -gt 0) {
                 $newest = $gatewayProcesses |
@@ -120,22 +180,21 @@ try {
                     $gatewayAction = "startup_in_progress"
                 }
                 else {
-                    Stop-ScheduledTask -TaskName $GatewayTaskName -ErrorAction SilentlyContinue
-                    if (Stop-GatewayProcess -Process $newest) {
-                        Write-GuardLog (
-                            "Stopped Gateway process {0} after startup grace expired ({1:N0}s)." -f `
-                                $newest.ProcessId, $ageSeconds
-                        )
-                    }
-                    Start-ScheduledTask -TaskName $GatewayTaskName
+                    $replacement = Invoke-GatewayLifecycle
                     $gatewayAction = "stale_start_replaced"
-                    Write-GuardLog "Gateway startup grace expired; scheduled task restarted once."
+                    Write-GuardLog (
+                        "Gateway startup grace expired; visible lifecycle restart created PID {0}." -f `
+                            $replacement.gatewayProcessId
+                    )
                 }
             }
             else {
-                Start-ScheduledTask -TaskName $GatewayTaskName
+                $started = Invoke-GatewayLifecycle -StartOnly
                 $gatewayAction = "start_requested"
-                Write-GuardLog "Gateway process and listener missing; scheduled task start requested."
+                Write-GuardLog (
+                    "Gateway process and listener missing; visible lifecycle start created PID {0}." -f `
+                        $started.gatewayProcessId
+                )
             }
             $tunnel = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
             if ($tunnel.State -ne "Running") {
@@ -148,15 +207,26 @@ try {
             $lastError = $_.Exception.GetType().Name
             Write-GuardLog "Guard cycle failed: $lastError"
         }
+        $statusListener = @(
+            Get-NetTCPConnection -State Listen -LocalPort $GatewayPort `
+                -ErrorAction SilentlyContinue
+        ) | Select-Object -First 1
+        $statusVisibleForeground = if ($statusListener) {
+            Test-GatewayVisibleForeground `
+                -GatewayProcessId ([int]$statusListener.OwningProcess)
+        } else {
+            $false
+        }
         $status = [ordered]@{
             schemaVersion = "agentbridge.openclaw-guard.v1"
             processId = $PID
             observedAt = [DateTimeOffset]::UtcNow.ToString("o")
-            gatewayTaskName = $GatewayTaskName
+            gatewayLifecycleScript = $resolvedLifecycleScript
             tunnelTaskName = $TunnelTaskName
             gatewayListening = Test-GatewayListener
             gatewayProcessCount = @(Get-GatewayProcesses).Count
             gatewayStartupGraceSeconds = $GatewayStartupGraceSeconds
+            gatewayVisibleForeground = $statusVisibleForeground
             gatewayAction = $gatewayAction
             tunnelAction = $tunnelAction
             errorCode = $lastError

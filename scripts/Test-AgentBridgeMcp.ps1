@@ -288,7 +288,10 @@ try {
     if ($Check -eq "CertificateSearch" -and $CertificateName) {
         $nodeArguments += @("--certificate-name", $CertificateName)
     }
-    if ($Check -eq "OaAddressbookPersonSearch") {
+    if ($Check -in @(
+        "OaAddressbookOrganization",
+        "OaAddressbookPersonSearch"
+    )) {
         if ([string]::IsNullOrWhiteSpace($AddressbookQuery)) {
             throw "AddressbookQuery is required for the selected check"
         }
