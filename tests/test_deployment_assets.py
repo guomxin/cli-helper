@@ -229,6 +229,8 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             "diagnostics.stuckSessionWarnMs",
             "diagnostics.stuckSessionAbortMs",
+            "$diagnosticsAlreadyConfigured",
+            "already configured; skipping config write",
             "--batch-file",
             "gateway status --deep --require-rpc --json",
             "OpenClaw CLI and Gateway versions do not match",
@@ -237,6 +239,18 @@ class DeploymentAssetTests(unittest.TestCase):
             'if ($warmup.status -ne "succeeded")',
         ):
             self.assertIn(marker, deploy)
+
+        guard = (
+            ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            "GatewayStartupGraceSeconds = 600",
+            "startup_in_progress",
+            "duplicates_removed",
+            "stale_start_replaced",
+            "gatewayProcessCount",
+        ):
+            self.assertIn(marker, guard)
         for marker in (
             'sessionKey = "agent:${AgentId}:agentbridge-release-warmup"',
             '--message $message',

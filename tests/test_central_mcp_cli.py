@@ -6,11 +6,30 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from bscli.cli.main import main
+from bscli.cli.main import build_parser, main
 from bscli.core.sessions import SessionRegistry
 
 
 class CentralMcpCliTests(unittest.TestCase):
+    def test_token_issue_accepts_addressbook_read_scope(self) -> None:
+        parser = build_parser()
+
+        args = parser.parse_args(
+            [
+                "--home",
+                "state",
+                "mcp",
+                "token",
+                "issue",
+                "--user-subject",
+                "user-1",
+                "--scope",
+                "oa:read:addressbook",
+            ]
+        )
+
+        self.assertEqual(args.scope, ["oa:read:addressbook"])
+
     def test_identity_token_issue_shows_secret_once_and_binds_session(self):
         with TemporaryDirectory() as tmp:
             with redirect_stdout(io.StringIO()) as issued_stdout:

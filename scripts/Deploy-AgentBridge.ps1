@@ -252,6 +252,26 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($RestartOpenClaw) {
+    $openClawConfigPath = if ($env:OPENCLAW_CONFIG_PATH) {
+        $env:OPENCLAW_CONFIG_PATH
+    }
+    else {
+        Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
+    }
+    $diagnosticsAlreadyConfigured = $false
+    if (Test-Path -LiteralPath $openClawConfigPath -PathType Leaf) {
+        try {
+            $openClawConfig = Get-Content -LiteralPath $openClawConfigPath `
+                -Raw -Encoding utf8 | ConvertFrom-Json
+            $diagnosticsAlreadyConfigured = (
+                $openClawConfig.diagnostics.stuckSessionWarnMs -eq 30000 -and
+                $openClawConfig.diagnostics.stuckSessionAbortMs -eq 120000
+            )
+        }
+        catch {
+            $diagnosticsAlreadyConfigured = $false
+        }
+    }
     $diagnosticsBatch = @(
         @{
             path = "diagnostics.stuckSessionWarnMs"
@@ -262,24 +282,29 @@ if ($RestartOpenClaw) {
             value = 120000
         }
     ) | ConvertTo-Json -Compress
-    $diagnosticsBatchFile = Join-Path ([IO.Path]::GetTempPath()) (
-        "agentbridge-openclaw-diagnostics-{0}.json" -f [guid]::NewGuid().ToString("N")
-    )
-    $configExitCode = 1
-    try {
-        [IO.File]::WriteAllText(
-            $diagnosticsBatchFile,
-            $diagnosticsBatch,
-            [Text.UTF8Encoding]::new($false)
+    if ($diagnosticsAlreadyConfigured) {
+        Write-Host "OpenClaw stuck-session recovery is already configured; skipping config write."
+    }
+    else {
+        $diagnosticsBatchFile = Join-Path ([IO.Path]::GetTempPath()) (
+            "agentbridge-openclaw-diagnostics-{0}.json" -f [guid]::NewGuid().ToString("N")
         )
-        & openclaw config set --batch-file $diagnosticsBatchFile
-        $configExitCode = $LASTEXITCODE
-    }
-    finally {
-        Remove-Item -LiteralPath $diagnosticsBatchFile -Force -ErrorAction SilentlyContinue
-    }
-    if ($configExitCode -ne 0) {
-        throw "Configuring OpenClaw stuck-session recovery failed"
+        $configExitCode = 1
+        try {
+            [IO.File]::WriteAllText(
+                $diagnosticsBatchFile,
+                $diagnosticsBatch,
+                [Text.UTF8Encoding]::new($false)
+            )
+            & openclaw config set --batch-file $diagnosticsBatchFile
+            $configExitCode = $LASTEXITCODE
+        }
+        finally {
+            Remove-Item -LiteralPath $diagnosticsBatchFile -Force -ErrorAction SilentlyContinue
+        }
+        if ($configExitCode -ne 0) {
+            throw "Configuring OpenClaw stuck-session recovery failed"
+        }
     }
     & openclaw gateway restart
     if ($LASTEXITCODE -ne 0) { throw "OpenClaw Gateway restart failed" }

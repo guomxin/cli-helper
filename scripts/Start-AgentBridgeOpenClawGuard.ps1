@@ -4,6 +4,7 @@ param(
     [string]$TunnelTaskName = "AgentBridge Workspace Tunnel",
     [ValidateRange(5, 300)][int]$IntervalSeconds = 15,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
+    [ValidateRange(30, 1800)][int]$GatewayStartupGraceSeconds = 600,
     [switch]$Once
 )
 
@@ -43,16 +44,98 @@ function Test-GatewayListener {
     ).Count -gt 0
 }
 
+function Get-GatewayProcesses {
+    return @(
+        Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -match 'openclaw\.mjs.*gateway run' -and
+                $_.CommandLine -match "--port\s+$GatewayPort(?:\s|$)"
+            }
+    )
+}
+
+function Stop-GatewayProcess {
+    param([Parameter(Mandatory = $true)]$Process)
+
+    $current = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $($Process.ProcessId)" `
+        -ErrorAction SilentlyContinue
+    if (-not $current -or $current.Name -ne "node.exe" -or
+        $current.CommandLine -notmatch 'openclaw\.mjs.*gateway run' -or
+        $current.CommandLine -notmatch "--port\s+$GatewayPort(?:\s|$)") {
+        return $false
+    }
+    Stop-Process -Id $current.ProcessId -Force -ErrorAction Stop
+    return $true
+}
+
 try {
     do {
         $gatewayAction = "none"
         $tunnelAction = "none"
         $lastError = $null
         try {
-            if (-not (Test-GatewayListener)) {
+            $listener = @(
+                Get-NetTCPConnection -State Listen -LocalPort $GatewayPort `
+                    -ErrorAction SilentlyContinue
+            ) | Select-Object -First 1
+            $gatewayProcesses = @(Get-GatewayProcesses)
+
+            if ($listener) {
+                $duplicates = @(
+                    $gatewayProcesses |
+                        Where-Object { $_.ProcessId -ne $listener.OwningProcess }
+                )
+                foreach ($duplicate in $duplicates) {
+                    if (Stop-GatewayProcess -Process $duplicate) {
+                        Write-GuardLog (
+                            "Stopped duplicate Gateway process {0}; listener owner is {1}." -f `
+                                $duplicate.ProcessId, $listener.OwningProcess
+                        )
+                    }
+                }
+                if ($duplicates.Count -gt 0) {
+                    $gatewayAction = "duplicates_removed"
+                }
+            }
+            elseif ($gatewayProcesses.Count -gt 0) {
+                $newest = $gatewayProcesses |
+                    Sort-Object CreationDate -Descending |
+                    Select-Object -First 1
+                $duplicates = @(
+                    $gatewayProcesses |
+                        Where-Object { $_.ProcessId -ne $newest.ProcessId }
+                )
+                foreach ($duplicate in $duplicates) {
+                    if (Stop-GatewayProcess -Process $duplicate) {
+                        Write-GuardLog (
+                            "Stopped duplicate starting Gateway process {0}; preserving {1}." -f `
+                                $duplicate.ProcessId, $newest.ProcessId
+                        )
+                    }
+                }
+                $ageSeconds = ([DateTime]::Now - [DateTime]$newest.CreationDate).TotalSeconds
+                if ($ageSeconds -lt $GatewayStartupGraceSeconds) {
+                    $gatewayAction = "startup_in_progress"
+                }
+                else {
+                    Stop-ScheduledTask -TaskName $GatewayTaskName -ErrorAction SilentlyContinue
+                    if (Stop-GatewayProcess -Process $newest) {
+                        Write-GuardLog (
+                            "Stopped Gateway process {0} after startup grace expired ({1:N0}s)." -f `
+                                $newest.ProcessId, $ageSeconds
+                        )
+                    }
+                    Start-ScheduledTask -TaskName $GatewayTaskName
+                    $gatewayAction = "stale_start_replaced"
+                    Write-GuardLog "Gateway startup grace expired; scheduled task restarted once."
+                }
+            }
+            else {
                 Start-ScheduledTask -TaskName $GatewayTaskName
                 $gatewayAction = "start_requested"
-                Write-GuardLog "Gateway listener missing; scheduled task start requested."
+                Write-GuardLog "Gateway process and listener missing; scheduled task start requested."
             }
             $tunnel = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
             if ($tunnel.State -ne "Running") {
@@ -72,6 +155,8 @@ try {
             gatewayTaskName = $GatewayTaskName
             tunnelTaskName = $TunnelTaskName
             gatewayListening = Test-GatewayListener
+            gatewayProcessCount = @(Get-GatewayProcesses).Count
+            gatewayStartupGraceSeconds = $GatewayStartupGraceSeconds
             gatewayAction = $gatewayAction
             tunnelAction = $tunnelAction
             errorCode = $lastError

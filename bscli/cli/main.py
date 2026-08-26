@@ -325,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         choices=[
             "oa:read",
+            "oa:read:addressbook",
             "oa:write:draft",
             "oa:write:approval",
             "oa:write:meeting",
