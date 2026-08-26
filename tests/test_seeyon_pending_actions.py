@@ -7,6 +7,7 @@ from bscli.adapters.seeyon_pending_actions import (
     approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
     approve_overtime,
+    approve_resignation,
     confirm_attendance,
     pending_action_contract_fingerprint,
     preflight_pending_action,
@@ -15,6 +16,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
     prepare_overtime_approval,
+    prepare_resignation_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -215,6 +217,82 @@ class PendingActionTests(unittest.TestCase):
         self.assertTrue(result["workflow_approved"])
         self.assertEqual(result["workflow_profile"], "overtime")
 
+    def test_resignation_approval_freezes_read_only_hr_fields_and_confirms(self):
+        fixture = _fixture("resignation")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_resignation_approval(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertEqual(fields["员工"], "杨芮杰")
+        self.assertEqual(fields["申请离职时间"], "2026-08-31")
+        self.assertEqual(fields["是否有证书"], "否")
+        self.assertEqual(
+            prepared["plan"]["target"]["business_snapshot"]["certificate_name"],
+            "",
+        )
+        self.assertEqual(fields["手写离职申请"], "离职申请.jpg (283KB)")
+        self.assertTrue(
+            prepared["plan"]["target"]["business_snapshot"][
+                "business_fields_browse_only"
+            ]
+        )
+
+        result = approve_resignation(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(result["workflow_profile"], "resignation")
+
+    def test_resignation_with_certificate_freezes_certificate_name(self):
+        fixture = _fixture("resignation")
+        fixture["business_snapshot"]["has_certificate"] = "是"
+        fixture["business_snapshot"]["certificate_name"] = "软件设计师证书"
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_resignation_approval(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertEqual(fields["是否有证书"], "是")
+        self.assertEqual(fields["证书名称"], "软件设计师证书")
+
+    def test_resignation_with_certificate_but_no_name_fails_closed(self):
+        fixture = _fixture("resignation")
+        fixture["business_snapshot"]["has_certificate"] = "是"
+        fixture["business_snapshot"]["certificate_name"] = ""
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        with self.assertRaisesRegex(
+            PendingActionContractMismatch,
+            "certificate name",
+        ):
+            prepare_resignation_approval(adapter, worker, _inputs())
+
+    def test_resignation_business_change_blocks_before_boundary(self):
+        fixture = _fixture("resignation")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        plan = prepare_resignation_approval(adapter, worker, _inputs())["plan"]
+        fixture["business_snapshot"]["resignation_date"] = "2026-09-01"
+        boundary = []
+
+        with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
+            approve_resignation(
+                adapter,
+                worker,
+                plan,
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+        self.assertEqual(boundary, [])
+
     def test_pending_preflight_rejects_wrong_profile_before_field_input(self):
         worker = FakeWorker(_fixture("attendance_confirmation"))
         with self.assertRaisesRegex(PendingActionContractMismatch, "not a registered"):
@@ -322,12 +400,13 @@ class PendingActionTests(unittest.TestCase):
                 "labor_contract_renewal",
                 "intellectual_property_declaration",
                 "overtime",
+                "resignation",
                 "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 8)
+        self.assertEqual(len(fingerprints), 9)
 
 
 class FakeAdapter:
@@ -422,6 +501,7 @@ class FakeBusinessFrame:
         expected_by_profile = {
             "attendance_confirmation": "#field0097_id",
             "intellectual_property_declaration": "#field0010_id",
+            "resignation": "#field0006_id",
         }
         expected = expected_by_profile.get(
             self.fixture.get("profile"), "#field0008_id"
@@ -603,6 +683,44 @@ def _fixture(profile):
             "node_policy": "考勤审批",
             "node_policy_name": "考勤审批",
             "attitudes": ["agree", "disagree"],
+        },
+        "resignation": {
+            "title": "【HR】离职申请单-杨芮杰-人工智能研发中心-实习生",
+            "fields": [
+                {
+                    "name": "姓名",
+                    "value": "申请人 杨芮杰 工号 TH2352 所属部门 人工智能研发中心 岗位 实习生",
+                },
+                {
+                    "name": "入职时间",
+                    "value": "入职时间 2026-07-09 申请离职时间 2026-08-31 岗位类别 研发",
+                },
+                {"name": "是否有证书", "value": "是否有证书 是 否"},
+                {"name": "离职原因", "value": "实习结束，返校"},
+                {
+                    "name": "手写离职 申请附件",
+                    "value": "离职申请.jpg (283KB)",
+                },
+            ],
+            "template_id": "3483439346772952417",
+            "form_app_id": "9167110384557358951",
+            "node_policy": "approve",
+            "node_policy_name": "审批",
+            "attitudes": ["agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "employee": "杨芮杰",
+                "employee_number": "TH2352",
+                "department": "人工智能研发中心",
+                "position": "实习生",
+                "hire_date": "2026-07-09",
+                "resignation_date": "2026-08-31",
+                "position_category": "研发",
+                "has_certificate": "否",
+                "certificate_name": "",
+                "resignation_reason": "实习结束，返校",
+                "handwritten_application": "离职申请.jpg (283KB)",
+            },
         },
         "standard_collaboration": {
             "title": "关于征集专家入库工作的通知",

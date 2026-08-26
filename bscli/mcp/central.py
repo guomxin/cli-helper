@@ -59,6 +59,8 @@ from bscli.adapters.seeyon_pending_actions import (
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
     OVERTIME_APPROVAL_PREPARE_CAPABILITY,
     OVERTIME_APPROVE_CAPABILITY,
+    RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
+    RESIGNATION_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
     TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
@@ -189,6 +191,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
         {"oa:write:approval"}
     ),
     "oa_overtime_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_resignation_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_attendance_confirmation_prepare": frozenset(
         {"oa:write:approval"}
     ),
@@ -905,6 +908,24 @@ def create_central_mcp_server(
                 "overtime request leaves the pending collection."
             ),
             "commit_capability": OVERTIME_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_resignation_approval_prepare",
+            "prepare_title": "Prepare OA Resignation Approval",
+            "prepare_description": (
+                "Bind one exact pending resignation request. AgentBridge validates the "
+                "registered HR template and freezes employee, department, position, "
+                "hire and resignation dates, certificate status, reason, and handwritten "
+                "application; pass any opinion already supplied by the user."
+            ),
+            "prepare_capability": RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_resignation_approve",
+            "commit_title": "Approve Authorized OA Resignation Request",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "resignation request leaves the pending collection."
+            ),
+            "commit_capability": RESIGNATION_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_attendance_confirmation_prepare",

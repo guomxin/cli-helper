@@ -375,6 +375,8 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_intellectual_property_declaration_approve",
   "oa_overtime_approval_prepare",
   "oa_overtime_approve",
+  "oa_resignation_approval_prepare",
+  "oa_resignation_approve",
   "oa_attendance_confirmation_prepare",
   "oa_attendance_confirm",
   "oa_weekly_report_acknowledgement_prepare",

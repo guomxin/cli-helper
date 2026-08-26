@@ -28,6 +28,8 @@ INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY = (
 )
 OVERTIME_APPROVAL_PREPARE_CAPABILITY = "oa.overtime.approval.prepare"
 OVERTIME_APPROVE_CAPABILITY = "oa.overtime.approve"
+RESIGNATION_APPROVAL_PREPARE_CAPABILITY = "oa.resignation.approval.prepare"
+RESIGNATION_APPROVE_CAPABILITY = "oa.resignation.approve"
 ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
     "oa.attendance_confirmation.prepare"
 )
@@ -120,6 +122,12 @@ OVERTIME_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_overtime_approval_fields.v1",
     title="填写加班申请审批意见",
     effect="审批通过一条加班申请审核单",
+    submit_label="提交审批意见",
+)
+RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_resignation_approval_fields.v1",
+    title="填写离职申请审批意见",
+    effect="审批通过一条离职申请单",
     submit_label="提交审批意见",
 )
 ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
@@ -295,6 +303,36 @@ _PROFILES = {
         "summary_title": "审批加班申请审核单",
         "summary_effect": "审批通过后该加班申请将离开待办列表",
         "authorize_label": "授权审批通过",
+    },
+    "resignation": {
+        "prepare_capability": RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": RESIGNATION_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-resignation-approval-v1",
+        "plan_schema": "agentbridge.oa_resignation_approval_plan.v1",
+        "result_schema": "agentbridge.oa_resignation_approval_result.v1",
+        "business_intent": "approve_resignation_request",
+        "title_rule": {
+            "kind": "prefix",
+            "value": "【HR】离职申请单-",
+        },
+        "required_fields": {
+            "姓名",
+            "入职时间",
+            "是否有证书",
+            "离职原因",
+        },
+        "allowed_fields": None,
+        "template_id": "3483439346772952417",
+        "form_app_id": "9167110384557358951",
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批离职申请单",
+        "summary_effect": "审批通过后该离职申请将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "resignation_v1",
     },
     "attendance_confirmation": {
         "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
@@ -506,6 +544,26 @@ def approve_overtime(
         worker,
         plan,
         profile_key="overtime",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_resignation_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "resignation")
+
+
+def approve_resignation(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="resignation",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -894,6 +952,9 @@ def _validate_target(
         signals["business_snapshot"] = (
             _intellectual_property_declaration_business_snapshot(page, detail)
         )
+    elif profile.get("business_snapshot_policy") == "resignation_v1":
+        signals = dict(signals)
+        signals["business_snapshot"] = _resignation_business_snapshot(page)
     return signals
 
 
@@ -1124,6 +1185,105 @@ def _intellectual_property_declaration_business_snapshot(
     return result
 
 
+def _resignation_business_snapshot(page) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0006_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA resignation CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = (id) => document.querySelector(`#${id}`);
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const value = (id) => clean(field(id)?.innerText);
+          const selected = (id) => {
+            const wrapper = field(id);
+            const items = Array.from(wrapper?.querySelectorAll('.cap4-radio__item') || []);
+            const chosen = items.filter((item) => item.querySelector(
+              '.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong'
+            ));
+            return chosen.length === 1
+              ? clean(chosen[0].querySelector('.cap4-radio__text')?.textContent)
+              : '';
+          };
+          const ids = [
+            'field0001_id', 'field0002_id', 'field0003_id', 'field0089_id',
+            'field0005_id', 'field0006_id', 'field0027_id', 'field0096_id',
+            'field0097_id', 'field0008_id', 'field0099_id'
+          ];
+          const browseOnly = ids.every((id) => {
+            const section = field(id)?.querySelector('section');
+            return Boolean(section?.classList.contains('is-none'));
+          });
+          return {
+            browse_only: browseOnly,
+            employee: value('field0001_id'),
+            employee_number: value('field0002_id'),
+            department: value('field0003_id'),
+            position: value('field0089_id'),
+            hire_date: value('field0005_id'),
+            resignation_date: value('field0006_id'),
+            position_category: value('field0027_id'),
+            has_certificate: selected('field0096_id'),
+            certificate_name: value('field0097_id'),
+            resignation_reason: value('field0008_id'),
+            handwritten_application: value('field0099_id'),
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA resignation business fields are editable at this node; "
+            "a separate field-entry contract is required."
+        )
+    required = (
+        "employee",
+        "employee_number",
+        "department",
+        "position",
+        "hire_date",
+        "resignation_date",
+        "position_category",
+        "has_certificate",
+        "resignation_reason",
+        "handwritten_application",
+    )
+    for name in required:
+        if not str(snapshot.get(name) or "").strip():
+            raise PendingActionContractMismatch(
+                f"The OA resignation {name} value is unavailable."
+            )
+    has_certificate = str(snapshot.get("has_certificate") or "").strip()
+    if has_certificate not in {"是", "否"}:
+        raise PendingActionContractMismatch(
+            "The OA resignation certificate selection is unsupported."
+        )
+    if has_certificate == "是" and not str(
+        snapshot.get("certificate_name") or ""
+    ).strip():
+        raise PendingActionContractMismatch(
+            "The OA resignation certificate name is unavailable."
+        )
+    result = {
+        name: re.sub(r"\s+", " ", str(value or "")).strip()[:1000]
+        for name, value in snapshot.items()
+        if name != "browse_only"
+    }
+    result["business_fields_browse_only"] = True
+    return result
+
+
 def _frozen_target(
     source: dict,
     detail: dict,
@@ -1248,6 +1408,23 @@ def _summary(
         ):
             if values.get(name):
                 fields.append({"label": name, "value": values[name]})
+    elif profile_key == "resignation":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("employee", "员工"),
+            ("employee_number", "工号"),
+            ("department", "所属部门"),
+            ("position", "岗位"),
+            ("hire_date", "入职时间"),
+            ("resignation_date", "申请离职时间"),
+            ("position_category", "岗位类别"),
+            ("has_certificate", "是否有证书"),
+            ("certificate_name", "证书名称"),
+            ("resignation_reason", "离职原因"),
+            ("handwritten_application", "手写离职申请"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
     elif profile_key == "weekly_report":
         for name in ("周报名称", "年度", "本周说明"):
             if values.get(name):
