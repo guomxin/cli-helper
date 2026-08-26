@@ -22,4 +22,6 @@ Write-Host ""
 $exitCode = $LASTEXITCODE
 Write-Host ""
 Write-Host "OpenClaw Gateway exited with code $exitCode. The self-heal guard will restart it."
-exit $exitCode
+# The guard records and repairs failures. Returning success lets Windows Terminal
+# close the dead tab instead of retaining one after every controlled restart.
+exit 0

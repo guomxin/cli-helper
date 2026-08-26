@@ -28,6 +28,7 @@ $foregroundScript = (Resolve-Path (
 
 $stateRoot = Split-Path -Parent $GatewayRuntimeLauncher
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
+$guardLauncher = Join-Path $stateRoot "openclaw-guard-hidden.vbs"
 $taskLauncherContent = Get-Content -LiteralPath $GatewayTaskLauncher -Raw
 $shimMarker = "AgentBridge visible Gateway task shim"
 if ($taskLauncherContent -notmatch [regex]::Escape($shimMarker)) {
@@ -55,12 +56,25 @@ $taskShim = @(
     [Text.UTF8Encoding]::new($false)
 )
 
+$guardCommand = (
+    'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f `
+        $guardScript
+)
+$escapedGuardCommand = $guardCommand.Replace('"', '""')
+$guardLauncherContent = @(
+    'Set shell = CreateObject("WScript.Shell")',
+    ('exitCode = shell.Run("{0}", 0, True)' -f $escapedGuardCommand),
+    'WScript.Quit exitCode'
+) -join "`r`n"
+[IO.File]::WriteAllText(
+    $guardLauncher,
+    "$guardLauncherContent`r`n",
+    [Text.UTF8Encoding]::new($false)
+)
+
 $guardAction = New-ScheduledTaskAction `
-    -Execute powershell.exe `
-    -Argument (
-        '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f `
-            $guardScript
-    )
+    -Execute "$env:SystemRoot\System32\wscript.exe" `
+    -Argument ('"{0}"' -f $guardLauncher)
 $guardTrigger = New-ScheduledTaskTrigger `
     -AtLogOn `
     -User "$env:USERDOMAIN\$env:USERNAME"
@@ -121,10 +135,12 @@ $installedGuardTask = Get-ScheduledTask -TaskName $GuardTaskName
     started = -not $NoStart
     gatewayTaskLauncher = (Resolve-Path -LiteralPath $GatewayTaskLauncher).Path
     gatewayRuntimeLauncher = (Resolve-Path -LiteralPath $GatewayRuntimeLauncher).Path
+    guardLauncher = $guardLauncher
     guardScript = $guardScript
     lifecycleScript = $lifecycleScript
     foregroundScript = $foregroundScript
     startupLauncherRetired = $true
+    guardConsoleHidden = $true
     visibleForeground = $true
     businessCalls = 0
     businessListReads = 0

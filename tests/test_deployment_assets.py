@@ -122,6 +122,10 @@ class DeploymentAssetTests(unittest.TestCase):
             "GatewayRuntimeLauncher",
             "AgentBridge OpenClaw Guard",
             "-RestartCount 999",
+            "openclaw-guard-hidden.vbs",
+            "wscript.exe",
+            'shell.Run("{0}", 0, True)',
+            "guardConsoleHidden = $true",
             "startupLauncherRetired = $true",
             'mode = "startup_guard_visible_gateway"',
             "visibleForeground = $true",
@@ -155,6 +159,7 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             'WindowTitle = "AgentBridge OpenClaw Gateway"',
             "Closing it stops the Gateway",
+            "exit 0",
         ):
             self.assertIn(marker, foreground)
         for marker in (
