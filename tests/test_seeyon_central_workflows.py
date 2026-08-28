@@ -54,6 +54,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.leave.submit.prepare",
                 "oa.meeting.create",
                 "oa.meeting.create.prepare",
+                "oa.missed_punch.approval.batch.prepare",
                 "oa.missed_punch.approval.prepare",
                 "oa.missed_punch.approve",
                 "oa.missed_punch.prepare",
@@ -91,6 +92,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.leave.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.leave.submit.prepare"], "controlled_write")
         self.assertEqual(effects["oa.leave.submit"], "controlled_write")
+        self.assertEqual(
+            effects["oa.missed_punch.approval.batch.prepare"],
+            "controlled_write",
+        )
         self.assertEqual(effects["oa.labor_contract_renewal.approval.prepare"], "controlled_write")
         self.assertEqual(effects["oa.labor_contract_renewal.approve"], "controlled_write")
         self.assertEqual(

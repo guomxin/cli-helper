@@ -1052,6 +1052,10 @@ code {
   background: var(--red);
 }
 
+.task-status-bar.partially_succeeded {
+  background: var(--amber);
+}
+
 .task-status-bar.succeeded {
   background: var(--green);
 }

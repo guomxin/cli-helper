@@ -43,6 +43,7 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_PREPARE_CAPABILITY,
 )
 from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVE_CAPABILITY,
     MISSED_PUNCH_PREPARE_CAPABILITY,
@@ -217,6 +218,9 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_leave_submit_prepare": frozenset({"oa:write:submit"}),
     "oa_missed_punch_prepare": frozenset({"oa:write:draft"}),
     "oa_missed_punch_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_missed_punch_approval_batch_prepare": frozenset(
+        {"oa:write:approval"}
+    ),
     "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
     "taihua_work_log_my_list": frozenset({"taihua:read"}),
     "taihua_work_log_team_list": frozenset({"taihua:read"}),
@@ -716,7 +720,9 @@ def create_central_mcp_server(
             "after resume.ready is true. For meeting preparation, forward scheduling values "
             "already supplied by the user and never invent missing values; AgentBridge checks "
             "live room availability before opening a prefilled card. Writes remain "
-            "prepare -> authorize -> commit -> verify."
+            "prepare -> authorize -> commit -> verify. When the user asks to handle all "
+            "pending missed-punch requests, call oa_missed_punch_approval_batch_prepare "
+            "once; do not loop over the singular prepare tool or ask the user to say continue."
         )
 
     async def invoke(
@@ -2071,6 +2077,43 @@ def create_central_mcp_server(
             ctx,
             MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
             arguments,
+            idempotency_key,
+            {"oa:write:approval"},
+        )
+
+    @mcp.tool(
+        name="oa_missed_punch_approval_batch_prepare",
+        title="Prepare All Pending OA Missed-Punch Approvals",
+        meta=interaction_tool_meta(),
+        description=(
+            "Freeze the current authenticated user's pending missed-punch items and "
+            "process them sequentially. Call this once when the user asks to handle all "
+            "missed-punch requests. AgentBridge selects targets server-side, opens one "
+            "independently authorized card at a time, and advances automatically after "
+            "authoritative verification. Do not call the singular prepare tool for the "
+            "same items or ask the user to say continue between items."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_missed_punch_approval_batch_prepare(
+        ctx: Context,
+        limit: Annotated[int, Field(ge=1, le=10)] = 10,
+        failure_policy: Literal["stop_on_failure"] = "stop_on_failure",
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+            {
+                "limit": limit,
+                "failure_policy": failure_policy,
+            },
             idempotency_key,
             {"oa:write:approval"},
         )

@@ -5149,6 +5149,73 @@ test("reports a verified workflow revoke after authorization resumes", async () 
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
 });
+test("reports a completed missed-punch batch once without waking the model", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-missed-punch-batch-final-123456",
+    type: "execution_authorization",
+    title: "确认审批补签申请",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          workflow_approved: true,
+          batch: {
+            state: "succeeded",
+            totalCount: 3,
+            succeededCount: 3,
+          },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, {
+    toolCallId: "tool-missed-punch-batch-final",
+    runId: "run-missed-punch-batch-final",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-missed-punch-batch-final",
+      toolName: "oa_missed_punch_approval_batch_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA 补签申请已全部处理完成，共 3 条。",
+  );
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
+
 test("delivers a final trusted status directly without waking the model", async () => {
   const harness = fakeApi({
     autoPoll: false,

@@ -2927,6 +2927,14 @@ function safeSucceededMessage(response) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "AgentBridge 已完成本次安全操作。";
   }
+  if (
+    result.batch &&
+    typeof result.batch === "object" &&
+    result.batch.state === "succeeded"
+  ) {
+    const total = Number(result.batch.totalCount) || 0;
+    return `OA 补签申请已全部处理完成，共 ${total} 条。`;
+  }
   if (result.meeting_created === true && result.meeting_sent === true) {
     return "OA 会议已创建并发送。";
   }

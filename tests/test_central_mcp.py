@@ -307,6 +307,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_missed_punch_prepare", names)
         self.assertIn("oa_missed_punch_save_draft", names)
         self.assertIn("oa_missed_punch_approval_prepare", names)
+        self.assertIn("oa_missed_punch_approval_batch_prepare", names)
         self.assertIn("oa_missed_punch_approve", names)
         self.assertIn("oa_meeting_create_prepare", names)
         self.assertIn("oa_meeting_create", names)
@@ -357,11 +358,18 @@ class CentralMcpTests(unittest.TestCase):
         self.assertFalse(revoke_prepare["annotations"]["destructiveHint"])
         self.assertTrue(revoke["annotations"]["destructiveHint"])
         approve = next(tool for tool in tools if tool["name"] == "oa_missed_punch_approve")
+        batch_prepare = next(
+            tool
+            for tool in tools
+            if tool["name"] == "oa_missed_punch_approval_batch_prepare"
+        )
         prepare_meeting = next(
             tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
         )
         create_meeting = next(tool for tool in tools if tool["name"] == "oa_meeting_create")
         self.assertTrue(approve["annotations"]["destructiveHint"])
+        self.assertFalse(batch_prepare["annotations"]["destructiveHint"])
+        self.assertNotIn("affair_id", batch_prepare["inputSchema"]["properties"])
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))

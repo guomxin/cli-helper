@@ -10,16 +10,73 @@ from bscli.adapters.seeyon_missed_punch import (
     MissedPunchContractMismatch,
     MissedPunchOutcomeUnknown,
     approve_missed_punch_request,
+    build_missed_punch_approval_batch_field_schema,
     missed_punch_approval_contract_fingerprint,
     missed_punch_draft_contract_fingerprint,
     normalize_missed_punch_inputs,
     prepare_missed_punch_approval,
     prepare_missed_punch_draft,
     save_missed_punch_draft,
+    select_missed_punch_approval_batch_items,
 )
 
 
 class SeeyonMissedPunchTests(unittest.TestCase):
+    def test_batch_selection_filters_freezes_and_orders_missed_punch_items(self):
+        selected = select_missed_punch_approval_batch_items(
+            [
+                {
+                    "affair_id": "affair-2",
+                    "title": "【HR】补签申请单-Bob",
+                    "sender": "Bob",
+                    "date": "2026-08-28 09:00",
+                    "category": "HR",
+                },
+                {
+                    "affair_id": "ignored",
+                    "title": "加班申请审核单",
+                    "sender": "Carol",
+                    "date": "2026-08-26 09:00",
+                },
+                {
+                    "affair_id": "affair-1",
+                    "title": "【HR】补签申请单-Alice",
+                    "sender": "Alice",
+                    "date": "2026-08-27 09:00",
+                    "category": "HR",
+                },
+                {"title": "补签申请单-缺少事项标识"},
+            ],
+            limit=10,
+        )
+
+        self.assertEqual(
+            [item["resource_ref"] for item in selected],
+            ["affair-1", "affair-2"],
+        )
+        self.assertEqual(
+            selected[0]["display_summary"]["title"],
+            "【HR】补签申请单-Alice",
+        )
+        self.assertEqual(len(selected[0]["source_fingerprint"]), 64)
+
+    def test_batch_field_card_identifies_current_item(self):
+        schema = build_missed_punch_approval_batch_field_schema(
+            None,
+            None,
+            {
+                "batch_ordinal": 2,
+                "batch_total": 3,
+                "target_title": "【HR】补签申请单-Bob",
+                "target_sender": "Bob",
+                "target_date": "2026-08-28 09:00",
+            },
+        )
+
+        self.assertEqual(schema["title"], "填写补签审批意见（第 2/3 条）")
+        self.assertIn("补签申请单-Bob", schema["notice"])
+        self.assertIn("权威验证成功", schema["notice"])
+
     def test_normalization_rejects_invalid_reason_and_range(self):
         normalized = normalize_missed_punch_inputs(_inputs())
         self.assertEqual(normalized["reason_type"], "忘记打卡")

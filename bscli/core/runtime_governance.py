@@ -38,6 +38,7 @@ OBSERVATION_STATES = {"active", "completed", "cancelled"}
 
 _TERMINAL_TASK_STATUSES = {
     "succeeded",
+    "partially_succeeded",
     "failed",
     "outcome_unknown",
     "canceled",

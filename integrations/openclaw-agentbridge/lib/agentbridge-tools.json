@@ -3615,6 +3615,64 @@
         "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
       },
       "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Freeze the current authenticated user's pending missed-punch items and process them sequentially. Call this once when the user asks to handle all missed-punch requests. AgentBridge selects targets server-side, opens one independently authorized card at a time, and advances automatically after authoritative verification. Do not call the singular prepare tool for the same items or ask the user to say continue between items.",
+      "inputSchema": {
+        "properties": {
+          "failure_policy": {
+            "const": "stop_on_failure",
+            "default": "stop_on_failure",
+            "title": "Failure Policy",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "oa_missed_punch_approval_batch_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_missed_punch_approval_batch_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_missed_punch_approval_batch_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare All Pending OA Missed-Punch Approvals"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": true,

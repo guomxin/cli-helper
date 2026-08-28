@@ -103,6 +103,9 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
 准备入口；最终提交能力由可信授权续办，不作为普通模型工具公开。
 
+补签接收处理还提供 `oa.missed_punch.approval.batch.prepare`：中心端冻结当前用户的补签待办，逐项展示
+独立字段卡和授权卡，当前项权威成功后自动进入下一项，不需要用户在事项之间发送“继续”。
+
 协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)和
 [OA 通讯录只读能力](docs/系统适配/协同办公系统/通讯录只读能力.md)。
 

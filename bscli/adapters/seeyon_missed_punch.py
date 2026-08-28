@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
@@ -14,6 +15,9 @@ from bscli.adapters.seeyon_cap4 import wait_for_cap4_interactive
 MISSED_PUNCH_PREPARE_CAPABILITY = "oa.missed_punch.prepare"
 MISSED_PUNCH_SAVE_CAPABILITY = "oa.missed_punch.save_draft"
 MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY = "oa.missed_punch.approval.prepare"
+MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY = (
+    "oa.missed_punch.approval.batch.prepare"
+)
 MISSED_PUNCH_APPROVE_CAPABILITY = "oa.missed_punch.approve"
 MISSED_PUNCH_TEMPLATE_TITLE = "【HR】补签申请单"
 MISSED_PUNCH_TEMPLATE_ID = "-8494358180075582561"
@@ -111,6 +115,23 @@ MISSED_PUNCH_APPROVAL_PREPARE_INPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
+MISSED_PUNCH_APPROVAL_BATCH_PREPARE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "limit": {"type": "integer"},
+        "failure_policy": {"type": "string"},
+        "batch_id": {"type": "string"},
+        "affair_id": {"type": "string"},
+        "batch_ordinal": {"type": "integer"},
+        "batch_total": {"type": "integer"},
+        "target_title": {"type": "string"},
+        "target_sender": {"type": "string"},
+        "target_date": {"type": "string"},
+        "input_submission_id": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+
 MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA = {
     "schema_version": "agentbridge.oa_missed_punch_approval_fields.v1",
     "title": "填写补签审批意见",
@@ -148,6 +169,70 @@ class MissedPunchContractMismatch(RuntimeError):
 
 class MissedPunchOutcomeUnknown(RuntimeError):
     pass
+
+
+def select_missed_punch_approval_batch_items(
+    workflow_items: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
+        raise ValueError("batch limit must be between 1 and 10")
+    selected = []
+    for source in workflow_items:
+        if not isinstance(source, dict):
+            continue
+        affair_id = str(source.get("affair_id") or "").strip()
+        title = str(source.get("title") or "").strip()
+        if not affair_id or "补签申请单" not in title:
+            continue
+        display = {
+            "title": title,
+            "sender": str(source.get("sender") or "").strip(),
+            "date": str(source.get("date") or "").strip(),
+            "category": str(source.get("category") or "").strip(),
+        }
+        selected.append(
+            {
+                "resource_ref": affair_id,
+                "display_summary": display,
+                "source_fingerprint": hashlib.sha256(
+                    json.dumps(
+                        {"affair_id": affair_id, **display},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    selected.sort(
+        key=lambda item: (
+            str(item["display_summary"].get("date") or ""),
+            item["resource_ref"],
+        )
+    )
+    return selected[:limit]
+
+
+def build_missed_punch_approval_batch_field_schema(
+    _adapter,
+    _worker,
+    arguments: dict,
+) -> dict:
+    schema = deepcopy(MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA)
+    ordinal = int(arguments.get("batch_ordinal") or 1)
+    total = int(arguments.get("batch_total") or 1)
+    title = str(arguments.get("target_title") or "补签申请单").strip()
+    sender = str(arguments.get("target_sender") or "").strip()
+    date = str(arguments.get("target_date") or "").strip()
+    target_parts = [value for value in (title, sender, date) if value]
+    schema["title"] = f"填写补签审批意见（第 {ordinal}/{total} 条）"
+    schema["notice"] = (
+        f"当前事项：{' | '.join(target_parts)}。提交意见后仍需独立授权；"
+        "本条权威验证成功后，系统才会进入下一条。"
+    )
+    return schema
 
 
 def prepare_missed_punch_draft(adapter, worker, arguments: dict) -> dict:

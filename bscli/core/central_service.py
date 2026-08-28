@@ -112,6 +112,7 @@ from bscli.adapters.seeyon_meeting import (
     prepare_meeting_create,
 )
 from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVE_CAPABILITY,
@@ -121,9 +122,11 @@ from bscli.adapters.seeyon_missed_punch import (
     MissedPunchContractMismatch,
     MissedPunchOutcomeUnknown,
     approve_missed_punch_request,
+    build_missed_punch_approval_batch_field_schema,
     prepare_missed_punch_approval,
     prepare_missed_punch_draft,
     save_missed_punch_draft,
+    select_missed_punch_approval_batch_items,
 )
 from bscli.adapters.seeyon_pending_actions import (
     ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
@@ -330,6 +333,18 @@ _TRUSTED_WRITE_DEFINITIONS = {
         "outcome_error": MissedPunchOutcomeUnknown,
         "field_message": "The missed-punch approval opinion must be entered in the trusted field card.",
         "authorization_message": "The missed-punch approval plan requires confirmation in the trusted action card.",
+    },
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY: {
+        "commit_capability": MISSED_PUNCH_APPROVE_CAPABILITY,
+        "field_schema": MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
+        "field_schema_function": "build_missed_punch_approval_batch_field_schema",
+        "context_fields": ("batch_id", "affair_id"),
+        "prepare_function": "prepare_missed_punch_approval",
+        "commit_function": "approve_missed_punch_request",
+        "contract_error": MissedPunchContractMismatch,
+        "outcome_error": MissedPunchOutcomeUnknown,
+        "field_message": "The current missed-punch opinion must be entered in the trusted field card.",
+        "authorization_message": "The current missed-punch approval plan requires confirmation in the trusted action card.",
     },
     MEETING_PREPARE_CAPABILITY: {
         "commit_capability": MEETING_CREATE_CAPABILITY,
@@ -559,6 +574,10 @@ _TRUSTED_WRITE_COMMITS = {
     definition["commit_capability"]: (prepare_capability, definition)
     for prepare_capability, definition in _TRUSTED_WRITE_DEFINITIONS.items()
 }
+_TRUSTED_WRITE_COMMITS[MISSED_PUNCH_APPROVE_CAPABILITY] = (
+    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
+    _TRUSTED_WRITE_DEFINITIONS[MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY],
+)
 
 _CAPABILITY_SCOPES = {
     BUSINESS_TRIP_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
@@ -572,6 +591,9 @@ _CAPABILITY_SCOPES = {
     MISSED_PUNCH_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY: frozenset(
+        {"oa:write:approval"}
+    ),
     MISSED_PUNCH_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
     MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
@@ -870,7 +892,124 @@ class CentralCapabilityService:
                 state=str(interaction.get("state") or "pending"),
                 system_id=system_id,
             )
-        return {**response, "runtimeTraceId": trace["trace_id"]}
+        observed_response = {**response, "runtimeTraceId": trace["trace_id"]}
+        if task_id:
+            observed_response = self._apply_batch_operation_response(
+                user_subject=user_subject,
+                task_id=task_id,
+                capability_name=capability_name,
+                response=observed_response,
+            )
+        return observed_response
+
+    def _apply_batch_operation_response(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        capability_name: str,
+        response: dict,
+    ) -> dict:
+        batch = self.tasks.get_batch_for_task(
+            parent_task_id=task_id,
+            user_subject=user_subject,
+            include_resource_refs=True,
+        )
+        if batch is None:
+            return response
+        operation_id = str(response.get("operationId") or "").strip() or None
+        interaction = response.get("interaction")
+        interaction_id = (
+            str(interaction.get("interactionId") or "").strip() or None
+            if isinstance(interaction, dict)
+            else None
+        )
+        batch = self.tasks.record_batch_item_activity(
+            parent_task_id=task_id,
+            user_subject=user_subject,
+            operation_id=operation_id,
+            interaction_id=interaction_id,
+        ) or batch
+        self.observe_host_task(
+            user_subject=user_subject,
+            task_id=task_id,
+            operation_ids=[operation_id] if operation_id else [],
+            interaction_ids=[interaction_id] if interaction_id else [],
+        )
+        status = str(response.get("status") or "")
+        governed_batch_step = capability_name in {
+            MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+            MISSED_PUNCH_APPROVE_CAPABILITY,
+        }
+        if governed_batch_step and status in {"failed", "unknown"}:
+            error_code = str(
+                (response.get("error") or {}).get("code")
+                or ("RESULT_UNKNOWN" if status == "unknown" else "BATCH_ITEM_FAILED")
+            )
+            batch = self.tasks.fail_current_batch_item(
+                parent_task_id=task_id,
+                user_subject=user_subject,
+                operation_id=operation_id,
+                expected_ordinal=int(batch["current_ordinal"]),
+                item_state="outcome_unknown" if status == "unknown" else "failed",
+                error_code=error_code,
+            )
+            return {**response, "batch": batch_response(batch)}
+        if (
+            capability_name != MISSED_PUNCH_APPROVE_CAPABILITY
+            or status != "succeeded"
+        ):
+            return {**response, "batch": batch_response(batch)}
+
+        completed_ordinal = int(batch["current_ordinal"])
+        completion = self.tasks.complete_current_batch_item(
+            parent_task_id=task_id,
+            user_subject=user_subject,
+            operation_id=operation_id or "batch-item-completed",
+            expected_ordinal=completed_ordinal,
+            result_summary={
+                "workflowApproved": bool(
+                    (response.get("result") or {}).get("workflow_approved")
+                ),
+                "verification": (
+                    (response.get("result") or {}).get("verification") or {}
+                ),
+            },
+        )
+        batch = completion["batch"]
+        next_item = completion.get("nextItem")
+        if next_item is None:
+            result = dict(response.get("result") or {})
+            result["batch"] = batch_response(batch)
+            return {
+                **response,
+                "result": result,
+                "batch": batch_response(batch),
+                "completedBatchItemOrdinal": completed_ordinal,
+            }
+
+        next_arguments = {
+            "batch_id": batch["batch_id"],
+            "affair_id": next_item["resource_ref"],
+            **_batch_item_card_context(batch, next_item),
+        }
+        next_response = self.invoke(
+            user_subject=user_subject,
+            capability_name=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+            arguments=next_arguments,
+            idempotency_key=(
+                f"batch:{batch['batch_id']}:item:{next_item['ordinal']}:prepare"
+            ),
+            task_id=task_id,
+            host_type="batch_coordinator",
+            host_run_id=f"batch:{batch['batch_id']}",
+        )
+        return {
+            **next_response,
+            "batch": next_response.get("batch") or batch_response(batch),
+            "completedBatchItemOrdinal": completed_ordinal,
+            "previousOperationId": operation_id,
+        }
 
     def session_status(self, *, user_subject: str, system_id: str = "oa") -> dict:
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)
@@ -1356,6 +1495,46 @@ class CentralCapabilityService:
                 interaction_record=record,
                 interaction=interaction,
             )
+            if interaction["state"] in {
+                "declined",
+                "expired",
+                "failed",
+                "superseded",
+            }:
+                batch = self.tasks.get_batch_for_task(
+                    parent_task_id=task_id,
+                    user_subject=user_subject,
+                )
+                if batch is not None and batch["state"] in {
+                    "running",
+                    "waiting_user",
+                    "paused",
+                }:
+                    current_ordinal = int(batch["current_ordinal"])
+                    current_item = next(
+                        (
+                            item
+                            for item in batch.get("items") or []
+                            if int(item["ordinal"]) == current_ordinal
+                        ),
+                        None,
+                    )
+                    if (
+                        current_item is not None
+                        and current_item.get("interaction_id") == interaction_id
+                    ):
+                        self.tasks.fail_current_batch_item(
+                            parent_task_id=task_id,
+                            user_subject=user_subject,
+                            operation_id=record.get("operation_id"),
+                            expected_ordinal=current_ordinal,
+                            item_state=(
+                                "canceled"
+                                if interaction["state"] == "declined"
+                                else interaction["state"]
+                            ),
+                            error_code=f"INTERACTION_{interaction['state'].upper()}",
+                        )
         return {
             "protocolVersion": "0.1",
             "interaction": {
@@ -2700,16 +2879,19 @@ class CentralCapabilityService:
             raise InteractionIntegrityError("unsupported interaction resume kind")
         session = self.sessions.get(record["session_id"])
         resume_epoch = session.get("last_verified_at") or session["updated_at"]
+        task_id = self.tasks.task_id_for_interaction(
+            record["interaction_id"],
+            user_subject=user_subject,
+        )
         response = self.invoke(
             user_subject=user_subject,
             capability_name=resume_spec["capability"],
             arguments=resume_spec["arguments"],
             idempotency_key=idempotency_key
             or f"interaction-resume:{record['interaction_id']}:{resume_epoch}",
-        )
-        task_id = self.tasks.task_id_for_interaction(
-            record["interaction_id"],
-            user_subject=user_subject,
+            task_id=task_id,
+            host_type="interaction_resume",
+            host_run_id=record["interaction_id"],
         )
         if task_id:
             operation_id = response.get("operationId")
@@ -3031,6 +3213,24 @@ class CentralCapabilityService:
             field_submission = None
             effective_arguments = arguments
             try:
+                if capability_name == MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY:
+                    with worker_factory(session, adapter) as worker:
+                        worker.restore_session_state(state)
+                        arguments, empty_batch_result = (
+                            self._resolve_missed_punch_batch_context(
+                                context=context,
+                                session=session,
+                                adapter=adapter,
+                                worker=worker,
+                                arguments=arguments,
+                                task_id=task_id,
+                            )
+                        )
+                        state = worker.capture_session_state()
+                        self.session_states.save(session["session_id"], state)
+                    if empty_batch_result is not None:
+                        return empty_batch_result
+                    effective_arguments = arguments
                 dynamic_field_schema = None
                 if (
                     prepare_definition is not None
@@ -3864,6 +4064,118 @@ class CentralCapabilityService:
             public_items.append(item)
         public_result["items"] = public_items
         return public_result
+
+    def _resolve_missed_punch_batch_context(
+        self,
+        *,
+        context: CapabilityContext,
+        session: dict,
+        adapter: object,
+        worker: object,
+        arguments: dict,
+        task_id: str | None,
+    ) -> tuple[dict, dict | None]:
+        if not task_id:
+            raise CapabilityRejected(
+                "HOST_TASK_REQUIRED",
+                "Batch approval requires a durable AgentBridge host task.",
+            )
+        supplied_batch_id = str(arguments.get("batch_id") or "").strip()
+        if supplied_batch_id:
+            batch = self.tasks.get_batch_for_task(
+                parent_task_id=task_id,
+                user_subject=session["user_subject"],
+                include_resource_refs=True,
+            )
+            if batch is None or batch["batch_id"] != supplied_batch_id:
+                raise CapabilityRejected(
+                    "BATCH_CONTEXT_MISMATCH",
+                    "The batch context does not match the current AgentBridge task.",
+                )
+            if batch["state"] not in {"running", "waiting_user", "paused"}:
+                raise CapabilityRejected(
+                    "BATCH_NOT_ACTIVE",
+                    "The missed-punch batch is already terminal.",
+                )
+            current = next(
+                (
+                    item
+                    for item in batch["items"]
+                    if int(item["ordinal"]) == int(batch["current_ordinal"])
+                ),
+                None,
+            )
+            if current is None:
+                raise CapabilityRejected(
+                    "BATCH_ITEM_MISSING",
+                    "The current missed-punch batch item is unavailable.",
+                )
+            supplied_affair_id = str(arguments.get("affair_id") or "").strip()
+            if supplied_affair_id and supplied_affair_id != current["resource_ref"]:
+                raise CapabilityRejected(
+                    "BATCH_TARGET_MISMATCH",
+                    "The requested affair does not match the frozen batch target.",
+                )
+            return {
+                **arguments,
+                "batch_id": batch["batch_id"],
+                "affair_id": current["resource_ref"],
+                **_batch_item_card_context(batch, current),
+            }, None
+
+        if str(arguments.get("input_submission_id") or "").strip():
+            raise CapabilityRejected(
+                "BATCH_CONTEXT_MISSING",
+                "The trusted field submission is missing its batch context.",
+            )
+        limit = arguments.get("limit", 10)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
+            raise ValueError("limit must be between 1 and 10")
+        failure_policy = str(
+            arguments.get("failure_policy") or "stop_on_failure"
+        ).strip()
+        if failure_policy != "stop_on_failure":
+            raise ValueError("failure_policy must be stop_on_failure")
+        pending = adapter.list_workflows(
+            worker,
+            collection="pending",
+            arguments={"limit": 100},
+        )
+        selected = select_missed_punch_approval_batch_items(
+            list(pending.get("items") or []),
+            limit=limit,
+        )
+        if not selected:
+            return {}, {
+                "schema_version": "agentbridge.oa_missed_punch_approval_batch.v1",
+                "business_intent": "approve_all_pending_missed_punch_requests",
+                "status": "empty",
+                "frozen_count": 0,
+                "message": "当前没有可处理的补签申请待办。",
+            }
+        try:
+            batch, _reused = self.tasks.create_batch(
+                parent_task_id=task_id,
+                user_subject=session["user_subject"],
+                system_id=session["system_id"],
+                capability_name=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+                selection_summary={
+                    "workflowType": "missed_punch",
+                    "collection": "pending",
+                    "limit": limit,
+                },
+                failure_policy=failure_policy,
+                items=selected,
+            )
+        except TaskIntegrityError as exc:
+            raise CapabilityRejected("BATCH_ALREADY_ACTIVE", str(exc)) from exc
+        current = batch["items"][int(batch["current_ordinal"]) - 1]
+        return {
+            "batch_id": batch["batch_id"],
+            "affair_id": current["resource_ref"],
+            **_batch_item_card_context(batch, current),
+        }, None
+
     def _prepare_trusted_write(
         self,
         *,
@@ -4125,13 +4437,16 @@ class CentralCapabilityService:
                 },
             )
         plan = authorization["plan"]
+        trusted_prepare_capability = str(
+            plan.get("prepare_capability") or prepare_capability
+        )
         if authorization["state"] != "approved":
             raise RequiresUserAction(
                 "WRITE_AUTHORIZATION_UNAVAILABLE",
                 f"The write authorization is {authorization['state']}.",
                 next_action={
                     "type": "prepare_again",
-                    "capability": prepare_capability,
+                    "capability": trusted_prepare_capability,
                     "arguments": dict(plan.get("resume_arguments") or {}),
                 },
             )
@@ -4834,6 +5149,45 @@ def task_response(task: dict) -> dict:
     }
 
 
+def batch_response(batch: dict) -> dict:
+    return {
+        "batchId": batch["batch_id"],
+        "parentTaskId": batch["parent_task_id"],
+        "systemId": batch["system_id"],
+        "capability": batch["capability_name"],
+        "state": batch["state"],
+        "currentOrdinal": int(batch["current_ordinal"]),
+        "totalCount": int(batch["total_count"]),
+        "succeededCount": int(batch["succeeded_count"]),
+        "failedCount": int(batch["failed_count"]),
+        "skippedCount": int(batch["skipped_count"]),
+        "failurePolicy": batch["failure_policy"],
+        "items": [
+            {
+                "ordinal": int(item["ordinal"]),
+                "state": item["state"],
+                "display": item.get("display_summary") or {},
+                "errorCode": item.get("error_code"),
+            }
+            for item in batch.get("items") or []
+        ],
+        "createdAt": batch["created_at"],
+        "updatedAt": batch["updated_at"],
+        "finishedAt": batch.get("finished_at"),
+    }
+
+
+def _batch_item_card_context(batch: dict, item: dict) -> dict:
+    display = item.get("display_summary") or {}
+    return {
+        "batch_ordinal": int(item["ordinal"]),
+        "batch_total": int(batch["total_count"]),
+        "target_title": str(display.get("title") or ""),
+        "target_sender": str(display.get("sender") or ""),
+        "target_date": str(display.get("date") or ""),
+    }
+
+
 def continuation_response(continuation: dict) -> dict:
     return {
         "endpointId": continuation["endpoint_id"],
@@ -4965,6 +5319,7 @@ _TASK_TITLE_LABELS = {
     "Prepare OA Leave Submission": "OA 请假申请提交",
     "Prepare OA Missed-Punch Draft": "OA 补签申请草稿",
     "Prepare OA Missed-Punch Approval": "OA 补签申请审批",
+    "Prepare All Pending OA Missed-Punch Approvals": "批量处理 OA 补签申请",
     "Prepare OA Meeting Creation": "OA 会议创建",
     "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
     "Prepare Taihua Work Log": "泰华工作日志提交",

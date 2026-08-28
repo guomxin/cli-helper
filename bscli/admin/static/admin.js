@@ -16,7 +16,7 @@ const titles = {
 };
 const statusText = {
   active: "有效", inactive: "未活动", revoked: "已撤销", expired: "已过期", quarantined: "已隔离",
-  awaiting_login: "待登录", new: "未登录", succeeded: "成功", failed: "失败", completed: "已完成",
+  awaiting_login: "待登录", new: "未登录", succeeded: "成功", partially_succeeded: "部分成功", failed: "失败", completed: "已完成",
   unknown: "结果未知", outcome_unknown: "结果未知", requires_user_action: "用户交互节点", waiting_user: "等待用户",
   awaiting_user: "当前等待用户", user_action_completed: "用户已处理", resumed: "已续办",
   user_action_expired: "交互已过期", user_action_rejected: "用户已拒绝", user_action_superseded: "已被替换",
@@ -32,7 +32,7 @@ const statusText = {
 };
 const statusClass = value => ["active", "succeeded", "approved", "submitted", "completed", "acknowledged", "eligible", "selected", "available", "healthy", "meeting", "resolved", "archived"].includes(value) ? "ok" :
   ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed", "unavailable", "breached"].includes(value) ? "bad" :
-  ["pending", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "waiting", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected", "open", "acknowledged", "investigating"].includes(value) ? "warn" :
+  ["pending", "partially_succeeded", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "waiting", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected", "open", "acknowledged", "investigating"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:read:addressbook", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
@@ -342,7 +342,7 @@ async function renderCoordination() {
     <button role="tab" data-coordination-tab="artifacts">文件 <span>${data.artifacts.length}</span></button>
     <button role="tab" data-coordination-tab="isolation">隔离 <span>${summary.isolation_violations}</span></button>
   </div>
-  <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "failed", "outcome_unknown", "canceled", "superseded"])}</section>
+  <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "partially_succeeded", "failed", "outcome_unknown", "canceled", "superseded"])}</section>
   <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "同步状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
   <section data-coordination-panel="continuations">${filteredTable(["Endpoint ID", "用户", "客户端", "状态", "执行模式", "选中任务", "候选", "原因", "到期"], continuationRows, "搜索用户、端点、任务或原因", ["selected", "awaiting_selection", "expired", "canceled"])}</section>
   <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新", ""], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed", "archived"])}</section>

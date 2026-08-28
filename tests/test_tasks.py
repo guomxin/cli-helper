@@ -3131,6 +3131,156 @@ class TaskHubStoreTests(unittest.TestCase):
             0,
         )
 
+    def test_batch_freezes_items_and_advances_without_finishing_parent_early(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        batch, reused = self.store.create_batch(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            system_id="oa",
+            capability_name="oa.missed_punch.approval.batch.prepare",
+            selection_summary={"workflowType": "missed_punch"},
+            failure_policy="stop_on_failure",
+            items=[
+                {
+                    "resource_ref": f"affair-{ordinal}",
+                    "display_summary": {
+                        "title": f"补签申请单-{ordinal}",
+                        "sender": "Alice",
+                    },
+                }
+                for ordinal in range(1, 4)
+            ],
+        )
+
+        self.assertFalse(reused)
+        self.assertEqual(batch["total_count"], 3)
+        self.assertEqual(
+            [item["resource_ref"] for item in batch["items"]],
+            ["affair-1", "affair-2", "affair-3"],
+        )
+        public = self.store.get_batch_for_task(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertNotIn("resource_ref", public["items"][0])
+
+        self.store.record_batch_item_activity(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="operation-1",
+            interaction_id="interaction-1",
+        )
+        completion = self.store.complete_current_batch_item(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            expected_ordinal=1,
+            result_summary={"verified": True},
+        )
+
+        self.assertEqual(completion["batch"]["state"], "running")
+        self.assertEqual(completion["batch"]["current_ordinal"], 2)
+        self.assertEqual(completion["nextItem"]["resource_ref"], "affair-2")
+        linked = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation={
+                "operation_id": "commit-1",
+                "user_subject": "user-a",
+                "capability_name": "oa.missed_punch.approve",
+                "status": "succeeded",
+                "error": None,
+            },
+        )
+        self.assertEqual(linked["status"], "running")
+
+    def test_batch_finishes_only_after_last_item_and_halts_on_unknown(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        self.store.create_batch(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            system_id="oa",
+            capability_name="oa.missed_punch.approval.batch.prepare",
+            selection_summary={},
+            failure_policy="stop_on_failure",
+            items=[
+                {"resource_ref": "affair-1", "display_summary": {"title": "补签1"}},
+                {"resource_ref": "affair-2", "display_summary": {"title": "补签2"}},
+            ],
+        )
+        self.store.complete_current_batch_item(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            expected_ordinal=1,
+        )
+        halted = self.store.fail_current_batch_item(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-2",
+            expected_ordinal=2,
+            item_state="outcome_unknown",
+            error_code="RESULT_UNKNOWN",
+        )
+
+        self.assertEqual(halted["state"], "outcome_unknown")
+        self.assertEqual(halted["succeeded_count"], 1)
+        self.assertEqual(
+            self.store.get_task(task["task_id"], user_subject="user-a")["status"],
+            "outcome_unknown",
+        )
+
+    def test_batch_duplicate_completion_cannot_skip_the_next_item(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        self.store.create_batch(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            system_id="oa",
+            capability_name="oa.missed_punch.approval.batch.prepare",
+            selection_summary={},
+            failure_policy="stop_on_failure",
+            items=[
+                {"resource_ref": "affair-1", "display_summary": {"title": "补签1"}},
+                {"resource_ref": "affair-2", "display_summary": {"title": "补签2"}},
+            ],
+        )
+        self.store.record_batch_item_activity(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            interaction_id=None,
+        )
+        self.store.complete_current_batch_item(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            expected_ordinal=1,
+        )
+
+        stale_activity = self.store.record_batch_item_activity(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            interaction_id=None,
+        )
+        duplicate = self.store.complete_current_batch_item(
+            parent_task_id=task["task_id"],
+            user_subject="user-a",
+            operation_id="commit-1",
+            expected_ordinal=1,
+        )
+
+        self.assertEqual(stale_activity["current_ordinal"], 2)
+        self.assertEqual(stale_activity["succeeded_count"], 1)
+        self.assertEqual(stale_activity["items"][1]["state"], "preparing")
+        self.assertIsNone(stale_activity["items"][1]["operation_id"])
+        self.assertTrue(duplicate["reused"])
+        self.assertEqual(duplicate["nextItem"]["resource_ref"], "affair-2")
+        self.assertEqual(duplicate["batch"]["succeeded_count"], 1)
+
     def _endpoint(self):
         return self.store.ensure_endpoint(
             user_subject="user-a",

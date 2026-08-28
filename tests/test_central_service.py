@@ -2046,6 +2046,144 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 {"affair_id": "affair-1", "opinion": "同意"},
             )
 
+    def test_missed_punch_batch_advances_cards_until_every_item_succeeds(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            task_id = self._ensure_host_task(service)
+            pending_items = [
+                {
+                    "affair_id": "affair-2",
+                    "title": "【HR】补签申请单-Bob",
+                    "sender": "Bob",
+                    "date": "2026-08-28 09:00",
+                    "category": "HR",
+                },
+                {
+                    "affair_id": "affair-1",
+                    "title": "【HR】补签申请单-Alice",
+                    "sender": "Alice",
+                    "date": "2026-08-27 09:00",
+                    "category": "HR",
+                },
+                {
+                    "affair_id": "ignored",
+                    "title": "加班申请审核单",
+                    "sender": "Carol",
+                    "date": "2026-08-26 09:00",
+                },
+            ]
+            prepared_targets = []
+            committed_targets = []
+
+            def prepare(_adapter, _worker, arguments):
+                prepared_targets.append(arguments["affair_id"])
+                return {
+                    "plan": {
+                        "business_intent": "approve_missed_punch_request",
+                        "target": {
+                            "affair_id": arguments["affair_id"],
+                            "title": arguments.get("target_title") or "补签申请单",
+                        },
+                        "action_contract": {
+                            "version": "v1",
+                            "fingerprint": f"sha256:{arguments['affair_id']}",
+                        },
+                        "exact_input": {"opinion": arguments["opinion"]},
+                    },
+                    "summary": {
+                        "title": "审批补签申请",
+                        "system": "致远 OA",
+                        "fields": [],
+                    },
+                }
+
+            def commit(_adapter, _worker, plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                affair_id = plan["target"]["affair_id"]
+                committed_targets.append(affair_id)
+                return {
+                    "workflow_approved": True,
+                    "verification": {
+                        "confirmed": True,
+                        "method": "pending_disappearance",
+                        "affair_id": affair_id,
+                    },
+                }
+
+            with (
+                patch.object(
+                    service.adapter,
+                    "list_workflows",
+                    return_value={"count": 3, "items": pending_items},
+                ) as list_pending,
+                patch(
+                    "bscli.core.central_service.prepare_missed_punch_approval",
+                    side_effect=prepare,
+                ),
+                patch(
+                    "bscli.core.central_service.approve_missed_punch_request",
+                    side_effect=commit,
+                ),
+            ):
+                first_field = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.missed_punch.approval.batch.prepare",
+                    arguments={"limit": 10},
+                    task_id=task_id,
+                )
+                self.assertEqual(first_field["error"]["code"], "FIELD_INPUT_REQUIRED")
+                self.assertEqual(first_field["batch"]["totalCount"], 2)
+                self.assertEqual(first_field["batch"]["currentOrdinal"], 1)
+                first_submission = service.field_submissions.get(
+                    first_field["nextAction"]["inputSubmissionId"]
+                )
+                self.assertEqual(
+                    first_submission["form_schema"]["title"],
+                    "填写补签审批意见（第 1/2 条）",
+                )
+
+                first_authorization = self._submit_and_resume_opinion(
+                    service,
+                    first_field,
+                )
+                second_field = self._approve_and_resume_authorization(
+                    service,
+                    first_authorization,
+                )
+
+                self.assertEqual(second_field["error"]["code"], "FIELD_INPUT_REQUIRED")
+                self.assertEqual(second_field["completedBatchItemOrdinal"], 1)
+                self.assertEqual(second_field["batch"]["currentOrdinal"], 2)
+                self.assertEqual(second_field["batch"]["succeededCount"], 1)
+                second_submission = service.field_submissions.get(
+                    second_field["nextAction"]["inputSubmissionId"]
+                )
+                self.assertEqual(
+                    second_submission["form_schema"]["title"],
+                    "填写补签审批意见（第 2/2 条）",
+                )
+
+                second_authorization = self._submit_and_resume_opinion(
+                    service,
+                    second_field,
+                )
+                completed = self._approve_and_resume_authorization(
+                    service,
+                    second_authorization,
+                )
+
+            list_pending.assert_called_once()
+            self.assertEqual(prepared_targets, ["affair-1", "affair-2"])
+            self.assertEqual(committed_targets, ["affair-1", "affair-2"])
+            self.assertEqual(completed["status"], "succeeded")
+            self.assertEqual(completed["batch"]["state"], "succeeded")
+            self.assertEqual(completed["batch"]["succeededCount"], 2)
+            self.assertEqual(
+                service.tasks.get_task(task_id, user_subject="user-a")["status"],
+                "succeeded",
+            )
+
     def test_workflow_revoke_card_prefills_comment_and_freezes_affair_context(self):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, FakeWorker())
@@ -2229,6 +2367,51 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         )
         service.session_states.save(session["session_id"], {"cookies": []})
         return session
+
+    @staticmethod
+    def _ensure_host_task(service):
+        response = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="token-a",
+            agent_host="test-host",
+            host_task_key="batch-test-run",
+            endpoint_key="batch-test-endpoint",
+            client_type="web",
+            external_subject="user-a",
+            conversation_ref="batch-test-conversation",
+            title="处理所有补签申请单",
+        )
+        return response["task"]["taskId"]
+
+    @staticmethod
+    def _submit_and_resume_opinion(service, field_response):
+        submission_id = field_response["nextAction"]["inputSubmissionId"]
+        csrf = service.field_submissions.issue_csrf(submission_id)
+        service.field_submissions.submit(
+            submission_id,
+            csrf_token=csrf,
+            csrf_cookie=csrf,
+            values={"opinion": "同意"},
+        )
+        return service.resume_interaction(
+            user_subject="user-a",
+            interaction_id=field_response["interaction"]["interactionId"],
+        )
+
+    @staticmethod
+    def _approve_and_resume_authorization(service, authorization_response):
+        authorization_id = authorization_response["nextAction"]["authorizationId"]
+        csrf = service.write_authorizations.issue_csrf(authorization_id)
+        service.write_authorizations.decide(
+            authorization_id,
+            decision="approve",
+            csrf_token=csrf,
+            csrf_cookie=csrf,
+        )
+        return service.resume_interaction(
+            user_subject="user-a",
+            interaction_id=authorization_response["interaction"]["interactionId"],
+        )
 
 
 class FakeWorker:

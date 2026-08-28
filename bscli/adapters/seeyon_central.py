@@ -62,6 +62,8 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_PREPARE_INPUT_SCHEMA,
 )
 from bscli.adapters.seeyon_missed_punch import (
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_INPUT_SCHEMA,
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_PREPARE_INPUT_SCHEMA,
     MISSED_PUNCH_APPROVE_CAPABILITY,
@@ -553,6 +555,19 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="controlled_write",
             adapter="seeyon-central",
             workflow="missed-punch-approval-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Freeze up to ten current pending missed-punch items and process "
+                "them sequentially with independent trusted input and authorization."
+            ),
+            input_schema=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="missed-punch-approval-batch-prepare-v1",
         ),
         CapabilitySpec(
             name=MISSED_PUNCH_APPROVE_CAPABILITY,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -20,10 +21,35 @@ TASK_STATUSES = {
     "canceled",
     "expired",
     "superseded",
+    "partially_succeeded",
 }
 
 ACTIVE_TASK_STATUSES = {"active", "waiting_user", "running"}
 TERMINAL_TASK_STATUSES = TASK_STATUSES - ACTIVE_TASK_STATUSES
+BATCH_STATES = {
+    "running",
+    "waiting_user",
+    "paused",
+    "succeeded",
+    "partially_succeeded",
+    "failed",
+    "outcome_unknown",
+    "canceled",
+    "expired",
+}
+ACTIVE_BATCH_STATES = {"running", "waiting_user", "paused"}
+BATCH_ITEM_STATES = {
+    "queued",
+    "preparing",
+    "waiting_user",
+    "succeeded",
+    "failed",
+    "outcome_unknown",
+    "canceled",
+    "expired",
+    "skipped",
+    "superseded",
+}
 CONTINUATION_STATES = {"awaiting_selection", "selected", "expired", "cleared"}
 CONTINUATION_EXECUTION_MODES = {"observe_only", "resume", "follow_up"}
 ARTIFACT_DELIVERY_STATES = {
@@ -244,6 +270,53 @@ class TaskHubStore:
 
                 CREATE INDEX IF NOT EXISTS task_continuations_subject_state
                 ON task_continuations (user_subject, state, updated_at);
+
+                CREATE TABLE IF NOT EXISTS task_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    parent_task_id TEXT NOT NULL UNIQUE,
+                    user_subject TEXT NOT NULL,
+                    system_id TEXT NOT NULL,
+                    capability_name TEXT NOT NULL,
+                    selection_summary_json TEXT NOT NULL,
+                    source_snapshot_hash TEXT NOT NULL,
+                    failure_policy TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    current_ordinal INTEGER NOT NULL,
+                    total_count INTEGER NOT NULL,
+                    succeeded_count INTEGER NOT NULL,
+                    failed_count INTEGER NOT NULL,
+                    skipped_count INTEGER NOT NULL,
+                    version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS task_batches_subject_state
+                ON task_batches (user_subject, state, updated_at);
+
+                CREATE TABLE IF NOT EXISTS task_batch_items (
+                    item_id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    resource_ref TEXT NOT NULL,
+                    resource_ref_hash TEXT NOT NULL,
+                    display_summary_json TEXT NOT NULL,
+                    source_fingerprint TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    operation_id TEXT,
+                    interaction_id TEXT,
+                    result_summary_json TEXT NOT NULL,
+                    error_code TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    UNIQUE (batch_id, ordinal),
+                    UNIQUE (batch_id, resource_ref_hash)
+                );
+
+                CREATE INDEX IF NOT EXISTS task_batch_items_batch_state
+                ON task_batch_items (batch_id, state, ordinal);
                 """
             )
             self._migrate_task_interaction_observations(connection)
@@ -821,6 +894,669 @@ class TaskHubStore:
             raise TaskNotFound(f"task not found: {task_id}")
         return _task_from_row(row)
 
+    def create_batch(
+        self,
+        *,
+        parent_task_id: str,
+        user_subject: str,
+        system_id: str,
+        capability_name: str,
+        selection_summary: dict[str, Any],
+        failure_policy: str,
+        items: list[dict[str, Any]],
+    ) -> tuple[dict, bool]:
+        if not items:
+            raise ValueError("batch items are required")
+        if len(items) > 100:
+            raise ValueError("batch item count exceeds 100")
+        failure_policy = _required_text(failure_policy, "failure_policy", 80)
+        if failure_policy != "stop_on_failure":
+            raise ValueError("unsupported batch failure policy")
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        system_id = _required_text(system_id, "system_id", 80)
+        capability_name = _required_text(
+            capability_name,
+            "capability_name",
+            200,
+        )
+        normalized_items = []
+        seen_refs: set[str] = set()
+        for ordinal, source in enumerate(items, start=1):
+            resource_ref = _required_text(
+                source.get("resource_ref"),
+                "resource_ref",
+                512,
+            )
+            resource_ref_hash = hashlib.sha256(
+                resource_ref.encode("utf-8")
+            ).hexdigest()
+            if resource_ref_hash in seen_refs:
+                raise ValueError("batch contains a duplicate target")
+            seen_refs.add(resource_ref_hash)
+            display_summary = _safe_object(source.get("display_summary"))
+            source_fingerprint = str(source.get("source_fingerprint") or "").strip()
+            if not source_fingerprint:
+                source_fingerprint = hashlib.sha256(
+                    _canonical_json(display_summary).encode("utf-8")
+                ).hexdigest()
+            normalized_items.append(
+                {
+                    "ordinal": ordinal,
+                    "resource_ref": resource_ref,
+                    "resource_ref_hash": resource_ref_hash,
+                    "display_summary": display_summary,
+                    "source_fingerprint": source_fingerprint[:256],
+                }
+            )
+        snapshot_hash = hashlib.sha256(
+            _canonical_json(
+                [
+                    {
+                        "ordinal": item["ordinal"],
+                        "resourceRefHash": item["resource_ref_hash"],
+                        "sourceFingerprint": item["source_fingerprint"],
+                    }
+                    for item in normalized_items
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            existing = connection.execute(
+                "SELECT * FROM task_batches WHERE parent_task_id = ?",
+                (parent_task_id,),
+            ).fetchone()
+            if existing is not None:
+                return self._batch_snapshot(
+                    connection,
+                    existing,
+                    include_resource_refs=True,
+                ), True
+            active = connection.execute(
+                """
+                SELECT batch_id FROM task_batches
+                WHERE user_subject = ? AND system_id = ? AND capability_name = ?
+                  AND state IN ('running', 'waiting_user', 'paused')
+                LIMIT 1
+                """,
+                (user_subject, system_id, capability_name),
+            ).fetchone()
+            if active is not None:
+                raise TaskIntegrityError(
+                    "an active batch already exists for this user and capability"
+                )
+            batch_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO task_batches (
+                    batch_id, parent_task_id, user_subject, system_id,
+                    capability_name, selection_summary_json,
+                    source_snapshot_hash, failure_policy, state,
+                    current_ordinal, total_count, succeeded_count,
+                    failed_count, skipped_count, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', 1, ?, 0, 0, 0, 1, ?, ?)
+                """,
+                (
+                    batch_id,
+                    parent_task_id,
+                    user_subject,
+                    system_id,
+                    capability_name,
+                    _canonical_json(_safe_object(selection_summary)),
+                    snapshot_hash,
+                    failure_policy,
+                    len(normalized_items),
+                    now,
+                    now,
+                ),
+            )
+            for item in normalized_items:
+                connection.execute(
+                    """
+                    INSERT INTO task_batch_items (
+                        item_id, batch_id, ordinal, resource_ref,
+                        resource_ref_hash, display_summary_json,
+                        source_fingerprint, state, result_summary_json,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', '{}', ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        batch_id,
+                        item["ordinal"],
+                        item["resource_ref"],
+                        item["resource_ref_hash"],
+                        _canonical_json(item["display_summary"]),
+                        item["source_fingerprint"],
+                        now,
+                        now,
+                    ),
+                )
+            batch = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchone()
+            self._sync_batch_task_summary(connection, task, batch, now=now)
+            self._append_event(
+                connection,
+                task_id=parent_task_id,
+                user_subject=user_subject,
+                event_type="batch.created",
+                payload={
+                    "batchId": batch_id,
+                    "systemId": system_id,
+                    "capability": capability_name,
+                    "totalCount": len(normalized_items),
+                    "failurePolicy": failure_policy,
+                },
+                causation_ref=batch_id,
+                created_at=now,
+            )
+            self._append_event(
+                connection,
+                task_id=parent_task_id,
+                user_subject=user_subject,
+                event_type="batch.candidates.frozen",
+                payload={
+                    "batchId": batch_id,
+                    "totalCount": len(normalized_items),
+                    "sourceSnapshotHash": snapshot_hash,
+                },
+                causation_ref=batch_id,
+                created_at=now,
+            )
+            stored = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchone()
+            return self._batch_snapshot(
+                connection,
+                stored,
+                include_resource_refs=True,
+            ), False
+
+    def get_batch_for_task(
+        self,
+        *,
+        parent_task_id: str,
+        user_subject: str,
+        include_resource_refs: bool = False,
+    ) -> dict | None:
+        with self._connect() as connection:
+            self._select_owned_task(connection, parent_task_id, user_subject)
+            row = connection.execute(
+                "SELECT * FROM task_batches WHERE parent_task_id = ?",
+                (parent_task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._batch_snapshot(
+                connection,
+                row,
+                include_resource_refs=include_resource_refs,
+            )
+
+    def record_batch_item_activity(
+        self,
+        *,
+        parent_task_id: str,
+        user_subject: str,
+        operation_id: str | None,
+        interaction_id: str | None,
+    ) -> dict | None:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            batch = connection.execute(
+                "SELECT * FROM task_batches WHERE parent_task_id = ?",
+                (parent_task_id,),
+            ).fetchone()
+            if batch is None or batch["state"] not in ACTIVE_BATCH_STATES:
+                return None
+            item = self._select_current_batch_item(connection, batch)
+            if operation_id:
+                previous_operation_item = connection.execute(
+                    """
+                    SELECT * FROM task_batch_items
+                    WHERE batch_id = ? AND operation_id = ?
+                    ORDER BY ordinal
+                    LIMIT 1
+                    """,
+                    (batch["batch_id"], operation_id),
+                ).fetchone()
+                if (
+                    previous_operation_item is not None
+                    and int(previous_operation_item["ordinal"])
+                    != int(item["ordinal"])
+                ):
+                    return self._batch_snapshot(
+                        connection,
+                        batch,
+                        include_resource_refs=True,
+                    )
+            previous_state = str(item["state"])
+            item_state = "waiting_user" if interaction_id else "preparing"
+            connection.execute(
+                """
+                UPDATE task_batch_items
+                SET state = ?, operation_id = COALESCE(?, operation_id),
+                    interaction_id = COALESCE(?, interaction_id),
+                    updated_at = ?
+                WHERE item_id = ?
+                """,
+                (
+                    item_state,
+                    operation_id,
+                    interaction_id,
+                    now,
+                    item["item_id"],
+                ),
+            )
+            batch_state = "waiting_user" if interaction_id else "running"
+            connection.execute(
+                """
+                UPDATE task_batches
+                SET state = ?, version = version + 1, updated_at = ?
+                WHERE batch_id = ?
+                """,
+                (batch_state, now, batch["batch_id"]),
+            )
+            refreshed_batch = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            self._sync_batch_task_summary(
+                connection,
+                task,
+                refreshed_batch,
+                now=now,
+                task_status="waiting_user" if interaction_id else "running",
+                current_operation_id=operation_id,
+                current_interaction_id=interaction_id,
+            )
+            if previous_state == "queued":
+                self._append_event(
+                    connection,
+                    task_id=parent_task_id,
+                    user_subject=user_subject,
+                    event_type="batch.item.started",
+                    payload={
+                        "batchId": batch["batch_id"],
+                        "ordinal": int(batch["current_ordinal"]),
+                        "totalCount": int(batch["total_count"]),
+                    },
+                    causation_ref=operation_id or interaction_id,
+                    created_at=now,
+                )
+            stored = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            return self._batch_snapshot(
+                connection,
+                stored,
+                include_resource_refs=True,
+            )
+
+    def complete_current_batch_item(
+        self,
+        *,
+        parent_task_id: str,
+        user_subject: str,
+        operation_id: str,
+        expected_ordinal: int,
+        result_summary: dict[str, Any] | None = None,
+    ) -> dict:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            batch = self._select_owned_batch_for_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            item = connection.execute(
+                """
+                SELECT * FROM task_batch_items
+                WHERE batch_id = ? AND ordinal = ?
+                """,
+                (batch["batch_id"], int(expected_ordinal)),
+            ).fetchone()
+            if item is None:
+                raise TaskIntegrityError("expected batch item is missing")
+            if item["state"] == "succeeded":
+                next_item = (
+                    self._select_current_batch_item(connection, batch)
+                    if batch["state"] in ACTIVE_BATCH_STATES
+                    and int(batch["current_ordinal"]) > int(expected_ordinal)
+                    else None
+                )
+                return {
+                    "batch": self._batch_snapshot(
+                        connection,
+                        batch,
+                        include_resource_refs=True,
+                    ),
+                    "nextItem": (
+                        _batch_item_from_row(next_item, include_resource_ref=True)
+                        if next_item is not None
+                        else None
+                    ),
+                    "reused": True,
+                }
+            if batch["state"] not in ACTIVE_BATCH_STATES:
+                raise TaskIntegrityError("batch is already terminal")
+            if int(batch["current_ordinal"]) != int(expected_ordinal):
+                raise TaskIntegrityError("batch item is no longer current")
+            connection.execute(
+                """
+                UPDATE task_batch_items
+                SET state = 'succeeded', operation_id = ?,
+                    result_summary_json = ?, error_code = NULL,
+                    updated_at = ?, finished_at = ?
+                WHERE item_id = ?
+                """,
+                (
+                    operation_id,
+                    _canonical_json(_safe_object(result_summary)),
+                    now,
+                    now,
+                    item["item_id"],
+                ),
+            )
+            succeeded_count = int(batch["succeeded_count"]) + 1
+            next_item = connection.execute(
+                """
+                SELECT * FROM task_batch_items
+                WHERE batch_id = ? AND ordinal > ? AND state = 'queued'
+                ORDER BY ordinal
+                LIMIT 1
+                """,
+                (batch["batch_id"], batch["current_ordinal"]),
+            ).fetchone()
+            terminal = next_item is None
+            next_ordinal = (
+                int(next_item["ordinal"])
+                if next_item is not None
+                else int(batch["current_ordinal"])
+            )
+            batch_state = "succeeded" if terminal else "running"
+            connection.execute(
+                """
+                UPDATE task_batches
+                SET state = ?, current_ordinal = ?, succeeded_count = ?,
+                    version = version + 1, updated_at = ?, finished_at = ?
+                WHERE batch_id = ?
+                """,
+                (
+                    batch_state,
+                    next_ordinal,
+                    succeeded_count,
+                    now,
+                    now if terminal else None,
+                    batch["batch_id"],
+                ),
+            )
+            if next_item is not None:
+                connection.execute(
+                    """
+                    UPDATE task_batch_items
+                    SET state = 'preparing', updated_at = ?
+                    WHERE item_id = ?
+                    """,
+                    (now, next_item["item_id"]),
+                )
+            refreshed_batch = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            self._sync_batch_task_summary(
+                connection,
+                task,
+                refreshed_batch,
+                now=now,
+                task_status="succeeded" if terminal else "running",
+                current_operation_id=operation_id,
+                current_interaction_id=None if not terminal else task["current_interaction_id"],
+            )
+            self._append_event(
+                connection,
+                task_id=parent_task_id,
+                user_subject=user_subject,
+                event_type="batch.item.succeeded",
+                payload={
+                    "batchId": batch["batch_id"],
+                    "ordinal": int(item["ordinal"]),
+                    "totalCount": int(batch["total_count"]),
+                    "succeededCount": succeeded_count,
+                },
+                causation_ref=operation_id,
+                created_at=now,
+            )
+            if terminal:
+                self._append_event(
+                    connection,
+                    task_id=parent_task_id,
+                    user_subject=user_subject,
+                    event_type="batch.completed",
+                    payload={
+                        "batchId": batch["batch_id"],
+                        "status": "succeeded",
+                        "totalCount": int(batch["total_count"]),
+                        "succeededCount": succeeded_count,
+                        "failedCount": int(batch["failed_count"]),
+                        "skippedCount": int(batch["skipped_count"]),
+                    },
+                    causation_ref=operation_id,
+                    created_at=now,
+                )
+                self._append_event(
+                    connection,
+                    task_id=parent_task_id,
+                    user_subject=user_subject,
+                    event_type="task.completed",
+                    payload={
+                        "status": "succeeded",
+                        "reason": "batch_completed",
+                    },
+                    causation_ref=operation_id,
+                    created_at=now,
+                )
+            stored = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            next_stored = (
+                connection.execute(
+                    "SELECT * FROM task_batch_items WHERE item_id = ?",
+                    (next_item["item_id"],),
+                ).fetchone()
+                if next_item is not None
+                else None
+            )
+            return {
+                "batch": self._batch_snapshot(
+                    connection,
+                    stored,
+                    include_resource_refs=True,
+                ),
+                "nextItem": (
+                    _batch_item_from_row(next_stored, include_resource_ref=True)
+                    if next_stored is not None
+                    else None
+                ),
+                "reused": False,
+            }
+
+    def fail_current_batch_item(
+        self,
+        *,
+        parent_task_id: str,
+        user_subject: str,
+        operation_id: str | None,
+        expected_ordinal: int,
+        item_state: str,
+        error_code: str,
+    ) -> dict:
+        if item_state not in {
+            "failed",
+            "outcome_unknown",
+            "canceled",
+            "expired",
+            "superseded",
+        }:
+            raise ValueError("unsupported terminal batch item state")
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            batch = self._select_owned_batch_for_task(
+                connection,
+                parent_task_id,
+                user_subject,
+            )
+            if batch["state"] not in ACTIVE_BATCH_STATES:
+                return self._batch_snapshot(
+                    connection,
+                    batch,
+                    include_resource_refs=True,
+                )
+            item = connection.execute(
+                """
+                SELECT * FROM task_batch_items
+                WHERE batch_id = ? AND ordinal = ?
+                """,
+                (batch["batch_id"], int(expected_ordinal)),
+            ).fetchone()
+            if item is None:
+                raise TaskIntegrityError("expected batch item is missing")
+            if int(batch["current_ordinal"]) != int(expected_ordinal):
+                if item["state"] not in {"queued", "preparing", "waiting_user"}:
+                    return self._batch_snapshot(
+                        connection,
+                        batch,
+                        include_resource_refs=True,
+                    )
+                raise TaskIntegrityError("batch item is no longer current")
+            connection.execute(
+                """
+                UPDATE task_batch_items
+                SET state = ?, operation_id = COALESCE(?, operation_id),
+                    error_code = ?, updated_at = ?, finished_at = ?
+                WHERE item_id = ?
+                """,
+                (
+                    item_state,
+                    operation_id,
+                    _required_text(error_code, "error_code", 120),
+                    now,
+                    now,
+                    item["item_id"],
+                ),
+            )
+            succeeded_count = int(batch["succeeded_count"])
+            failed_count = int(batch["failed_count"]) + 1
+            if item_state == "outcome_unknown":
+                batch_state = "outcome_unknown"
+            elif succeeded_count:
+                batch_state = "partially_succeeded"
+            elif item_state in {"canceled", "expired"}:
+                batch_state = item_state
+            else:
+                batch_state = "failed"
+            connection.execute(
+                """
+                UPDATE task_batches
+                SET state = ?, failed_count = ?, version = version + 1,
+                    updated_at = ?, finished_at = ?
+                WHERE batch_id = ?
+                """,
+                (
+                    batch_state,
+                    failed_count,
+                    now,
+                    now,
+                    batch["batch_id"],
+                ),
+            )
+            refreshed_batch = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            self._sync_batch_task_summary(
+                connection,
+                task,
+                refreshed_batch,
+                now=now,
+                task_status=batch_state,
+                current_operation_id=operation_id,
+                current_interaction_id=task["current_interaction_id"],
+            )
+            event_suffix = (
+                "outcome_unknown" if item_state == "outcome_unknown" else "failed"
+            )
+            self._append_event(
+                connection,
+                task_id=parent_task_id,
+                user_subject=user_subject,
+                event_type=f"batch.item.{event_suffix}",
+                payload={
+                    "batchId": batch["batch_id"],
+                    "ordinal": int(item["ordinal"]),
+                    "totalCount": int(batch["total_count"]),
+                    "errorCode": error_code,
+                },
+                causation_ref=operation_id,
+                created_at=now,
+            )
+            self._append_event(
+                connection,
+                task_id=parent_task_id,
+                user_subject=user_subject,
+                event_type="batch.completed",
+                payload={
+                    "batchId": batch["batch_id"],
+                    "status": batch_state,
+                    "totalCount": int(batch["total_count"]),
+                    "succeededCount": succeeded_count,
+                    "failedCount": failed_count,
+                    "skippedCount": int(batch["skipped_count"]),
+                    "errorCode": error_code,
+                },
+                causation_ref=operation_id,
+                created_at=now,
+            )
+            stored = connection.execute(
+                "SELECT * FROM task_batches WHERE batch_id = ?",
+                (batch["batch_id"],),
+            ).fetchone()
+            return self._batch_snapshot(
+                connection,
+                stored,
+                include_resource_refs=True,
+            )
+
     def endpoint_for_key(
         self,
         *,
@@ -863,6 +1599,19 @@ class TaskHubStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             task = self._select_owned_task(connection, task_id, user_subject)
+            batch = connection.execute(
+                "SELECT * FROM task_batches WHERE parent_task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if batch is not None:
+                if batch["state"] in ACTIVE_BATCH_STATES:
+                    task_status = (
+                        "waiting_user"
+                        if batch["state"] in {"waiting_user", "paused"}
+                        else "running"
+                    )
+                else:
+                    task_status = str(batch["state"])
             linked = connection.execute(
                 "SELECT task_id FROM task_operations WHERE operation_id = ?",
                 (operation_id,),
@@ -3340,6 +4089,127 @@ class TaskHubStore:
                 ),
             )
 
+    def _select_owned_batch_for_task(
+        self,
+        connection: sqlite3.Connection,
+        parent_task_id: str,
+        user_subject: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM task_batches
+            WHERE parent_task_id = ? AND user_subject = ?
+            """,
+            (parent_task_id, user_subject),
+        ).fetchone()
+        if row is None:
+            raise TaskNotFound("batch task not found")
+        return row
+
+    @staticmethod
+    def _select_current_batch_item(
+        connection: sqlite3.Connection,
+        batch: sqlite3.Row,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM task_batch_items
+            WHERE batch_id = ? AND ordinal = ?
+            """,
+            (batch["batch_id"], batch["current_ordinal"]),
+        ).fetchone()
+        if row is None:
+            raise TaskIntegrityError("batch current item is missing")
+        return row
+
+    def _batch_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        batch: sqlite3.Row,
+        *,
+        include_resource_refs: bool,
+    ) -> dict:
+        rows = connection.execute(
+            """
+            SELECT * FROM task_batch_items
+            WHERE batch_id = ?
+            ORDER BY ordinal
+            """,
+            (batch["batch_id"],),
+        ).fetchall()
+        value = _batch_from_row(batch)
+        value["items"] = [
+            _batch_item_from_row(
+                row,
+                include_resource_ref=include_resource_refs,
+            )
+            for row in rows
+        ]
+        return value
+
+    def _sync_batch_task_summary(
+        self,
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+        batch: sqlite3.Row,
+        *,
+        now: str,
+        task_status: str | None = None,
+        current_operation_id: str | None = None,
+        current_interaction_id: str | None = None,
+    ) -> None:
+        current_item = self._select_current_batch_item(connection, batch)
+        summary = json.loads(task["summary_json"] or "{}")
+        summary["batch"] = {
+            "batchId": batch["batch_id"],
+            "systemId": batch["system_id"],
+            "capability": batch["capability_name"],
+            "state": batch["state"],
+            "currentOrdinal": int(batch["current_ordinal"]),
+            "totalCount": int(batch["total_count"]),
+            "succeededCount": int(batch["succeeded_count"]),
+            "failedCount": int(batch["failed_count"]),
+            "skippedCount": int(batch["skipped_count"]),
+            "failurePolicy": batch["failure_policy"],
+            "currentItem": {
+                "ordinal": int(current_item["ordinal"]),
+                "state": current_item["state"],
+                "display": json.loads(current_item["display_summary_json"] or "{}"),
+            },
+        }
+        connection.execute(
+            "UPDATE agent_tasks SET summary_json = ? WHERE task_id = ?",
+            (_canonical_json(summary), task["task_id"]),
+        )
+        if task_status is None:
+            task_status = {
+                "waiting_user": "waiting_user",
+                "running": "running",
+                "paused": "waiting_user",
+                "partially_succeeded": "partially_succeeded",
+                "outcome_unknown": "outcome_unknown",
+                "failed": "failed",
+                "canceled": "canceled",
+                "expired": "expired",
+                "succeeded": "succeeded",
+            }.get(str(batch["state"]), "active")
+        self._update_task_state(
+            connection,
+            task_id=task["task_id"],
+            status=task_status,
+            current_operation_id=(
+                current_operation_id
+                if current_operation_id is not None
+                else task["current_operation_id"]
+            ),
+            current_interaction_id=(
+                current_interaction_id
+                if current_interaction_id is not None
+                else task["current_interaction_id"]
+            ),
+            now=now,
+        )
+
     @staticmethod
     def _update_task_state(
         connection: sqlite3.Connection,
@@ -3354,6 +4224,7 @@ class TaskHubStore:
             raise ValueError(f"unsupported task status: {status}")
         finished_at = now if status in {
             "succeeded",
+            "partially_succeeded",
             "failed",
             "outcome_unknown",
             "canceled",
@@ -3496,6 +4367,31 @@ def _endpoint_from_row(row: sqlite3.Row) -> dict:
 def _task_from_row(row: sqlite3.Row) -> dict:
     value = dict(row)
     value["summary"] = json.loads(value.pop("summary_json"))
+    return value
+
+
+def _batch_from_row(row: sqlite3.Row) -> dict:
+    value = dict(row)
+    value["selection_summary"] = json.loads(
+        value.pop("selection_summary_json") or "{}"
+    )
+    return value
+
+
+def _batch_item_from_row(
+    row: sqlite3.Row,
+    *,
+    include_resource_ref: bool,
+) -> dict:
+    value = dict(row)
+    value["display_summary"] = json.loads(
+        value.pop("display_summary_json") or "{}"
+    )
+    value["result_summary"] = json.loads(
+        value.pop("result_summary_json") or "{}"
+    )
+    if not include_resource_ref:
+        value.pop("resource_ref", None)
     return value
 
 
