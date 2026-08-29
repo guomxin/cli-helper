@@ -525,6 +525,7 @@ class ReferenceHostTests(unittest.IsolatedAsyncioTestCase):
                 denied = client.get("/")
                 bootstrap = client.get("/?access_token=one-time-ui-secret")
                 allowed = client.get(bootstrap.headers["location"])
+                favicon = client.get("/favicon.ico")
         finally:
             server.shutdown()
             server.server_close()
@@ -533,6 +534,7 @@ class ReferenceHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(401, denied.status_code)
         self.assertEqual(303, bootstrap.status_code)
         self.assertEqual(200, allowed.status_code)
+        self.assertEqual(204, favicon.status_code)
         self.assertIn("AgentBridge Reference Host", allowed.text)
         self.assertIn("frame-ancestors 'none'", allowed.headers["content-security-policy"])
 

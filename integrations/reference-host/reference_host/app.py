@@ -236,6 +236,9 @@ class ReferenceHostHandler(BaseHTTPRequestHandler):
         if path in {"/", "/index.html"}:
             self._send_static("index.html", "text/html; charset=utf-8")
             return
+        if path == "/favicon.ico":
+            self._send_bytes(HTTPStatus.NO_CONTENT, b"", "image/x-icon")
+            return
         if path == "/assets/styles.css":
             self._send_static("styles.css", "text/css; charset=utf-8")
             return
