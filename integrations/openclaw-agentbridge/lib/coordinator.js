@@ -1172,17 +1172,57 @@ export class InteractionCoordinator {
   }
 
   async restoreWorkspaceInteractionFromNotification(notification, client) {
-    if (
-      notification?.deliveryMode !== "trusted_interaction" ||
-      !notification.interaction ||
-      !notification.task?.taskId
-    ) {
+    if (!notification?.task?.taskId) {
       return false;
     }
     const sessionKey = safeRoutePart(
       notification.task.activeConversationRef,
     );
     if (!isWorkspaceSessionKey(sessionKey)) {
+      return false;
+    }
+    let interaction = notification.interaction || null;
+    const eventType = safeRoutePart(notification?.event?.eventType);
+    const eventInteractionId = safeRoutePart(
+      notification?.event?.payload?.interactionId,
+    );
+    if (
+      !interaction &&
+      eventInteractionId &&
+      ["task.interaction.waiting", "task.interaction.completed"].includes(
+        eventType,
+      )
+    ) {
+      try {
+        const response = await client.callTool(
+          "agentbridge_interaction_get",
+          { interaction_id: eventInteractionId },
+          { meta: hostContextMeta() },
+        );
+        const processed = processToolResult(
+          response,
+          this.config.allowedCardOrigins,
+        );
+        interaction = processed.interactions.find(
+          (item) => item.interactionId === eventInteractionId,
+        );
+      } catch (error) {
+        this.api.logger.warn(
+          `AgentBridge Workspace interaction notification recovery failed: ${safeErrorCode(error)}`,
+        );
+        return false;
+      }
+    }
+    const resumableCompleted = Boolean(
+      interaction?.state === "completed" &&
+        interaction.resume?.ready === true &&
+        interaction.resume?.completed !== true,
+    );
+    if (
+      !interaction ||
+      (!resumableCompleted &&
+        !["pending", "processing"].includes(interaction.state))
+    ) {
       return false;
     }
     this.bindDeliveryRoute({
@@ -1194,7 +1234,7 @@ export class InteractionCoordinator {
     });
     const restored = await this.restoreRecoveredInteraction({
       taskId: notification.task.taskId,
-      interaction: notification.interaction,
+      interaction,
       sessionKey,
       mcpClient: client,
     });
@@ -1241,6 +1281,7 @@ export class InteractionCoordinator {
       mcpClient: this.clientForSession(sessionKey),
       delivered: false,
       continuationQueued: false,
+      resumeStarted: false,
       capturedAt: this.now(),
     };
     this.records.set(interaction.interactionId, record);
@@ -1334,6 +1375,10 @@ export class InteractionCoordinator {
   }
 
   async resume(record, signal) {
+    if (record.resumeStarted) {
+      return false;
+    }
+    record.resumeStarted = true;
     let response;
     try {
       response = await record.mcpClient.callTool(
@@ -1354,8 +1399,9 @@ export class InteractionCoordinator {
         },
       );
     } catch (error) {
+      record.resumeStarted = false;
       await this.notify(record, "resume_failed", safeErrorCode(error));
-      return;
+      return false;
     }
 
     const processed = processToolResult(
@@ -1393,6 +1439,7 @@ export class InteractionCoordinator {
         response,
       },
     );
+    return true;
   }
 
   async notify(

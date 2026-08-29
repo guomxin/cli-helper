@@ -2139,6 +2139,126 @@ test("continues a workspace interaction after its field card is delivered to a c
   await coordinator.waitForIdle();
 });
 
+test("resumes a workspace field card completed before companion notification claim", async () => {
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  const companionSessionKey = "agent:main:telegram:direct:7052061588";
+  const interactionId = "interaction-workspace-fast-field-1234567890";
+  const completedFieldInteraction = interaction({
+    interactionId,
+    type: "business_input",
+    state: "completed",
+    title: "填写差旅费审批意见",
+    resume: {
+      tool: "agentbridge_interaction_resume",
+      ready: true,
+      completed: false,
+    },
+  });
+  const authorization = interaction({
+    interactionId: "interaction-workspace-fast-authorization-1234567890",
+    type: "execution_authorization",
+    title: "确认提交差旅费审批",
+  });
+  const task = {
+    taskId: "task-workspace-fast-field-1234567890",
+    originEndpointId: "workspace-endpoint-1234567890",
+    activeConversationRef: workspaceSessionKey,
+  };
+  const notifications = [
+    {
+      deliveryId: "delivery-workspace-fast-waiting-1234567890",
+      deliveryMode: "status",
+      task,
+      event: {
+        eventType: "task.interaction.waiting",
+        payload: { interactionId },
+      },
+      message: "等待用户填写。",
+    },
+    {
+      deliveryId: "delivery-workspace-fast-completed-1234567890",
+      deliveryMode: "status",
+      task,
+      event: {
+        eventType: "task.interaction.completed",
+        payload: { interactionId },
+      },
+      message: "用户已填写。",
+    },
+  ];
+  const harness = fakeApi({ autoPoll: false, wakeAgentOnComplete: true });
+  const calls = [];
+  const client = {
+    async callTool(name, params, options) {
+      calls.push({ name, params, options });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: companionSessionKey,
+            route: { channel: "telegram", to: "7052061588" },
+          },
+          notifications,
+        };
+      }
+      if (name === "agentbridge_interaction_get") {
+        return {
+          status: "succeeded",
+          interaction: completedFieldInteraction,
+        };
+      }
+      if (name === "agentbridge_interaction_resume") {
+        return toolResult(authorization);
+      }
+      return { status: "succeeded" };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:7052061588",
+      channel: "telegram",
+      senderId: "7052061588",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(
+    calls.filter((item) => item.name === "agentbridge_interaction_get").length,
+    2,
+  );
+  const resumeCalls = calls.filter(
+    (item) => item.name === "agentbridge_interaction_resume",
+  );
+  assert.equal(resumeCalls.length, 1);
+  assert.equal(resumeCalls[0].params.interaction_id, interactionId);
+  assert.equal(
+    resumeCalls[0].options.meta["io.agentbridge/task"].taskId,
+    task.taskId,
+  );
+  assert.equal(
+    calls.filter((item) => item.name === "agentbridge_host_notification_ack")
+      .length,
+    2,
+  );
+  assert.equal(
+    coordinator
+      .pendingForSession(workspaceSessionKey)
+      .some((item) => item.interactionId === authorization.interactionId),
+    true,
+  );
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(harness.systemEvents.length, 0);
+  assert.equal(harness.heartbeatRuns.length, 0);
+});
+
 test("acknowledges pull-based workspace notifications without direct webchat delivery", async () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
