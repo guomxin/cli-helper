@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/timeline-event.schema.json",
+  "title": "AgentBridge Timeline Event",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "eventId", "taskId", "sequence", "kind", "audience", "summary", "createdAt"],
+  "properties": {
+    "schema": {"const": "agentbridge.timeline-event.v1"},
+    "eventId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "sequence": {"type": "integer", "minimum": 1},
+    "kind": {"type": "string", "minLength": 1, "maxLength": 120},
+    "audience": {"enum": ["user", "host", "admin"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+    "createdAt": {"type": "string", "format": "date-time"}
+  }
+}

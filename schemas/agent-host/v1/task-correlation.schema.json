@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/task-correlation.schema.json",
+  "title": "AgentBridge Host Task Correlation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "hostInstanceId", "hostRunId", "operationIds", "interactionIds", "artifactIds"],
+  "properties": {
+    "schema": {"const": "agentbridge.task-correlation.v1"},
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "hostInstanceId": {"type": "string", "minLength": 1, "maxLength": 160},
+    "hostRunId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "operationIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 128}},
+    "interactionIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 128}},
+    "artifactIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 128}}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/task-batch.schema.json",
+  "title": "AgentBridge Batch Task Progress",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "batchId", "parentTaskId", "state", "currentOrdinal", "totalCount", "succeededCount", "failedCount", "skippedCount"],
+  "properties": {
+    "schema": {"const": "agentbridge.task-batch.v1"},
+    "batchId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "parentTaskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "state": {"enum": ["running", "waiting_user", "paused", "succeeded", "partially_succeeded", "failed", "outcome_unknown", "canceled", "expired"]},
+    "currentOrdinal": {"type": "integer", "minimum": 0},
+    "totalCount": {"type": "integer", "minimum": 1},
+    "succeededCount": {"type": "integer", "minimum": 0},
+    "failedCount": {"type": "integer", "minimum": 0},
+    "skippedCount": {"type": "integer", "minimum": 0}
+  }
+}

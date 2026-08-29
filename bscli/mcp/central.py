@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 from pathlib import Path
+import sysconfig
 import threading
 from time import perf_counter
 from typing import Annotated, Any, Literal, Mapping
@@ -140,6 +141,16 @@ from bscli.broker.remote_browser import (
     RemoteInteractiveBrowserBroker,
 )
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.host_contract import (
+    HOST_CONTRACT_SCHEMA,
+    HOST_CONTEXT_META_KEY,
+    HOST_PROFILE_META_KEY,
+    LEGACY_HOST_CONTEXT_META_KEY,
+    TASK_CONTEXT_META_KEY,
+    HostContractError,
+    normalize_host_call_context,
+    normalize_host_runtime_context,
+)
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
@@ -162,8 +173,6 @@ from bscli.workspace.server import (
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
-HOST_CONTEXT_META_KEY = "io.agentbridge/host"
-TASK_CONTEXT_META_KEY = "io.agentbridge/task"
 
 
 AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
@@ -276,6 +285,48 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "yuque_session_login": frozenset({"yuque:read"}),
 }
 
+APPLICATION_PRIVATE_TOOL_NAMES = (
+    "agentbridge_interaction_resume",
+)
+
+HOST_REGISTRATION_TOOL_NAMES = (
+    "agentbridge_host_register",
+    "agentbridge_host_runtime_snapshot",
+    "agentbridge_host_identity_profile",
+)
+
+HOST_PRESENTATION_TOOL_NAMES = (
+    "agentbridge_host_interaction_present",
+)
+
+HOST_COORDINATION_TOOL_NAMES = (
+    "agentbridge_host_coordinator_lease_acquire",
+    "agentbridge_host_coordinator_lease_get",
+    "agentbridge_host_coordinator_lease_release",
+    "agentbridge_host_task_ensure",
+    "agentbridge_host_timeline_append",
+    "agentbridge_host_task_observe",
+    "agentbridge_host_task_finish",
+    "agentbridge_host_task_recovery_list",
+    "agentbridge_host_task_list",
+    "agentbridge_host_task_snapshot",
+    "agentbridge_host_task_continuation_resolve",
+    "agentbridge_host_cross_endpoint_context",
+    "agentbridge_host_notification_claim",
+    "agentbridge_host_notification_ack",
+    "agentbridge_host_artifact_delivery_report",
+    "agentbridge_host_artifact_reissue",
+    "agentbridge_host_workspace_link_confirm",
+    "agentbridge_host_workspace_session_bind",
+    "agentbridge_host_workspace_session_resolve",
+)
+
+HOST_CONTROL_TOOL_NAMES = (
+    *HOST_REGISTRATION_TOOL_NAMES,
+    *HOST_PRESENTATION_TOOL_NAMES,
+    *HOST_COORDINATION_TOOL_NAMES,
+)
+
 
 def agent_facing_tools_for_scopes(scopes: list[str] | set[str]) -> list[str]:
     granted = set(scopes)
@@ -318,6 +369,45 @@ async def _run_host_control(
                 elapsed_ms,
                 user_subject,
             )
+
+
+async def _require_registered_host_call(
+    ctx: Context,
+    *,
+    service: CentralCapabilityService,
+    identity: Mapping[str, Any],
+    agent_host: str | None = None,
+    minimum_level: str = "L3",
+    task_id: str | None = None,
+    require_coordinator_lease: bool = False,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    host_context, registration = await _registered_host_context(
+        ctx,
+        service=service,
+        identity=identity,
+        agent_host=agent_host,
+        minimum_level=minimum_level,
+    )
+    runtime_context = _request_runtime_context(ctx)
+    lease_version = runtime_context.get("coordinatorLeaseVersion")
+    try:
+        expected_lease_version = (
+            int(lease_version) if lease_version is not None else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise HostContractError(
+            "coordinator lease version must be an integer"
+        ) from exc
+    await asyncio.to_thread(
+        service.validate_host_call_context,
+        user_subject=identity["user_subject"],
+        registration=registration,
+        task_id=task_id,
+        endpoint_id=runtime_context.get("endpointId"),
+        expected_lease_version=expected_lease_version,
+        require_coordinator_lease=require_coordinator_lease,
+    )
+    return host_context, registration
 
 
 @dataclass(frozen=True)
@@ -691,6 +781,36 @@ def create_central_mcp_server(
     def agentbridge_server_profile_resource() -> str:
         return server_profile_json(mcp_url=config.mcp_url)
 
+    schema_directory = Path(__file__).parents[2] / "schemas" / "agent-host" / "v1"
+    if not schema_directory.is_dir():
+        schema_directory = (
+            Path(sysconfig.get_path("data"))
+            / "share"
+            / "agentbridge"
+            / "schemas"
+            / "agent-host"
+            / "v1"
+        )
+    if schema_directory.is_dir():
+        for schema_path in sorted(schema_directory.glob("*.json")):
+            resource_uri = f"agentbridge://host-contract/v1/{schema_path.name}"
+
+            def load_contract_schema(path: Path = schema_path) -> str:
+                return path.read_text(encoding="utf-8")
+
+            schema_resource = FunctionResource.from_function(
+                load_contract_schema,
+                uri=resource_uri,
+                name=f"agentbridge_host_contract_{schema_path.stem}",
+                title=f"AgentBridge Host Contract: {schema_path.name}",
+                description=(
+                    "Machine-readable AgentBridge host contract schema or shared "
+                    "compatibility test vectors."
+                ),
+                mime_type="application/json",
+            )
+            mcp.add_resource(schema_resource)
+
     app_resource = FunctionResource.from_function(
         load_mcp_app_html,
         uri=MCP_APP_RESOURCE_URI,
@@ -741,6 +861,29 @@ def create_central_mcp_server(
         mcp_started_at = datetime.now(timezone.utc).isoformat()
         mcp_started = perf_counter()
         task_id = _request_task_id(ctx)
+        request_meta = _request_meta(ctx)
+        has_formal_host_context = isinstance(
+            request_meta.get(HOST_CONTEXT_META_KEY), Mapping
+        )
+        if has_formal_host_context or task_id:
+            _host_context, registration = await _registered_host_context(
+                ctx,
+                service=service,
+                identity=identity,
+                minimum_level="L3" if task_id else "L1",
+            )
+            expected_version = runtime_context.get("coordinatorLeaseVersion")
+            await asyncio.to_thread(
+                service.validate_host_call_context,
+                user_subject=identity["user_subject"],
+                registration=registration,
+                task_id=task_id,
+                endpoint_id=runtime_context.get("endpointId"),
+                expected_lease_version=(
+                    int(expected_version) if expected_version is not None else None
+                ),
+                require_coordinator_lease=bool(task_id),
+            )
         if task_id:
             await asyncio.to_thread(
                 service.observe_host_task,
@@ -1005,8 +1148,55 @@ def create_central_mcp_server(
         annotations=read_annotations,
         structured_output=True,
     )
-    async def agentbridge_server_profile() -> dict[str, Any]:
-        return profile
+    async def agentbridge_server_profile(ctx: Context) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        response = dict(profile)
+        declared_profile = _request_meta(ctx).get(HOST_PROFILE_META_KEY)
+        if isinstance(declared_profile, Mapping):
+            negotiation = await asyncio.to_thread(
+                service.negotiate_host,
+                user_subject=identity["user_subject"],
+                token_id=identity["token_id"],
+                profile=dict(declared_profile),
+            )
+        else:
+            negotiation = {
+                "schemaVersion": "agentbridge.host-negotiation.v1",
+                "status": "succeeded",
+                "acceptedLevel": "L1",
+                "compatibilityStatus": "undeclared",
+                "missingCapabilities": [],
+                "mustReregisterOnVersionChange": True,
+            }
+        response["negotiation"] = negotiation
+        allowed_tools = agent_facing_tools_for_scopes(identity["scopes"])
+        response["agentToolAccess"] = {
+            "allowedToolNames": allowed_tools,
+            "allowedToolCount": len(allowed_tools),
+        }
+        response["toolPlanes"] = {
+            "model": {
+                "visibility": "model",
+                "toolNames": allowed_tools,
+            },
+            "applicationPrivate": {
+                "visibility": "app_private",
+                "minimumHostLevel": "L2",
+                "taskBoundMinimumHostLevel": "L3",
+                "toolNames": list(APPLICATION_PRIVATE_TOOL_NAMES),
+            },
+            "hostControl": {
+                "visibility": "host_private",
+                "toolNames": list(HOST_CONTROL_TOOL_NAMES),
+                "levels": {
+                    "L1": list(HOST_REGISTRATION_TOOL_NAMES),
+                    "L2": list(HOST_PRESENTATION_TOOL_NAMES),
+                    "L3": list(HOST_COORDINATION_TOOL_NAMES),
+                },
+            },
+        }
+        response["hostContract"]["schemaVersion"] = HOST_CONTRACT_SCHEMA
+        return response
 
     @mcp.tool(
         name="oa_template_list",
@@ -4107,6 +4297,7 @@ def create_central_mcp_server(
         structured_output=True,
     )
     async def agentbridge_interaction_resume(
+        ctx: Context,
         interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
@@ -4120,6 +4311,36 @@ def create_central_mcp_server(
             identity_store,
             required_scopes=set(required_scopes),
         )
+        task_id = await asyncio.to_thread(
+            service.tasks.task_id_for_interaction,
+            interaction_id,
+            user_subject=identity["user_subject"],
+        )
+        if not isinstance(task_id, str) or not task_id.strip():
+            task_id = None
+        if task_id:
+            requested_task_id = _request_task_id(ctx)
+            if requested_task_id and requested_task_id != task_id:
+                raise PermissionError(
+                    "trusted interaction task context does not match"
+                )
+            _host_context, registration = await _registered_host_context(
+                ctx,
+                service=service,
+                identity=identity,
+                minimum_level="L3",
+            )
+            runtime_context = _request_runtime_context(ctx)
+            expected_version = runtime_context.get("coordinatorLeaseVersion")
+            await asyncio.to_thread(
+                service.assert_host_coordinator_lease,
+                user_subject=identity["user_subject"],
+                task_id=task_id,
+                registration=registration,
+                expected_version=(
+                    int(expected_version) if expected_version is not None else None
+                ),
+            )
         response = await asyncio.to_thread(
             service.resume_interaction,
             user_subject=identity["user_subject"],
@@ -4163,6 +4384,176 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(
+        name="agentbridge_host_register",
+        title="Register AgentBridge Host Runtime",
+        description=(
+            "Host-private capability negotiation. The host profile and runtime "
+            "context must be supplied in trusted MCP request metadata."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_register(ctx: Context) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        host_context = _require_host_context(ctx)
+        profile_value = _request_meta(ctx).get(HOST_PROFILE_META_KEY)
+        if not isinstance(profile_value, Mapping):
+            raise HostContractError("trusted host capability profile is required")
+        profile_value = dict(profile_value)
+        implementation = profile_value.get("implementation")
+        if (
+            profile_value.get("hostInstanceId") != host_context["hostInstanceId"]
+            or not isinstance(implementation, Mapping)
+            or implementation.get("name") != host_context["agentHost"]
+            or implementation.get("version") != host_context["hostVersion"]
+        ):
+            raise HostContractError(
+                "host capability profile does not match runtime context"
+            )
+        return await asyncio.to_thread(
+            service.negotiate_host,
+            user_subject=identity["user_subject"],
+            token_id=identity["token_id"],
+            profile=profile_value,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_runtime_snapshot",
+        title="Record AgentBridge Host Runtime Snapshot",
+        description="Host-private health and recovery evidence for runtime governance.",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_runtime_snapshot(
+        ctx: Context,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        _host_context, registration = await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+        )
+        return await asyncio.to_thread(
+            service.record_host_runtime_snapshot,
+            user_subject=identity["user_subject"],
+            registration=registration,
+            snapshot=snapshot,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_coordinator_lease_acquire",
+        title="Acquire AgentBridge Task Coordinator Lease",
+        description=(
+            "Host-private task coordination lease. A different host requires an "
+            "expired lease, explicit takeover, and the expected prior version."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_coordinator_lease_acquire(
+        ctx: Context,
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        lease_seconds: Annotated[int, Field(ge=15, le=600)] = 60,
+        takeover: bool = False,
+        expected_version: Annotated[int | None, Field(ge=1)] = None,
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        _host_context, registration = await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+        )
+        lease = await asyncio.to_thread(
+            service.acquire_host_coordinator_lease,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            registration=registration,
+            lease_seconds=lease_seconds,
+            takeover=takeover,
+            expected_version=expected_version,
+        )
+        return {"status": "succeeded", "coordinatorLease": lease}
+
+    @mcp.tool(
+        name="agentbridge_host_coordinator_lease_release",
+        title="Release AgentBridge Task Coordinator Lease",
+        description="Host-private explicit release of an owned task coordinator lease.",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_coordinator_lease_release(
+        ctx: Context,
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        expected_version: Annotated[int | None, Field(ge=1)] = None,
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        _host_context, registration = await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+        )
+        lease = await asyncio.to_thread(
+            service.release_host_coordinator_lease,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            registration=registration,
+            expected_version=expected_version,
+        )
+        return {"status": "succeeded", "coordinatorLease": lease}
+
+    @mcp.tool(
+        name="agentbridge_host_coordinator_lease_get",
+        title="Get AgentBridge Task Coordinator Lease",
+        description=(
+            "Host-private read-only coordinator ownership snapshot used before "
+            "restart recovery or an explicit reconciled takeover."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_host_coordinator_lease_get(
+        ctx: Context,
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+        )
+        lease = await asyncio.to_thread(
+            service.get_host_coordinator_lease,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+        )
+        return {"status": "succeeded", "coordinatorLease": lease}
+
+    @mcp.tool(
         name="agentbridge_host_identity_profile",
         title="Resolve Host Identity Tool Access",
         description=(
@@ -4181,8 +4572,14 @@ def create_central_mcp_server(
         ctx: Context,
         agent_host: Annotated[str, Field(min_length=1, max_length=80)],
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        host_context, registration = await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            minimum_level="L1",
+        )
         allowed_tools = agent_facing_tools_for_scopes(identity["scopes"])
         return {
             "schemaVersion": "agentbridge.host-identity-profile.v1",
@@ -4197,6 +4594,11 @@ def create_central_mcp_server(
             "agentToolAccess": {
                 "allowedToolNames": allowed_tools,
                 "allowedToolCount": len(allowed_tools),
+            },
+            "host": {
+                "hostInstanceId": host_context["hostInstanceId"],
+                "hostVersion": host_context["hostVersion"],
+                "acceptedLevel": registration["acceptedLevel"],
             },
         }
 
@@ -4233,8 +4635,14 @@ def create_central_mcp_server(
             Field(pattern="^(host_run|user_turn|independent)$"),
         ] = "host_run",
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        host_context, _registration = await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            minimum_level="L3",
+        )
         return await _run_host_control(
             "agentbridge_host_task_ensure",
             service.ensure_host_task,
@@ -4252,6 +4660,8 @@ def create_central_mcp_server(
             route=route,
             capabilities=capabilities,
             task_scope=task_scope,
+            host_instance_id=host_context["hostInstanceId"],
+            host_version=host_context["hostVersion"],
         )
 
     @mcp.tool(
@@ -4285,8 +4695,15 @@ def create_central_mcp_server(
         route: dict[str, Any] | None = None,
         task_id: Annotated[str | None, Field(max_length=128)] = None,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            task_id=task_id,
+            require_coordinator_lease=bool(task_id),
+        )
         return await _run_host_control(
             "agentbridge_host_timeline_append",
             service.append_host_timeline_message,
@@ -4327,8 +4744,15 @@ def create_central_mcp_server(
         operation_ids: list[str] | None = None,
         interaction_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            task_id=task_id,
+            require_coordinator_lease=True,
+        )
         return await asyncio.to_thread(
             service.observe_host_task,
             user_subject=identity["user_subject"],
@@ -4362,8 +4786,15 @@ def create_central_mcp_server(
         message: Annotated[str | None, Field(max_length=500)] = None,
         causation_ref: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            task_id=task_id,
+            require_coordinator_lease=True,
+        )
         return await _run_host_control(
             "agentbridge_host_task_finish",
             service.finish_host_task,
@@ -4392,8 +4823,13 @@ def create_central_mcp_server(
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         include_user_endpoints: bool = False,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await asyncio.to_thread(
             service.recover_host_tasks,
             user_subject=identity["user_subject"],
@@ -4419,8 +4855,13 @@ def create_central_mcp_server(
         active_only: bool = False,
         limit: Annotated[int, Field(ge=1, le=100)] = 20,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await asyncio.to_thread(
             service.list_host_tasks,
             user_subject=identity["user_subject"],
@@ -4428,6 +4869,41 @@ def create_central_mcp_server(
             endpoint_key=endpoint_key,
             active_only=active_only,
             limit=limit,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_task_snapshot",
+        title="Read One Host-Owned AgentBridge Task Snapshot",
+        description=(
+            "Host-private read-only task, ordered event, current interaction, "
+            "and artifact snapshot for rendering and restart recovery."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_host_task_snapshot(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        event_limit: Annotated[int, Field(ge=1, le=500)] = 100,
+        artifact_limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
+        return await asyncio.to_thread(
+            service.get_host_task_snapshot,
+            user_subject=identity["user_subject"],
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+            task_id=task_id,
+            event_limit=event_limit,
+            artifact_limit=artifact_limit,
         )
 
     @mcp.tool(
@@ -4464,8 +4940,13 @@ def create_central_mcp_server(
         max_age_minutes: Annotated[int, Field(ge=1, le=10_080)] = 1_440,
         limit: Annotated[int, Field(ge=1, le=20)] = 8,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await _run_host_control(
             "agentbridge_host_task_continuation_resolve",
             service.resolve_host_task_continuation,
@@ -4501,8 +4982,13 @@ def create_central_mcp_server(
         max_age_minutes: Annotated[int, Field(ge=1, le=1_440)] = 360,
         limit: Annotated[int, Field(ge=1, le=20)] = 12,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await _run_host_control(
             "agentbridge_host_cross_endpoint_context",
             service.get_host_cross_endpoint_context,
@@ -4534,8 +5020,14 @@ def create_central_mcp_server(
         endpoint_key: Annotated[str, Field(min_length=1, max_length=768)],
         interaction_id: Annotated[str, Field(min_length=16, max_length=128)],
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            minimum_level="L2",
+        )
         return await asyncio.to_thread(
             service.present_interaction,
             user_subject=identity["user_subject"],
@@ -4566,8 +5058,13 @@ def create_central_mcp_server(
         limit: Annotated[int, Field(ge=1, le=100)] = 10,
         lease_seconds: Annotated[int, Field(ge=5, le=300)] = 30,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await _run_host_control(
             "agentbridge_host_notification_claim",
             service.claim_host_notifications,
@@ -4602,8 +5099,13 @@ def create_central_mcp_server(
         retry_after_seconds: Annotated[int, Field(ge=1, le=300)] = 5,
         defer_until_activity: bool = False,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await _run_host_control(
             "agentbridge_host_notification_ack",
             service.acknowledge_host_notification,
@@ -4640,8 +5142,15 @@ def create_central_mcp_server(
         channel: Annotated[str, Field(min_length=1, max_length=80)],
         files: Annotated[list[dict[str, Any]], Field(min_length=1, max_length=20)],
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            task_id=task_id,
+            require_coordinator_lease=True,
+        )
         return await _run_host_control(
             "agentbridge_host_artifact_delivery_report",
             service.report_host_artifact_delivery,
@@ -4651,6 +5160,45 @@ def create_central_mcp_server(
             delivery_ref=delivery_ref,
             channel=channel,
             files=files,
+        )
+
+    @mcp.tool(
+        name="agentbridge_host_artifact_reissue",
+        title="Reissue an Expired AgentBridge Task Artifact",
+        description=(
+            "Host-private artifact refresh. It never repeats a completed business "
+            "write and is allowed only for a regenerable artifact on a task owned "
+            "by the current coordinator."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_host_artifact_reissue(
+        ctx: Context,
+        agent_host: Annotated[str, Field(min_length=1, max_length=80)],
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+        artifact_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+            task_id=task_id,
+            require_coordinator_lease=True,
+        )
+        return await _run_host_control(
+            "agentbridge_host_artifact_reissue",
+            service.reissue_document_download,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            artifact_id=artifact_id,
         )
 
     @mcp.tool(
@@ -4680,8 +5228,13 @@ def create_central_mcp_server(
         label: Annotated[str | None, Field(max_length=120)] = None,
         route: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await asyncio.to_thread(
             service.confirm_workspace_link,
             user_subject=identity["user_subject"],
@@ -4720,8 +5273,13 @@ def create_central_mcp_server(
         grant: Annotated[str, Field(min_length=32, max_length=256)],
         turn_ref: Annotated[str | None, Field(max_length=128)] = None,
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await asyncio.to_thread(
             service.redeem_workspace_gateway_grant,
             user_subject=identity["user_subject"],
@@ -4752,8 +5310,13 @@ def create_central_mcp_server(
         agent_host: Annotated[str, Field(min_length=1, max_length=80)],
         session_key: Annotated[str, Field(min_length=16, max_length=1024)],
     ) -> dict[str, Any]:
-        _require_host_context(ctx, agent_host=agent_host)
         identity = _request_identity(identity_store)
+        await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            agent_host=agent_host,
+        )
         return await asyncio.to_thread(
             service.resolve_workspace_gateway_session,
             user_subject=identity["user_subject"],
@@ -4952,14 +5515,62 @@ def _request_meta(ctx: Context) -> Mapping[str, Any]:
     return {}
 
 
-def _require_host_context(ctx: Context, *, agent_host: str) -> None:
-    host_context = _request_meta(ctx).get(HOST_CONTEXT_META_KEY)
+def _require_host_context(
+    ctx: Context,
+    *,
+    agent_host: str | None = None,
+) -> dict[str, str]:
+    meta = _request_meta(ctx)
+    host_context = meta.get(HOST_CONTEXT_META_KEY)
+    if not isinstance(host_context, Mapping):
+        host_context = meta.get(LEGACY_HOST_CONTEXT_META_KEY)
     if not isinstance(host_context, Mapping):
         raise PermissionError("trusted AgentBridge host context is required")
-    if host_context.get("version") != "1":
-        raise PermissionError("trusted AgentBridge host context version is invalid")
-    if host_context.get("agentHost") != agent_host:
+    try:
+        normalized = normalize_host_runtime_context(host_context)
+    except HostContractError:
+        if host_context.get("version") != "1" or not host_context.get("agentHost"):
+            raise PermissionError(
+                "trusted AgentBridge host context version is invalid"
+            ) from None
+        # Deployment compatibility only. New host-private operations require a
+        # registered context with an explicit instance and version.
+        normalized = {
+            "version": "1",
+            "agentHost": str(host_context["agentHost"]),
+            "hostInstanceId": str(
+                host_context.get("hostInstanceId")
+                or f"{host_context['agentHost']}:legacy"
+            ),
+            "hostVersion": str(host_context.get("hostVersion") or "legacy"),
+        }
+    if agent_host is not None and normalized["agentHost"] != agent_host:
         raise PermissionError("trusted AgentBridge host context does not match")
+    return normalized
+
+
+async def _registered_host_context(
+    ctx: Context,
+    *,
+    service: CentralCapabilityService,
+    identity: Mapping[str, Any],
+    minimum_level: str,
+    agent_host: str | None = None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    host_context = _require_host_context(ctx, agent_host=agent_host)
+    if host_context["hostVersion"] == "legacy":
+        raise PermissionError(
+            "registered AgentBridge host context with an explicit version is required"
+        )
+    registration = await asyncio.to_thread(
+        service.require_host_registration,
+        user_subject=identity["user_subject"],
+        agent_host=host_context["agentHost"],
+        host_instance_id=host_context["hostInstanceId"],
+        host_version=host_context["hostVersion"],
+        minimum_level=minimum_level,
+    )
+    return host_context, registration
 
 
 def _request_task_id(ctx: Context) -> str | None:
@@ -4978,9 +5589,16 @@ def _request_task_id(ctx: Context) -> str | None:
 def _request_runtime_context(ctx: Context) -> dict[str, str | None]:
     meta = _request_meta(ctx)
     host_context = meta.get(HOST_CONTEXT_META_KEY)
+    if not isinstance(host_context, Mapping):
+        host_context = meta.get(LEGACY_HOST_CONTEXT_META_KEY)
     task_context = meta.get(TASK_CONTEXT_META_KEY)
     host = host_context if isinstance(host_context, Mapping) else {}
-    task = task_context if isinstance(task_context, Mapping) else {}
+    try:
+        task = normalize_host_call_context(
+            task_context if isinstance(task_context, Mapping) else None
+        )
+    except HostContractError:
+        task = {}
 
     def text_value(value: Any, maximum: int) -> str | None:
         if not isinstance(value, (str, int)):
@@ -4991,11 +5609,15 @@ def _request_runtime_context(ctx: Context) -> dict[str, str | None]:
     return {
         "hostType": text_value(host.get("agentHost"), 80) or "unknown",
         "hostInstanceId": text_value(host.get("hostInstanceId"), 160),
+        "hostVersion": text_value(host.get("hostVersion"), 80),
         "hostRunId": (
             text_value(task.get("hostRunId"), 256)
             or text_value(task.get("toolCallId"), 256)
         ),
         "endpointId": text_value(task.get("endpointId"), 128),
+        "coordinatorLeaseVersion": text_value(
+            task.get("coordinatorLeaseVersion"), 32
+        ),
     }
 
 

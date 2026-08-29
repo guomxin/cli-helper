@@ -311,6 +311,8 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(task_hub["users"][0]["user_subject"], "user-a")
         self.assertNotIn("sensitive-peer-uat-9f4c", json.dumps(task_hub))
         self.assertIn("operations", runtime["coordination"]["host_control"])
+        self.assertIn("agent_hosts", runtime["coordination"])
+        self.assertNotIn("token-a", json.dumps(runtime["coordination"]["agent_hosts"]))
         self.assertEqual(
             runtime["workspace_gateway"]["target"],
             "ws://10.90.20.210:18789",

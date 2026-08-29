@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/coordinator-lease.schema.json",
+  "title": "AgentBridge Task Coordinator Lease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "hostInstanceId", "agentHost", "leaseId", "version", "state", "acquiredAt", "renewedAt", "expiresAt"],
+  "properties": {
+    "schema": {"const": "agentbridge.coordinator-lease.v1"},
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "hostInstanceId": {"type": "string", "minLength": 1, "maxLength": 160},
+    "agentHost": {"type": "string", "minLength": 1, "maxLength": 80},
+    "leaseId": {"type": "string", "minLength": 16, "maxLength": 128},
+    "version": {"type": "integer", "minimum": 1},
+    "state": {"enum": ["active", "released", "expired"]},
+    "acquiredAt": {"type": "string", "format": "date-time"},
+    "renewedAt": {"type": "string", "format": "date-time"},
+    "expiresAt": {"type": "string", "format": "date-time"},
+    "releasedAt": {"type": ["string", "null"], "format": "date-time"}
+  }
+}

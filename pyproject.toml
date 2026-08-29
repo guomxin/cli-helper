@@ -24,5 +24,8 @@ include = ["bscli*"]
 "bscli.admin" = ["static/*.html", "static/*.css", "static/*.js"]
 "bscli.workspace" = ["static/*.html", "static/*.css", "static/*.js", "*.mjs"]
 
+[tool.setuptools.data-files]
+"share/agentbridge/schemas/agent-host/v1" = ["schemas/agent-host/v1/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

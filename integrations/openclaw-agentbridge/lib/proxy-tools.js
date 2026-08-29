@@ -2,10 +2,15 @@ import {
   AGENTBRIDGE_TOOL_CATALOG,
 } from "./tool-catalog.js";
 import { extractToolPayload } from "./mcp-client.js";
+import {
+  HOST_CONTEXT_META_KEY,
+  TASK_CONTEXT_META_KEY,
+  hostContextMeta,
+} from "./host-contract.js";
+
+export { HOST_CONTEXT_META_KEY, TASK_CONTEXT_META_KEY, hostContextMeta };
 
 export const IDENTITY_STATUS_TOOL_NAME = "agentbridge_identity_status";
-export const HOST_CONTEXT_META_KEY = "io.agentbridge/host";
-export const TASK_CONTEXT_META_KEY = "io.agentbridge/task";
 export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
   "oa_efficiency_data_approval_prepare",
   "oa_travel_expense_approval_prepare",
@@ -257,6 +262,14 @@ function createProxyTool({
         taskRunRefResolver,
         logger,
       });
+      const coordinatorLease = taskId
+        ? await renewCoordinatorLease({
+            client: identity.client,
+            taskId,
+            logger,
+            signal,
+          })
+        : null;
       let result;
       const transportRecovery = {};
       const retry = safeTransportRetryPolicy({
@@ -278,6 +291,13 @@ function createProxyTool({
                     taskId,
                     hostRunId: boundedText(toolCallId, 256),
                     toolCallId: boundedText(toolCallId, 256),
+                    ...(coordinatorLease?.version
+                      ? {
+                          coordinatorLeaseVersion: String(
+                            coordinatorLease.version,
+                          ),
+                        }
+                      : {}),
                   },
                 }
                 : {}),
@@ -337,6 +357,40 @@ function createProxyTool({
       };
     },
   };
+}
+
+async function renewCoordinatorLease({
+  client,
+  taskId,
+  logger,
+  signal,
+}) {
+  try {
+    const response = await client.callTool(
+      "agentbridge_host_coordinator_lease_acquire",
+      {
+        task_id: taskId,
+        lease_seconds: 600,
+        takeover: false,
+        expected_version: null,
+      },
+      { signal, meta: hostContextMeta() },
+    );
+    const lease = response?.coordinatorLease;
+    if (!lease || lease.hostInstanceId !== "openclaw-gateway") {
+      const error = new Error(
+        "AgentBridge did not grant the OpenClaw task coordinator lease",
+      );
+      error.code = "HOST_COORDINATOR_LEASE_CONFLICT";
+      throw error;
+    }
+    return lease;
+  } catch (error) {
+    logger?.warn?.(
+      `AgentBridge task coordinator lease unavailable (${safeErrorCode(error)})`,
+    );
+    throw error;
+  }
 }
 
 function paramsWithStableIdempotencyKey({
@@ -670,16 +724,6 @@ export function collectTaskReferences(value) {
   return {
     operationIds: [...operationIds].slice(0, 20),
     interactionIds: [...interactionIds].slice(0, 20),
-  };
-}
-
-export function hostContextMeta() {
-  return {
-    [HOST_CONTEXT_META_KEY]: {
-      version: "1",
-      agentHost: "openclaw",
-      hostInstanceId: "openclaw-gateway",
-    },
   };
 }
 

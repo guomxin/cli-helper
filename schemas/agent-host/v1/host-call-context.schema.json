@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/host-call-context.schema.json",
+  "title": "AgentBridge Host Call Context",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "taskId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "hostRunId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "toolCallId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "endpointId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "conversationRef": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "clientMessageRef": {"type": "string", "minLength": 1, "maxLength": 256},
+    "coordinatorLeaseVersion": {"type": "integer", "minimum": 1}
+  }
+}

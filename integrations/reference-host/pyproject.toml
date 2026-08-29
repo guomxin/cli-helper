@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentbridge-reference-host"
+version = "0.1.0"
+description = "Deterministic reference Agent Host for AgentBridge"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27,<1",
+  "mcp==1.23.2",
+]
+
+[project.scripts]
+agentbridge-reference-host = "reference_host.app:main"
+
+[tool.setuptools.packages.find]
+include = ["reference_host*"]
+
+[tool.setuptools.package-data]
+reference_host = ["static/*.html", "static/*.css", "static/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

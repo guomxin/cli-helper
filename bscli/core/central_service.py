@@ -242,6 +242,7 @@ from bscli.core.field_submissions import (
     FieldSubmissionStateError,
     FieldSubmissionStore,
 )
+from bscli.core.host_contract import HostContractStore
 from bscli.core.interactions import (
     InteractionIntegrityError,
     InteractionStore,
@@ -709,6 +710,7 @@ class CentralCapabilityService:
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
         self.tasks = TaskHubStore(self.db_path)
+        self.host_contract = HostContractStore(self.db_path)
         self.workspace = WorkspaceStore(self.db_path)
         self.governance_policies = GovernancePolicyStore(self.db_path)
         self.runtime_governance = RuntimeGovernanceStore(
@@ -1876,6 +1878,8 @@ class CentralCapabilityService:
         route: dict | None = None,
         capabilities: list[str] | None = None,
         task_scope: str = "host_run",
+        host_instance_id: str | None = None,
+        host_version: str | None = None,
     ) -> dict:
         task_scope = str(task_scope or "host_run").strip()
         if task_scope not in {"host_run", "user_turn", "independent"}:
@@ -1948,12 +1952,27 @@ class CentralCapabilityService:
             active_conversation_ref=conversation_ref,
             title=title,
         )
+        coordinator_lease = None
+        if host_instance_id and host_version:
+            self.host_contract.require_registration(
+                user_subject=user_subject,
+                agent_host=agent_host,
+                host_instance_id=host_instance_id,
+                host_version=host_version,
+                minimum_level="L3",
+            )
+            coordinator_lease = self.host_contract.acquire_coordinator_lease(
+                task_id=task["task_id"],
+                user_subject=user_subject,
+                host_instance_id=host_instance_id,
+                agent_host=agent_host,
+            )
         trace, _trace_reused = self.runtime_governance.ensure_trace(
             user_subject=user_subject,
             task_id=task["task_id"],
             origin_endpoint_id=endpoint["endpoint_id"],
             host_type=agent_host,
-            host_instance_id=f"{agent_host}:default",
+            host_instance_id=host_instance_id or f"{agent_host}:default",
             host_run_id=host_task_key,
             request_kind="interaction",
         )
@@ -1976,6 +1995,202 @@ class CentralCapabilityService:
                 "task": task_reused,
                 "endpoint": endpoint_reused,
             },
+            "coordinatorLease": coordinator_lease,
+        }
+
+    def negotiate_host(
+        self,
+        *,
+        user_subject: str,
+        token_id: str,
+        profile: dict,
+    ) -> dict:
+        negotiation = self.host_contract.negotiate(
+            user_subject=user_subject,
+            token_id=token_id,
+            profile=profile,
+        )
+        self.runtime_governance.record_signal(
+            signal_type="host.contract.negotiated",
+            source="agent_host_contract",
+            status=(
+                "healthy"
+                if negotiation["compatibilityStatus"] == "approved"
+                else "degraded"
+            ),
+            user_subject=user_subject,
+            host_type=negotiation["implementation"]["name"],
+            value={
+                "hostInstanceId": negotiation["hostInstanceId"],
+                "hostVersion": negotiation["implementation"]["version"],
+                "acceptedLevel": negotiation["acceptedLevel"],
+                "compatibilityStatus": negotiation["compatibilityStatus"],
+            },
+        )
+        return negotiation
+
+    def require_host_registration(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        host_instance_id: str,
+        host_version: str,
+        minimum_level: str = "L1",
+    ) -> dict:
+        return self.host_contract.require_registration(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            host_instance_id=host_instance_id,
+            host_version=host_version,
+            minimum_level=minimum_level,
+        )
+
+    def record_host_runtime_snapshot(
+        self,
+        *,
+        user_subject: str,
+        registration: dict,
+        snapshot: dict,
+    ) -> dict:
+        result = self.host_contract.record_runtime_snapshot(
+            user_subject=user_subject,
+            registration=registration,
+            snapshot=snapshot,
+        )
+        self.runtime_governance.record_signal(
+            signal_type="host.runtime.snapshot",
+            source="agent_host_contract",
+            status=str(snapshot.get("status") or "failed"),
+            user_subject=user_subject,
+            host_type=registration["agentHost"],
+            value={
+                "hostInstanceId": registration["hostInstanceId"],
+                "hostVersion": registration["hostVersion"],
+                "snapshotId": result["snapshotId"],
+            },
+        )
+        return result
+
+    def acquire_host_coordinator_lease(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        registration: dict,
+        lease_seconds: int = 60,
+        takeover: bool = False,
+        expected_version: int | None = None,
+    ) -> dict:
+        self.tasks.get_task(task_id, user_subject=user_subject)
+        return self.host_contract.acquire_coordinator_lease(
+            task_id=task_id,
+            user_subject=user_subject,
+            host_instance_id=registration["hostInstanceId"],
+            agent_host=registration["agentHost"],
+            lease_seconds=lease_seconds,
+            takeover=takeover,
+            expected_version=expected_version,
+        )
+
+    def assert_host_coordinator_lease(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        registration: dict,
+        expected_version: int | None = None,
+    ) -> dict:
+        self.tasks.get_task(task_id, user_subject=user_subject)
+        return self.host_contract.assert_coordinator_lease(
+            task_id=task_id,
+            user_subject=user_subject,
+            host_instance_id=registration["hostInstanceId"],
+            expected_version=expected_version,
+        )
+
+    def release_host_coordinator_lease(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        registration: dict,
+        expected_version: int | None = None,
+    ) -> dict:
+        self.tasks.get_task(task_id, user_subject=user_subject)
+        return self.host_contract.release_coordinator_lease(
+            task_id=task_id,
+            user_subject=user_subject,
+            host_instance_id=registration["hostInstanceId"],
+            expected_version=expected_version,
+        )
+
+    def get_host_coordinator_lease(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+    ) -> dict | None:
+        self.tasks.get_task(task_id, user_subject=user_subject)
+        return self.host_contract.get_coordinator_lease(
+            task_id=task_id,
+            user_subject=user_subject,
+        )
+
+    def host_runtime_overview(self) -> dict:
+        return self.host_contract.runtime_overview()
+
+    def validate_host_call_context(
+        self,
+        *,
+        user_subject: str,
+        registration: dict,
+        task_id: str | None = None,
+        endpoint_id: str | None = None,
+        expected_lease_version: int | None = None,
+        require_coordinator_lease: bool = False,
+    ) -> dict:
+        endpoint = None
+        task = None
+        if endpoint_id:
+            endpoint = self.tasks.get_endpoint(
+                endpoint_id,
+                user_subject=user_subject,
+            )
+            if endpoint["agent_host"] != registration["agentHost"]:
+                raise TaskIntegrityError(
+                    "host call endpoint belongs to another agent host"
+                )
+        if task_id:
+            task = self.tasks.get_task(task_id, user_subject=user_subject)
+            if task["agent_host"] != registration["agentHost"]:
+                raise TaskIntegrityError(
+                    "host call task belongs to another agent host"
+                )
+            if endpoint is not None:
+                endpoint_ids = {
+                    task.get("origin_endpoint_id"),
+                    task.get("active_endpoint_id"),
+                }
+                if endpoint["endpoint_id"] not in endpoint_ids:
+                    raise TaskIntegrityError(
+                        "host call endpoint is not bound to the task"
+                    )
+            if require_coordinator_lease:
+                self.assert_host_coordinator_lease(
+                    user_subject=user_subject,
+                    task_id=task_id,
+                    registration=registration,
+                    expected_version=expected_lease_version,
+                )
+        elif require_coordinator_lease:
+            raise TaskIntegrityError(
+                "task context is required for coordinator-owned calls"
+            )
+        return {
+            "task": task,
+            "endpoint": endpoint,
+            "registration": registration,
         }
 
     def append_host_timeline_message(
@@ -2297,6 +2512,84 @@ class CentralCapabilityService:
             "count": len(tasks),
             "endpoint": endpoint_response(endpoint),
             "tasks": [task_response(task) for task in tasks],
+        }
+
+    def get_host_task_snapshot(
+        self,
+        *,
+        user_subject: str,
+        agent_host: str,
+        endpoint_key: str,
+        task_id: str,
+        event_limit: int = 100,
+        artifact_limit: int = 20,
+    ) -> dict:
+        endpoint = self.tasks.endpoint_for_key(
+            user_subject=user_subject,
+            agent_host=agent_host,
+            endpoint_key=endpoint_key,
+        )
+        task = self.tasks.get_task(task_id, user_subject=user_subject)
+        if task["agent_host"] != agent_host:
+            raise TaskIntegrityError("task belongs to another agent host")
+        events = self.tasks.list_events(
+            task_id=task_id,
+            user_subject=user_subject,
+            limit=event_limit,
+        )
+        artifacts = self.tasks.list_artifacts(
+            task_id=task_id,
+            user_subject=user_subject,
+            limit=artifact_limit,
+        )
+        interaction = None
+        interaction_id = task.get("current_interaction_id")
+        if interaction_id:
+            try:
+                interaction = self.present_interaction(
+                    user_subject=user_subject,
+                    agent_host=agent_host,
+                    endpoint_key=endpoint_key,
+                    interaction_id=interaction_id,
+                ).get("interaction")
+            except (KeyError, RuntimeError, InteractionIntegrityError):
+                interaction = None
+        return {
+            "protocolVersion": "0.1",
+            "schemaVersion": "agentbridge.host-task-snapshot.v1",
+            "status": "succeeded",
+            "task": task_response(task),
+            "endpoint": endpoint_response(endpoint),
+            "events": [
+                {
+                    "schema": "agentbridge.timeline-event.v1",
+                    "eventId": event["event_id"],
+                    "taskId": event["task_id"],
+                    "sequence": int(event.get("sequence") or 0),
+                    "kind": event["event_type"],
+                    "payload": event.get("payload") or {},
+                    "causationRef": event.get("causation_ref"),
+                    "createdAt": event["created_at"],
+                }
+                for event in events
+            ],
+            "interaction": interaction,
+            "artifacts": [
+                {
+                    "schema": "agentbridge.artifact.v1",
+                    "artifactId": artifact["artifact_id"],
+                    "taskId": artifact["task_id"],
+                    "fileName": artifact["filename"],
+                    "mediaType": artifact["content_type"],
+                    "size": artifact["byte_size"],
+                    "status": artifact["state"].upper(),
+                    "expiresAt": artifact["expires_at"],
+                    "downloadUrl": artifact["download_url"],
+                    "regenerable": artifact["artifact_type"]
+                    == "certificate_scan",
+                }
+                for artifact in artifacts
+            ],
         }
 
     def resolve_host_task_continuation(

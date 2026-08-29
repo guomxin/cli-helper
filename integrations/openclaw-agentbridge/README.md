@@ -4,7 +4,7 @@
 OpenClaw。它是宿主兼容层，不包含协同办公、泰华、语雀或照明系统的业务实现，也不修改
 OpenClaw 核心源码。
 
-当前版本：`0.4.61`
+当前版本：`0.4.62`
 
 兼容基线：OpenClaw `2026.7.1`
 完整身份设计见 [智能体宿主多用户身份路由](../../docs/架构设计/智能体宿主多用户身份路由.md)。
@@ -32,7 +32,7 @@ OpenClaw 核心源码。
 
 ## 二、模型工具面
 
-中心发布 125 个 MCP 工具，其中 109 个受治理智能体工具可由插件按身份权限裁剪后注册：
+中心 MCP 同时发布业务工具与宿主私有控制工具；受治理智能体工具由插件按身份权限动态裁剪：
 
 - 读取工具；
 - 受治理的 `prepare` 或登录入口；
@@ -72,7 +72,7 @@ openclaw gateway status --deep --require-rpc --json
 日志核对实际版本：
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.61, ...)
+AgentBridge interaction plugin registered (version=0.4.62, ...)
 ```
 
 Windows 托管的 Gateway 重启可能超过两分钟。命令调用方超时不代表后台重启失败：

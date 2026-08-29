@@ -195,6 +195,7 @@ class AdminControlPlane:
             "coordination": {
                 "task_hub": self.service.tasks.runtime_diagnostics(),
                 "host_control": HOST_CONTROL_DIAGNOSTICS.snapshot(),
+                "agent_hosts": self.service.host_runtime_overview(),
             },
             "governance": governance,
         }

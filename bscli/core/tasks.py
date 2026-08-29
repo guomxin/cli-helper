@@ -772,6 +772,26 @@ class TaskHubStore:
             row = self._select_endpoint(connection, endpoint_id)
         return _endpoint_from_row(row)
 
+    def get_endpoint(
+        self,
+        endpoint_id: str,
+        *,
+        user_subject: str,
+    ) -> dict:
+        endpoint_id = _required_text(endpoint_id, "endpoint_id", 256)
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM client_endpoints
+                WHERE endpoint_id = ? AND user_subject = ? AND state = 'active'
+                """,
+                (endpoint_id, user_subject),
+            ).fetchone()
+        if row is None:
+            raise TaskNotFound("client endpoint not found")
+        return _endpoint_from_row(row)
+
     def ensure_task(
         self,
         *,
@@ -3546,9 +3566,13 @@ class TaskHubStore:
             self._select_owned_task(connection, task_id, user_subject)
             rows = connection.execute(
                 """
-                SELECT * FROM task_events
-                WHERE task_id = ? AND user_subject = ?
-                ORDER BY created_at, rowid
+                SELECT event.*, timeline.sequence
+                FROM task_events AS event
+                LEFT JOIN user_timeline AS timeline
+                  ON timeline.entry_id = event.event_id
+                WHERE event.task_id = ? AND event.user_subject = ?
+                ORDER BY COALESCE(timeline.sequence, 0), event.created_at,
+                         event.rowid
                 LIMIT ?
                 """,
                 (task_id, user_subject, limit),

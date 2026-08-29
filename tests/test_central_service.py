@@ -31,6 +31,7 @@ from bscli.core.central_service import (
 )
 from bscli.core.interactions import InteractionNotFound
 from bscli.core.session_secrets import SessionStateAccessDenied
+from bscli.core.tasks import TaskIntegrityError, TaskNotFound
 
 
 BASE_URL = "http://oa.example.test/seeyon/main.do?method=main"
@@ -45,6 +46,66 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             ),
             "OA 补签申请审批：已完成。",
         )
+
+    def test_host_call_context_rejects_cross_user_and_cross_host_endpoints(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, MagicMock())
+            owned = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="reference-host",
+                host_task_key="reference-task-a",
+                endpoint_key="reference:endpoint:a",
+                client_type="web",
+                external_subject="user-a",
+                conversation_ref="reference:conversation:a",
+                title="Reference task",
+            )
+            foreign_user, _ = service.tasks.ensure_endpoint(
+                user_subject="user-b",
+                token_id="token-b",
+                agent_host="reference-host",
+                endpoint_key="reference:endpoint:b",
+                client_type="web",
+                external_subject="user-b",
+                conversation_ref="reference:conversation:b",
+            )
+            foreign_host, _ = service.tasks.ensure_endpoint(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="openclaw",
+                endpoint_key="openclaw:endpoint:a",
+                client_type="web",
+                external_subject="user-a",
+                conversation_ref="openclaw:conversation:a",
+            )
+            registration = {
+                "agentHost": "reference-host",
+                "hostInstanceId": "reference-host-test",
+            }
+
+            with self.assertRaises(TaskNotFound):
+                service.validate_host_call_context(
+                    user_subject="user-a",
+                    registration=registration,
+                    endpoint_id=foreign_user["endpoint_id"],
+                )
+            with self.assertRaises(TaskIntegrityError):
+                service.validate_host_call_context(
+                    user_subject="user-a",
+                    registration=registration,
+                    endpoint_id=foreign_host["endpoint_id"],
+                )
+            valid = service.validate_host_call_context(
+                user_subject="user-a",
+                registration=registration,
+                task_id=owned["task"]["taskId"],
+                endpoint_id=owned["endpoint"]["endpointId"],
+            )
+            self.assertEqual(
+                owned["task"]["taskId"],
+                valid["task"]["task_id"],
+            )
 
     def test_unmapped_write_scope_policy_fails_closed(self):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):

@@ -904,6 +904,20 @@ export class InteractionCoordinator {
     };
   }
 
+  hostRuntimeCounts() {
+    this.prune();
+    const activeRecords = [...this.records.values()].filter((record) =>
+      ["pending", "processing"].includes(record.interaction.state),
+    );
+    const taskIds = new Set(
+      activeRecords.map((record) => record.taskId).filter(Boolean),
+    );
+    return {
+      activeTaskCount: taskIds.size,
+      waitingInteractionCount: activeRecords.length,
+    };
+  }
+
   clientForSession(sessionKey) {
     return this.mcpClientResolver?.(sessionKey) || this.mcpClient;
   }
@@ -1381,6 +1395,30 @@ export class InteractionCoordinator {
     record.resumeStarted = true;
     let response;
     try {
+      let coordinatorLease = null;
+      if (record.taskId) {
+        const leaseResponse = await record.mcpClient.callTool(
+          "agentbridge_host_coordinator_lease_acquire",
+          {
+            task_id: record.taskId,
+            lease_seconds: 600,
+            takeover: false,
+            expected_version: null,
+          },
+          { signal, meta: hostContextMeta() },
+        );
+        coordinatorLease = leaseResponse?.coordinatorLease || null;
+        if (
+          !coordinatorLease ||
+          coordinatorLease.hostInstanceId !== "openclaw-gateway"
+        ) {
+          const leaseError = new Error(
+            "AgentBridge did not grant the OpenClaw task coordinator lease",
+          );
+          leaseError.code = "HOST_COORDINATOR_LEASE_CONFLICT";
+          throw leaseError;
+        }
+      }
       response = await record.mcpClient.callTool(
         "agentbridge_interaction_resume",
         {
@@ -1389,13 +1427,23 @@ export class InteractionCoordinator {
         },
         {
           signal,
-          meta: record.taskId
-            ? {
+          meta: {
+            ...hostContextMeta(),
+            ...(record.taskId
+              ? {
                 [TASK_CONTEXT_META_KEY]: {
                   taskId: record.taskId,
+                  ...(coordinatorLease?.version
+                    ? {
+                        coordinatorLeaseVersion: String(
+                          coordinatorLease.version,
+                        ),
+                      }
+                    : {}),
                 },
               }
-            : undefined,
+              : {}),
+          },
         },
       );
     } catch (error) {

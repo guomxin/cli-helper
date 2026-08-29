@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/interaction-presentation.schema.json",
+  "title": "AgentBridge Trusted Interaction Presentation",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "interactionId", "type", "state", "presentation", "resume"],
+  "properties": {
+    "schemaVersion": {"const": "agentbridge.interaction.v1"},
+    "interactionId": {"type": "string", "minLength": 16, "maxLength": 128},
+    "type": {"enum": ["credential", "business_input", "execution_authorization"]},
+    "state": {"enum": ["pending", "processing", "completed", "declined", "expired", "failed", "superseded"]},
+    "presentation": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "uiResourceUri": {"type": "string"},
+        "hostHandled": {"type": "boolean"}
+      }
+    },
+    "resume": {
+      "type": "object",
+      "required": ["ready", "completed"],
+      "properties": {
+        "ready": {"type": "boolean"},
+        "completed": {"type": "boolean"}
+      }
+    }
+  }
+}

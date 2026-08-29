@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/artifact-delivery.schema.json",
+  "title": "AgentBridge Artifact Delivery",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "artifactId", "fileName", "mediaType", "size", "status", "expiresAt", "regenerable"],
+  "properties": {
+    "schema": {"const": "agentbridge.artifact.v1"},
+    "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "fileName": {"type": "string", "minLength": 1, "maxLength": 255},
+    "mediaType": {"type": "string", "minLength": 1, "maxLength": 160},
+    "size": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["READY", "EXPIRED", "REGENERATING", "FAILED"]},
+    "expiresAt": {"type": "string", "format": "date-time"},
+    "regenerable": {"type": "boolean"}
+  }
+}

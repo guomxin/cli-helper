@@ -1166,6 +1166,12 @@ class CentralMcpTests(unittest.TestCase):
                     "name": "oa_workflow_pending_list",
                     "arguments": {"limit": 5},
                     "_meta": {
+                        "io.agentbridge/host-context": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
+                        },
                         "io.agentbridge/task": {
                             "taskId": "task-1234567890-abcdef",
                         }
@@ -1220,6 +1226,12 @@ class CentralMcpTests(unittest.TestCase):
                     "name": "oa_workflow_pending_list",
                     "arguments": {"limit": 5},
                     "_meta": {
+                        "io.agentbridge/host-context": {
+                            "version": "1",
+                            "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
+                        },
                         "io.agentbridge/task": {
                             "taskId": "task-1234567890-abcdef",
                         }
@@ -1414,8 +1426,216 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(denied.json()["result"]["isError"])
         service.ensure_host_task.assert_not_called()
 
+    def test_server_profile_negotiates_and_registers_declared_host(self):
+        profile = json.loads(
+            (
+                Path(__file__).parents[1]
+                / "schemas"
+                / "agent-host"
+                / "v1"
+                / "test-vectors.json"
+            ).read_text(encoding="utf-8")
+        )["profiles"][0]["value"]
+        with self._server() as (service, store, token, client):
+            identity = store.verify(token)
+            service.negotiate_host.return_value = {
+                "schemaVersion": "agentbridge.host-negotiation.v1",
+                "status": "succeeded",
+                "acceptedLevel": "L3",
+                "compatibilityStatus": "approved",
+                "hostInstanceId": profile["hostInstanceId"],
+                "implementation": profile["implementation"],
+                "missingCapabilities": [],
+                "mustReregisterOnVersionChange": True,
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=610,
+                token=token,
+                params={
+                    "name": "agentbridge_server_profile",
+                    "arguments": {},
+                    "_meta": {
+                        "io.agentbridge/host-context": {
+                            "version": "1",
+                            "agentHost": "reference-host",
+                            "hostInstanceId": profile["hostInstanceId"],
+                            "hostVersion": "0.1.0",
+                        },
+                        "io.agentbridge/host-profile": profile,
+                    },
+                },
+            )
+
+        result = response.json()["result"]["structuredContent"]
+        self.assertEqual("L3", result["negotiation"]["acceptedLevel"])
+        self.assertEqual(
+            ["agentbridge_host_register", "agentbridge_host_runtime_snapshot", "agentbridge_host_identity_profile"],
+            result["toolPlanes"]["hostControl"]["levels"]["L1"],
+        )
+        self.assertEqual(
+            ["agentbridge_host_interaction_present"],
+            result["toolPlanes"]["hostControl"]["levels"]["L2"],
+        )
+        service.negotiate_host.assert_called_once_with(
+            user_subject="user-a",
+            token_id=identity["token_id"],
+            profile=profile,
+        )
+
+    def test_undeclared_host_profile_is_l1_only(self):
+        with self._server() as (_service, _store, token, client):
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=6101,
+                token=token,
+                params={"name": "agentbridge_server_profile", "arguments": {}},
+            )
+
+        result = response.json()["result"]["structuredContent"]
+        self.assertEqual("L1", result["negotiation"]["acceptedLevel"])
+        self.assertEqual("undeclared", result["negotiation"]["compatibilityStatus"])
+
+    def test_host_runtime_lease_and_snapshot_controls_use_registered_identity(self):
+        host_meta = {
+            "io.agentbridge/host-context": {
+                "version": "1",
+                "agentHost": "openclaw",
+                "hostInstanceId": "openclaw-gateway",
+                "hostVersion": "0.4.62",
+            }
+        }
+        snapshot = {
+            "status": "healthy",
+            "observedAt": "2026-08-29T10:00:00+00:00",
+            "activeTaskCount": 1,
+        }
+        with self._server() as (service, _store, token, client):
+            service.record_host_runtime_snapshot.return_value = {
+                "status": "succeeded",
+                "snapshotId": "snapshot-1234567890",
+            }
+            service.get_host_coordinator_lease.return_value = {
+                "taskId": "task-1234567890-abcdef",
+                "hostInstanceId": "openclaw-gateway",
+                "version": 4,
+            }
+            service.get_host_task_snapshot.return_value = {
+                "status": "succeeded",
+                "task": {"taskId": "task-1234567890-abcdef"},
+                "events": [],
+                "artifacts": [],
+            }
+            runtime_response = self._request(
+                client,
+                "tools/call",
+                request_id=6102,
+                token=token,
+                params={
+                    "name": "agentbridge_host_runtime_snapshot",
+                    "arguments": {"snapshot": snapshot},
+                    "_meta": host_meta,
+                },
+            )
+            lease_response = self._request(
+                client,
+                "tools/call",
+                request_id=6103,
+                token=token,
+                params={
+                    "name": "agentbridge_host_coordinator_lease_get",
+                    "arguments": {"task_id": "task-1234567890-abcdef"},
+                    "_meta": host_meta,
+                },
+            )
+            task_response = self._request(
+                client,
+                "tools/call",
+                request_id=6104,
+                token=token,
+                params={
+                    "name": "agentbridge_host_task_snapshot",
+                    "arguments": {
+                        "agent_host": "openclaw",
+                        "endpoint_key": "telegram:*:1001",
+                        "task_id": "task-1234567890-abcdef",
+                    },
+                    "_meta": host_meta,
+                },
+            )
+
+        self.assertFalse(runtime_response.json()["result"]["isError"])
+        self.assertFalse(lease_response.json()["result"]["isError"])
+        self.assertFalse(task_response.json()["result"]["isError"])
+        service.record_host_runtime_snapshot.assert_called_once_with(
+            user_subject="user-a",
+            registration=service.require_host_registration.return_value,
+            snapshot=snapshot,
+        )
+        service.get_host_coordinator_lease.assert_called_once_with(
+            user_subject="user-a",
+            task_id="task-1234567890-abcdef",
+        )
+        service.get_host_task_snapshot.assert_called_once_with(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            task_id="task-1234567890-abcdef",
+            event_limit=100,
+            artifact_limit=20,
+        )
+
+    def test_non_coordinator_cannot_resume_task_interaction(self):
+        host_meta = {
+            "io.agentbridge/host-context": {
+                "version": "1",
+                "agentHost": "reference-host",
+                "hostInstanceId": "reference-host-test",
+                "hostVersion": "0.1.0",
+            },
+            "io.agentbridge/task": {
+                "taskId": "task-1234567890-abcdef",
+                "coordinatorLeaseVersion": "1",
+            },
+        }
+        with self._server() as (service, _store, token, client):
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "reference-host-test",
+                "agentHost": "reference-host",
+                "hostVersion": "0.1.0",
+                "acceptedLevel": "L3",
+            }
+            service.interaction_required_scopes.return_value = []
+            service.tasks.task_id_for_interaction.return_value = (
+                "task-1234567890-abcdef"
+            )
+            service.assert_host_coordinator_lease = MagicMock(
+                side_effect=PermissionError(
+                    "Coordinator lease is held by another host"
+                )
+            )
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=6105,
+                token=token,
+                params={
+                    "name": "agentbridge_interaction_resume",
+                    "arguments": {
+                        "interaction_id": "interaction-1234567890-abcdef",
+                        "idempotency_key": "reference-host:test",
+                    },
+                    "_meta": host_meta,
+                },
+            )
+
+        self.assertTrue(response.json()["result"]["isError"])
+        service.resume_interaction.assert_not_called()
+
     def test_host_identity_profile_returns_scope_filtered_agent_tools(self):
-        with self._server() as (_service, store, _token, client):
+        with self._server() as (service, store, _token, client):
             issued = store.issue(
                 user_subject="user-b",
                 expected_principal_ref="Bob",
@@ -1423,6 +1643,12 @@ class CentralMcpTests(unittest.TestCase):
                 scopes=["oa:read", "oa:write:submit"],
                 ttl_seconds=3600,
             )
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "openclaw-gateway",
+                "agentHost": "openclaw",
+                "hostVersion": "0.4.62",
+                "acceptedLevel": "L3",
+            }
             response = self._request(
                 client,
                 "tools/call",
@@ -1432,9 +1658,11 @@ class CentralMcpTests(unittest.TestCase):
                     "name": "agentbridge_host_identity_profile",
                     "arguments": {"agent_host": "openclaw"},
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1463,6 +1691,12 @@ class CentralMcpTests(unittest.TestCase):
     def test_host_task_ensure_uses_token_identity_and_private_metadata(self):
         with self._server() as (service, store, token, client):
             identity = store.verify(token)
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "openclaw-gateway",
+                "agentHost": "openclaw",
+                "hostVersion": "0.4.62",
+                "acceptedLevel": "L3",
+            }
             service.ensure_host_task.return_value = {
                 "protocolVersion": "0.1",
                 "status": "succeeded",
@@ -1488,9 +1722,11 @@ class CentralMcpTests(unittest.TestCase):
                         "route": {"channel": "telegram", "to": "1001"},
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1512,6 +1748,8 @@ class CentralMcpTests(unittest.TestCase):
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
             task_scope="user_turn",
+            host_instance_id="openclaw-gateway",
+            host_version="0.4.62",
         )
 
     def test_host_task_finish_uses_token_identity_and_private_metadata(self):
@@ -1540,9 +1778,11 @@ class CentralMcpTests(unittest.TestCase):
                         "causation_ref": "tool-call-1",
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1587,9 +1827,11 @@ class CentralMcpTests(unittest.TestCase):
                         "turn_ref": "request-123",
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1639,9 +1881,11 @@ class CentralMcpTests(unittest.TestCase):
                         "files": files,
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1678,9 +1922,11 @@ class CentralMcpTests(unittest.TestCase):
                         "task_id": "task-1234567890-abcdef",
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1728,9 +1974,11 @@ class CentralMcpTests(unittest.TestCase):
                         "interaction_id": "interaction-1234567890",
                     },
                     "_meta": {
-                        "io.agentbridge/host": {
+                        "io.agentbridge/host-context": {
                             "version": "1",
                             "agentHost": "openclaw",
+                            "hostInstanceId": "openclaw-gateway",
+                            "hostVersion": "0.4.62",
                         }
                     },
                 },
@@ -1913,6 +2161,17 @@ class CentralMcpFixture:
     def __enter__(self):
         self.temp = TemporaryDirectory()
         self.service = MagicMock()
+        self.service.require_host_registration.return_value = {
+            "hostInstanceId": "openclaw-gateway",
+            "agentHost": "openclaw",
+            "hostVersion": "0.4.62",
+            "acceptedLevel": "L3",
+        }
+        self.service.validate_host_call_context.return_value = {
+            "task": None,
+            "endpoint": None,
+            "registration": self.service.require_host_registration.return_value,
+        }
         self.store = McpIdentityTokenStore(Path(self.temp.name) / "agentbridge.db")
         issued = self.store.issue(
             user_subject="user-a",

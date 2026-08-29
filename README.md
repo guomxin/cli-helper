@@ -11,6 +11,7 @@ AgentBridge 使用 Python 构建，以非侵入方式把遗留 B/S 系统封装�
 - 正式写入遵循“准备、授权、提交、核验”的固定流程；
 - Telegram、微信和 Agent Workspace 支持跨端任务、文本、卡片、图片和文件同步；
 - 管理控制台提供持久化链路、运行事件、试点 SLO、安全恢复账本和可验证每日备份；
+- OpenClaw 与独立 Reference Host 使用同一 `agentbridge.host.v1` 契约和远程 MCP；
 - 已接入协同办公、泰华日志、语雀部门信息库和照明实验室四个系统；
 - Chrome 扩展、旧浏览器桥、localhost daemon 和代理型 CLI 已于 2026-07-13 退役。
 
@@ -48,7 +49,7 @@ Telegram / 微信 / Agent Workspace / 其他 MCP 宿主
 - 中心节点能够访问目标遗留系统；
 - Linux 使用权限受限的 32 字节会话密钥；
 - 远程访问使用固定私网 IP、HTTPS 和内部 CA；
-- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.61`。
+- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.62`。
 
 本地开发安装：
 
@@ -216,6 +217,7 @@ Agent Workspace 支持：
 - 操作、可信交互、多端任务和任务文件；
 - 写入暂停、会话失效和追加式管理审计；
 - AgentBridge、Workspace Gateway 和 OpenClaw 的脱敏运行状态。
+- OpenClaw 与 Reference Host 的兼容等级、实例健康和协调 Lease。
 
 管理账户不会自动获得任何下游业务身份，也不能代替用户完成业务写入。详见
 [管理控制台](docs/平台能力/管理控制台.md)。

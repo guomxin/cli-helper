@@ -17,6 +17,16 @@ import {
   toolResult,
 } from "./fixtures.js";
 
+function coordinatorLease() {
+  return {
+    status: "succeeded",
+    coordinatorLease: {
+      hostInstanceId: "openclaw-gateway",
+      version: 1,
+    },
+  };
+}
+
 test("injects bounded same-user context only for explicit cross-end references", async () => {
   const calls = [];
   const routeContexts = [];
@@ -296,6 +306,16 @@ test("finishes a no-reference host task from the returned tool outcome", async (
       if (name === "agentbridge_host_task_ensure") {
         return { status: "succeeded", task: { taskId } };
       }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "succeeded",
+          coordinatorLease: {
+            taskId,
+            hostInstanceId: "openclaw-gateway",
+            version: 1,
+          },
+        };
+      }
       if (name === "agentbridge_host_task_finish") {
         return { status: "succeeded" };
       }
@@ -354,6 +374,16 @@ test("best-effort fails an ensured task when the business MCP call throws", asyn
       calls.push({ name, arguments_ });
       if (name === "agentbridge_host_task_ensure") {
         return { status: "succeeded", task: { taskId } };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "succeeded",
+          coordinatorLease: {
+            taskId,
+            hostInstanceId: "openclaw-gateway",
+            version: 1,
+          },
+        };
       }
       if (name === "agentbridge_host_task_finish") {
         return { status: "succeeded" };
@@ -669,6 +699,16 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       if (name === "agentbridge_host_task_observe") {
         return { status: "succeeded" };
       }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "succeeded",
+          coordinatorLease: {
+            taskId,
+            hostInstanceId: "openclaw-gateway",
+            version: 1,
+          },
+        };
+      }
       throw new Error(`unexpected tool: ${name}`);
     },
     async callToolResult(name, arguments_, options) {
@@ -730,15 +770,17 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
   assert.equal(businessCalls.length, 1);
   assert.equal(businessCalls[0].name, "oa_workflow_pending_list");
   assert.deepEqual(businessCalls[0].options.meta, {
-    "io.agentbridge/host": {
+    "io.agentbridge/host-context": {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
+      hostVersion: "0.4.62",
     },
     "io.agentbridge/task": {
       taskId,
       hostRunId: "tool-follow-up",
       toolCallId: "tool-follow-up",
+      coordinatorLeaseVersion: "1",
     },
   });
   assert.equal(result.details.agentbridgeTaskId, taskId);
@@ -792,6 +834,16 @@ test("keeps workflow revoke on a separate task across trusted-card stages", asyn
       }
       if (name === "agentbridge_host_task_observe") {
         return { status: "succeeded" };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "succeeded",
+          coordinatorLease: {
+            taskId: arguments_.task_id,
+            hostInstanceId: "openclaw-gateway",
+            version: 1,
+          },
+        };
       }
       throw new Error(`unexpected tool: ${name}`);
     },
@@ -1136,10 +1188,11 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
   assert.equal(attempts[1].params.turn_ref, "request-bind-123");
   assert.deepEqual(attempts[1].options, {
     meta: {
-      "io.agentbridge/host": {
+      "io.agentbridge/host-context": {
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
+        hostVersion: "0.4.62",
       },
     },
   });
@@ -1223,6 +1276,15 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
             status: "succeeded",
             task: { taskId: "task-workspace-shared-1234567890" },
           }
+        : toolName === "agentbridge_host_coordinator_lease_acquire"
+          ? {
+              status: "succeeded",
+              coordinatorLease: {
+                taskId: body.params.arguments.task_id,
+                hostInstanceId: "openclaw-gateway",
+                version: 1,
+              },
+            }
         : toolName === "oa_workflow_pending_list"
           ? {
               status: "succeeded",
@@ -1281,12 +1343,13 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
   assert.equal(responses[0].ok, true);
   assert.equal(result.structuredContent.status, "succeeded");
   assert.equal(Object.hasOwn(result.details, "structuredContent"), false);
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 5);
   assert.deepEqual(
     requests.map((request) => request.body.params.name),
     [
       "agentbridge_host_workspace_session_bind",
       "agentbridge_host_task_ensure",
+      "agentbridge_host_coordinator_lease_acquire",
       "oa_workflow_pending_list",
       "agentbridge_host_task_observe",
     ],
@@ -1338,6 +1401,15 @@ test("uses the shared Workspace turn as a local task-key fast path", async () =>
             status: "succeeded",
             task: { taskId: "task-workspace-turn-1234567890" },
           }
+        : name === "agentbridge_host_coordinator_lease_acquire"
+          ? {
+              status: "succeeded",
+              coordinatorLease: {
+                taskId: body.params.arguments.task_id,
+                hostInstanceId: "openclaw-gateway",
+                version: 1,
+              },
+            }
         : { status: "succeeded", result: { count: 0, items: [] } };
     return new Response(
       JSON.stringify({
@@ -1808,7 +1880,12 @@ test("restores a pending interaction and its original route on gateway start", a
       const body = JSON.parse(options.body);
       requests.push(body);
       const structuredContent =
-        body.params.name === "agentbridge_host_identity_profile"
+        body.params.name === "agentbridge_server_profile"
+          ? {
+              status: "succeeded",
+              negotiation: { acceptedLevel: "L3" },
+            }
+          : body.params.name === "agentbridge_host_identity_profile"
           ? {
               status: "succeeded",
               identity: {
@@ -1852,28 +1929,33 @@ test("restores a pending interaction and its original route on gateway start", a
 
   await harness.hooks.gateway_start();
 
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
   assert.equal(
     requests[0].params.name,
-    "agentbridge_host_identity_profile",
+    "agentbridge_server_profile",
   );
   assert.equal(
     requests[1].params.name,
-    "agentbridge_host_task_recovery_list",
+    "agentbridge_host_identity_profile",
   );
   assert.equal(
     requests[2].params.name,
+    "agentbridge_host_task_recovery_list",
+  );
+  assert.equal(
+    requests[3].params.name,
     "agentbridge_host_notification_claim",
   );
-  assert.deepEqual(requests[1].params._meta, {
-    "io.agentbridge/host": {
+  assert.deepEqual(requests[2].params._meta, {
+    "io.agentbridge/host-context": {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
+      hostVersion: "0.4.62",
     },
   });
   assert.equal(
-    requests[1].params.arguments.include_user_endpoints,
+    requests[2].params.arguments.include_user_endpoints,
     true,
   );
   assert.equal(coordinator.pendingForSession(sessionKey).length, 1);
@@ -1911,6 +1993,16 @@ test("resumes a completed workspace interaction restored after restart", async (
   const client = {
     async callTool(name, params, options) {
       calls.push({ name, params, options });
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "succeeded",
+          coordinatorLease: {
+            taskId: params.task_id,
+            hostInstanceId: "openclaw-gateway",
+            version: 1,
+          },
+        };
+      }
       assert.equal(name, "agentbridge_interaction_resume");
       return toolResult(authorization);
     },
@@ -1933,10 +2025,10 @@ test("resumes a completed workspace interaction restored after restart", async (
   });
 
   assert.equal(restored, true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].params.interaction_id, completed.interactionId);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].params.interaction_id, completed.interactionId);
   assert.equal(
-    calls[0].options.meta["io.agentbridge/task"].taskId,
+    calls[1].options.meta["io.agentbridge/task"].taskId,
     "task-workspace-recovered-1234567890",
   );
   assert.equal(
@@ -2090,6 +2182,9 @@ test("continues a workspace interaction after its field card is delivered to a c
           interaction: completedFieldInteraction,
         };
       }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
+      }
       if (name === "agentbridge_interaction_resume") {
         resumeObserved();
         return toolResult(authorization);
@@ -2207,6 +2302,9 @@ test("resumes a workspace field card completed before companion notification cla
           status: "succeeded",
           interaction: completedFieldInteraction,
         };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
       }
       if (name === "agentbridge_interaction_resume") {
         return toolResult(authorization);
@@ -3754,6 +3852,9 @@ test("replays the exact pending-list read after credential login", async () => {
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
       }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
+      }
       if (name === "agentbridge_interaction_resume") {
         return {
           status: "succeeded",
@@ -3867,6 +3968,9 @@ test("replays a filtered Taihua team work-log read after credential login", asyn
       calls.push({ name, arguments_ });
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
       }
       if (name === "agentbridge_interaction_resume") {
         return {
@@ -4008,6 +4112,9 @@ test("replays a Yuque document search after interactive credential login", async
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
       }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
+      }
       if (name === "agentbridge_interaction_resume") {
         return {
           status: "succeeded",
@@ -4134,6 +4241,9 @@ test("infers a sent-list continuation when login is the first tool", async () =>
       calls.push({ name, arguments_ });
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return coordinatorLease();
       }
       if (name === "agentbridge_interaction_resume") {
         return {

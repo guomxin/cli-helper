@@ -598,6 +598,14 @@ test("scope profiles give one identity the same reduced catalog on web and chat"
     env: { TOKEN_A: "token-a" },
     config,
     responseForTool(name) {
+      if (name === "agentbridge_server_profile") {
+        return {
+          structuredContent: {
+            status: "succeeded",
+            negotiation: { acceptedLevel: "L3" },
+          },
+        };
+      }
       if (name === "agentbridge_host_identity_profile") {
         return {
           structuredContent: {
@@ -654,6 +662,10 @@ test("scope profiles give one identity the same reduced catalog on web and chat"
   assert.equal(workspaceNames.includes("yuque_document_search"), false);
   assert.equal(
     requests[0].body.params.name,
+    "agentbridge_server_profile",
+  );
+  assert.equal(
+    requests[1].body.params.name,
     "agentbridge_host_identity_profile",
   );
 });
@@ -1046,6 +1058,7 @@ test("creates and observes one host-owned task without model task arguments", as
     requests.map((request) => request.body.params.name),
     [
       "agentbridge_host_task_ensure",
+      "agentbridge_host_coordinator_lease_acquire",
       "oa_workflow_pending_list",
       "agentbridge_host_task_observe",
     ],
@@ -1056,29 +1069,31 @@ test("creates and observes one host-owned task without model task arguments", as
   );
   assert.equal(
     Object.hasOwn(
-      requests[1].body.params.arguments,
+    requests[2].body.params.arguments,
       "task_id",
     ),
     false,
   );
-  assert.deepEqual(requests[1].body.params._meta, {
-    "io.agentbridge/host": {
+  assert.deepEqual(requests[2].body.params._meta, {
+    "io.agentbridge/host-context": {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
+      hostVersion: "0.4.62",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",
       hostRunId: "tool-call-42",
       toolCallId: "tool-call-42",
+      coordinatorLeaseVersion: "1",
     },
   });
   assert.deepEqual(
-    requests[2].body.params.arguments.operation_ids,
+    requests[3].body.params.arguments.operation_ids,
     ["operation-123"],
   );
   assert.deepEqual(
-    requests[2].body.params.arguments.interaction_ids,
+    requests[3].body.params.arguments.interaction_ids,
     ["interaction-1234567890"],
   );
   assert.equal(
@@ -1216,12 +1231,28 @@ function createRouter({
         typeof responseForTool === "function"
           ? responseForTool(body.params?.name, body)
           : null;
+      const normalizedResult =
+        body.params?.name ===
+          "agentbridge_host_coordinator_lease_acquire" &&
+        !selectedResult?.structuredContent?.coordinatorLease
+          ? {
+              structuredContent: {
+                status: "succeeded",
+                coordinatorLease: {
+                  taskId: body.params.arguments.task_id,
+                  hostInstanceId: "openclaw-gateway",
+                  version: 1,
+                  state: "active",
+                },
+              },
+            }
+          : selectedResult;
       return new Response(
         JSON.stringify({
           jsonrpc: "2.0",
           id: "response",
           result:
-            selectedResult ||
+            normalizedResult ||
             responseResult || {
               content: [
                 {

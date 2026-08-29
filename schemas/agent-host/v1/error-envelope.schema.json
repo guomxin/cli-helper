@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/error-envelope.schema.json",
+  "title": "AgentBridge Host Error Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "code", "category", "retryable", "sideEffectBoundary", "summary"],
+  "properties": {
+    "schema": {"const": "agentbridge.error.v1"},
+    "code": {"type": "string", "minLength": 1, "maxLength": 120},
+    "category": {"enum": ["user_action", "identity", "business_rejection", "transport", "result_unknown", "lifecycle", "host_capability"]},
+    "retryable": {"type": "boolean"},
+    "sideEffectBoundary": {"enum": ["B0_NO_EFFECT", "B1_PREPARED", "B2_EFFECT_REQUESTED", "B3_EFFECT_CONFIRMED"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 500}
+  }
+}

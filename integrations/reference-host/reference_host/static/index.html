@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentBridge Reference Host</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true"></div>
+    <div>
+      <strong>AgentBridge Reference Host</strong>
+      <span id="host-state">正在连接</span>
+    </div>
+    <button id="recover-button" class="quiet-button" type="button">恢复任务</button>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar">
+      <label for="identity-select">测试身份</label>
+      <select id="identity-select"></select>
+
+      <div class="section-title">
+        <span>任务</span>
+        <button id="refresh-button" class="icon-button" type="button" title="刷新任务" aria-label="刷新任务">&#8635;</button>
+      </div>
+      <div id="task-list" class="task-list" aria-live="polite"></div>
+    </aside>
+
+    <section class="content">
+      <section class="composer" aria-labelledby="composer-title">
+        <div class="section-title">
+          <h1 id="composer-title">发起确定性工具调用</h1>
+          <span class="level-badge">L3</span>
+        </div>
+        <div class="composer-grid">
+          <label>
+            <span>能力</span>
+            <select id="tool-select"></select>
+          </label>
+          <label>
+            <span>任务标题</span>
+            <input id="task-title" maxlength="200" placeholder="可选">
+          </label>
+        </div>
+        <p id="tool-description" class="tool-description"></p>
+        <label>
+          <span>参数 JSON</span>
+          <textarea id="tool-arguments" spellcheck="false">{}</textarea>
+        </label>
+        <div class="composer-actions">
+          <span id="composer-error" class="error-text" role="alert"></span>
+          <button id="run-button" class="primary-button" type="button">运行</button>
+        </div>
+      </section>
+
+      <section class="task-detail" aria-labelledby="detail-title">
+        <div class="detail-header">
+          <div>
+            <p class="eyebrow">当前任务</p>
+            <h2 id="detail-title">尚未选择任务</h2>
+          </div>
+          <span id="task-status" class="status-badge muted">未选择</span>
+        </div>
+        <div id="interaction-panel" class="interaction-panel hidden"></div>
+        <div id="artifact-panel" class="artifact-panel hidden"></div>
+        <div class="timeline-heading">
+          <h3>时间线</h3>
+          <span id="task-id"></span>
+        </div>
+        <ol id="timeline" class="timeline"></ol>
+      </section>
+    </section>
+  </main>
+
+  <script src="/assets/host.js" defer></script>
+</body>
+</html>

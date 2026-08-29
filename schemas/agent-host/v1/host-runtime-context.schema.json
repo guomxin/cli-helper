@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbridge.local/schemas/agent-host/v1/host-runtime-context.schema.json",
+  "title": "AgentBridge Host Runtime Context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "agentHost", "hostInstanceId", "hostVersion"],
+  "properties": {
+    "version": {"const": "1"},
+    "agentHost": {"type": "string", "minLength": 1, "maxLength": 80},
+    "hostInstanceId": {"type": "string", "minLength": 1, "maxLength": 160},
+    "hostVersion": {"type": "string", "minLength": 1, "maxLength": 80}
+  }
+}

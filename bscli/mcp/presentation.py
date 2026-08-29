@@ -8,6 +8,12 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent
 
 from bscli.core.interactions import INTERACTION_SCHEMA_VERSION
+from bscli.core.host_contract import (
+    HOST_CONTRACT_SCHEMA,
+    HOST_CONTEXT_META_KEY,
+    HOST_PROFILE_META_KEY,
+    TASK_CONTEXT_META_KEY,
+)
 
 
 MCP_APP_RESOURCE_URI = "ui://agentbridge/trusted-interaction.html"
@@ -97,6 +103,28 @@ def build_server_profile(*, mcp_url: str) -> dict[str, Any]:
             "identitySource": "authenticated MCP token",
             "modelMustNotCollectInteractionValues": True,
             "governedWriteFlow": "prepare -> authorize -> commit -> verify",
+        },
+        "hostContract": {
+            "schemaVersion": HOST_CONTRACT_SCHEMA,
+            "negotiationTool": "agentbridge_server_profile",
+            "levels": ["L1", "L2", "L3"],
+            "defaultLevel": "L1",
+            "runtimeContextMetaKey": HOST_CONTEXT_META_KEY,
+            "callContextMetaKey": TASK_CONTEXT_META_KEY,
+            "profileMetaKey": HOST_PROFILE_META_KEY,
+            "schemaResourcePrefix": "agentbridge://host-contract/v1/",
+            "requiresExactVersionRegistrationFor": ["L2", "L3"],
+            "coordination": {
+                "multiplePresenters": True,
+                "singleCoordinatorLease": True,
+                "explicitTakeover": True,
+            },
+            "transportRecovery": {
+                "read": "bounded_retry",
+                "prepare": "bounded_retry_with_stable_idempotency_key",
+                "commit": "query_operation_then_stop_if_unknown",
+                "completedResume": "query_operation_then_stop_if_unknown",
+            },
         },
     }
 

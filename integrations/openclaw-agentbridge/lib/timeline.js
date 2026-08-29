@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { hostContextMeta } from "./host-contract.js";
 
 const RECENT_KEY_TTL_MS = 10_000;
 const MAX_RECENT_KEYS = 500;
@@ -103,12 +104,7 @@ export class TimelinePublisher {
             },
             {
               signal: AbortSignal.timeout(TIMELINE_ATTEMPT_TIMEOUT_MS),
-              meta: {
-                "io.agentbridge/host": {
-                  version: "1",
-                  agentHost: "openclaw",
-                },
-              },
+              meta: hostContextMeta(),
             },
           );
           return true;

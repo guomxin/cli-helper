@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "agentbridge.host-test-vectors.v1",
+  "profiles": [
+    {
+      "name": "reference-host-l3",
+      "valid": true,
+      "value": {
+        "schema": "agentbridge.host.v1",
+        "hostInstanceId": "reference-host-test-01",
+        "implementation": {"name": "reference-host", "version": "0.1.0"},
+        "levels": ["L1", "L2", "L3"],
+        "capabilities": {
+          "mcpApps": false,
+          "privateResultMeta": true,
+          "interactionPollResume": true,
+          "taskTimeline": true,
+          "proactiveDelivery": true,
+          "artifactDelivery": true,
+          "restartRecovery": true,
+          "coordinatorLease": true,
+          "batchTaskTimeline": true,
+          "runtimeSignals": true,
+          "boundedTransportRecovery": true
+        },
+        "endpointTypes": ["web_private"]
+      }
+    },
+    {
+      "name": "unknown-reader-l1",
+      "valid": true,
+      "value": {
+        "schema": "agentbridge.host.v1",
+        "hostInstanceId": "reader-01",
+        "implementation": {"name": "unknown-reader", "version": "1.0.0"},
+        "levels": ["L1"],
+        "capabilities": {
+          "mcpApps": false,
+          "privateResultMeta": false,
+          "interactionPollResume": false,
+          "taskTimeline": false,
+          "proactiveDelivery": false,
+          "artifactDelivery": false,
+          "restartRecovery": false,
+          "coordinatorLease": false,
+          "batchTaskTimeline": false,
+          "runtimeSignals": false,
+          "boundedTransportRecovery": false
+        },
+        "endpointTypes": ["stdio_private"]
+      }
+    },
+    {
+      "name": "l3-missing-lease",
+      "valid": false,
+      "errorCode": "HOST_CONTRACT_INVALID",
+      "value": {
+        "schema": "agentbridge.host.v1",
+        "hostInstanceId": "broken-host",
+        "implementation": {"name": "broken", "version": "1"},
+        "levels": ["L1", "L2", "L3"],
+        "capabilities": {
+          "mcpApps": true,
+          "privateResultMeta": true,
+          "interactionPollResume": true,
+          "taskTimeline": true,
+          "proactiveDelivery": true,
+          "artifactDelivery": true,
+          "restartRecovery": true,
+          "coordinatorLease": false,
+          "batchTaskTimeline": true,
+          "runtimeSignals": true,
+          "boundedTransportRecovery": true
+        },
+        "endpointTypes": ["web_private"]
+      }
+    },
+    {
+      "name": "levels-not-contiguous",
+      "valid": false,
+      "errorCode": "HOST_CONTRACT_INVALID",
+      "value": {
+        "schema": "agentbridge.host.v1",
+        "hostInstanceId": "broken-levels",
+        "implementation": {"name": "broken", "version": "1"},
+        "levels": ["L1", "L3"],
+        "capabilities": {
+          "mcpApps": false,
+          "privateResultMeta": true,
+          "interactionPollResume": true,
+          "taskTimeline": true,
+          "proactiveDelivery": true,
+          "artifactDelivery": true,
+          "restartRecovery": true,
+          "coordinatorLease": true,
+          "batchTaskTimeline": true,
+          "runtimeSignals": true,
+          "boundedTransportRecovery": true
+        },
+        "endpointTypes": ["web_private"]
+      }
+    }
+  ],
+  "transportPolicies": [
+    {
+      "name": "read-bounded-retry",
+      "valid": true,
+      "value": {
+        "schema": "agentbridge.transport-recovery.v1",
+        "callClass": "read",
+        "automaticRetry": true,
+        "maximumAttempts": 3,
+        "maximumElapsedMs": 5000,
+        "allowedErrorCodes": ["ETIMEDOUT", "ECONNRESET"],
+        "sideEffectBoundary": "B0_NO_EFFECT"
+      }
+    },
+    {
+      "name": "commit-never-retry",
+      "valid": true,
+      "value": {
+        "schema": "agentbridge.transport-recovery.v1",
+        "callClass": "commit",
+        "automaticRetry": false,
+        "maximumAttempts": 1,
+        "maximumElapsedMs": 30000,
+        "allowedErrorCodes": [],
+        "sideEffectBoundary": "B2_EFFECT_REQUESTED"
+      }
+    }
+  ],
+  "conformanceCases": [
+    {"id": "H01", "level": "L1", "subject": "unknown_host_downgrade"},
+    {"id": "H02", "level": "L1", "subject": "authenticated_read"},
+    {"id": "H03", "level": "L1", "subject": "interaction_capability_required"},
+    {"id": "H04", "level": "L2", "subject": "private_interaction_envelope"},
+    {"id": "H05", "level": "L2", "subject": "multi_endpoint_single_consume"},
+    {"id": "H06", "level": "L2", "subject": "resume_idempotency"},
+    {"id": "H07", "level": "L2", "subject": "decline_expiry_terminal"},
+    {"id": "H08", "level": "L2", "subject": "login_auto_continuation"},
+    {"id": "H09", "level": "L2", "subject": "field_authorization_separation"},
+    {"id": "H10", "level": "L2", "subject": "unknown_write_no_retry"},
+    {"id": "H11", "level": "L3", "subject": "restart_recovery"},
+    {"id": "H12", "level": "L3", "subject": "multi_user_isolation"},
+    {"id": "H13", "level": "L3", "subject": "artifact_reissue"},
+    {"id": "H14", "level": "L3", "subject": "notification_outcome_isolation"},
+    {"id": "H15", "level": "L3", "subject": "timeline_order_deduplication"},
+    {"id": "H16", "level": "L2", "subject": "private_meta_non_disclosure"},
+    {"id": "H17", "level": "L2", "subject": "private_tool_projection"},
+    {"id": "H18", "level": "L3", "subject": "cross_identity_endpoint_rejection"},
+    {"id": "H19", "level": "L3", "subject": "late_claim_completed_interaction"},
+    {"id": "H20", "level": "L3", "subject": "duplicate_completion_single_resume"},
+    {"id": "H21", "level": "L3", "subject": "multi_host_single_coordinator"},
+    {"id": "H22", "level": "L3", "subject": "non_owner_resume_rejection"},
+    {"id": "H23", "level": "L3", "subject": "batch_multi_interaction"},
+    {"id": "H24", "level": "L3", "subject": "bounded_transport_recovery"},
+    {"id": "H25", "level": "L3", "subject": "runtime_governance_signal"}
+  ]
+}

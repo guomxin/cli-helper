@@ -1,6 +1,11 @@
 import { matchIdentityBinding, resolveMcpEndpoint } from "./config.js";
 import { isPrivateSessionKey } from "./interaction.js";
 import { createAgentBridgeMcpClient } from "./mcp-client.js";
+import {
+  assertAcceptedHostNegotiation,
+  hostContextMeta,
+  hostRegistrationMeta,
+} from "./host-contract.js";
 
 export class AgentBridgeIdentityRouter {
   constructor({
@@ -115,12 +120,7 @@ export class AgentBridgeIdentityRouter {
           },
           {
             signal,
-            meta: {
-              "io.agentbridge/host": {
-                version: "1",
-                agentHost: "openclaw",
-              },
-            },
+            meta: hostContextMeta(),
           },
         );
         if (
@@ -154,17 +154,21 @@ export class AgentBridgeIdentityRouter {
     const profiles = [];
     for (const { binding, client } of this.configuredIdentities()) {
       try {
+        const serverProfile = await client.callTool(
+          "agentbridge_server_profile",
+          {},
+          { signal, meta: hostRegistrationMeta() },
+        );
+        const acceptedHostLevel = assertAcceptedHostNegotiation(
+          serverProfile?.negotiation,
+          "L3",
+        );
         const result = await client.callTool(
           "agentbridge_host_identity_profile",
           { agent_host: "openclaw" },
           {
             signal,
-            meta: {
-              "io.agentbridge/host": {
-                version: "1",
-                agentHost: "openclaw",
-              },
-            },
+            meta: hostContextMeta(),
           },
         );
         const allowedToolNames = Array.isArray(
@@ -188,12 +192,14 @@ export class AgentBridgeIdentityRouter {
           ),
           allowedToolNames: new Set(allowedToolNames),
           expiresAt: identityPart(result?.identity?.expiresAt, false),
+          acceptedHostLevel,
         });
         this.identityProfiles.set(binding.key, profile);
         profiles.push({
           bindingKey: binding.key,
           userSubject: profile.userSubject,
           allowedToolCount: profile.allowedToolNames.size,
+          acceptedHostLevel,
         });
       } catch (error) {
         logger?.warn?.(

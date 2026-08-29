@@ -19,9 +19,10 @@ import {
   createAgentBridgeProxyTools,
   hostContextMeta,
 } from "./proxy-tools.js";
+import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.61";
+export const PLUGIN_VERSION = "0.4.62";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -104,6 +105,17 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
         })
       : null;
   coordinator.timelinePublisher = timelinePublisher;
+  const hostRuntimeReporter = identityRouter.enabled
+    ? dependencies.hostRuntimeReporter ||
+      createHostRuntimeReporter({
+        identityRouter,
+        coordinator,
+        logger: api.logger,
+        sleep: dependencies.runtimeReporterSleep,
+        now: dependencies.now,
+      })
+    : null;
+  coordinator.hostRuntimeReporter = hostRuntimeReporter;
 
   if (identityRouter.enabled) {
     api.registerTool(
@@ -328,9 +340,11 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       logger: api.logger,
     });
     coordinator.startNotificationPump(identityRouter);
+    hostRuntimeReporter?.start();
   });
 
   api.on("gateway_stop", () => {
+    hostRuntimeReporter?.stop();
     coordinator.stopAll();
   });
 
