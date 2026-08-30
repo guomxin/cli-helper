@@ -774,7 +774,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.62",
+      hostVersion: "0.4.63",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1192,7 +1192,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.62",
+        hostVersion: "0.4.63",
       },
     },
   });
@@ -1951,7 +1951,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.62",
+      hostVersion: "0.4.63",
     },
   });
   assert.equal(
@@ -3831,6 +3831,74 @@ test("continues the original request once after credential login succeeds", asyn
   assert.equal(harness.heartbeatRuns.length, 1);
 });
 
+test("automatically opens a trusted login for an authenticated read", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const calls = [];
+  const loginInteraction = interaction({
+    title: "登录照明实验室测试系统",
+    display: { systemName: "照明实验室测试系统" },
+  });
+  const client = {
+    async callTool(name, arguments_, options) {
+      calls.push({ name, arguments_, options });
+      assert.equal(name, "smartlight_session_login");
+      return toolResult(loginInteraction);
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-smartlight-before-login",
+    runId: "run-smartlight-before-login",
+    sessionKey,
+    toolName: "smartlight_system_overview",
+    params: {},
+  });
+  const loginRequired = {
+    protocolVersion: "0.1",
+    status: "requires_user_action",
+    error: { code: "LOGIN_REQUIRED" },
+    nextAction: { type: "session_login", system: "smartlight" },
+  };
+
+  await harness.middleware(
+    {
+      toolCallId: "tool-smartlight-before-login",
+      toolName: "smartlight_system_overview",
+      result: {
+        content: [{ type: "text", text: JSON.stringify(loginRequired) }],
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "smartlight_system_overview",
+          agentbridgeTaskId: "task-smartlight-login",
+          structuredContent: loginRequired,
+        },
+      },
+    },
+    { runtime: "openclaw" },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "smartlight_session_login");
+  assert.equal(
+    calls[0].options.meta["io.agentbridge/task"].taskId,
+    "task-smartlight-login",
+  );
+  assert.equal(coordinator.pendingForSession(sessionKey).length, 1);
+  assert.equal(
+    coordinator.pendingForSession(sessionKey)[0].interactionId,
+    loginInteraction.interactionId,
+  );
+  assert.equal(
+    harness.logs.info.some((message) =>
+      message.includes("automatically started trusted login"),
+    ),
+    true,
+  );
+});
+
 test("replays the exact pending-list read after credential login", async () => {
   const harness = fakeApi({
     autoPoll: true,
@@ -3849,6 +3917,9 @@ test("replays the exact pending-list read after credential login", async () => {
   const client = {
     async callTool(name, arguments_) {
       calls.push({ name, arguments_ });
+      if (name === "oa_session_login") {
+        return toolResult();
+      }
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
       }
@@ -3900,7 +3971,7 @@ test("replays the exact pending-list read after credential login", async () => {
     toolName: "oa_workflow_pending_list",
     params: { limit: 7, idempotency_key: "must-not-be-replayed" },
   });
-  harness.middleware(
+  await harness.middleware(
     {
       toolCallId: "tool-pending-before-login",
       toolName: "oa_workflow_pending_list",
@@ -3915,25 +3986,13 @@ test("replays the exact pending-list read after credential login", async () => {
     },
     { runtime: "openclaw" },
   );
-  bindToolCall(harness, {
-    toolCallId: "tool-login-for-pending",
-    runId: "run-pending-before-login",
-    sessionKey,
-  });
-  harness.middleware(
-    {
-      toolCallId: "tool-login-for-pending",
-      toolName: "oa_session_login",
-      result: toolResult(),
-    },
-    { runtime: "openclaw" },
-  );
 
   await coordinator.waitForIdle();
 
   assert.deepEqual(
     calls.map((call) => call.name),
     [
+      "oa_session_login",
       "agentbridge_interaction_get",
       "agentbridge_interaction_resume",
       "oa_workflow_pending_list",
@@ -3966,6 +4025,9 @@ test("replays a filtered Taihua team work-log read after credential login", asyn
   const client = {
     async callTool(name, arguments_) {
       calls.push({ name, arguments_ });
+      if (name === "taihua_session_login") {
+        return toolResult();
+      }
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
       }
@@ -4029,7 +4091,7 @@ test("replays a filtered Taihua team work-log read after credential login", asyn
       idempotency_key: "must-not-be-replayed",
     },
   });
-  harness.middleware(
+  await harness.middleware(
     {
       toolCallId: "tool-taihua-before-login",
       toolName: "taihua_work_log_team_list",
@@ -4044,25 +4106,13 @@ test("replays a filtered Taihua team work-log read after credential login", asyn
     },
     { runtime: "openclaw" },
   );
-  bindToolCall(harness, {
-    toolCallId: "tool-login-for-taihua",
-    runId: "run-taihua-before-login",
-    sessionKey,
-  });
-  harness.middleware(
-    {
-      toolCallId: "tool-login-for-taihua",
-      toolName: "taihua_session_login",
-      result: toolResult(),
-    },
-    { runtime: "openclaw" },
-  );
 
   await coordinator.waitForIdle();
 
   assert.deepEqual(
     calls.map((call) => call.name),
     [
+      "taihua_session_login",
       "agentbridge_interaction_get",
       "agentbridge_interaction_resume",
       "taihua_work_log_team_list",
@@ -4109,6 +4159,9 @@ test("replays a Yuque document search after interactive credential login", async
   const client = {
     async callTool(name, arguments_) {
       calls.push({ name, arguments_ });
+      if (name === "yuque_session_login") {
+        return toolResult();
+      }
       if (name === "agentbridge_interaction_get") {
         return { status: "succeeded", interaction: completed };
       }
@@ -4166,7 +4219,7 @@ test("replays a Yuque document search after interactive credential login", async
       idempotency_key: "must-not-be-replayed",
     },
   });
-  harness.middleware(
+  await harness.middleware(
     {
       toolCallId: "tool-yuque-before-login",
       toolName: "yuque_document_search",
@@ -4181,25 +4234,13 @@ test("replays a Yuque document search after interactive credential login", async
     },
     { runtime: "openclaw" },
   );
-  bindToolCall(harness, {
-    toolCallId: "tool-login-for-yuque",
-    runId: "run-yuque-before-login",
-    sessionKey,
-  });
-  harness.middleware(
-    {
-      toolCallId: "tool-login-for-yuque",
-      toolName: "yuque_session_login",
-      result: toolResult(),
-    },
-    { runtime: "openclaw" },
-  );
 
   await coordinator.waitForIdle();
 
   assert.deepEqual(
     calls.map((call) => call.name),
     [
+      "yuque_session_login",
       "agentbridge_interaction_get",
       "agentbridge_interaction_resume",
       "yuque_document_search",

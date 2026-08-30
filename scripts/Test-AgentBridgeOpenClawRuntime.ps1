@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
+    # Retained for CLI compatibility. Freshness is now tied to the current
+    # Gateway process start, not to an arbitrary wall-clock age.
     [ValidateRange(30, 900)][int]$RegistrationMaxAgeSeconds = 300,
     [string]$PluginManifestPath = ""
 )
@@ -90,10 +92,6 @@ $gatewayStartedAt = [DateTimeOffset]([DateTime]$gateways[0].CreationDate)
 if ($registration.observedAt -lt $gatewayStartedAt.AddSeconds(-5)) {
     throw "AgentBridge OpenClaw plugin was not registered by the current Gateway process"
 }
-$registrationAge = ([DateTimeOffset]::Now - $registration.observedAt).TotalSeconds
-if ($registrationAge -gt $RegistrationMaxAgeSeconds) {
-    throw "AgentBridge OpenClaw plugin registration is stale"
-}
 if ($registration.version -ne $expectedVersion) {
     throw "AgentBridge OpenClaw plugin runtime version does not match its manifest"
 }
@@ -102,11 +100,17 @@ if ($registration.version -ne $expectedVersion) {
     status = "succeeded"
     checkedAt = [DateTimeOffset]::UtcNow.ToString("o")
     gatewayProcessId = [int]$gateways[0].ProcessId
+    gatewayStartedAt = $gatewayStartedAt.ToString("o")
     listenerAddress = [string]$listeners[0].LocalAddress
     readyEndpoint = "ok"
     pluginStatus = "loaded"
     pluginVersion = $registration.version
     pluginRegistrationAt = $registration.observedAt.ToString("o")
+    pluginRegistrationAgeSeconds = [Math]::Round(
+        ([DateTimeOffset]::Now - $registration.observedAt).TotalSeconds,
+        3
+    )
+    pluginRegistrationFreshnessPolicy = "current_gateway_process"
     businessCalls = 0
     businessListReads = 0
     businessWrites = 0

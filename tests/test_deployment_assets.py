@@ -288,9 +288,12 @@ class DeploymentAssetTests(unittest.TestCase):
             "AgentBridge interaction plugin registered",
             "was not registered by the current Gateway process",
             "plugin runtime version does not match its manifest",
+            "pluginRegistrationFreshnessPolicy",
+            '"current_gateway_process"',
             "businessWrites = 0",
         ):
             self.assertIn(marker, runtime_check)
+        self.assertNotIn("plugin registration is stale", runtime_check)
 
         guard = (
             ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"

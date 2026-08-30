@@ -25,6 +25,13 @@ _PRE_ACCEPT_RETRY_CODES = {
 }
 _PRE_ACCEPT_RETRY_STAGES = {"connect", "preflight_abort", "bind"}
 _PRE_ACCEPT_RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0)
+_POST_ACCEPT_RECONCILE_CODES = {
+    "GATEWAY_CONNECTION_CLOSED",
+    "GATEWAY_CONNECTION_FAILED",
+    "GATEWAY_PROCESS_FAILED",
+    "GATEWAY_RESPONSE_INVALID",
+}
+_POST_ACCEPT_RECONCILE_DELAYS_SECONDS = (0.0, 2.0, 5.0)
 
 
 class GatewayRequestError(RuntimeError):
@@ -211,6 +218,30 @@ class OpenClawGatewayClient:
                             yield item
                         return
                     except GatewayRequestError as exc:
+                        if (
+                            accepted
+                            and run_id
+                            and exc.code in _POST_ACCEPT_RECONCILE_CODES
+                        ):
+                            recovered, observed_tool_activity = (
+                                self._reconcile_accepted_run(
+                                    session_key=normalized["sessionKey"],
+                                    run_id=run_id,
+                                )
+                            )
+                            if recovered:
+                                terminal = True
+                                yield recovered
+                                return
+                            exc.details = {
+                                **exc.details,
+                                "reconciliationAttempted": True,
+                                "hadToolActivity": (
+                                    exc.details.get("hadToolActivity") is True
+                                    or observed_tool_activity
+                                ),
+                                "safeToRetry": False,
+                            }
                         if not _should_retry_before_accept(
                             exc,
                             accepted=accepted,
@@ -253,6 +284,52 @@ class OpenClawGatewayClient:
                     )
 
         return guarded_stream()
+
+    def _reconcile_accepted_run(
+        self,
+        *,
+        session_key: str,
+        run_id: str,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        observed_tool_activity = False
+        for delay_seconds in _POST_ACCEPT_RECONCILE_DELAYS_SECONDS:
+            if delay_seconds:
+                self._retry_sleep(delay_seconds)
+            try:
+                history = self.call(
+                    "chat.history",
+                    {
+                        "sessionKey": session_key,
+                        "limit": 200,
+                        "maxChars": 200_000,
+                    },
+                    timeout_seconds=5,
+                )
+            except GatewayRequestError:
+                continue
+            evidence = _history_evidence_for_run(history, run_id)
+            observed_tool_activity = (
+                observed_tool_activity or evidence["had_tool_activity"]
+            )
+            if evidence["final_text"]:
+                _LOG.info(
+                    "Recovered accepted OpenClaw run from authoritative "
+                    "history run_id=%s had_tool_activity=%s",
+                    run_id,
+                    observed_tool_activity,
+                )
+                return (
+                    {
+                        "type": "chat",
+                        "runId": run_id,
+                        "state": "final",
+                        "text": evidence["final_text"],
+                        "recovered": True,
+                        "hadToolActivity": observed_tool_activity,
+                    },
+                    observed_tool_activity,
+                )
+        return None, observed_tool_activity
 
     def abort_chat(
         self,
@@ -468,3 +545,85 @@ def _should_retry_before_accept(
     if stage:
         return stage in _PRE_ACCEPT_RETRY_STAGES
     return error.code in {"GATEWAY_PROCESS_FAILED", "GATEWAY_RESPONSE_INVALID"}
+
+
+def _history_evidence_for_run(payload: Any, run_id: str) -> dict[str, Any]:
+    messages = payload.get("messages") if isinstance(payload, dict) else None
+    if not isinstance(messages, list):
+        return {
+            "prompt_observed": False,
+            "had_tool_activity": False,
+            "final_text": "",
+        }
+    prompt_key = f"{run_id}:user"
+    prompt_index = -1
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        if (
+            message.get("idempotencyKey") == prompt_key
+            or message.get("runId") == run_id
+        ):
+            prompt_index = index
+            break
+    if prompt_index < 0:
+        return {
+            "prompt_observed": False,
+            "had_tool_activity": False,
+            "final_text": "",
+        }
+
+    had_tool_activity = False
+    final_text = ""
+    for value in messages[prompt_index + 1 :]:
+        if not isinstance(value, dict):
+            continue
+        if value.get("role") == "user":
+            break
+        message_tool_activity = _history_message_has_tool_activity(value)
+        had_tool_activity = had_tool_activity or message_tool_activity
+        if value.get("role") == "assistant" and not message_tool_activity:
+            text = _history_message_text(value.get("content"))
+            if text:
+                final_text = text
+    return {
+        "prompt_observed": True,
+        "had_tool_activity": had_tool_activity,
+        "final_text": final_text,
+    }
+
+
+def _history_message_has_tool_activity(message: dict[str, Any]) -> bool:
+    if (
+        message.get("role") in {"tool", "toolResult"}
+        or isinstance(message.get("toolCallId"), str)
+        or isinstance(message.get("toolName"), str)
+    ):
+        return True
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("type")
+        in {"tool", "toolCall", "toolResult", "tool_use", "tool_result"}
+        for item in content
+    )
+
+
+def _history_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in {"text", "output_text"}:
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts).strip()

@@ -19,6 +19,7 @@ from bscli.core.tasks import TaskNotFound
 from bscli.workspace.application import (
     WorkspaceApplication,
     _validated_chat_attachments,
+    _workspace_gateway_failure_text,
 )
 from bscli.workspace.gateway import (
     GatewayRequestError,
@@ -1591,6 +1592,198 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 [event["type"] for event in events],
                 ["progress", "progress", "progress", "accepted", "chat"],
             )
+
+    def test_gateway_send_stream_reconciles_an_accepted_run_from_history(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            retry_delays = []
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                retry_sleep=retry_delays.append,
+            )
+
+            def failed_stream():
+                yield {
+                    "type": "accepted",
+                    "runId": "run-history-1",
+                    "status": "started",
+                }
+                yield {
+                    "type": "progress",
+                    "runId": "run-history-1",
+                    "kind": "tool",
+                    "phase": "result",
+                }
+                raise GatewayRequestError(
+                    "GATEWAY_CONNECTION_CLOSED",
+                    "reverse tunnel changed",
+                    {
+                        "stage": "run",
+                        "accepted": True,
+                        "hadToolActivity": True,
+                    },
+                )
+
+            history_calls = 0
+
+            def history(_method, _params, *, timeout_seconds=30):
+                nonlocal history_calls
+                history_calls += 1
+                if history_calls == 1:
+                    raise GatewayRequestError(
+                        "GATEWAY_CONNECTION_FAILED",
+                        "tunnel is reconnecting",
+                    )
+                return {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Read pending details",
+                            "idempotencyKey": "run-history-1:user",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "toolCall", "name": "oa_read"},
+                            ],
+                        },
+                        {
+                            "role": "toolResult",
+                            "content": "done",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "text", "text": "Authoritative answer"},
+                            ],
+                        },
+                    ],
+                }
+
+            with (
+                patch.object(
+                    client,
+                    "_stream_payload",
+                    return_value=failed_stream(),
+                ),
+                patch.object(client, "call", side_effect=history),
+                patch.object(client, "abort_chat") as abort_chat,
+            ):
+                events = list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="Read pending details",
+                        idempotency_key="run-history-1",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(history_calls, 2)
+            self.assertEqual(retry_delays, [2.0])
+            self.assertEqual(events[-1]["state"], "final")
+            self.assertEqual(events[-1]["text"], "Authoritative answer")
+            self.assertTrue(events[-1]["recovered"])
+            abort_chat.assert_not_called()
+
+    def test_gateway_send_stream_never_replays_an_unreconciled_run(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                retry_sleep=lambda _seconds: None,
+            )
+
+            def failed_stream():
+                yield {
+                    "type": "accepted",
+                    "runId": "run-history-missing",
+                    "status": "started",
+                }
+                raise GatewayRequestError(
+                    "GATEWAY_CONNECTION_CLOSED",
+                    "connection closed",
+                    {"stage": "run", "accepted": True},
+                )
+
+            history = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Read pending details",
+                        "idempotencyKey": "run-history-missing:user",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "toolCall", "name": "oa_read"},
+                        ],
+                    },
+                ],
+            }
+            with (
+                patch.object(
+                    client,
+                    "_stream_payload",
+                    return_value=failed_stream(),
+                ) as stream_payload,
+                patch.object(client, "call", return_value=history) as call,
+                patch.object(client, "abort_chat") as abort_chat,
+                self.assertRaises(GatewayRequestError) as caught,
+            ):
+                list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="Read pending details",
+                        idempotency_key="run-history-missing",
+                        timeout_seconds=120,
+                    )
+                )
+
+            stream_payload.assert_called_once()
+            self.assertEqual(call.call_count, 3)
+            self.assertTrue(caught.exception.details["reconciliationAttempted"])
+            self.assertTrue(caught.exception.details["hadToolActivity"])
+            self.assertFalse(caught.exception.details["safeToRetry"])
+            abort_chat.assert_called_once()
+
+    def test_gateway_failure_text_does_not_deny_observed_tool_activity(
+        self,
+    ) -> None:
+        text = _workspace_gateway_failure_text(
+            GatewayRequestError(
+                "GATEWAY_CONNECTION_CLOSED",
+                "closed",
+                {"hadToolActivity": True},
+            )
+        )
+
+        self.assertIn("\u5df2\u8c03\u7528\u4e1a\u52a1\u80fd\u529b", text)
+        self.assertIn("\u4e0d\u4f1a\u81ea\u52a8\u91cd\u653e", text)
+        self.assertNotIn("\u672a\u7ee7\u7eed\u8fdb\u5165\u4e1a\u52a1\u7cfb\u7edf", text)
 
     def test_gateway_send_stream_does_not_retry_after_send_started(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -49,7 +49,7 @@ Telegram / 微信 / Agent Workspace / 其他 MCP 宿主
 - 中心节点能够访问目标遗留系统；
 - Linux 使用权限受限的 32 字节会话密钥；
 - 远程访问使用固定私网 IP、HTTPS 和内部 CA；
-- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.62`。
+- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.63`。
 
 本地开发安装：
 

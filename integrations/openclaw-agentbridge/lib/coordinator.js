@@ -528,6 +528,15 @@ export class InteractionCoordinator {
       return undefined;
     }
     this.rememberLoginContinuation(publicPayload, binding, context);
+    const loginStart = this.autoStartLoginForRead(
+      publicPayload,
+      binding,
+      context,
+      taskId,
+    );
+    if (loginStart) {
+      return loginStart;
+    }
     const references = collectPublicInteractionReferences(publicPayload).slice(
       0,
       MAX_HYDRATION_REFERENCES,
@@ -552,6 +561,65 @@ export class InteractionCoordinator {
       return;
     }
     this.loginContinuations.set(sessionKey, binding.readContinuation);
+  }
+
+  autoStartLoginForRead(payload, binding, context, taskId = null) {
+    if (!isLoginRequiredPayload(payload) || !binding?.readContinuation) {
+      return null;
+    }
+    const sessionKey = binding.sessionKey || context.sessionKey;
+    if (!isPrivateSessionKey(sessionKey)) {
+      return null;
+    }
+    const loginTool = loginToolForReadTool(binding.readContinuation.toolName);
+    const mcpClient = this.clientForSession(sessionKey);
+    if (!loginTool || !mcpClient) {
+      return null;
+    }
+    return (async () => {
+      let response;
+      try {
+        response = await mcpClient.callTool(
+          loginTool,
+          {},
+          {
+            meta: {
+              ...hostContextMeta(),
+              ...(taskId
+                ? {
+                    [TASK_CONTEXT_META_KEY]: { taskId },
+                  }
+                : {}),
+            },
+          },
+        );
+      } catch (error) {
+        this.api.logger.warn(
+          `AgentBridge automatic trusted login start failed: ${safeErrorCode(error)}`,
+        );
+        return undefined;
+      }
+      const processed = processToolResult(
+        response,
+        this.config.allowedCardOrigins,
+      );
+      if (processed.interactions.length === 0) {
+        this.api.logger.warn(
+          "AgentBridge automatic trusted login start returned no interaction",
+        );
+        return undefined;
+      }
+      const presented =
+        (await this.presentInteractions(
+          processed.interactions,
+          sessionKey,
+        )) || processed.interactions;
+      this.captureInteractions(presented, binding, context, taskId);
+      this.api.logger.info(
+        `AgentBridge automatically started trusted login after a read required authentication (tool=${loginTool})`,
+      );
+      return undefined;
+    })();
   }
 
   consumeLoginContinuation(sessionKey) {
@@ -1593,6 +1661,12 @@ export class InteractionCoordinator {
   async replayReadContinuation(record) {
     const continuation = record.readContinuation;
     if (!continuation || !record.mcpClient) {
+      return false;
+    }
+    const descriptor = LOGIN_READ_TOOLS.get(continuation.toolName);
+    if (descriptor?.kind?.startsWith("smartlight_")) {
+      // Smartlight read results have several domain-specific schemas. Let the
+      // model resume the original turn instead of flattening them as OA lists.
       return false;
     }
     let response;
@@ -2849,6 +2923,17 @@ function isLoginRequiredPayload(payload) {
       (payload?.error?.code === "LOGIN_REQUIRED" ||
         payload?.nextAction?.type === "session_login"),
   );
+}
+
+function loginToolForReadTool(toolName) {
+  const normalized = String(toolName || "");
+  if (normalized.startsWith("oa_")) return "oa_session_login";
+  if (normalized.startsWith("taihua_")) return "taihua_session_login";
+  if (normalized.startsWith("yuque_")) return "yuque_session_login";
+  if (normalized.startsWith("smartlight_")) {
+    return "smartlight_session_login";
+  }
+  return null;
 }
 
 function formatReadContinuation(continuation, response) {
