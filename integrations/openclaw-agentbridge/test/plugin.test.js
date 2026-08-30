@@ -774,7 +774,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.64",
+      hostVersion: "0.4.65",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1192,7 +1192,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.64",
+        hostVersion: "0.4.65",
       },
     },
   });
@@ -1951,7 +1951,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.64",
+      hostVersion: "0.4.65",
     },
   });
   assert.equal(
@@ -3842,8 +3842,17 @@ test("automatically opens a trusted login for an authenticated read", async () =
   const client = {
     async callTool(name, arguments_, options) {
       calls.push({ name, arguments_, options });
-      assert.equal(name, "smartlight_session_login");
-      return toolResult(loginInteraction);
+      if (name === "smartlight_session_login") {
+        return {
+          protocolVersion: "0.1",
+          status: "requires_user_action",
+          interaction: loginInteraction,
+        };
+      }
+      if (name === "agentbridge_host_task_observe") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool: ${name}`);
     },
   };
   const coordinator = registerAgentBridgeInteractions(harness.api, {
@@ -3863,7 +3872,7 @@ test("automatically opens a trusted login for an authenticated read", async () =
     nextAction: { type: "session_login", system: "smartlight" },
   };
 
-  await harness.middleware(
+  const replacement = await harness.middleware(
     {
       toolCallId: "tool-smartlight-before-login",
       toolName: "smartlight_system_overview",
@@ -3879,11 +3888,20 @@ test("automatically opens a trusted login for an authenticated read", async () =
     { runtime: "openclaw" },
   );
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0].name, "smartlight_session_login");
   assert.equal(
     calls[0].options.meta["io.agentbridge/task"].taskId,
     "task-smartlight-login",
+  );
+  assert.equal(calls[1].name, "agentbridge_host_task_observe");
+  assert.equal(calls[1].arguments_.task_id, "task-smartlight-login");
+  assert.deepEqual(calls[1].arguments_.interaction_ids, [
+    loginInteraction.interactionId,
+  ]);
+  assert.match(
+    replacement.result.content[0].text,
+    /already opened the trusted login card/,
   );
   assert.equal(coordinator.pendingForSession(sessionKey).length, 1);
   assert.equal(

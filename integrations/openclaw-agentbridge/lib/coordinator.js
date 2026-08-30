@@ -533,6 +533,7 @@ export class InteractionCoordinator {
       binding,
       context,
       taskId,
+      event.result,
     );
     if (loginStart) {
       return loginStart;
@@ -563,7 +564,13 @@ export class InteractionCoordinator {
     this.loginContinuations.set(sessionKey, binding.readContinuation);
   }
 
-  autoStartLoginForRead(payload, binding, context, taskId = null) {
+  autoStartLoginForRead(
+    payload,
+    binding,
+    context,
+    taskId = null,
+    originalResult = null,
+  ) {
     if (!isLoginRequiredPayload(payload) || !binding?.readContinuation) {
       return null;
     }
@@ -599,6 +606,7 @@ export class InteractionCoordinator {
         );
         return undefined;
       }
+      await this.observeTaskResponse({ taskId, mcpClient }, response);
       const processed = processToolResult(
         response,
         this.config.allowedCardOrigins,
@@ -618,7 +626,9 @@ export class InteractionCoordinator {
       this.api.logger.info(
         `AgentBridge automatically started trusted login after a read required authentication (tool=${loginTool})`,
       );
-      return undefined;
+      return {
+        result: trustedLoginStartedResult(originalResult, loginTool),
+      };
     })();
   }
 
@@ -2492,6 +2502,35 @@ function structuredContentFromToolText(content) {
     }
   }
   return null;
+}
+
+function trustedLoginStartedResult(originalResult, loginTool) {
+  const details = originalResult?.details;
+  const trustedDetails =
+    details && typeof details === "object" && !Array.isArray(details)
+      ? {
+          mcpServer: details.mcpServer,
+          mcpTool: details.mcpTool,
+          ...(typeof details.agentbridgeTaskId === "string"
+            ? { agentbridgeTaskId: details.agentbridgeTaskId }
+            : {}),
+        }
+      : undefined;
+  return {
+    content: [
+      {
+        type: "text",
+        text: [
+          "AgentBridge has already opened the trusted login card for this read request.",
+          "Briefly ask the user to complete the displayed card; the original read will continue automatically after successful login.",
+          "Do not call the login tool again, ask whether to open a card, or request credentials in chat.",
+          `Internal login tool: ${loginTool}.`,
+        ].join(" "),
+      },
+    ],
+    ...(trustedDetails ? { details: trustedDetails } : {}),
+    isError: false,
+  };
 }
 
 function taskIdFromToolResult(result) {

@@ -1170,7 +1170,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         },
                         "io.agentbridge/task": {
                             "taskId": "task-1234567890-abcdef",
@@ -1230,7 +1230,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         },
                         "io.agentbridge/task": {
                             "taskId": "task-1234567890-abcdef",
@@ -1504,7 +1504,7 @@ class CentralMcpTests(unittest.TestCase):
                 "version": "1",
                 "agentHost": "openclaw",
                 "hostInstanceId": "openclaw-gateway",
-                "hostVersion": "0.4.64",
+                "hostVersion": "0.4.65",
             }
         }
         snapshot = {
@@ -1646,7 +1646,7 @@ class CentralMcpTests(unittest.TestCase):
             service.require_host_registration.return_value = {
                 "hostInstanceId": "openclaw-gateway",
                 "agentHost": "openclaw",
-                "hostVersion": "0.4.64",
+                "hostVersion": "0.4.65",
                 "acceptedLevel": "L3",
             }
             response = self._request(
@@ -1662,7 +1662,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1694,7 +1694,7 @@ class CentralMcpTests(unittest.TestCase):
             service.require_host_registration.return_value = {
                 "hostInstanceId": "openclaw-gateway",
                 "agentHost": "openclaw",
-                "hostVersion": "0.4.64",
+                "hostVersion": "0.4.65",
                 "acceptedLevel": "L3",
             }
             service.ensure_host_task.return_value = {
@@ -1726,7 +1726,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1749,7 +1749,7 @@ class CentralMcpTests(unittest.TestCase):
             capabilities=None,
             task_scope="user_turn",
             host_instance_id="openclaw-gateway",
-            host_version="0.4.64",
+            host_version="0.4.65",
         )
 
     def test_host_task_finish_uses_token_identity_and_private_metadata(self):
@@ -1782,7 +1782,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1831,7 +1831,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1885,7 +1885,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1926,7 +1926,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -1978,7 +1978,7 @@ class CentralMcpTests(unittest.TestCase):
                             "version": "1",
                             "agentHost": "openclaw",
                             "hostInstanceId": "openclaw-gateway",
-                            "hostVersion": "0.4.64",
+                            "hostVersion": "0.4.65",
                         }
                     },
                 },
@@ -2164,7 +2164,7 @@ class CentralMcpFixture:
         self.service.require_host_registration.return_value = {
             "hostInstanceId": "openclaw-gateway",
             "agentHost": "openclaw",
-            "hostVersion": "0.4.64",
+            "hostVersion": "0.4.65",
             "acceptedLevel": "L3",
         }
         self.service.validate_host_call_context.return_value = {
