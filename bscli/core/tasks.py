@@ -1733,6 +1733,118 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def link_plan_operation(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        operation: dict[str, Any],
+        plan_id: str,
+        step_key: str,
+    ) -> dict:
+        """Link a child operation without treating it as the parent task terminal."""
+        operation_id = _required_text(
+            operation.get("operation_id"),
+            "operation_id",
+            256,
+        )
+        if operation.get("user_subject") != user_subject:
+            raise TaskIntegrityError("operation belongs to another user")
+        plan_id = _required_text(plan_id, "plan_id", 128)
+        step_key = _required_text(step_key, "step_key", 80)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            linked = connection.execute(
+                "SELECT task_id FROM task_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if linked is not None and linked["task_id"] != task_id:
+                raise TaskIntegrityError(
+                    "operation is already linked to another task"
+                )
+            if linked is None:
+                connection.execute(
+                    """
+                    INSERT INTO task_operations (
+                        task_id, operation_id, user_subject, linked_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (task_id, operation_id, user_subject, now),
+                )
+                self._append_event(
+                    connection,
+                    task_id=task_id,
+                    user_subject=user_subject,
+                    event_type="task.operation.linked",
+                    payload={
+                        "operationId": operation_id,
+                        "capability": operation.get("capability_name"),
+                        "planId": plan_id,
+                        "stepKey": step_key,
+                    },
+                    causation_ref=operation_id,
+                    created_at=now,
+                )
+            if task["status"] in ACTIVE_TASK_STATUSES:
+                self._update_task_state(
+                    connection,
+                    task_id=task_id,
+                    status="running",
+                    current_operation_id=operation_id,
+                    current_interaction_id=task["current_interaction_id"],
+                    now=now,
+                )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
+
+    def record_plan_event(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_ref: str | None = None,
+    ) -> dict:
+        if not str(event_type or "").startswith("plan."):
+            raise ValueError("plan event type must start with plan.")
+        if not isinstance(payload, dict):
+            raise TypeError("plan event payload must be an object")
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type=event_type,
+                payload=payload,
+                causation_ref=causation_ref,
+                created_at=now,
+            )
+            if task["status"] in ACTIVE_TASK_STATUSES:
+                status = (
+                    "waiting_user"
+                    if event_type in {
+                        "plan.step.waiting",
+                        "plan.authorization.waiting",
+                    }
+                    else "running"
+                )
+                self._update_task_state(
+                    connection,
+                    task_id=task_id,
+                    status=status,
+                    current_operation_id=task["current_operation_id"],
+                    current_interaction_id=task["current_interaction_id"],
+                    now=now,
+                )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
+
     def link_interaction(
         self,
         *,
@@ -2363,6 +2475,96 @@ class TaskHubStore:
                 user_subject=user_subject,
                 event_type="task.failed",
                 payload={"status": "failed", "errorCode": code},
+                causation_ref=causation_ref,
+                created_at=now,
+            )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
+
+    def mark_task_outcome_unknown(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        error_code: str,
+        causation_ref: str | None = None,
+    ) -> dict:
+        code = _required_text(error_code, "error_code", 120)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["status"] == "outcome_unknown":
+                return _task_from_row(task)
+            if task["status"] not in ACTIVE_TASK_STATUSES:
+                raise TaskIntegrityError(
+                    f"terminal task cannot become outcome_unknown: {task['status']}"
+                )
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
+            self._update_task_state(
+                connection,
+                task_id=task_id,
+                status="outcome_unknown",
+                current_operation_id=task["current_operation_id"],
+                current_interaction_id=task["current_interaction_id"],
+                now=now,
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.operation.outcome_unknown",
+                payload={"status": "outcome_unknown", "errorCode": code},
+                causation_ref=causation_ref,
+                created_at=now,
+            )
+            row = self._select_task(connection, task_id)
+        return _task_from_row(row)
+
+    def cancel_task(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        reason: str,
+        causation_ref: str | None = None,
+    ) -> dict:
+        normalized_reason = _required_text(reason, "reason", 120)
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["status"] == "canceled":
+                return _task_from_row(task)
+            if task["status"] not in ACTIVE_TASK_STATUSES:
+                raise TaskIntegrityError(
+                    f"terminal task cannot be canceled: {task['status']}"
+                )
+            self._subscribe_companion_endpoints(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                created_at=now,
+            )
+            self._update_task_state(
+                connection,
+                task_id=task_id,
+                status="canceled",
+                current_operation_id=task["current_operation_id"],
+                current_interaction_id=task["current_interaction_id"],
+                now=now,
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                user_subject=user_subject,
+                event_type="task.canceled",
+                payload={"status": "canceled", "reason": normalized_reason},
                 causation_ref=causation_ref,
                 created_at=now,
             )

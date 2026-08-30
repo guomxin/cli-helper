@@ -176,6 +176,33 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             "getDoneList",
         )
 
+    def test_done_list_filters_dates_before_limit(self):
+        result = self.adapter.invoke_capability(
+            "oa.workflow.done.list",
+            self.worker,
+            {
+                "start_date": "2026-07-03",
+                "end_date": "2026-07-10",
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(result["schema_version"], "bscli.oa_workflow_list.v2")
+        self.assertEqual(result["source_count"], 3)
+        self.assertEqual(result["date_filtered_count"], 2)
+        self.assertEqual(result["matched_count"], 2)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["affair_id"], "done-1")
+        self.assertEqual(result["filters"]["start_date"], "2026-07-03")
+
+    def test_done_list_rejects_reversed_date_range(self):
+        with self.assertRaisesRegex(ValueError, "start_date cannot be after end_date"):
+            self.adapter.invoke_capability(
+                "oa.workflow.done.list",
+                self.worker,
+                {"start_date": "2026-07-11", "end_date": "2026-07-10"},
+            )
+
     def test_sent_list_uses_the_distinct_sent_page_grid(self):
         result = self.adapter.invoke_capability("oa.workflow.sent.list", self.worker, {})
 

@@ -12,6 +12,8 @@ export { HOST_CONTEXT_META_KEY, TASK_CONTEXT_META_KEY, hostContextMeta };
 
 export const IDENTITY_STATUS_TOOL_NAME = "agentbridge_identity_status";
 export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
+  "agentbridge_task_plan_prepare",
+  "agentbridge_task_plan_cancel",
   "oa_efficiency_data_approval_prepare",
   "oa_travel_expense_approval_prepare",
   "oa_labor_contract_renewal_approval_prepare",
@@ -322,13 +324,15 @@ function createProxyTool({
         throw error;
       }
       if (taskId) {
-        const hasReferences = await observeTaskResult({
-          client: identity.client,
-          taskId,
-          result,
-          logger,
-          signal,
-        });
+        const hasReferences = descriptor.name === "agentbridge_task_plan_prepare"
+          ? true
+          : await observeTaskResult({
+              client: identity.client,
+              taskId,
+              result,
+              logger,
+              signal,
+            });
         if (!hasReferences) {
           await finishHostTask({
             client: identity.client,
@@ -730,7 +734,8 @@ export function collectTaskReferences(value) {
 function isTaskEligibleTool(name) {
   return (
     typeof name === "string" &&
-    !name.startsWith("agentbridge_") &&
+    (name === "agentbridge_task_plan_prepare" ||
+      !name.startsWith("agentbridge_")) &&
     !name.endsWith("_session_status")
   );
 }

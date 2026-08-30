@@ -407,6 +407,36 @@ class AdminControlPlaneTests(unittest.TestCase):
                 candidate_task_ids=[task["task_id"]],
                 reason="secret continuation reason",
             )
+            service.task_plans.create(
+                user_subject="user-a",
+                parent_task_id=task["task_id"],
+                compiled_plan={
+                    "goal": "secret-plan-goal",
+                    "planHash": "b" * 64,
+                    "riskSummary": {
+                        "systems": ["oa", "taihua"],
+                        "writeSinkCount": 1,
+                    },
+                    "steps": [
+                        {
+                            "stepKey": "read",
+                            "ordinal": 1,
+                            "kind": "capability",
+                            "title": "secret-step-title",
+                            "capabilityName": "oa.workflow.done.list",
+                            "version": "1",
+                            "dependsOn": [],
+                            "arguments": {"secret": "secret-plan-argument"},
+                            "bindings": {},
+                            "effect": "read",
+                            "systemId": "oa",
+                        }
+                    ],
+                },
+                proposal_source="agent_host",
+                coordinator_lease_version=1,
+                idempotency_key="admin-plan-1",
+            )
             claimed = service.claim_host_notifications(
                 user_subject="user-a",
                 agent_host="openclaw",
@@ -432,6 +462,7 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["summary"]["pull_endpoints"], 1)
         self.assertEqual(result["summary"]["direct_endpoints"], 1)
         self.assertEqual(result["summary"]["waiting_tasks"], 1)
+        self.assertEqual(result["summary"]["active_plans"], 1)
         self.assertEqual(result["summary"]["active_continuations"], 1)
         self.assertEqual(result["summary"]["ready_artifacts"], 1)
         self.assertGreater(result["summary"]["outstanding_deliveries"], 0)
@@ -452,6 +483,8 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["continuations"][0]["candidate_count"], 1)
         self.assertIsNone(result["continuations"][0]["reason"])
         self.assertEqual(result["artifacts"][0]["filename"], "certificate.pdf")
+        self.assertEqual(result["plans"][0]["systems"], ["oa", "taihua"])
+        self.assertEqual(result["plans"][0]["write_sink_count"], 1)
         self.assertNotIn("download_url", result["artifacts"][0])
         self.assertNotIn("source_ref", result["artifacts"][0])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -465,6 +498,9 @@ class AdminControlPlaneTests(unittest.TestCase):
             "secret-card.example",
             "secret continuation reason",
             "secret-download-id",
+            "secret-plan-goal",
+            "secret-step-title",
+            "secret-plan-argument",
         ):
             self.assertNotIn(secret, serialized)
 

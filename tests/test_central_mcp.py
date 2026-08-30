@@ -161,6 +161,13 @@ class CentralMcpTests(unittest.TestCase):
         payload = response.json()
         tools = payload["result"]["tools"]
         names = [tool["name"] for tool in tools]
+        for plan_tool_name in (
+            "agentbridge_task_plan_catalog",
+            "agentbridge_task_plan_prepare",
+            "agentbridge_task_plan_get",
+            "agentbridge_task_plan_cancel",
+        ):
+            self.assertIn(plan_tool_name, names)
         self.assertIn("oa_workflow_pending_list", names)
         self.assertIn("oa_certificate_search", names)
         self.assertIn("oa_certificate_prepare_download", names)
@@ -334,6 +341,10 @@ class CentralMcpTests(unittest.TestCase):
             self.assertIn(tool_name, names)
         pending = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_list")
         sent = next(tool for tool in tools if tool["name"] == "oa_workflow_sent_list")
+        done = next(tool for tool in tools if tool["name"] == "oa_workflow_done_list")
+        plan_prepare = next(
+            tool for tool in tools if tool["name"] == "agentbridge_task_plan_prepare"
+        )
         team_logs = next(
             tool for tool in tools if tool["name"] == "taihua_work_log_team_list"
         )
@@ -347,6 +358,14 @@ class CentralMcpTests(unittest.TestCase):
         revoke = next(tool for tool in tools if tool["name"] == "oa_workflow_revoke")
         self.assertTrue(pending["annotations"]["readOnlyHint"])
         self.assertTrue(sent["annotations"]["readOnlyHint"])
+        self.assertIn("start_date", done["inputSchema"]["properties"])
+        self.assertIn("end_date", done["inputSchema"]["properties"])
+        self.assertFalse(plan_prepare["annotations"]["readOnlyHint"])
+        self.assertFalse(plan_prepare["annotations"]["destructiveHint"])
+        self.assertEqual(
+            plan_prepare["inputSchema"]["properties"]["steps"]["maxItems"],
+            12,
+        )
         self.assertIn("Sent page", sent["description"])
         self.assertIn("Done", sent["description"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])
@@ -1681,12 +1700,113 @@ class CentralMcpTests(unittest.TestCase):
             "oa_business_trip_submit_prepare",
             result["agentToolAccess"]["allowedToolNames"],
         )
+        for plan_tool_name in (
+            "agentbridge_task_plan_catalog",
+            "agentbridge_task_plan_prepare",
+            "agentbridge_task_plan_get",
+            "agentbridge_task_plan_cancel",
+        ):
+            self.assertIn(
+                plan_tool_name,
+                result["agentToolAccess"]["allowedToolNames"],
+            )
         self.assertNotIn(
             "oa_business_trip_prepare",
             result["agentToolAccess"]["allowedToolNames"],
         )
         self.assertNotIn("yuque_document_search", str(result))
         self.assertNotIn("abmcp_", str(result))
+
+    def test_registered_host_can_start_a_scope_checked_task_plan(self):
+        host_meta = {
+            "io.agentbridge/host-context": {
+                "version": "1",
+                "agentHost": "reference-host",
+                "hostInstanceId": "reference-host-test",
+                "hostVersion": "0.1.0",
+            },
+            "io.agentbridge/task": {
+                "taskId": "task-1234567890-abcdef",
+                "coordinatorLeaseVersion": "3",
+            },
+        }
+        steps = [
+            {
+                "stepKey": "done",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.done.list",
+                "arguments": {
+                    "start_date": "2026-08-30",
+                    "end_date": "2026-08-30",
+                },
+            }
+        ]
+        with self._server() as (service, store, _token, client):
+            issued = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                scopes=["oa:read"],
+                ttl_seconds=3600,
+            )
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "reference-host-test",
+                "agentHost": "reference-host",
+                "hostVersion": "0.1.0",
+                "acceptedLevel": "L3",
+            }
+            service.task_plan_required_scopes.return_value = frozenset(
+                {"oa:read"}
+            )
+            service.prepare_task_plan.return_value = {
+                "protocolVersion": "0.1",
+                "status": "succeeded",
+                "plan": {
+                    "schemaVersion": "agentbridge.task-plan.v1",
+                    "planId": "plan-1234567890-abcdef",
+                    "taskId": "task-1234567890-abcdef",
+                    "state": "succeeded",
+                    "steps": [],
+                },
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=612,
+                token=issued["token"],
+                params={
+                    "name": "agentbridge_task_plan_prepare",
+                    "arguments": {
+                        "goal": "汇总今日已办",
+                        "steps": steps,
+                        "idempotency_key": "reference-plan-1",
+                    },
+                    "_meta": host_meta,
+                },
+            )
+
+        result = response.json()["result"]
+        self.assertFalse(result["isError"])
+        service.task_plan_required_scopes.assert_called_once()
+        service.validate_host_call_context.assert_called_once_with(
+            user_subject="user-a",
+            registration=service.require_host_registration.return_value,
+            task_id="task-1234567890-abcdef",
+            endpoint_id=None,
+            expected_lease_version=3,
+            require_coordinator_lease=True,
+        )
+        service.prepare_task_plan.assert_called_once_with(
+            user_subject="user-a",
+            task_id="task-1234567890-abcdef",
+            proposal={
+                "schemaVersion": "agentbridge.task-plan.proposal.v1",
+                "goal": "汇总今日已办",
+                "steps": steps,
+            },
+            granted_scopes=["oa:read"],
+            idempotency_key="reference-plan-1",
+            coordinator_lease_version=3,
+        )
 
     def test_host_task_ensure_uses_token_identity_and_private_metadata(self):
         with self._server() as (service, store, token, client):

@@ -17,6 +17,7 @@ const titles = {
 const statusText = {
   active: "有效", inactive: "未活动", revoked: "已撤销", expired: "已过期", quarantined: "已隔离",
   awaiting_login: "待登录", new: "未登录", succeeded: "成功", partially_succeeded: "部分成功", failed: "失败", completed: "已完成",
+  validated: "已校验", queued: "等待执行", skipped: "已跳过",
   unknown: "结果未知", outcome_unknown: "结果未知", requires_user_action: "用户交互节点", waiting_user: "等待用户",
   awaiting_user: "当前等待用户", user_action_completed: "用户已处理", resumed: "已续办",
   user_action_expired: "交互已过期", user_action_rejected: "用户已拒绝", user_action_superseded: "已被替换",
@@ -316,8 +317,10 @@ async function renderIncidents(evaluate = false) {
 async function renderCoordination() {
   const data = await api("/api/coordination?limit=300");
   data.artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+  data.plans = Array.isArray(data.plans) ? data.plans : [];
   const summary = data.summary;
   const taskRows = data.tasks.map(item => filterRow(`${item.task_id} ${item.user_subject} ${item.title} ${item.origin_client_type} ${item.origin_label} ${item.current_operation_id} ${item.current_interaction_id}`, item.status, `<td class="code">${shortId(item.task_id)}</td><td>${escapeHtml(item.user_subject)}</td><td class="truncate" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.origin_label || item.origin_client_type || "--")}</td><td class="code">${shortId(item.current_operation_id)}</td><td class="code">${shortId(item.current_interaction_id)}</td><td>${fmtTime(item.updated_at)}</td><td>${fmtTime(item.finished_at)}</td>`));
+  const planRows = data.plans.map(item => { const completed = Number(item.step_counts?.succeeded || 0) + Number(item.step_counts?.skipped || 0); return filterRow(`${item.plan_id} ${item.task_id} ${item.user_subject} ${item.current_step_key} ${(item.systems || []).join(" ")} ${item.terminal_reason}`, item.state, `<td class="code">${shortId(item.plan_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${badge(item.state)}</td><td>${item.revision}</td><td>${escapeHtml((item.systems || []).join(" → ") || "--")}</td><td>${completed}/${item.step_count}</td><td class="code">${escapeHtml(item.current_step_key || "--")}</td><td>${item.write_sink_count}</td><td>${escapeHtml(item.terminal_reason || "--")}</td><td>${fmtTime(item.updated_at)}</td>`); });
   const endpointRows = data.endpoints.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.label} ${item.capabilities.join(" ")} ${item.delivery_state}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type)}</td><td>${badge(item.delivery_mode)}</td><td>${escapeHtml(item.label || "--")}</td><td>${scopeBadges(item.capabilities)}</td><td>${badge(item.state)}</td><td>${badge(item.delivery_state)}${item.deferred_delivery_count ? ` <span class="muted">${item.deferred_delivery_count}</span>` : ""}</td><td>${fmtTime(item.last_seen_at)}</td>`));
   const continuationRows = data.continuations.map(item => filterRow(`${item.endpoint_id} ${item.user_subject} ${item.client_type} ${item.selected_task_id} ${item.reason}`, item.state, `<td class="code">${shortId(item.endpoint_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.client_type || "--")}</td><td>${badge(item.state)}</td><td>${badge(item.execution_mode)}</td><td class="code">${shortId(item.selected_task_id)}</td><td>${item.candidate_count}</td><td>${escapeHtml(item.reason || "--")}</td><td>${fmtTime(item.expires_at)}</td>`));
   const deliveryRows = data.deliveries.map(item => { const actions = state.account.role === "admin" ? `<div class="actions">${["failed", "deferred", "archived"].includes(item.state) ? `<button class="button secondary small" data-recovery-action="retry_delivery" data-recovery-target="${item.delivery_id}">重试</button>` : ""}${["failed", "acknowledged"].includes(item.state) ? `<button class="button secondary small" data-recovery-action="archive_delivery" data-recovery-target="${item.delivery_id}">归档</button>` : ""}</div>` : ""; return filterRow(`${item.delivery_id} ${item.task_id} ${item.endpoint_id} ${item.user_subject} ${item.event_type}`, item.state, `<td class="code">${shortId(item.delivery_id)}</td><td>${escapeHtml(item.user_subject)}</td><td>${escapeHtml(item.event_type || item.payload_type)}</td><td class="code">${shortId(item.endpoint_id)}</td><td>${badge(item.state)}</td><td>${item.attempt_count}</td><td>${fmtTime(item.next_attempt_at)}</td><td>${fmtTime(item.acknowledged_at)}</td><td>${fmtTime(item.updated_at)}</td><td>${actions}</td>`); });
@@ -327,6 +330,7 @@ async function renderCoordination() {
     ${metric("涉及用户", summary.users, "Task Hub 用户")}
     ${metric("活动任务", summary.active_tasks, "尚未进入终态")}
     ${metric("等待用户", summary.waiting_tasks, "卡片或确认节点")}
+    ${metric("活动计划", summary.active_plans || 0, `等待用户 ${summary.waiting_plans || 0}`)}
     ${metric("活动端点", summary.active_endpoints, "网页与聊天通道")}
     ${metric("投递模式", `${summary.pull_endpoints} / ${summary.direct_endpoints}`, "拉取 / 直推")}
     ${metric("活动接续", summary.active_continuations, "跨端任务上下文")}
@@ -338,6 +342,7 @@ async function renderCoordination() {
   <div class="view-head section-spaced"><div><h2>任务协调明细</h2><p>只显示治理元数据；聊天正文、卡片链接、通道路由和业务字段不会进入此页面。</p></div></div>
   <div class="segmented" role="tablist" aria-label="多端任务视图">
     <button role="tab" data-coordination-tab="tasks">任务 <span>${data.tasks.length}</span></button>
+    <button role="tab" data-coordination-tab="plans">计划 <span>${data.plans.length}</span></button>
     <button role="tab" data-coordination-tab="endpoints">端点 <span>${data.endpoints.length}</span></button>
     <button role="tab" data-coordination-tab="continuations">接续 <span>${data.continuations.length}</span></button>
     <button role="tab" data-coordination-tab="deliveries">投递 <span>${data.deliveries.length}</span></button>
@@ -345,6 +350,7 @@ async function renderCoordination() {
     <button role="tab" data-coordination-tab="isolation">隔离 <span>${summary.isolation_violations}</span></button>
   </div>
   <section data-coordination-panel="tasks">${filteredTable(["Task ID", "用户", "任务", "状态", "发起端", "当前操作", "当前交互", "更新", "结束"], taskRows, "搜索任务、用户、端点或关联 ID", ["active", "waiting_user", "running", "completed", "partially_succeeded", "failed", "outcome_unknown", "canceled", "superseded"])}</section>
+  <section data-coordination-panel="plans">${filteredTable(["Plan ID", "用户", "状态", "版本", "系统", "步骤", "当前步骤", "写终点", "终止原因", "更新"], planRows, "搜索计划、用户、系统、步骤或终止原因", ["validated", "running", "waiting_user", "succeeded", "failed", "outcome_unknown", "canceled"])}</section>
   <section data-coordination-panel="endpoints">${filteredTable(["Endpoint ID", "用户", "客户端", "投递方式", "标签", "能力", "状态", "同步状态", "最近活动"], endpointRows, "搜索端点、用户、客户端或能力", ["active", "inactive"])}</section>
   <section data-coordination-panel="continuations">${filteredTable(["Endpoint ID", "用户", "客户端", "状态", "执行模式", "选中任务", "候选", "原因", "到期"], continuationRows, "搜索用户、端点、任务或原因", ["selected", "awaiting_selection", "expired", "canceled"])}</section>
   <section data-coordination-panel="deliveries">${filteredTable(["Delivery ID", "用户", "事件", "Endpoint ID", "状态", "尝试", "下次重试", "确认", "更新", ""], deliveryRows, "搜索投递、用户、事件或端点", ["pending", "delivering", "deferred", "acknowledged", "failed", "archived"])}</section>

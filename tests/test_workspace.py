@@ -868,6 +868,66 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 all(item.get("linkedAt") for item in detail["interactions"])
             )
 
+    def test_task_detail_exposes_owned_task_plan_without_private_arguments(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="workspace:alice",
+            )
+            task = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="workspace-token",
+                agent_host="openclaw",
+                host_task_key="workspace-task|plan-1",
+                endpoint_key=account["endpoint_key"],
+                client_type="web",
+                external_subject=account["account_id"],
+                conversation_ref=account["openclaw_session_key"],
+                title="Cross-system test",
+            )["task"]
+            service.task_plans.create(
+                user_subject="user-a",
+                parent_task_id=task["taskId"],
+                compiled_plan={
+                    "goal": "汇总工作形成草稿",
+                    "planHash": "a" * 64,
+                    "riskSummary": {
+                        "systems": ["oa", "taihua"],
+                        "writeSinkCount": 0,
+                    },
+                    "steps": [
+                        {
+                            "stepKey": "read",
+                            "ordinal": 1,
+                            "kind": "capability",
+                            "title": "读取 OA 已办",
+                            "capabilityName": "oa.workflow.done.list",
+                            "version": "1",
+                            "dependsOn": [],
+                            "arguments": {"secret": "not-public"},
+                            "bindings": {},
+                            "effect": "read",
+                            "systemId": "oa",
+                        }
+                    ],
+                },
+                proposal_source="agent_host",
+                coordinator_lease_version=1,
+                idempotency_key="workspace-plan-1",
+            )
+
+            detail = WorkspaceApplication(service=service).task_detail(
+                account, task["taskId"]
+            )
+
+            self.assertEqual(detail["plan"]["state"], "validated")
+            self.assertEqual(detail["plan"]["steps"][0]["stepKey"], "read")
+            self.assertNotIn("arguments", detail["plan"]["steps"][0])
+            self.assertNotIn("not-public", json.dumps(detail, ensure_ascii=False))
+
     def test_task_detail_exposes_only_owned_short_lived_artifacts(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -1359,6 +1419,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 [entry["text"] for entry in timeline if entry["role"] == "user"],
                 ["first", "second"],
             )
+            app.close()
 
     def test_browser_stream_disconnect_does_not_abort_durable_run(self) -> None:
         accepted = threading.Event()

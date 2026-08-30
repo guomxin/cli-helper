@@ -14,6 +14,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from bscli.core.central_service import CentralCapabilityService
+from bscli.core.task_plans import task_plan_response
 from bscli.core.timeline_attachments import (
     TimelineAttachmentExpired,
     TimelineAttachmentIntegrityError,
@@ -230,8 +231,13 @@ class WorkspaceApplication:
             ),
             None,
         )
+        plan = self.service.task_plans.get_for_task(
+            parent_task_id=task_id,
+            user_subject=account["user_subject"],
+        )
         return {
             "task": _public_task(task),
+            "plan": task_plan_response(plan) if plan is not None else None,
             "events": [_public_event(event) for event in events],
             "artifacts": [_public_artifact(item) for item in artifacts],
             "interaction": interaction,
@@ -268,6 +274,7 @@ class WorkspaceApplication:
             items.append(
                 {
                     "task": _public_task(task),
+                    "plan": None,
                     "events": [],
                     "artifacts": [
                         _public_artifact(item) for item in task_artifacts

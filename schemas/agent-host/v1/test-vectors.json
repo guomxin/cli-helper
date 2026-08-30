@@ -153,6 +153,10 @@
     {"id": "H22", "level": "L3", "subject": "non_owner_resume_rejection"},
     {"id": "H23", "level": "L3", "subject": "batch_multi_interaction"},
     {"id": "H24", "level": "L3", "subject": "bounded_transport_recovery"},
-    {"id": "H25", "level": "L3", "subject": "runtime_governance_signal"}
+    {"id": "H25", "level": "L3", "subject": "runtime_governance_signal"},
+    {"id": "H26", "level": "L2", "subject": "login_required_auto_resume"},
+    {"id": "H27", "level": "L3", "subject": "accepted_run_reconciliation_no_replay"},
+    {"id": "H28", "level": "L3", "subject": "durable_task_plan_submission"},
+    {"id": "H29", "level": "L3", "subject": "task_plan_restart_safety"}
   ]
 }

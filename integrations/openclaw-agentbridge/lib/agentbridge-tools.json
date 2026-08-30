@@ -1244,6 +1244,144 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "Return the model-safe capability and deterministic-transform catalog filtered to this MCP identity's scopes. Use it before proposing a multi-system task plan.",
+      "inputSchema": {
+        "properties": {},
+        "title": "agentbridge_task_plan_catalogArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_task_plan_catalog",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_task_plan_catalogDictOutput",
+        "type": "object"
+      },
+      "title": "Get AgentBridge Planning Catalog"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Validate, compile, persist, and start one cross-system task plan bound to the current AgentTask. The host supplies public capability/transform steps only. AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at most one trusted prepare write sink. Example: oa.workflow.done.list with start_date/end_date -> work_items_to_log_draft.v1 using /items -> taihua.work_log.create.prepare with /draft bound to content. Never include a commit, interaction resume, arbitrary HTTP, or script step.",
+      "inputSchema": {
+        "properties": {
+          "goal": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal",
+          "steps"
+        ],
+        "title": "agentbridge_task_plan_prepareArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_task_plan_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_task_plan_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare and Start a Durable AgentBridge Task Plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Read one current user's durable plan and its non-sensitive step states.",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "title": "agentbridge_task_plan_getArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_task_plan_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_task_plan_getDictOutput",
+        "type": "object"
+      },
+      "title": "Get Durable AgentBridge Task Plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Cancel unexecuted steps in one current user's active plan. This never rolls back a downstream write and cannot consume an authorization.",
+      "inputSchema": {
+        "properties": {
+          "plan_id": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id"
+        ],
+        "title": "agentbridge_task_plan_cancelArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_task_plan_cancel",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_task_plan_cancelDictOutput",
+        "type": "object"
+      },
+      "title": "Cancel Durable AgentBridge Task Plan"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "List templates available to the authenticated OA user.",
       "inputSchema": {
         "properties": {
@@ -1560,6 +1698,19 @@
       "description": "List workflows already handled by the authenticated OA user from the Done page. This is distinct from workflows initiated by the user (Sent).",
       "inputSchema": {
         "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
           "idempotency_key": {
             "anyOf": [
               {
@@ -1592,6 +1743,19 @@
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
           }
         },
         "title": "oa_workflow_done_listArguments",

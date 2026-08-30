@@ -38,6 +38,15 @@ const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.interaction.completed",
   "task.completed",
   "task.artifact.delivery",
+  "plan.proposed",
+  "plan.validated",
+  "plan.started",
+  "plan.step.started",
+  "plan.step.succeeded",
+  "plan.step.resumed",
+  "plan.step.recovered",
+  "plan.step.waiting",
+  "plan.authorization.waiting",
 ]);
 const PULL_BASED_CHANNELS = new Set(["web", "webchat"]);
 const MAX_NOTIFICATION_IDLE_INTERVAL_MS = 10_000;

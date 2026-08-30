@@ -692,7 +692,8 @@ test("agent-facing catalogs hide internal commit and continuation tools", () => 
     .filter(
       (tool) =>
         tool.name.endsWith("_prepare") ||
-        tool.name.endsWith("_session_login"),
+        tool.name.endsWith("_session_login") ||
+        tool.name === "agentbridge_task_plan_cancel",
     )
     .map((tool) => tool.name)
     .sort();
@@ -1079,7 +1080,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.66",
+      hostVersion: "0.4.67",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",

@@ -177,6 +177,10 @@ _LOGGER = logging.getLogger("uvicorn.error")
 
 AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "agentbridge_server_profile": frozenset(),
+    "agentbridge_task_plan_catalog": frozenset(),
+    "agentbridge_task_plan_prepare": frozenset(),
+    "agentbridge_task_plan_get": frozenset(),
+    "agentbridge_task_plan_cancel": frozenset(),
     "agentbridge_interaction_get": frozenset(),
     "agentbridge_operation_get": frozenset(),
     "agentbridge_operation_list": frozenset(),
@@ -545,6 +549,7 @@ class CentralRuntimeGovernanceWorker:
             self._thread.join(timeout=10)
 
     def run_cycle(self) -> dict[str, Any]:
+        task_plans = self.service.recover_task_plans(limit=100)
         task_diagnostics = self.service.tasks.runtime_diagnostics()
         evaluation = self.service.runtime_governance.evaluate_incidents(
             task_diagnostics=task_diagnostics,
@@ -556,6 +561,7 @@ class CentralRuntimeGovernanceWorker:
         )
         retention = self.service.runtime_governance.prune()
         return {
+            "taskPlans": task_plans,
             "evaluation": evaluation,
             "slo": slo,
             "observations": observations,
@@ -569,7 +575,8 @@ class CentralRuntimeGovernanceWorker:
             try:
                 result = self.run_cycle()
                 _LOGGER.info(
-                    "AgentBridge runtime governance cycle: open=%d observed=%d resolved=%d",
+                    "AgentBridge runtime governance cycle: plans=%d open=%d observed=%d resolved=%d",
+                    result["taskPlans"]["candidates"],
                     result["evaluation"]["open"],
                     result["evaluation"]["observed"],
                     result["evaluation"]["resolved"],
@@ -843,6 +850,10 @@ def create_central_mcp_server(
             "prepare -> authorize -> commit -> verify. When the user asks to handle all "
             "pending missed-punch requests, call oa_missed_punch_approval_batch_prepare "
             "once; do not loop over the singular prepare tool or ask the user to say continue."
+            " For a goal that combines capabilities from more than one downstream system, "
+            "read agentbridge_task_plan_catalog and submit one durable plan through "
+            "agentbridge_task_plan_prepare. Do not emulate a cross-system plan with a series "
+            "of unrelated tool calls, and never put private commit or resume tools in a plan."
         )
 
     async def invoke(
@@ -1199,6 +1210,149 @@ def create_central_mcp_server(
         return response
 
     @mcp.tool(
+        name="agentbridge_task_plan_catalog",
+        title="Get AgentBridge Planning Catalog",
+        description=(
+            "Return the model-safe capability and deterministic-transform catalog filtered "
+            "to this MCP identity's scopes. Use it before proposing a multi-system task plan."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_task_plan_catalog() -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.planning_catalog,
+            granted_scopes=identity["scopes"],
+        )
+
+    @mcp.tool(
+        name="agentbridge_task_plan_prepare",
+        title="Prepare and Start a Durable AgentBridge Task Plan",
+        description=(
+            "Validate, compile, persist, and start one cross-system task plan bound to the "
+            "current AgentTask. The host supplies public capability/transform steps only. "
+            "AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at "
+            "most one trusted prepare write sink. Example: oa.workflow.done.list with "
+            "start_date/end_date -> work_items_to_log_draft.v1 using /items -> "
+            "taihua.work_log.create.prepare with /draft bound to content. Never include a "
+            "commit, interaction resume, arbitrary HTTP, or script step."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_task_plan_prepare(
+        ctx: Context,
+        goal: Annotated[str, Field(min_length=1, max_length=500)],
+        steps: Annotated[
+            list[dict[str, Any]],
+            Field(min_length=1, max_length=12),
+        ],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        proposal = {
+            "schemaVersion": "agentbridge.task-plan.proposal.v1",
+            "goal": goal,
+            "steps": steps,
+        }
+        required_scopes = await asyncio.to_thread(
+            service.task_plan_required_scopes,
+            proposal,
+        )
+        identity = _request_identity(
+            identity_store,
+            required_scopes=set(required_scopes),
+        )
+        task_id = _request_task_id(ctx)
+        if not task_id:
+            raise PermissionError(
+                "a durable AgentBridge task plan requires trusted AgentTask context"
+            )
+        _host_context, _registration = await _require_registered_host_call(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+            task_id=task_id,
+            require_coordinator_lease=True,
+        )
+        runtime_context = _request_runtime_context(ctx)
+        lease_value = runtime_context.get("coordinatorLeaseVersion")
+        response = await asyncio.to_thread(
+            service.prepare_task_plan,
+            user_subject=identity["user_subject"],
+            task_id=task_id,
+            proposal=proposal,
+            granted_scopes=identity["scopes"],
+            idempotency_key=idempotency_key,
+            coordinator_lease_version=(
+                int(lease_value) if lease_value is not None else None
+            ),
+        )
+        return package_interaction_result(response)
+
+    @mcp.tool(
+        name="agentbridge_task_plan_get",
+        title="Get Durable AgentBridge Task Plan",
+        description=(
+            "Read one current user's durable plan and its non-sensitive step states."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def agentbridge_task_plan_get(
+        plan_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(
+            service.get_task_plan,
+            user_subject=identity["user_subject"],
+            plan_id=plan_id,
+        )
+
+    @mcp.tool(
+        name="agentbridge_task_plan_cancel",
+        title="Cancel Durable AgentBridge Task Plan",
+        description=(
+            "Cancel unexecuted steps in one current user's active plan. This never rolls "
+            "back a downstream write and cannot consume an authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    async def agentbridge_task_plan_cancel(
+        ctx: Context,
+        plan_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        plan_response = await asyncio.to_thread(
+            service.get_task_plan,
+            user_subject=identity["user_subject"],
+            plan_id=plan_id,
+        )
+        await _registered_host_context(
+            ctx,
+            service=service,
+            identity=identity,
+            minimum_level="L3",
+        )
+        return await asyncio.to_thread(
+            service.cancel_task_plan,
+            user_subject=identity["user_subject"],
+            plan_id=plan_id,
+        )
+
+    @mcp.tool(
         name="oa_template_list",
         title="List OA Templates",
         description="List templates available to the authenticated OA user.",
@@ -1408,12 +1562,18 @@ def create_central_mcp_server(
     async def oa_workflow_done_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments = {"limit": limit}
         if keyword:
             arguments["keyword"] = keyword
+        if start_date:
+            arguments["start_date"] = start_date
+        if end_date:
+            arguments["end_date"] = end_date
         return await invoke(ctx, "oa.workflow.done.list", arguments, idempotency_key)
 
     @mcp.tool(

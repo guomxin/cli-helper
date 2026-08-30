@@ -1617,6 +1617,9 @@ function upsertTaskCardVariant(
       `${eventLabel(latestEvent.event_type)} · ${formatTime(latestEvent.created_at)}`,
     );
   }
+  if (result.plan) {
+    addDetail(facts, "计划进度", taskPlanProgress(result.plan));
+  }
   if (facts.childElementCount) card.append(facts);
   if (showArtifacts) {
     appendArtifactList(card, result.artifacts, {
@@ -1848,6 +1851,10 @@ function renderTaskDetail(result) {
   addDetail(metadata, "更新时间", formatTime(task.updated_at));
   addDetail(metadata, "任务编号", task.task_id);
   detail.append(metadata);
+
+  if (result.plan) {
+    detail.append(renderTaskPlan(result.plan));
+  }
 
   const interactions = Array.isArray(result.interactions)
     ? result.interactions
@@ -2220,9 +2227,13 @@ function statusLabel(status) {
   return (
     {
       active: "进行中",
+      validated: "已校验",
+      queued: "等待执行",
+      pending: "待处理",
       waiting_user: "等待确认",
       running: "执行中",
       succeeded: "已完成",
+      skipped: "已跳过",
       partially_succeeded: "部分成功",
       failed: "失败",
       outcome_unknown: "结果待核对",
@@ -2257,12 +2268,68 @@ function eventLabel(type) {
       "batch.item.failed": "当前事项失败",
       "batch.item.outcome_unknown": "当前事项结果待核对",
       "batch.completed": "批量任务已结束",
+      "plan.proposed": "跨系统计划已提出",
+      "plan.validated": "跨系统计划已校验",
+      "plan.started": "跨系统计划已启动",
+      "plan.step.started": "计划步骤已开始",
+      "plan.step.succeeded": "计划步骤已完成",
+      "plan.step.resumed": "计划步骤已恢复",
+      "plan.step.recovered": "重启后已恢复计划步骤",
+      "plan.step.waiting": "计划正在等待用户",
+      "plan.authorization.waiting": "计划正在等待执行授权",
+      "plan.step.failed": "计划步骤失败",
+      "plan.outcome_unknown": "计划结果待核对",
+      "plan.completed": "跨系统计划已完成",
+      "plan.canceled": "跨系统计划已取消",
       "task.artifact.ready": "任务文件已就绪",
       "task.artifact.delivery": "文件投递结果已回报",
       "task.artifact.refreshed": "文件下载已重新生成",
       "task.completed": "任务已完成",
     }[type] || type.replaceAll(".", " / ")
   );
+}
+
+function taskPlanProgress(plan) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const completed = steps.filter((step) =>
+    ["succeeded", "skipped"].includes(step.state),
+  ).length;
+  const current = steps.find((step) => step.stepKey === plan.currentStepKey);
+  const suffix = current ? ` · ${current.title || current.stepKey}` : "";
+  return `${completed}/${steps.length} 步${suffix}`;
+}
+
+function renderTaskPlan(plan) {
+  const section = document.createElement("section");
+  section.className = "task-plan";
+  const header = document.createElement("div");
+  header.className = "task-plan-header";
+  const title = document.createElement("strong");
+  title.textContent = "跨系统任务计划";
+  const progress = document.createElement("span");
+  progress.textContent = taskPlanProgress(plan);
+  header.append(title, progress);
+  section.append(header);
+
+  const steps = document.createElement("ol");
+  steps.className = "task-plan-steps";
+  (plan.steps || []).forEach((step) => {
+    const item = document.createElement("li");
+    item.className = `task-plan-step ${escapeClass(step.state)}`;
+    const marker = document.createElement("span");
+    marker.className = "task-plan-marker";
+    marker.textContent = String(Number(step.ordinal || 0));
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = step.title || step.capabilityName || step.transformName;
+    const meta = document.createElement("small");
+    meta.textContent = `${step.systemId} · ${statusLabel(step.state)}`;
+    copy.append(name, meta);
+    item.append(marker, copy);
+    steps.append(item);
+  });
+  section.append(steps);
+  return section;
 }
 
 function appendArtifactList(

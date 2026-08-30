@@ -268,6 +268,27 @@ class OperationStore:
             raise KeyError(f"operation not found: {operation_id}")
         return _operation_from_row(row)
 
+    def find_idempotent(
+        self,
+        *,
+        user_subject: str,
+        capability_name: str,
+        capability_version: str,
+        idempotency_key: str,
+    ) -> dict | None:
+        normalized_key = str(idempotency_key or "").strip()
+        if not normalized_key:
+            return None
+        with self._connect() as connection:
+            row = self._find_idempotent(
+                connection,
+                user_subject=user_subject,
+                capability_name=capability_name,
+                capability_version=capability_version,
+                idempotency_key=normalized_key,
+            )
+        return _operation_from_row(row) if row is not None else None
+
     def list(self, *, user_subject: str | None = None, limit: int = 100) -> list[dict]:
         limit = min(max(limit, 1), 1000)
         query = "SELECT * FROM operations"

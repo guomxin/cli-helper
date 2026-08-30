@@ -12,6 +12,7 @@ AgentBridge 使用 Python 构建，以非侵入方式把遗留 B/S 系统封装�
 - Telegram、微信和 Agent Workspace 支持跨端任务、文本、卡片、图片和文件同步；
 - 管理控制台提供持久化链路、运行事件、试点 SLO、安全恢复账本和可验证每日备份；
 - OpenClaw 与独立 Reference Host 使用同一 `agentbridge.host.v1` 契约和远程 MCP；
+- 跨系统目标可编译为中心端持久任务计划，按已注册能力和确定性转换执行，等待登录、字段或授权后自动续办；
 - 已接入协同办公、泰华日志、语雀部门信息库和照明实验室四个系统；
 - Chrome 扩展、旧浏览器桥、localhost daemon 和代理型 CLI 已于 2026-07-13 退役。
 
@@ -49,7 +50,7 @@ Telegram / 微信 / Agent Workspace / 其他 MCP 宿主
 - 中心节点能够访问目标遗留系统；
 - Linux 使用权限受限的 32 字节会话密钥；
 - 远程访问使用固定私网 IP、HTTPS 和内部 CA；
-- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.66`。
+- OpenClaw 当前兼容基线为 `2026.7.1`，AgentBridge 插件为 `0.4.67`。
 
 本地开发安装：
 
@@ -69,7 +70,7 @@ python -m bscli.cli.main --home .bscli capability describe oa.template.list
 python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prepare
 ```
 
-截至 2026-08-26，中央注册表包含 94 个业务能力：
+截至 2026-08-30，中央注册表包含 95 个业务能力：
 
 | 系统 | 数量 | 主要范围 |
 | --- | ---: | --- |
@@ -80,6 +81,14 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 
 线上 MCP 还包含会话、可信交互、任务、文件和治理工具。模型只看到读取能力和受治理的写入
 入口，内部提交、续办和宿主协调工具不会暴露给模型。
+
+### 跨系统任务计划
+
+宿主先调用 `agentbridge_task_plan_catalog` 读取当前 Token 可用的安全计划目录，再通过
+`agentbridge_task_plan_prepare` 提交结构化计划。中央服务校验能力、参数、依赖、Scope、数据绑定
+和副作用后持久执行；`agentbridge_task_plan_get` 和 `agentbridge_task_plan_cancel` 用于查看与取消。
+一期允许多个读取和注册转换，但最多只有一个受控写入终点；正式写入仍必须经过字段核对、独立授权、
+私有 commit 和权威回读。
 
 ### 协同办公能力
 

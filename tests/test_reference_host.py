@@ -497,8 +497,8 @@ class ReferenceHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(state.list_tasks(identity_label="用户甲")))
         self.assertEqual(1, len(state.list_tasks(identity_label="用户乙")))
 
-    async def test_conformance_catalog_requires_all_h01_h25(self) -> None:
-        expected = {f"H{number:02d}" for number in range(1, 26)}
+    async def test_conformance_catalog_requires_all_h01_h29(self) -> None:
+        expected = {f"H{number:02d}" for number in range(1, 30)}
         validate_case_ids(case.case_id for case in CASES)
         self.assertEqual(expected, {case.case_id for case in CASES})
         report = ConformanceReport(host_name="reference-host", host_version="0.1.0")

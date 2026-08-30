@@ -40,6 +40,10 @@ CASES = (
     ConformanceCase("H23", "L3", "批量任务逐项独立授权"),
     ConformanceCase("H24", "L3", "按副作用边界有界恢复"),
     ConformanceCase("H25", "L3", "宿主运行证据进入中央治理"),
+    ConformanceCase("H26", "L2", "登录后按原参数自动续办"),
+    ConformanceCase("H27", "L3", "受理后断线只读对账且不重放"),
+    ConformanceCase("H28", "L3", "提交经权限校验的持久任务计划"),
+    ConformanceCase("H29", "L3", "任务计划重启恢复不重放业务提交"),
 )
 
 

@@ -41,7 +41,7 @@ test("JavaScript validates the shared host capability vectors", async () => {
   }
   assert.deepEqual(
     vectors.conformanceCases.map((item) => item.id),
-    Array.from({ length: 25 }, (_, index) => `H${String(index + 1).padStart(2, "0")}`),
+    Array.from({ length: 29 }, (_, index) => `H${String(index + 1).padStart(2, "0")}`),
   );
   assert.equal(
     vectors.conformanceCases.every((item) => ["L1", "L2", "L3"].includes(item.level)),
@@ -57,7 +57,7 @@ test("OpenClaw publishes the exact registered L3 runtime context", () => {
     version: "1",
     agentHost: "openclaw",
     hostInstanceId: "openclaw-gateway",
-    hostVersion: "0.4.66",
+    hostVersion: "0.4.67",
   });
   assert.equal(
     hostRegistrationMeta()[HOST_PROFILE_META_KEY],

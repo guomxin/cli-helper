@@ -50,7 +50,7 @@ class HostContractSchemaTests(unittest.TestCase):
             (SCHEMA_DIR / "test-vectors.json").read_text(encoding="utf-8")
         )
         self.assertEqual(
-            [f"H{number:02d}" for number in range(1, 26)],
+            [f"H{number:02d}" for number in range(1, 30)],
             [item["id"] for item in vectors["conformanceCases"]],
         )
 

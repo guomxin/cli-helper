@@ -215,6 +215,7 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
                 session_keepalive_lease_seconds=None,
             )
             result = CentralRuntimeGovernanceWorker(service).run_cycle()
+            self.assertIn("taskPlans", result)
             self.assertIn("evaluation", result)
             self.assertIn("slo", result)
             self.assertIn("observations", result)

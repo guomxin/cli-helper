@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import date, datetime
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -340,7 +341,75 @@ _WORKFLOW_LIST_INPUT_SCHEMA = {
     "properties": {
         "keyword": {"type": "string"},
         "limit": {"type": "integer"},
+        "start_date": {"type": "string"},
+        "end_date": {"type": "string"},
     },
+    "additionalProperties": False,
+}
+
+_WORKFLOW_LIST_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "schema_version": {"type": "string"},
+        "collection": {"type": "string"},
+        "source": {"type": "string"},
+        "source_count": {"type": "integer"},
+        "date_filtered_count": {"type": "integer"},
+        "unparsed_date_count": {"type": "integer"},
+        "matched_count": {"type": "integer"},
+        "count": {"type": "integer"},
+        "total": {"type": ["integer", "null"]},
+        "page": {"type": ["integer", "null"]},
+        "filters": {
+            "type": "object",
+            "properties": {
+                "keyword": {"type": ["string", "null"]},
+                "start_date": {"type": ["string", "null"]},
+                "end_date": {"type": ["string", "null"]},
+                "limit": {"type": "integer"},
+            },
+            "required": ["keyword", "start_date", "end_date", "limit"],
+            "additionalProperties": False,
+        },
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "affair_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "status": {"type": "string"},
+                    "date": {"type": "string"},
+                    "category": {"type": "string"},
+                    "sender": {"type": "string"},
+                    "read": {"type": "boolean"},
+                },
+                "required": [
+                    "affair_id",
+                    "title",
+                    "date",
+                    "category",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "transport": {"type": "string"},
+    },
+    "required": [
+        "schema_version",
+        "collection",
+        "source",
+        "source_count",
+        "date_filtered_count",
+        "unparsed_date_count",
+        "matched_count",
+        "count",
+        "total",
+        "page",
+        "filters",
+        "items",
+        "transport",
+    ],
     "additionalProperties": False,
 }
 
@@ -679,13 +748,13 @@ def build_central_capability_registry() -> CapabilityRegistry:
         registry.register(
             CapabilitySpec(
                 name=capability_name,
-                version="0.1.0",
+                version="0.2.0",
                 description=_WORKFLOW_COLLECTION_DESCRIPTIONS[collection],
                 input_schema=_WORKFLOW_LIST_INPUT_SCHEMA,
-                output_schema={"type": "object"},
+                output_schema=_WORKFLOW_LIST_OUTPUT_SCHEMA,
                 effect="read",
                 adapter="seeyon-central",
-                workflow="workflow-list-v1",
+                workflow="workflow-list-v2",
             )
         )
     registry.register(
@@ -950,10 +1019,29 @@ class SeeyonCentralAdapter:
         arguments = arguments or {}
         keyword = _validated_optional_string(arguments.get("keyword"), "keyword", maximum=200)
         limit = _validated_integer(arguments.get("limit"), "limit", default=50, minimum=1, maximum=100)
+        start_date = _validated_optional_date(arguments.get("start_date"), "start_date")
+        end_date = _validated_optional_date(arguments.get("end_date"), "end_date")
+        if start_date and end_date and start_date > end_date:
+            raise ValueError("start_date cannot be after end_date")
         parsed = self._fetch_workflow_collection(worker, collection)
         public_items = [_public_workflow_item(item, collection) for item in parsed.get("items") or []]
         public_items = [item for item in public_items if item.get("title")]
         source_count = len(public_items)
+        unparsed_date_count = 0
+        if start_date or end_date:
+            date_filtered_items = []
+            for item in public_items:
+                item_date = _workflow_item_date(item.get("date"))
+                if item_date is None:
+                    unparsed_date_count += 1
+                    continue
+                if start_date and item_date < start_date:
+                    continue
+                if end_date and item_date > end_date:
+                    continue
+                date_filtered_items.append(item)
+            public_items = date_filtered_items
+        date_filtered_count = len(public_items)
         if keyword:
             needle = keyword.casefold()
             public_items = [
@@ -964,14 +1052,22 @@ class SeeyonCentralAdapter:
         matched_count = len(public_items)
         public_items = public_items[:limit]
         return {
-            "schema_version": "bscli.oa_workflow_list.v1",
+            "schema_version": "bscli.oa_workflow_list.v2",
             "collection": collection,
             "source": parsed.get("source") or "section_api",
             "source_count": source_count,
+            "date_filtered_count": date_filtered_count,
+            "unparsed_date_count": unparsed_date_count,
             "matched_count": matched_count,
             "count": len(public_items),
             "total": parsed.get("total"),
             "page": parsed.get("page"),
+            "filters": {
+                "keyword": keyword or None,
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+                "limit": limit,
+            },
             "items": public_items,
             "transport": (
                 "central_http_session"
@@ -1581,6 +1677,27 @@ def _validated_optional_string(value, name: str, *, maximum: int) -> str:
     if len(value) > maximum:
         raise ValueError(f"{name} must be at most {maximum} characters")
     return value.strip()
+
+
+def _validated_optional_date(value, name: str) -> date | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a YYYY-MM-DD string")
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid YYYY-MM-DD date") from exc
+
+
+def _workflow_item_date(value) -> date | None:
+    match = re.search(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", str(value or ""))
+    if match is None:
+        return None
+    try:
+        return date(int(match[1]), int(match[2]), int(match[3]))
+    except ValueError:
+        return None
 
 
 def _validated_integer(value, name: str, *, default: int, minimum: int, maximum: int) -> int:

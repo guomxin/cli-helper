@@ -1135,6 +1135,92 @@ code {
   background: #fff8e9;
 }
 
+.task-plan {
+  margin: 0 0 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f7faf8;
+}
+
+.task-plan-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.task-plan-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-plan-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-plan-step {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+}
+
+.task-plan-marker {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #aebbb5;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.task-plan-step.succeeded .task-plan-marker,
+.task-plan-step.skipped .task-plan-marker {
+  border-color: var(--teal);
+  color: #fff;
+  background: var(--teal);
+}
+
+.task-plan-step.running .task-plan-marker,
+.task-plan-step.waiting_user .task-plan-marker {
+  border-color: #b78120;
+  color: #6d4a0e;
+  background: #fff3d6;
+}
+
+.task-plan-step.failed .task-plan-marker,
+.task-plan-step.outcome_unknown .task-plan-marker {
+  border-color: #a34b47;
+  color: #fff;
+  background: #a34b47;
+}
+
+.task-plan-step strong,
+.task-plan-step small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.task-plan-step strong {
+  font-size: 13px;
+}
+
+.task-plan-step small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .timeline {
   position: relative;
   display: grid;

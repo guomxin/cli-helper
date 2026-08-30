@@ -42,6 +42,10 @@ CASE_EVIDENCE = {
     "H23": "OpenClaw governed batch and multiple-card tests",
     "H24": "Reference Host and OpenClaw bounded transport recovery tests",
     "H25": "Reference Host and OpenClaw runtime snapshot reporter tests",
+    "H26": "Reference Host and OpenClaw login auto-continuation tests",
+    "H27": "Workspace accepted-run reconciliation and no-replay tests",
+    "H28": "Reference Host scope-checked durable task plan submission tests",
+    "H29": "Central task plan restart recovery and hidden commit no-retry tests",
 }
 
 
@@ -55,9 +59,9 @@ def main() -> int:
 
     vectors = json.loads(VECTORS.read_text(encoding="utf-8"))
     case_ids = [item["id"] for item in vectors["conformanceCases"]]
-    expected = [f"H{number:02d}" for number in range(1, 26)]
+    expected = [f"H{number:02d}" for number in range(1, 30)]
     if case_ids != expected:
-        raise RuntimeError("shared conformance vectors do not contain H01-H25 in order")
+        raise RuntimeError("shared conformance vectors do not contain H01-H29 in order")
 
     commands = [
         {
@@ -69,6 +73,8 @@ def main() -> int:
                 "tests.test_host_contract",
                 "tests.test_reference_host",
                 "tests.test_central_mcp",
+                "tests.test_task_plan_runtime",
+                "tests.test_workspace",
             ],
             "cwd": ROOT,
         }
@@ -133,7 +139,7 @@ def main() -> int:
         "generatedAt": generated_at.isoformat(),
         "passed": passed,
         "hosts": [
-            {"name": "openclaw", "version": "0.4.66"},
+            {"name": "openclaw", "version": "0.4.67"},
             {"name": "reference-host", "version": "0.1.0"},
         ],
         "contractDigest": _contract_digest(),

@@ -255,6 +255,18 @@ from bscli.core.session_secrets import (
 )
 from bscli.core.sessions import SessionRegistry
 from bscli.core.tasks import TaskHubStore, TaskIntegrityError, TaskNotFound
+from bscli.core.planning_catalog import build_planning_catalog
+from bscli.core.task_plan_runtime import TaskPlanRuntime
+from bscli.core.task_plan_validation import (
+    PlanValidationError,
+    validate_and_compile_task_plan,
+)
+from bscli.core.task_plans import (
+    ACTIVE_PLAN_STATES,
+    TaskPlanStore,
+    task_plan_response,
+)
+from bscli.core.transforms import build_transform_registry
 from bscli.core.write_authorizations import (
     WriteAuthorizationAccessDenied,
     WriteAuthorizationNotFound,
@@ -710,6 +722,8 @@ class CentralCapabilityService:
         self.write_authorizations = WriteAuthorizationStore(self.db_path)
         self.interactions = InteractionStore(self.db_path)
         self.tasks = TaskHubStore(self.db_path)
+        self.task_plans = TaskPlanStore(self.db_path)
+        self.transforms = build_transform_registry()
         self.host_contract = HostContractStore(self.db_path)
         self.workspace = WorkspaceStore(self.db_path)
         self.governance_policies = GovernancePolicyStore(self.db_path)
@@ -760,6 +774,11 @@ class CentralCapabilityService:
         self.session_keepalive_lease_seconds = session_keepalive_lease_seconds
         self._locks_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
+        self.task_plan_runtime = TaskPlanRuntime(
+            service=self,
+            plans=self.task_plans,
+            transforms=self.transforms,
+        )
 
     def list_capabilities(self, *, system: str | None = None) -> dict:
         return {
@@ -772,6 +791,126 @@ class CentralCapabilityService:
             "protocolVersion": "0.1",
             "capability": self.registry.describe(name),
         }
+
+    def planning_required_scopes(self, capability_name: str) -> frozenset[str]:
+        if capability_name in _CAPABILITY_SCOPES:
+            return _CAPABILITY_SCOPES[capability_name]
+        spec = self.registry.get(capability_name)
+        if spec.effect != "read":
+            raise KeyError(
+                f"capability has no planning scope policy: {capability_name}"
+            )
+        if capability_name.startswith("oa.addressbook."):
+            return frozenset({"oa:read:addressbook"})
+        return frozenset({f"{spec.system}:read"})
+
+    def planning_catalog(self, *, granted_scopes: list[str] | set[str]) -> dict:
+        return build_planning_catalog(
+            registry=self.registry,
+            transforms=self.transforms,
+            trusted_write_prepares=_TRUSTED_WRITE_DEFINITIONS,
+            hidden_commit_capabilities=_TRUSTED_WRITE_COMMITS,
+            scope_resolver=self.planning_required_scopes,
+            granted_scopes=granted_scopes,
+        )
+
+    def task_plan_required_scopes(self, proposal: dict) -> frozenset[str]:
+        compiled = validate_and_compile_task_plan(
+            proposal,
+            registry=self.registry,
+            transforms=self.transforms,
+            trusted_write_prepares=_TRUSTED_WRITE_DEFINITIONS,
+            hidden_commit_capabilities=_TRUSTED_WRITE_COMMITS,
+            scope_resolver=self.planning_required_scopes,
+        )
+        return frozenset(compiled["requiredScopes"])
+
+    def prepare_task_plan(
+        self,
+        *,
+        user_subject: str,
+        task_id: str,
+        proposal: dict,
+        granted_scopes: list[str] | set[str],
+        idempotency_key: str | None = None,
+        coordinator_lease_version: int | None = None,
+        proposal_source: str = "agent_host",
+    ) -> dict:
+        self.tasks.get_task(task_id, user_subject=user_subject)
+        compiled = validate_and_compile_task_plan(
+            proposal,
+            registry=self.registry,
+            transforms=self.transforms,
+            trusted_write_prepares=_TRUSTED_WRITE_DEFINITIONS,
+            hidden_commit_capabilities=_TRUSTED_WRITE_COMMITS,
+            scope_resolver=self.planning_required_scopes,
+            granted_scopes=granted_scopes,
+        )
+        plan, reused = self.task_plans.create(
+            user_subject=user_subject,
+            parent_task_id=task_id,
+            compiled_plan=compiled,
+            proposal_source=proposal_source,
+            coordinator_lease_version=coordinator_lease_version,
+            idempotency_key=idempotency_key,
+        )
+        if reused:
+            response = self.task_plan_runtime.advance(
+                plan["plan_id"], user_subject=user_subject
+            )
+            return {**response, "reused": True}
+        self.tasks.record_plan_event(
+            task_id=task_id,
+            user_subject=user_subject,
+            event_type="plan.proposed",
+            payload={
+                "planId": plan["plan_id"],
+                "revision": plan["revision"],
+                "stepCount": len(plan["steps"]),
+            },
+            causation_ref=plan["plan_id"],
+        )
+        self.tasks.record_plan_event(
+            task_id=task_id,
+            user_subject=user_subject,
+            event_type="plan.validated",
+            payload={
+                "planId": plan["plan_id"],
+                "systems": plan["risk_summary"].get("systems") or [],
+                "writeSinkCount": plan["risk_summary"].get(
+                    "writeSinkCount", 0
+                ),
+            },
+            causation_ref=plan["plan_id"],
+        )
+        response = self.task_plan_runtime.start(
+            plan["plan_id"], user_subject=user_subject
+        )
+        return {**response, "reused": False}
+
+    def get_task_plan(self, *, user_subject: str, plan_id: str) -> dict:
+        plan = self.task_plans.get(plan_id, user_subject=user_subject)
+        return {
+            "protocolVersion": "0.1",
+            "status": "succeeded",
+            "plan": task_plan_response(plan),
+        }
+
+    def cancel_task_plan(
+        self,
+        *,
+        user_subject: str,
+        plan_id: str,
+        reason: str = "user_requested",
+    ) -> dict:
+        return self.task_plan_runtime.cancel(
+            plan_id,
+            user_subject=user_subject,
+            reason=reason,
+        )
+
+    def recover_task_plans(self, *, limit: int = 100) -> dict:
+        return self.task_plan_runtime.recover(limit=limit)
 
     def adapter_for_system(self, system_id: str) -> object:
         runtime = self._runtime_for_system(system_id)
@@ -1711,6 +1850,9 @@ class CentralCapabilityService:
             }:
                 item["deliveryMode"] = "status"
                 item["message"] = _task_notification_message(task, event)
+            elif str(event.get("eventType") or "").startswith("plan."):
+                item["deliveryMode"] = "status"
+                item["message"] = _task_notification_message(task, event)
             notifications.append(item)
         return {
             "protocolVersion": "0.1",
@@ -2554,11 +2696,16 @@ class CentralCapabilityService:
                 ).get("interaction")
             except (KeyError, RuntimeError, InteractionIntegrityError):
                 interaction = None
+        plan = self.task_plans.get_for_task(
+            parent_task_id=task_id,
+            user_subject=user_subject,
+        )
         return {
             "protocolVersion": "0.1",
             "schemaVersion": "agentbridge.host-task-snapshot.v1",
             "status": "succeeded",
             "task": task_response(task),
+            "plan": task_plan_response(plan) if plan is not None else None,
             "endpoint": endpoint_response(endpoint),
             "events": [
                 {
@@ -3129,14 +3276,51 @@ class CentralCapabilityService:
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
+        plan_binding = self.task_plans.step_for_interaction(
+            interaction_id,
+            user_subject=user_subject,
+        )
+        if plan_binding is not None:
+            bound_plan, _bound_step = plan_binding
+            if bound_plan["state"] not in ACTIVE_PLAN_STATES:
+                return {
+                    "protocolVersion": "0.1",
+                    "status": bound_plan["state"],
+                    "interaction": interaction,
+                    "plan": task_plan_response(bound_plan),
+                    "resumedFromInteractionId": interaction_id,
+                    "taskId": bound_plan["parent_task_id"],
+                }
         if interaction["state"] in {
             "declined",
             "expired",
             "failed",
             "superseded",
         }:
+            if plan_binding is not None:
+                plan_response = self.task_plan_runtime.handle_terminal_interaction(
+                    user_subject=user_subject,
+                    interaction_id=interaction_id,
+                    interaction_state=interaction["state"],
+                )
+                if plan_response is not None:
+                    return {
+                        **plan_response,
+                        "interaction": interaction,
+                        "resumedFromInteractionId": interaction_id,
+                        "taskId": bound_plan["parent_task_id"],
+                    }
             return _interaction_not_ready_response(interaction)
         if interaction["resume"]["completed"]:
+            if plan_binding is not None:
+                return {
+                    "protocolVersion": "0.1",
+                    "status": "already_resumed",
+                    "interaction": interaction,
+                    "plan": task_plan_response(bound_plan),
+                    "resumedFromInteractionId": interaction_id,
+                    "taskId": bound_plan["parent_task_id"],
+                }
             operation_id = resource.get("consume_operation_id") or resource.get(
                 "commit_operation_id"
             )
@@ -3160,6 +3344,23 @@ class CentralCapabilityService:
                     code="SESSION_NOT_ACTIVE",
                     message="The authenticated session is no longer active.",
                 )
+            if plan_binding is not None:
+                self.tasks.link_interaction(
+                    task_id=bound_plan["parent_task_id"],
+                    user_subject=user_subject,
+                    interaction_record=record,
+                    interaction=interaction,
+                )
+                plan_response = self.task_plan_runtime.resume_after_session(
+                    user_subject=user_subject,
+                    interaction_id=interaction_id,
+                )
+                if plan_response is not None:
+                    return {
+                        **plan_response,
+                        "resumedFromInteractionId": interaction_id,
+                        "taskId": bound_plan["parent_task_id"],
+                    }
             return {
                 "protocolVersion": "0.1",
                 "status": "succeeded",
@@ -3186,6 +3387,24 @@ class CentralCapabilityService:
             host_type="interaction_resume",
             host_run_id=record["interaction_id"],
         )
+        if plan_binding is not None:
+            self.tasks.link_interaction(
+                task_id=bound_plan["parent_task_id"],
+                user_subject=user_subject,
+                interaction_record=record,
+                interaction=interaction,
+            )
+            plan_response = self.task_plan_runtime.resume_after_capability(
+                user_subject=user_subject,
+                interaction_id=interaction_id,
+                response=response,
+            )
+            if plan_response is not None:
+                return {
+                    **plan_response,
+                    "resumedFromInteractionId": record["interaction_id"],
+                    "taskId": bound_plan["parent_task_id"],
+                }
         if task_id:
             operation_id = response.get("operationId")
             next_interaction = response.get("interaction")
@@ -5653,6 +5872,26 @@ def _task_notification_message(task: dict, event: dict) -> str:
     }:
         return f"{title}：执行失败，请查看任务详情。"
     if event_type == "task.operation.outcome_unknown":
+        return f"{title}：最终结果未能确认，请先在目标系统核对。"
+    if event_type in {"plan.proposed", "plan.validated", "plan.started"}:
+        return f"{title}：跨系统任务计划已启动。"
+    if event_type == "plan.step.started":
+        return f"{title}：正在执行下一步。"
+    if event_type == "plan.step.succeeded":
+        return f"{title}：当前步骤已完成。"
+    if event_type == "plan.step.resumed":
+        return f"{title}：登录恢复后已自动继续。"
+    if event_type == "plan.step.recovered":
+        return f"{title}：服务恢复后已自动继续。"
+    if event_type in {"plan.step.waiting", "plan.authorization.waiting"}:
+        return f"{title}：正在等待用户填写或确认。"
+    if event_type == "plan.completed":
+        return f"{title}：跨系统任务已完成。"
+    if event_type == "plan.canceled":
+        return f"{title}：跨系统任务已取消。"
+    if event_type == "plan.step.failed":
+        return f"{title}：跨系统任务执行失败，请查看任务详情。"
+    if event_type == "plan.outcome_unknown":
         return f"{title}：最终结果未能确认，请先在目标系统核对。"
     return f"{title}：任务状态已更新为 {task['status']}。"
 

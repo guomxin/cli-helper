@@ -35,6 +35,7 @@ class OpenClawToolCatalogTests(unittest.TestCase):
             if tool.get("annotations", {}).get("readOnlyHint") is True
             or tool["name"].endswith("_prepare")
             or tool["name"].endswith("_session_login")
+            or tool["name"] == "agentbridge_task_plan_cancel"
         }
         self.assertEqual(
             set(AGENT_FACING_TOOL_SCOPE_REQUIREMENTS),

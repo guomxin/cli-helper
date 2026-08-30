@@ -394,6 +394,7 @@ class AdminControlPlane:
         deliveries: list[dict] = []
         continuations: list[dict] = []
         artifacts: list[dict] = []
+        plans: list[dict] = []
         for subject in subjects:
             subject_endpoints = self.service.tasks.list_endpoints(
                 user_subject=subject,
@@ -447,7 +448,13 @@ class AdminControlPlane:
                     limit=limit,
                 )
             )
+        plans.extend(
+            self._task_plan_projection(item)
+            for item in self.service.task_plans.list(limit=limit)
+            if item["user_subject"] in subjects
+        )
         tasks.sort(key=lambda item: item["updated_at"], reverse=True)
+        plans.sort(key=lambda item: item["updated_at"], reverse=True)
         deliveries.sort(key=lambda item: item["updated_at"], reverse=True)
         continuations.sort(key=lambda item: item["updated_at"], reverse=True)
         artifacts.sort(key=lambda item: item["created_at"], reverse=True)
@@ -519,6 +526,14 @@ class AdminControlPlane:
                     for status in {"active", "waiting_user", "running"}
                 ),
                 "waiting_tasks": task_statuses.get("waiting_user", 0),
+                "active_plans": sum(
+                    1
+                    for item in plans
+                    if item["state"] in {"validated", "running", "waiting_user"}
+                ),
+                "waiting_plans": sum(
+                    1 for item in plans if item["state"] == "waiting_user"
+                ),
                 "active_continuations": sum(
                     1
                     for item in continuations
@@ -549,6 +564,7 @@ class AdminControlPlane:
             "task_statuses": dict(task_statuses),
             "isolation": diagnostics.get("isolation", {}),
             "tasks": tasks[:limit],
+            "plans": plans[:limit],
             "endpoints": endpoints[:limit],
             "deliveries": deliveries[:limit],
             "continuations": continuations[:limit],
@@ -1112,6 +1128,26 @@ class AdminControlPlane:
             "origin_label": origin_endpoint.get("label") if origin_endpoint else None,
             "current_operation_id": record.get("current_operation_id"),
             "current_interaction_id": record.get("current_interaction_id"),
+            "created_at": record["created_at"],
+            "updated_at": record["updated_at"],
+            "finished_at": record.get("finished_at"),
+        }
+
+    @staticmethod
+    def _task_plan_projection(record: dict) -> dict:
+        risk = record.get("risk_summary") or {}
+        return {
+            "plan_id": record["plan_id"],
+            "task_id": record["parent_task_id"],
+            "user_subject": record["user_subject"],
+            "revision": record["revision"],
+            "state": record["state"],
+            "current_step_key": record.get("current_step_key"),
+            "step_count": len(record.get("steps") or []),
+            "step_counts": dict(record.get("step_counts") or {}),
+            "systems": list(risk.get("systems") or []),
+            "write_sink_count": int(risk.get("writeSinkCount") or 0),
+            "terminal_reason": _runtime_code(record.get("terminal_reason")),
             "created_at": record["created_at"],
             "updated_at": record["updated_at"],
             "finished_at": record.get("finished_at"),
