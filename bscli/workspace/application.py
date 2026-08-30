@@ -509,6 +509,9 @@ class WorkspaceApplication:
                     session_key=grant["session_key"],
                     endpoint_key=grant["endpoint_key"],
                     grant=grant["grant"],
+                    binding_grant_provider=lambda: self.store.issue_gateway_grant(
+                        account["account_id"]
+                    )["grant"],
                     message=message,
                     idempotency_key=effective_key,
                     attachments=normalized_attachments,

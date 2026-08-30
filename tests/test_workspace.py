@@ -123,6 +123,7 @@ class FakeGateway:
         session_key: str,
         endpoint_key: str,
         grant: str,
+        binding_grant_provider=None,
         message: str,
         idempotency_key: str,
         attachments: list[dict] | None = None,
@@ -135,6 +136,9 @@ class FakeGateway:
                     "sessionKey": session_key,
                     "endpointKey": endpoint_key,
                     "grant": grant,
+                    "bindingGrantRefreshConfigured": callable(
+                        binding_grant_provider
+                    ),
                     "message": message,
                     "idempotencyKey": idempotency_key,
                     "attachments": list(attachments or []),
@@ -1592,6 +1596,78 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 [event["type"] for event in events],
                 ["progress", "progress", "progress", "accepted", "chat"],
             )
+
+    def test_gateway_send_stream_refreshes_one_use_grant_before_each_retry(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                retry_sleep=lambda _seconds: None,
+            )
+            payloads = []
+            refreshed = iter(["h" * 48, "i" * 48, "j" * 48])
+
+            def stream_payload(payload):
+                payloads.append(payload)
+                if len(payloads) <= 3:
+                    def failed_stream():
+                        raise GatewayRequestError(
+                            "GATEWAY_CONNECTION_FAILED",
+                            "reverse tunnel is reconnecting",
+                            {"stage": "connect", "accepted": False},
+                        )
+                        yield  # pragma: no cover
+
+                    return failed_stream()
+                return iter(
+                    [
+                        {
+                            "type": "accepted",
+                            "runId": "run-fresh-grant-1",
+                            "status": "started",
+                        },
+                        {
+                            "type": "chat",
+                            "runId": "run-fresh-grant-1",
+                            "state": "final",
+                            "text": "done",
+                        },
+                    ]
+                )
+
+            with patch.object(
+                client,
+                "_stream_payload",
+                side_effect=stream_payload,
+            ):
+                events = list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        binding_grant_provider=lambda: next(refreshed),
+                        message="List five pending workflows",
+                        idempotency_key="run-fresh-grant-1",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(
+                [payload["grant"] for payload in payloads],
+                ["g" * 48, "h" * 48, "i" * 48, "j" * 48],
+            )
+            self.assertEqual(events[-1]["text"], "done")
 
     def test_gateway_send_stream_reconciles_an_accepted_run_from_history(
         self,

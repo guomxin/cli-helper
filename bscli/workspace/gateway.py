@@ -158,6 +158,7 @@ class OpenClawGatewayClient:
         session_key: str,
         endpoint_key: str,
         grant: str,
+        binding_grant_provider: Callable[[], str] | None = None,
         message: str,
         idempotency_key: str,
         attachments: list[dict] | None = None,
@@ -200,7 +201,15 @@ class OpenClawGatewayClient:
                     len(_PRE_ACCEPT_RETRY_DELAYS_SECONDS) + 1
                 ):
                     accepted = False
-                    source = self._stream_payload(payload)
+                    attempt_payload = payload
+                    if attempt > 0 and binding_grant_provider is not None:
+                        attempt_payload = {
+                            **payload,
+                            "grant": _refreshed_binding_grant(
+                                binding_grant_provider
+                            ),
+                        }
+                    source = self._stream_payload(attempt_payload)
                     try:
                         for item in source:
                             if item.get("type") == "accepted":
@@ -627,3 +636,27 @@ def _history_message_text(content: Any) -> str:
         if isinstance(text, str) and text.strip():
             parts.append(text.strip())
     return "\n".join(parts).strip()
+
+
+def _validated_binding_grant(value: Any) -> str:
+    grant = str(value or "").strip()
+    if len(grant) < 32 or len(grant) > 256:
+        raise GatewayRequestError(
+            "GATEWAY_BINDING_GRANT_INVALID",
+            "OpenClaw Workspace binding grant refresh failed.",
+            {"stage": "bind", "safeToRetry": False},
+        )
+    return grant
+
+
+def _refreshed_binding_grant(provider: Callable[[], str]) -> str:
+    try:
+        return _validated_binding_grant(provider())
+    except GatewayRequestError:
+        raise
+    except Exception as exc:
+        raise GatewayRequestError(
+            "GATEWAY_BINDING_GRANT_REFRESH_FAILED",
+            "OpenClaw Workspace binding grant refresh failed.",
+            {"stage": "bind", "safeToRetry": False},
+        ) from exc
