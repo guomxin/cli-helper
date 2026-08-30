@@ -1774,6 +1774,117 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
             self.assertTrue(events[-1]["recovered"])
             abort_chat.assert_not_called()
 
+    def test_gateway_send_stream_waits_for_final_text_after_tool_result(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            token_file = root / "gateway.token"
+            token_file.write_text(
+                "gateway-secret-token-value",
+                encoding="utf-8",
+            )
+            retry_delays = []
+            client = OpenClawGatewayClient(
+                url="ws://127.0.0.1:18789",
+                token_file=token_file,
+                state_dir=root / "state",
+                retry_sleep=retry_delays.append,
+            )
+
+            def failed_stream():
+                yield {
+                    "type": "accepted",
+                    "runId": "run-history-delayed-final",
+                    "status": "started",
+                }
+                yield {
+                    "type": "progress",
+                    "runId": "run-history-delayed-final",
+                    "kind": "tool",
+                    "phase": "result",
+                }
+                raise GatewayRequestError(
+                    "GATEWAY_CONNECTION_CLOSED",
+                    "reverse tunnel changed",
+                    {
+                        "stage": "run",
+                        "accepted": True,
+                        "hadToolActivity": True,
+                    },
+                )
+
+            history_calls = 0
+
+            def history(_method, _params, *, timeout_seconds=30):
+                nonlocal history_calls
+                history_calls += 1
+                messages = [
+                    {
+                        "role": "user",
+                        "content": "Read pending details",
+                        "idempotencyKey": (
+                            "run-history-delayed-final:user"
+                        ),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "toolCall", "name": "oa_read"},
+                        ],
+                    },
+                    {
+                        "role": "toolResult",
+                        "content": "done",
+                    },
+                ]
+                if history_calls >= 4:
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Delayed authoritative answer",
+                                },
+                            ],
+                        }
+                    )
+                return {"messages": messages}
+
+            with (
+                patch.object(
+                    client,
+                    "_stream_payload",
+                    return_value=failed_stream(),
+                ),
+                patch.object(client, "call", side_effect=history),
+                patch.object(client, "abort_chat") as abort_chat,
+            ):
+                events = list(
+                    client.send_stream(
+                        session_key=(
+                            "agent:main:agentbridge-workspace:direct:account-a"
+                        ),
+                        endpoint_key="workspace:account-a",
+                        grant="g" * 48,
+                        message="Read pending details",
+                        idempotency_key="run-history-delayed-final",
+                        timeout_seconds=120,
+                    )
+                )
+
+            self.assertEqual(history_calls, 4)
+            self.assertEqual(retry_delays, [2.0, 5.0, 10.0])
+            self.assertEqual(events[-1]["state"], "final")
+            self.assertEqual(
+                events[-1]["text"],
+                "Delayed authoritative answer",
+            )
+            self.assertTrue(events[-1]["recovered"])
+            self.assertTrue(events[-1]["hadToolActivity"])
+            abort_chat.assert_not_called()
+
     def test_gateway_send_stream_never_replays_an_unreconciled_run(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1840,7 +1951,7 @@ class WorkspaceGatewayClientTests(unittest.TestCase):
                 )
 
             stream_payload.assert_called_once()
-            self.assertEqual(call.call_count, 3)
+            self.assertEqual(call.call_count, 5)
             self.assertTrue(caught.exception.details["reconciliationAttempted"])
             self.assertTrue(caught.exception.details["hadToolActivity"])
             self.assertFalse(caught.exception.details["safeToRetry"])
