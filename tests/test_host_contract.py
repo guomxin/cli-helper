@@ -118,6 +118,31 @@ class HostContractStoreTests(unittest.TestCase):
         )
         self.assertEqual("L3", registration["acceptedLevel"])
 
+    def test_openclaw_package_version_is_an_approved_l3_baseline(self) -> None:
+        package = json.loads(
+            (
+                ROOT
+                / "integrations"
+                / "openclaw-agentbridge"
+                / "package.json"
+            ).read_text(encoding="utf-8")
+        )
+        profile = deepcopy(self.profile)
+        profile["hostInstanceId"] = "openclaw-gateway"
+        profile["implementation"] = {
+            "name": "openclaw",
+            "version": package["version"],
+        }
+
+        result = self.store.negotiate(
+            user_subject="user-a",
+            token_id="token-a",
+            profile=profile,
+        )
+
+        self.assertEqual("L3", result["acceptedLevel"])
+        self.assertEqual("approved", result["compatibilityStatus"])
+
     def test_unknown_version_is_l1_and_cannot_use_l3(self) -> None:
         self.profile["implementation"]["version"] = "0.1.1"
         result = self.store.negotiate(
