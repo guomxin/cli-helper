@@ -2450,15 +2450,21 @@ function interactionDeadline(interaction) {
 
 function trustedAgentBridgeStructuredContent(result, serverName) {
   const details = result?.details;
-  const structuredContent =
-    result?.structuredContent ?? details?.structuredContent;
   if (
     !details ||
     typeof details !== "object" ||
     Array.isArray(details) ||
     details.mcpServer !== serverName ||
     typeof details.mcpTool !== "string" ||
-    !details.mcpTool.trim() ||
+    !details.mcpTool.trim()
+  ) {
+    return null;
+  }
+  const structuredContent =
+    result?.structuredContent ??
+    details?.structuredContent ??
+    structuredContentFromToolText(result?.content);
+  if (
     !structuredContent ||
     typeof structuredContent !== "object" ||
     Array.isArray(structuredContent)
@@ -2466,6 +2472,26 @@ function trustedAgentBridgeStructuredContent(result, serverName) {
     return null;
   }
   return structuredContent;
+}
+
+function structuredContentFromToolText(content) {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  for (const item of content) {
+    if (item?.type !== "text" || typeof item.text !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(item.text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Only exact JSON tool payloads are eligible for the trusted fallback.
+    }
+  }
+  return null;
 }
 
 function taskIdFromToolResult(result) {

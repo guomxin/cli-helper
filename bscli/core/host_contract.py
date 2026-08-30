@@ -324,7 +324,7 @@ class HostContractStore:
     def _bootstrap_compatibility(connection: sqlite3.Connection) -> None:
         now = _utc_now()
         builtins = (
-            ("openclaw", "0.4.63", "L3", "shared-contract-h01-h25"),
+            ("openclaw", "0.4.64", "L3", "shared-contract-h01-h27"),
             ("reference-host", "0.1.0", "L3", "shared-contract-h01-h25"),
         )
         for name, version, level, evidence in builtins:

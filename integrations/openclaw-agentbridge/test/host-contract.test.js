@@ -57,7 +57,7 @@ test("OpenClaw publishes the exact registered L3 runtime context", () => {
     version: "1",
     agentHost: "openclaw",
     hostInstanceId: "openclaw-gateway",
-    hostVersion: "0.4.63",
+    hostVersion: "0.4.64",
   });
   assert.equal(
     hostRegistrationMeta()[HOST_PROFILE_META_KEY],

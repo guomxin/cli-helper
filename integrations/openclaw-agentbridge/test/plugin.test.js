@@ -774,7 +774,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.63",
+      hostVersion: "0.4.64",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1192,7 +1192,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.63",
+        hostVersion: "0.4.64",
       },
     },
   });
@@ -1951,7 +1951,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.63",
+      hostVersion: "0.4.64",
     },
   });
   assert.equal(
@@ -3873,7 +3873,6 @@ test("automatically opens a trusted login for an authenticated read", async () =
           mcpServer: "agentbridge",
           mcpTool: "smartlight_system_overview",
           agentbridgeTaskId: "task-smartlight-login",
-          structuredContent: loginRequired,
         },
       },
     },
