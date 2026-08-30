@@ -774,7 +774,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.65",
+      hostVersion: "0.4.66",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1192,7 +1192,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.65",
+        hostVersion: "0.4.66",
       },
     },
   });
@@ -1855,6 +1855,35 @@ test("uses one task reference for a multimodal user turn", () => {
   assert.equal(prepareRef, searchRef);
 });
 
+test("does not attach a new user turn to an unrelated pending interaction task", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const previousTaskId = "12345678-1234-4123-8123-123456789099";
+  coordinator.upsert({
+    interaction: interaction({
+      interactionId: "interaction-previous-login-1234567890",
+      type: "credential",
+      state: "pending",
+    }),
+    sessionKey,
+    runId: "run-previous-login",
+    taskId: previousTaskId,
+  });
+
+  coordinator.recordUserMessage(
+    { sessionKey, content: "查看我的 OA 前 3 条待办" },
+    { sessionKey },
+  );
+
+  assert.equal(
+    coordinator.taskIdForBusinessCall(sessionKey, "oa_workflow_pending_list"),
+    null,
+  );
+});
+
 test("restores a pending interaction and its original route on gateway start", async () => {
   const requests = [];
   const senderId = "7052061588";
@@ -1951,7 +1980,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.65",
+      hostVersion: "0.4.66",
     },
   });
   assert.equal(

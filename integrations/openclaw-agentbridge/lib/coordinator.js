@@ -862,15 +862,11 @@ export class InteractionCoordinator {
     if (continuation) {
       return continuation.allowNewOperation ? continuation.taskId : null;
     }
-    const matches = [...this.records.values()]
-      .filter(
-        (record) =>
-          record.sessionKey === sessionKey &&
-          record.taskId &&
-          ["pending", "processing"].includes(record.interaction.state),
-      )
-      .sort((left, right) => right.capturedAt - left.capturedAt);
-    return matches[0]?.taskId || null;
+    // A pending card only proves that this private session owns an unfinished
+    // interaction. It does not prove that a later inbound user turn belongs to
+    // the same host task. Same-turn tools converge through taskRunRefForToolCall
+    // and agentbridge_host_task_ensure; cross-turn reuse must be explicit.
+    return null;
   }
 
   bindIndependentTask(sessionKey, toolName, taskId) {
