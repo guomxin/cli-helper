@@ -94,6 +94,13 @@ test("injects bounded same-user context only for explicit cross-end references",
     },
     context,
   );
+  const composedTask = await harness.hooks.before_prompt_build(
+    {
+      prompt: "汇总2026年7月的OA已办，填写3小时工作日志，先让我核对，不要提交。",
+      messages: [],
+    },
+    context,
+  );
 
   assert.equal(sameEndpoint, undefined);
   assert.equal(calls.length, 1);
@@ -111,6 +118,15 @@ test("injects bounded same-user context only for explicit cross-end references",
   assert.match(crossEndpoint.prependContext, /untrusted conversation data/);
   assert.match(crossEndpoint.prependContext, /affair-new-123/);
   assert.match(crossEndpoint.prependContext, /Agent Workspace/);
+  assert.match(
+    composedTask.prependContext,
+    /agentbridge_task_plan_catalog/,
+  );
+  assert.match(
+    composedTask.prependContext,
+    /agentbridge_task_plan_prepare/,
+  );
+  assert.match(composedTask.prependContext, /Do not emulate/);
 });
 
 test("persists ambiguous task choices and blocks duplicate work after selection", async () => {
@@ -774,7 +790,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.67",
+      hostVersion: "0.4.68",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1192,7 +1208,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.67",
+        hostVersion: "0.4.68",
       },
     },
   });
@@ -1980,7 +1996,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.67",
+      hostVersion: "0.4.68",
     },
   });
   assert.equal(
