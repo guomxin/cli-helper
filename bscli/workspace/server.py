@@ -359,6 +359,22 @@ def create_workspace_http_server(
                 if route.path == "/api/gateway":
                     self._json(200, application.gateway_status())
                     return
+                if route.path == "/api/chat/dispatches":
+                    self._json(
+                        200,
+                        {
+                            "items": application.list_chat_dispatches(
+                                account,
+                                active_only=_query_bool(
+                                    query,
+                                    "active_only",
+                                    True,
+                                ),
+                                limit=_query_int(query, "limit", 20),
+                            )
+                        },
+                    )
+                    return
                 if route.path == "/api/chat/history":
                     self._json(
                         200,
@@ -440,6 +456,19 @@ def create_workspace_http_server(
                             account,
                             task_id=artifact_reissue_match.group(1),
                             artifact_id=artifact_reissue_match.group(2),
+                        ),
+                    )
+                    return
+                dispatch_cancel_match = re.fullmatch(
+                    r"/api/chat/dispatches/([0-9a-f-]{36})/cancel",
+                    route.path,
+                )
+                if dispatch_cancel_match:
+                    self._json(
+                        200,
+                        application.cancel_chat_dispatch(
+                            account,
+                            dispatch_cancel_match.group(1),
                         ),
                     )
                     return
@@ -938,11 +967,21 @@ def create_workspace_http_server(
                 self._json(404, {"error": {"code": "TASK_NOT_FOUND"}})
                 return
             if isinstance(exc, WorkspaceConflictError):
+                conflict_code = str(exc)
+                if conflict_code not in {
+                    "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                    "WORKSPACE_HOST_QUEUE_CONVERSATION_LIMIT",
+                    "WORKSPACE_HOST_QUEUE_USER_LIMIT",
+                    "HOST_DISPATCH_CANCEL_NOT_ALLOWED",
+                    "HOST_DISPATCH_CLAIM_LOST",
+                    "HOST_ACCEPT_DUPLICATE_RUN_VIOLATION",
+                }:
+                    conflict_code = "WORKSPACE_CONFLICT"
                 self._json(
                     409,
                     {
                         "error": {
-                            "code": "WORKSPACE_CONFLICT",
+                            "code": conflict_code,
                             "message": str(exc),
                         }
                     },

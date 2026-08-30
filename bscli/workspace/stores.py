@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import json
 from pathlib import Path
 import re
 import secrets
@@ -20,6 +21,21 @@ _PASSWORD_MIN_LENGTH = 12
 _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+_HOST_DISPATCH_ACTIVE_STATES = {
+    "queued",
+    "waiting_host",
+    "dispatching",
+    "reconciling_acceptance",
+    "accepted",
+}
+_HOST_DISPATCH_TERMINAL_STATES = {
+    "completed",
+    "failed",
+    "expired",
+    "failed_before_accept",
+    "acceptance_unknown",
+    "canceled",
+}
 
 
 class WorkspaceConflictError(RuntimeError):
@@ -143,6 +159,56 @@ class WorkspaceStore:
 
                 CREATE UNIQUE INDEX IF NOT EXISTS workspace_gateway_turns_session
                 ON workspace_gateway_turns (user_subject, openclaw_session_key);
+
+                CREATE TABLE IF NOT EXISTS agent_host_dispatches (
+                    dispatch_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    user_subject TEXT NOT NULL,
+                    agent_host TEXT NOT NULL,
+                    host_binding_ref TEXT NOT NULL,
+                    origin_endpoint_id TEXT NOT NULL,
+                    conversation_ref TEXT NOT NULL,
+                    message_key TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    attachment_refs_json TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    accepted_run_id TEXT,
+                    attempt_count INTEGER NOT NULL,
+                    request_sent_at TEXT,
+                    next_attempt_at TEXT NOT NULL,
+                    deadline_at TEXT NOT NULL,
+                    claim_owner TEXT,
+                    claim_token TEXT,
+                    claim_expires_at TEXT,
+                    last_error_code TEXT,
+                    had_tool_activity INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    accepted_at TEXT,
+                    finished_at TEXT,
+                    UNIQUE (user_subject, agent_host, idempotency_key)
+                );
+
+                CREATE INDEX IF NOT EXISTS agent_host_dispatches_account_state
+                ON agent_host_dispatches (
+                    account_id, state, next_attempt_at, created_at
+                );
+
+                CREATE INDEX IF NOT EXISTS agent_host_dispatches_subject_state
+                ON agent_host_dispatches (user_subject, state, created_at);
+
+                CREATE TABLE IF NOT EXISTS agent_host_dispatch_events (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    dispatch_id TEXT NOT NULL,
+                    event_name TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS agent_host_dispatch_events_dispatch
+                ON agent_host_dispatch_events (dispatch_id, sequence);
                 """
             )
 
@@ -750,6 +816,879 @@ class WorkspaceStore:
             "updated_at": row["updated_at"],
         }
 
+    def create_host_dispatch(
+        self,
+        *,
+        account_id: str,
+        user_subject: str,
+        agent_host: str,
+        host_binding_ref: str,
+        origin_endpoint_id: str,
+        conversation_ref: str,
+        message_key: str,
+        payload_hash: str,
+        idempotency_key: str,
+        attachment_refs: list[str] | None = None,
+        deadline_seconds: int = 60,
+    ) -> tuple[dict, bool]:
+        account_id = _required_text(account_id, "account_id", 128)
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        agent_host = _required_text(agent_host, "agent_host", 80)
+        host_binding_ref = _required_text(
+            host_binding_ref,
+            "host_binding_ref",
+            1024,
+        )
+        origin_endpoint_id = _required_text(
+            origin_endpoint_id,
+            "origin_endpoint_id",
+            128,
+        )
+        conversation_ref = _required_text(
+            conversation_ref,
+            "conversation_ref",
+            1024,
+        )
+        message_key = _required_text(message_key, "message_key", 768)
+        payload_hash = _required_text(payload_hash, "payload_hash", 128)
+        idempotency_key = _required_text(
+            idempotency_key,
+            "idempotency_key",
+            128,
+        )
+        refs = [
+            _required_text(value, "attachment_ref", 128)
+            for value in list(attachment_refs or [])
+        ]
+        deadline_seconds = min(max(int(deadline_seconds), 5), 600)
+        now = self._now()
+        now_text = _format_time(now)
+        deadline_at = _format_time(
+            now + timedelta(seconds=deadline_seconds)
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            account = connection.execute(
+                """
+                SELECT * FROM workspace_accounts
+                WHERE account_id = ? AND user_subject = ? AND state = 'active'
+                """,
+                (account_id, user_subject),
+            ).fetchone()
+            if account is None:
+                raise WorkspaceLinkError(
+                    "workspace dispatch identity is not active"
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM agent_host_dispatches
+                WHERE user_subject = ? AND agent_host = ?
+                  AND idempotency_key = ?
+                """,
+                (user_subject, agent_host, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if not hmac.compare_digest(
+                    str(existing["payload_hash"]),
+                    payload_hash,
+                ):
+                    raise WorkspaceConflictError(
+                        "IDEMPOTENCY_PAYLOAD_MISMATCH"
+                    )
+                return _host_dispatch_from_row(existing), True
+
+            placeholders = ",".join("?" for _ in _HOST_DISPATCH_ACTIVE_STATES)
+            conversation_count = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM agent_host_dispatches
+                WHERE user_subject = ? AND agent_host = ?
+                  AND conversation_ref = ? AND state IN ({placeholders})
+                """,
+                (
+                    user_subject,
+                    agent_host,
+                    conversation_ref,
+                    *sorted(_HOST_DISPATCH_ACTIVE_STATES),
+                ),
+            ).fetchone()
+            if int(conversation_count["count"] or 0) >= 3:
+                raise WorkspaceConflictError(
+                    "WORKSPACE_HOST_QUEUE_CONVERSATION_LIMIT"
+                )
+            user_count = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count FROM agent_host_dispatches
+                WHERE user_subject = ? AND state IN ({placeholders})
+                """,
+                (user_subject, *sorted(_HOST_DISPATCH_ACTIVE_STATES)),
+            ).fetchone()
+            if int(user_count["count"] or 0) >= 10:
+                raise WorkspaceConflictError("WORKSPACE_HOST_QUEUE_USER_LIMIT")
+
+            dispatch_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO agent_host_dispatches (
+                    dispatch_id, account_id, user_subject, agent_host,
+                    host_binding_ref, origin_endpoint_id, conversation_ref,
+                    message_key, payload_hash, idempotency_key,
+                    attachment_refs_json, state, attempt_count,
+                    next_attempt_at, deadline_at, had_tool_activity,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0,
+                          ?, ?, 0, ?, ?)
+                """,
+                (
+                    dispatch_id,
+                    account_id,
+                    user_subject,
+                    agent_host,
+                    host_binding_ref,
+                    origin_endpoint_id,
+                    conversation_ref,
+                    message_key,
+                    payload_hash,
+                    idempotency_key,
+                    json.dumps(refs, separators=(",", ":")),
+                    now_text,
+                    deadline_at,
+                    now_text,
+                    now_text,
+                ),
+            )
+            self._append_host_dispatch_event(
+                connection,
+                dispatch_id=dispatch_id,
+                event_name="host_dispatch_created",
+                payload={
+                    "type": "progress",
+                    "runId": idempotency_key,
+                    "kind": "system",
+                    "phase": "queued",
+                    "label": "请求已保存，正在连接智能体",
+                },
+                created_at=now_text,
+            )
+            row = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(row), False
+
+    def get_host_dispatch(
+        self,
+        dispatch_id: str,
+        *,
+        user_subject: str | None = None,
+    ) -> dict:
+        with self._connect() as connection:
+            if user_subject is None:
+                row = connection.execute(
+                    "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                    (dispatch_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM agent_host_dispatches
+                    WHERE dispatch_id = ? AND user_subject = ?
+                    """,
+                    (dispatch_id, user_subject),
+                ).fetchone()
+        if row is None:
+            raise KeyError(f"host dispatch not found: {dispatch_id}")
+        return _host_dispatch_from_row(row)
+
+    def list_host_dispatches(
+        self,
+        *,
+        user_subject: str,
+        active_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = min(max(int(limit), 1), 500)
+        with self._connect() as connection:
+            if active_only:
+                placeholders = ",".join(
+                    "?" for _ in _HOST_DISPATCH_ACTIVE_STATES
+                )
+                rows = connection.execute(
+                    f"""
+                    SELECT * FROM agent_host_dispatches
+                    WHERE user_subject = ? AND state IN ({placeholders})
+                    ORDER BY created_at
+                    LIMIT ?
+                    """,
+                    (
+                        user_subject,
+                        *sorted(_HOST_DISPATCH_ACTIVE_STATES),
+                        limit,
+                    ),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM agent_host_dispatches
+                    WHERE user_subject = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_subject, limit),
+                ).fetchall()
+        return [_host_dispatch_from_row(row) for row in rows]
+
+    def list_host_dispatch_events(
+        self,
+        dispatch_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 200,
+    ) -> list[dict]:
+        after_sequence = max(int(after_sequence), 0)
+        limit = min(max(int(limit), 1), 1000)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM agent_host_dispatch_events
+                WHERE dispatch_id = ? AND sequence > ?
+                ORDER BY sequence
+                LIMIT ?
+                """,
+                (dispatch_id, after_sequence, limit),
+            ).fetchall()
+        return [_host_dispatch_event_from_row(row) for row in rows]
+
+    def recover_host_dispatches(self) -> list[str]:
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stale = connection.execute(
+                """
+                SELECT * FROM agent_host_dispatches
+                WHERE state IN (
+                    'queued', 'waiting_host', 'dispatching',
+                    'reconciling_acceptance', 'accepted'
+                )
+                ORDER BY created_at
+                """
+            ).fetchall()
+            for row in stale:
+                state = row["state"]
+                if state == "dispatching":
+                    state = (
+                        "reconciling_acceptance"
+                        if row["request_sent_at"]
+                        else "waiting_host"
+                    )
+                connection.execute(
+                    """
+                    UPDATE agent_host_dispatches
+                    SET state = ?, claim_owner = NULL, claim_token = NULL,
+                        claim_expires_at = NULL, updated_at = ?
+                    WHERE dispatch_id = ?
+                    """,
+                    (state, now, row["dispatch_id"]),
+                )
+                self._append_host_dispatch_event(
+                    connection,
+                    dispatch_id=row["dispatch_id"],
+                    event_name="host_dispatch_recovered",
+                    payload={
+                        "type": "progress",
+                        "runId": row["accepted_run_id"]
+                        or row["idempotency_key"],
+                        "kind": "system",
+                        "phase": "recovered",
+                        "label": "服务已恢复，正在继续原请求",
+                    },
+                    created_at=now,
+                )
+        return sorted({str(row["account_id"]) for row in stale})
+
+    def claim_next_host_dispatch(
+        self,
+        *,
+        account_id: str,
+        claim_owner: str,
+        lease_seconds: int = 360,
+    ) -> dict | None:
+        now_value = self._now()
+        now = _format_time(now_value)
+        expires = _format_time(
+            now_value + timedelta(seconds=max(int(lease_seconds), 30))
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM agent_host_dispatches
+                WHERE account_id = ? AND state IN (
+                    'queued', 'waiting_host', 'dispatching',
+                    'reconciling_acceptance', 'accepted'
+                )
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if (
+                row["claim_token"]
+                and row["claim_expires_at"]
+                and _parse_time(row["claim_expires_at"]) > now_value
+            ):
+                return None
+            if (
+                row["state"] in {"waiting_host", "reconciling_acceptance"}
+                and _parse_time(row["next_attempt_at"]) > now_value
+            ):
+                return None
+            token = str(uuid4())
+            next_state = (
+                "dispatching"
+                if row["state"] in {"queued", "waiting_host"}
+                else row["state"]
+            )
+            connection.execute(
+                """
+                UPDATE agent_host_dispatches
+                SET state = ?, claim_owner = ?, claim_token = ?,
+                    claim_expires_at = ?, updated_at = ?
+                WHERE dispatch_id = ?
+                """,
+                (
+                    next_state,
+                    claim_owner,
+                    token,
+                    expires,
+                    now,
+                    row["dispatch_id"],
+                ),
+            )
+            if next_state == "dispatching" and row["state"] != "dispatching":
+                self._append_host_dispatch_event(
+                    connection,
+                    dispatch_id=row["dispatch_id"],
+                    event_name="host_dispatching",
+                    payload={
+                        "type": "progress",
+                        "runId": row["idempotency_key"],
+                        "kind": "system",
+                        "phase": "dispatching",
+                        "label": "正在交给智能体处理",
+                    },
+                    created_at=now,
+                )
+            claimed = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (row["dispatch_id"],),
+            ).fetchone()
+        return _host_dispatch_from_row(claimed)
+
+    def record_host_dispatch_attempt(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+    ) -> dict:
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            connection.execute(
+                """
+                UPDATE agent_host_dispatches
+                SET state = 'dispatching',
+                    attempt_count = attempt_count + 1,
+                    request_sent_at = ?, updated_at = ?
+                WHERE dispatch_id = ? AND claim_token = ?
+                """,
+                (now, now, dispatch_id, claim_token),
+            )
+            self._append_host_dispatch_event(
+                connection,
+                dispatch_id=dispatch_id,
+                event_name="host_dispatch_attempted",
+                payload={
+                    "type": "progress",
+                    "runId": row["idempotency_key"],
+                    "kind": "system",
+                    "phase": "dispatching",
+                    "label": "正在交给智能体处理",
+                },
+                created_at=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def append_host_dispatch_stream_event(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        event_name: str,
+        payload: dict,
+        had_tool_activity: bool = False,
+    ) -> dict:
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            if had_tool_activity:
+                connection.execute(
+                    """
+                    UPDATE agent_host_dispatches
+                    SET had_tool_activity = 1, updated_at = ?
+                    WHERE dispatch_id = ? AND claim_token = ?
+                    """,
+                    (now, dispatch_id, claim_token),
+                )
+            self._append_host_dispatch_event(
+                connection,
+                dispatch_id=dispatch_id,
+                event_name=event_name,
+                payload=payload,
+                created_at=now,
+            )
+            row = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(row)
+
+    def mark_host_dispatch_waiting(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        error_code: str,
+        delay_seconds: float,
+    ) -> dict:
+        now_value = self._now()
+        now = _format_time(now_value)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            if _parse_time(row["deadline_at"]) <= now_value:
+                self._finish_host_dispatch_in_connection(
+                    connection,
+                    row=row,
+                    state="expired",
+                    error_code="HOST_ACCEPT_TIMEOUT",
+                    event={
+                        "type": "chat",
+                        "runId": row["idempotency_key"],
+                        "state": "error",
+                        "text": (
+                            "连接暂未恢复，本次请求未进入业务系统，"
+                            "请稍后重试。"
+                        ),
+                        "safeToRetry": True,
+                    },
+                    now=now,
+                )
+            else:
+                next_attempt = _format_time(
+                    min(
+                        _parse_time(row["deadline_at"]),
+                        now_value
+                        + timedelta(seconds=max(float(delay_seconds), 0.1)),
+                    )
+                )
+                connection.execute(
+                    """
+                    UPDATE agent_host_dispatches
+                    SET state = 'waiting_host', next_attempt_at = ?,
+                        claim_owner = NULL, claim_token = NULL,
+                        claim_expires_at = NULL, last_error_code = ?,
+                        request_sent_at = NULL, updated_at = ?
+                    WHERE dispatch_id = ? AND claim_token = ?
+                    """,
+                    (
+                        next_attempt,
+                        str(error_code or "HOST_TRANSPORT_UNAVAILABLE")[:128],
+                        now,
+                        dispatch_id,
+                        claim_token,
+                    ),
+                )
+                self._append_host_dispatch_event(
+                    connection,
+                    dispatch_id=dispatch_id,
+                    event_name="host_waiting",
+                    payload={
+                        "type": "progress",
+                        "runId": row["idempotency_key"],
+                        "kind": "system",
+                        "phase": "waiting_host",
+                        "label": (
+                            "智能体连接正在恢复，恢复后会自动继续"
+                        ),
+                    },
+                    created_at=now,
+                )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def mark_host_dispatch_reconciling(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        error_code: str,
+    ) -> dict:
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            connection.execute(
+                """
+                UPDATE agent_host_dispatches
+                SET state = 'reconciling_acceptance', last_error_code = ?,
+                    updated_at = ?
+                WHERE dispatch_id = ? AND claim_token = ?
+                """,
+                (str(error_code or "HOST_ACCEPTANCE_UNKNOWN")[:128], now,
+                 dispatch_id, claim_token),
+            )
+            self._append_host_dispatch_event(
+                connection,
+                dispatch_id=dispatch_id,
+                event_name="host_acceptance_reconciling",
+                payload={
+                    "type": "progress",
+                    "runId": row["idempotency_key"],
+                    "kind": "system",
+                    "phase": "reconciling_acceptance",
+                    "label": "正在确认智能体是否已接收",
+                },
+                created_at=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def defer_host_dispatch_reconciliation(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        error_code: str,
+        delay_seconds: float,
+    ) -> dict:
+        now_value = self._now()
+        now = _format_time(now_value)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            if _parse_time(row["deadline_at"]) <= now_value:
+                self._finish_host_dispatch_in_connection(
+                    connection,
+                    row=row,
+                    state="acceptance_unknown",
+                    error_code="HOST_ACCEPTANCE_UNKNOWN",
+                    event={
+                        "type": "chat",
+                        "runId": row["idempotency_key"],
+                        "state": "error",
+                        "text": (
+                            "无法确认智能体是否已接收，已停止重发，"
+                            "请等待系统核对。"
+                        ),
+                        "safeToRetry": False,
+                    },
+                    now=now,
+                )
+            else:
+                next_attempt = _format_time(
+                    min(
+                        _parse_time(row["deadline_at"]),
+                        now_value
+                        + timedelta(seconds=max(float(delay_seconds), 0.1)),
+                    )
+                )
+                connection.execute(
+                    """
+                    UPDATE agent_host_dispatches
+                    SET state = 'reconciling_acceptance',
+                        next_attempt_at = ?, claim_owner = NULL,
+                        claim_token = NULL, claim_expires_at = NULL,
+                        last_error_code = ?, updated_at = ?
+                    WHERE dispatch_id = ? AND claim_token = ?
+                    """,
+                    (
+                        next_attempt,
+                        str(error_code or "HOST_ACCEPTANCE_UNKNOWN")[:128],
+                        now,
+                        dispatch_id,
+                        claim_token,
+                    ),
+                )
+                self._append_host_dispatch_event(
+                    connection,
+                    dispatch_id=dispatch_id,
+                    event_name="host_acceptance_reconciling",
+                    payload={
+                        "type": "progress",
+                        "runId": row["idempotency_key"],
+                        "kind": "system",
+                        "phase": "reconciling_acceptance",
+                        "label": "正在确认智能体是否已接收",
+                    },
+                    created_at=now,
+                )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def mark_host_dispatch_accepted(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        run_id: str,
+        status: str = "started",
+    ) -> dict:
+        run_id = _required_text(run_id, "run_id", 256)
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            if row["accepted_run_id"] and row["accepted_run_id"] != run_id:
+                raise WorkspaceConflictError(
+                    "HOST_ACCEPT_DUPLICATE_RUN_VIOLATION"
+                )
+            connection.execute(
+                """
+                UPDATE agent_host_dispatches
+                SET state = 'accepted', accepted_run_id = ?, accepted_at = ?,
+                    last_error_code = NULL, updated_at = ?
+                WHERE dispatch_id = ? AND claim_token = ?
+                """,
+                (run_id, now, now, dispatch_id, claim_token),
+            )
+            self._append_host_dispatch_event(
+                connection,
+                dispatch_id=dispatch_id,
+                event_name="host_accepted",
+                payload={
+                    "type": "accepted",
+                    "runId": run_id,
+                    "status": status,
+                },
+                created_at=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def finish_host_dispatch(
+        self,
+        dispatch_id: str,
+        *,
+        claim_token: str,
+        state: str,
+        event: dict,
+        error_code: str | None = None,
+    ) -> dict:
+        if state not in _HOST_DISPATCH_TERMINAL_STATES:
+            raise ValueError("host dispatch terminal state is invalid")
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(
+                connection,
+                dispatch_id,
+                claim_token,
+            )
+            self._finish_host_dispatch_in_connection(
+                connection,
+                row=row,
+                state=state,
+                error_code=error_code,
+                event=event,
+                now=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def host_dispatch_work_pending(self, account_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM agent_host_dispatches
+                WHERE account_id = ? AND state IN (
+                    'queued', 'waiting_host', 'dispatching',
+                    'reconciling_acceptance', 'accepted'
+                )
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+        return row is not None
+
+    def host_dispatch_deadline_passed(self, dispatch: dict) -> bool:
+        return _parse_time(str(dispatch["deadline_at"])) <= self._now()
+
+    def cancel_host_dispatch(
+        self,
+        dispatch_id: str,
+        *,
+        user_subject: str,
+    ) -> dict:
+        now = _format_time(self._now())
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM agent_host_dispatches
+                WHERE dispatch_id = ? AND user_subject = ?
+                """,
+                (dispatch_id, user_subject),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"host dispatch not found: {dispatch_id}")
+            if row["state"] == "canceled":
+                return _host_dispatch_from_row(row)
+            if row["state"] not in {"queued", "waiting_host"}:
+                raise WorkspaceConflictError(
+                    "HOST_DISPATCH_CANCEL_NOT_ALLOWED"
+                )
+            self._finish_host_dispatch_in_connection(
+                connection,
+                row=row,
+                state="canceled",
+                error_code="HOST_DISPATCH_CANCELED",
+                event={
+                    "type": "chat",
+                    "runId": row["idempotency_key"],
+                    "state": "aborted",
+                    "text": "已取消等待，本次请求未进入业务系统。",
+                    "safeToRetry": True,
+                },
+                now=now,
+            )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?",
+                (dispatch_id,),
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def _select_claimed_host_dispatch(
+        self,
+        connection: sqlite3.Connection,
+        dispatch_id: str,
+        claim_token: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT * FROM agent_host_dispatches
+            WHERE dispatch_id = ? AND claim_token = ?
+            """,
+            (dispatch_id, claim_token),
+        ).fetchone()
+        if row is None:
+            raise WorkspaceConflictError("HOST_DISPATCH_CLAIM_LOST")
+        return row
+
+    def _finish_host_dispatch_in_connection(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        row: sqlite3.Row,
+        state: str,
+        error_code: str | None,
+        event: dict,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE agent_host_dispatches
+            SET state = ?, last_error_code = ?, finished_at = ?,
+                claim_owner = NULL, claim_token = NULL,
+                claim_expires_at = NULL, updated_at = ?
+            WHERE dispatch_id = ?
+            """,
+            (
+                state,
+                str(error_code)[:128] if error_code else None,
+                now,
+                now,
+                row["dispatch_id"],
+            ),
+        )
+        self._append_host_dispatch_event(
+            connection,
+            dispatch_id=row["dispatch_id"],
+            event_name=f"host_dispatch_{state}",
+            payload=event,
+            created_at=now,
+        )
+
+    def _append_host_dispatch_event(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        dispatch_id: str,
+        event_name: str,
+        payload: dict,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO agent_host_dispatch_events (
+                event_id, dispatch_id, event_name, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                dispatch_id,
+                _required_text(event_name, "event_name", 128),
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                created_at,
+            ),
+        )
+
     def _now(self) -> datetime:
         value = self.clock()
         if value.tzinfo is None:
@@ -782,6 +1721,58 @@ def _link_from_row(row: sqlite3.Row) -> dict:
         "expires_at": row["expires_at"],
         "confirmed_at": row["confirmed_at"],
         "consumed_at": row["consumed_at"],
+    }
+
+
+def _host_dispatch_from_row(row: sqlite3.Row) -> dict:
+    try:
+        attachment_refs = json.loads(row["attachment_refs_json"])
+    except (json.JSONDecodeError, TypeError):
+        attachment_refs = []
+    return {
+        "dispatch_id": row["dispatch_id"],
+        "account_id": row["account_id"],
+        "user_subject": row["user_subject"],
+        "agent_host": row["agent_host"],
+        "host_binding_ref": row["host_binding_ref"],
+        "origin_endpoint_id": row["origin_endpoint_id"],
+        "conversation_ref": row["conversation_ref"],
+        "message_key": row["message_key"],
+        "payload_hash": row["payload_hash"],
+        "idempotency_key": row["idempotency_key"],
+        "attachment_refs": (
+            attachment_refs if isinstance(attachment_refs, list) else []
+        ),
+        "state": row["state"],
+        "accepted_run_id": row["accepted_run_id"],
+        "attempt_count": int(row["attempt_count"]),
+        "request_sent_at": row["request_sent_at"],
+        "next_attempt_at": row["next_attempt_at"],
+        "deadline_at": row["deadline_at"],
+        "claim_owner": row["claim_owner"],
+        "claim_token": row["claim_token"],
+        "claim_expires_at": row["claim_expires_at"],
+        "last_error_code": row["last_error_code"],
+        "had_tool_activity": bool(row["had_tool_activity"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "accepted_at": row["accepted_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+def _host_dispatch_event_from_row(row: sqlite3.Row) -> dict:
+    try:
+        payload = json.loads(row["payload_json"])
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+    return {
+        "sequence": int(row["sequence"]),
+        "event_id": row["event_id"],
+        "dispatch_id": row["dispatch_id"],
+        "event_name": row["event_name"],
+        "payload": payload if isinstance(payload, dict) else {},
+        "created_at": row["created_at"],
     }
 
 

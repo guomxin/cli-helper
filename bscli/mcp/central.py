@@ -5423,13 +5423,15 @@ def serve_central_mcp(
         )
     workspace_server = None
     workspace_thread = None
+    workspace_application = None
     if workspace_config is not None:
+        workspace_application = WorkspaceApplication(
+            service=service,
+            gateway=workspace_gateway,
+        )
         workspace_server = create_workspace_http_server(
             config=workspace_config,
-            application=WorkspaceApplication(
-                service=service,
-                gateway=workspace_gateway,
-            ),
+            application=workspace_application,
         )
         workspace_thread = threading.Thread(
             target=workspace_server.serve_forever,
@@ -5485,6 +5487,8 @@ def serve_central_mcp(
             workspace_server.server_close()
         if workspace_thread is not None:
             workspace_thread.join(timeout=5)
+        if workspace_application is not None:
+            workspace_application.close()
         auth_server.shutdown()
         auth_server.server_close()
         auth_thread.join(timeout=5)

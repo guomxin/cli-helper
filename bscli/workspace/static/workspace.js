@@ -330,10 +330,11 @@ async function loadGatewayStatus() {
 async function loadChat() {
   const container = $("#chat-messages");
   try {
-    const [history, taskTimeline, chatTimeline] = await Promise.all([
+    const [history, taskTimeline, chatTimeline, dispatches] = await Promise.all([
       api("/api/chat/history?limit=120"),
       api("/api/timeline?entry_type=task_event&limit=240"),
       api("/api/timeline?entry_type=chat_message&limit=500"),
+      api("/api/chat/dispatches?active_only=true&limit=20"),
     ]);
     state.historyMessages.clear();
     history.messages.forEach((message, index) => {
@@ -367,6 +368,7 @@ async function loadChat() {
       Number(chatTimeline.cursor) || 0,
     );
     dismissTerminalLiveMessages();
+    restoreActiveDispatches(dispatches.items || []);
     await hydrateTaskCards({ render: false });
     renderChatTimeline();
     container.scrollTop = container.scrollHeight;
@@ -380,6 +382,41 @@ async function loadChat() {
       );
     }
   }
+}
+
+function restoreActiveDispatches(items) {
+  const activeKeys = new Set();
+  const labels = {
+    queued: "请求已保存，正在连接智能体",
+    waiting_host: "智能体连接正在恢复，恢复后会自动继续",
+    dispatching: "正在交给智能体处理",
+    reconciling_acceptance: "正在确认智能体是否已接收",
+    accepted: "智能体已开始处理",
+  };
+  items.forEach((dispatch) => {
+    const key = dispatch.runId || dispatch.idempotencyKey;
+    if (!key) return;
+    activeKeys.add(key);
+    const live = ensureLiveMessage(key);
+    live.dispatchId = dispatch.dispatchId;
+    live.restoredDispatch = true;
+    live.requestMessage = dispatch.requestMessage || null;
+    addLiveProgress(
+      key,
+      labels[dispatch.state] || "正在继续原请求",
+      "active",
+    );
+    if (["queued", "waiting_host"].includes(dispatch.state)) {
+      attachDispatchCancel(key, dispatch.dispatchId);
+    } else {
+      live.actions.replaceChildren();
+    }
+  });
+  state.liveMessages.forEach((live, key) => {
+    if (!live?.restoredDispatch || activeKeys.has(key)) return;
+    live.item.remove();
+    state.liveMessages.delete(key);
+  });
 }
 
 function messageElement(message) {
@@ -877,9 +914,19 @@ async function consumeChatStream({ message, idempotencyKey, attachments = [] }) 
           registerActiveStream(activeStream, runId);
           adoptLiveMessage(previousRunId, runId, message);
           addLiveProgress(runId, "请求已交给智能体", "active");
+          ensureLiveMessage(runId).actions.replaceChildren();
         } else if (event.name === "progress") {
           if (event.data.kind === "tool") hadToolActivity = true;
           handleChatProgress(event.data);
+          if (["queued", "waiting_host"].includes(event.data.phase)) {
+            attachDispatchCancel(runId, event.data.dispatchId);
+          } else if (
+            ["dispatching", "reconciling_acceptance"].includes(
+              event.data.phase,
+            )
+          ) {
+            ensureLiveMessage(runId).actions.replaceChildren();
+          }
         } else if (event.name === "chat") {
           if (["final", "error", "aborted"].includes(event.data.state)) {
             activeStream.terminal = true;
@@ -1061,6 +1108,11 @@ function reconcileOriginChatMessage(entry, render = true) {
       activeStream.controller.abort();
     }
     return;
+  }
+  const restoredLive = state.liveMessages.get(runId);
+  if (restoredLive?.item?.isConnected) {
+    restoredLive.item.remove();
+    state.liveMessages.delete(runId);
   }
   if (!entry.entry_id) return;
   removeMatchingHistoryMessage(entry);
@@ -1280,6 +1332,34 @@ function renderRunFailure(
     live.actions.append(retry);
   }
   scrollChat();
+}
+
+function attachDispatchCancel(runId, dispatchId) {
+  if (!runId || !dispatchId) return;
+  const live = ensureLiveMessage(runId);
+  if (live.cancelDispatchId === dispatchId && live.actions.childElementCount) {
+    return;
+  }
+  live.cancelDispatchId = dispatchId;
+  live.actions.replaceChildren();
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary retry-command";
+  cancel.textContent = "取消本次请求";
+  cancel.addEventListener("click", async () => {
+    cancel.disabled = true;
+    try {
+      await api(
+        `/api/chat/dispatches/${encodeURIComponent(dispatchId)}/cancel`,
+        { method: "POST", body: {}, csrf: true },
+      );
+      addLiveProgress(runId, "已取消等待", "failed");
+    } catch (error) {
+      cancel.disabled = false;
+      toast(friendlyError(error), true, `dispatch:${dispatchId}:cancel`);
+    }
+  });
+  live.actions.append(cancel);
 }
 
 function dismissTerminalLiveMessages() {
@@ -2047,6 +2127,14 @@ function friendlyError(error) {
     LOGIN_RATE_LIMITED: "登录尝试过多，请稍后再试。",
     WORKSPACE_LINK_INVALID: "配对尚未完成或已经失效。",
     WORKSPACE_CONFLICT: "该身份或用户名已经绑定网页账号。",
+    IDEMPOTENCY_PAYLOAD_MISMATCH:
+      "同一次请求的内容发生变化，系统没有覆盖原请求。",
+    WORKSPACE_HOST_QUEUE_CONVERSATION_LIMIT:
+      "当前会话已有 3 条请求等待智能体受理，请稍后再发。",
+    WORKSPACE_HOST_QUEUE_USER_LIMIT:
+      "当前账号等待智能体受理的请求较多，请稍后再发。",
+    HOST_DISPATCH_CANCEL_NOT_ALLOWED:
+      "请求已经开始交给智能体，当前不能再取消等待。",
     GATEWAY_NOT_CONFIGURED: "智能体连接尚未配置。",
     WORKSPACE_RUN_IN_PROGRESS:
       "\u4e0a\u4e00\u6761\u7f51\u9875\u4efb\u52a1\u4ecd\u5728\u5904\u7406\uff0c\u672c\u6b21\u8bf7\u6c42\u6ca1\u6709\u6392\u961f\u3002",

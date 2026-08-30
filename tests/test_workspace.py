@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import ssl
 import threading
+import time
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -31,7 +32,11 @@ from bscli.workspace.server import (
     create_workspace_http_server,
     validate_workspace_server_config,
 )
-from bscli.workspace.stores import WorkspaceLinkError, WorkspaceStore
+from bscli.workspace.stores import (
+    WorkspaceConflictError,
+    WorkspaceLinkError,
+    WorkspaceStore,
+)
 
 
 PASSWORD = "AgentBridge!Workspace9"
@@ -128,6 +133,8 @@ class FakeGateway:
         idempotency_key: str,
         attachments: list[dict] | None = None,
         timeout_seconds: float = 150,
+        retry_before_accept: bool = True,
+        abort_accepted_on_close: bool = True,
     ):
         self.calls.append(
             (
@@ -143,6 +150,8 @@ class FakeGateway:
                     "idempotencyKey": idempotency_key,
                     "attachments": list(attachments or []),
                     "timeoutSeconds": timeout_seconds,
+                    "retryBeforeAccept": retry_before_accept,
+                    "abortAcceptedOnClose": abort_accepted_on_close,
                 },
             )
         )
@@ -530,6 +539,79 @@ class WorkspaceStoreTests(unittest.TestCase):
             self.assertNotEqual(token_hash, session["session_token"])
             self.assertNotEqual(csrf_hash, session["csrf_token"])
 
+    def test_host_dispatch_idempotency_and_user_isolation(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account_a = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            account_b = _create_account(
+                service,
+                user_subject="user-b",
+                username="bob",
+                endpoint_key="telegram:*:bob",
+            )
+            values = {
+                "account_id": account_a["account_id"],
+                "user_subject": "user-a",
+                "agent_host": "openclaw",
+                "host_binding_ref": account_a["endpoint_key"],
+                "origin_endpoint_id": account_a["endpoint_id"],
+                "conversation_ref": account_a["openclaw_session_key"],
+                "message_key": "workspace:user:dispatch-1",
+                "payload_hash": "a" * 64,
+                "idempotency_key": "dispatch-1",
+            }
+
+            created, reused = service.workspace.create_host_dispatch(**values)
+            same, reused_again = service.workspace.create_host_dispatch(**values)
+
+            self.assertFalse(reused)
+            self.assertTrue(reused_again)
+            self.assertEqual(created["dispatch_id"], same["dispatch_id"])
+            with self.assertRaisesRegex(
+                WorkspaceConflictError,
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+            ):
+                service.workspace.create_host_dispatch(
+                    **{**values, "payload_hash": "b" * 64}
+                )
+            self.assertEqual(
+                len(
+                    service.workspace.list_host_dispatches(
+                        user_subject="user-a"
+                    )
+                ),
+                1,
+            )
+            self.assertEqual(
+                service.workspace.list_host_dispatches(
+                    user_subject=account_b["user_subject"]
+                ),
+                [],
+            )
+            canceled = service.workspace.cancel_host_dispatch(
+                created["dispatch_id"],
+                user_subject="user-a",
+            )
+            self.assertEqual(canceled["state"], "canceled")
+            self.assertEqual(
+                service.workspace.list_host_dispatches(
+                    user_subject="user-a",
+                    active_only=True,
+                ),
+                [],
+            )
+            self.assertEqual(
+                service.workspace.list_host_dispatch_events(
+                    created["dispatch_id"]
+                )[-1]["payload"]["state"],
+                "aborted",
+            )
+
 
 class WorkspaceApplicationTests(unittest.TestCase):
     def test_workspace_images_reject_mime_spoofing_and_oversized_sets(self) -> None:
@@ -843,19 +925,23 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )
             self.assertEqual(result.run_id, "web-message-1")
             self.assertEqual(streamed[-1]["state"], "final")
-            self.assertEqual(send_streamed[0]["type"], "accepted")
+            self.assertEqual(send_streamed[0]["type"], "progress")
+            self.assertTrue(
+                any(item["type"] == "accepted" for item in send_streamed)
+            )
             methods = [method for method, _params in gateway.calls]
             self.assertEqual(
                 methods,
                 [
                     "chat.history",
                     "stream",
+                    "system.info",
                     "send_stream",
                     "send_stream",
                 ],
             )
-            streamed_send = gateway.calls[2][1]
-            compatibility_send = gateway.calls[3][1]
+            streamed_send = gateway.calls[3][1]
+            compatibility_send = gateway.calls[4][1]
             self.assertEqual(
                 streamed_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -865,6 +951,8 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 "web-message-stream-1",
             )
             self.assertEqual(streamed_send["timeoutSeconds"], 300)
+            self.assertFalse(streamed_send["retryBeforeAccept"])
+            self.assertFalse(streamed_send["abortAcceptedOnClose"])
             self.assertEqual(
                 compatibility_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -957,7 +1045,8 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(events[0]["type"], "accepted")
+            self.assertEqual(events[0]["type"], "progress")
+            self.assertTrue(any(item["type"] == "accepted" for item in events))
             sent = next(
                 params
                 for method, params in gateway.calls
@@ -1074,19 +1163,15 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 gateway=FailingGateway(),
             )
 
-            with self.assertRaises(GatewayRequestError) as caught:
-                list(
-                    app.send_chat_stream(
-                        account,
-                        message="List five sent workflows",
-                        idempotency_key="failed-run-1",
-                    )
+            events = list(
+                app.send_chat_stream(
+                    account,
+                    message="List five sent workflows",
+                    idempotency_key="failed-run-1",
                 )
-
-            self.assertEqual(
-                caught.exception.code,
-                "GATEWAY_RUN_TIMEOUT_ABORTED",
             )
+            self.assertEqual(events[-1]["state"], "error")
+            self.assertTrue(events[-1]["safeToRetry"])
             timeline = app.list_timeline(account)
             self.assertEqual(
                 [entry["role"] for entry in timeline],
@@ -1142,7 +1227,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 "Run stopped after a business tool call.",
             )
 
-    def test_second_workspace_run_is_rejected_instead_of_queued(self) -> None:
+    def test_second_workspace_run_waits_in_durable_account_order(self) -> None:
         entered = threading.Event()
         release = threading.Event()
 
@@ -1195,17 +1280,18 @@ class WorkspaceApplicationTests(unittest.TestCase):
             thread.start()
             self.assertTrue(entered.wait(timeout=3))
             try:
-                with self.assertRaises(GatewayRequestError) as caught:
-                    list(
-                        app.send_chat_stream(
-                            account,
-                            message="second",
-                            idempotency_key="concurrent-run-2",
-                        )
-                    )
+                second_stream = app.send_chat_stream(
+                    account,
+                    message="second",
+                    idempotency_key="concurrent-run-2",
+                )
                 self.assertEqual(
-                    caught.exception.code,
-                    "WORKSPACE_RUN_IN_PROGRESS",
+                    len(app.list_chat_dispatches(account)),
+                    2,
+                )
+                self.assertEqual(
+                    sum(method == "send_stream" for method, _ in gateway.calls),
+                    1,
                 )
             finally:
                 release.set()
@@ -1213,18 +1299,242 @@ class WorkspaceApplicationTests(unittest.TestCase):
 
             self.assertFalse(thread.is_alive())
             self.assertEqual(first_errors, [])
+            second_events = list(second_stream)
+            self.assertTrue(
+                any(item["type"] == "accepted" for item in second_events)
+            )
+            self.assertEqual(
+                sum(method == "send_stream" for method, _ in gateway.calls),
+                2,
+            )
+            timeline = app.list_timeline(account)
+            self.assertEqual(
+                [entry["text"] for entry in timeline if entry["role"] == "user"],
+                ["first", "second"],
+            )
+
+    def test_browser_stream_disconnect_does_not_abort_durable_run(self) -> None:
+        accepted = threading.Event()
+        release = threading.Event()
+
+        class SlowGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                self.calls.append(("send_stream", kwargs))
+
+                def events():
+                    yield {
+                        "type": "accepted",
+                        "runId": kwargs["idempotency_key"],
+                        "status": "started",
+                    }
+                    accepted.set()
+                    release.wait(timeout=5)
+                    yield {
+                        "type": "chat",
+                        "runId": kwargs["idempotency_key"],
+                        "state": "final",
+                        "text": "durable result",
+                    }
+
+                return events()
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            gateway = SlowGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+            stream = app.send_chat_stream(
+                account,
+                message="keep running after browser disconnect",
+                idempotency_key="browser-disconnect-1",
+            )
+
+            self.assertEqual(next(stream)["type"], "progress")
+            stream.close()
+            self.assertTrue(accepted.wait(timeout=3))
+            release.set()
+            self.assertTrue(
+                _wait_until(
+                    lambda: not app.list_chat_dispatches(account),
+                    timeout=5,
+                )
+            )
+            self.assertEqual(app.list_timeline(account)[-1]["text"], "durable result")
+            self.assertFalse(
+                any(method == "chat.abort" for method, _ in gateway.calls)
+            )
+
+    def test_pre_accept_transport_failure_recovers_with_one_run(self) -> None:
+        class RecoveringGateway(FakeGateway):
+            def __init__(self) -> None:
+                super().__init__()
+                self.send_attempts = 0
+
+            def send_stream(self, **kwargs):
+                self.send_attempts += 1
+                if self.send_attempts == 1:
+                    self.calls.append(("send_stream", kwargs))
+                    raise GatewayRequestError(
+                        "GATEWAY_CONNECTION_FAILED",
+                        "reverse tunnel is reconnecting",
+                        {"stage": "connect"},
+                    )
+                return super().send_stream(**kwargs)
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            gateway = RecoveringGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+
+            events = list(
+                app.send_chat_stream(
+                    account,
+                    message="recover this read request",
+                    idempotency_key="preaccept-recovery-1",
+                )
+            )
+
+            accepted_events = [
+                item for item in events if item.get("type") == "accepted"
+            ]
+            self.assertEqual(len(accepted_events), 1)
+            self.assertTrue(
+                any(item.get("phase") == "waiting_host" for item in events)
+            )
+            self.assertEqual(gateway.send_attempts, 2)
+            completed = service.workspace.list_host_dispatches(
+                user_subject="user-a"
+            )[0]
+            self.assertEqual(completed["state"], "completed")
+            self.assertEqual(completed["attempt_count"], 2)
+
+    def test_agentbridge_restart_resumes_waiting_dispatch(self) -> None:
+        class OfflineGateway(FakeGateway):
+            def call(self, method, params=None, *, timeout_seconds=30):
+                if method == "system.info":
+                    raise GatewayRequestError(
+                        "GATEWAY_CONNECTION_FAILED",
+                        "offline",
+                    )
+                return super().call(
+                    method,
+                    params,
+                    timeout_seconds=timeout_seconds,
+                )
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            first = WorkspaceApplication(
+                service=service,
+                gateway=OfflineGateway(),
+            )
+            first.send_chat_stream(
+                account,
+                message="survive central restart",
+                idempotency_key="restart-recovery-1",
+            )
+            self.assertTrue(
+                _wait_until(
+                    lambda: first.list_chat_dispatches(account)[0]["state"]
+                    == "waiting_host",
+                    timeout=3,
+                )
+            )
+            first.close()
+
+            gateway = FakeGateway()
+            second = WorkspaceApplication(service=service, gateway=gateway)
+            self.assertTrue(
+                _wait_until(
+                    lambda: not second.list_chat_dispatches(account),
+                    timeout=5,
+                )
+            )
+            dispatch = service.workspace.list_host_dispatches(
+                user_subject="user-a"
+            )[0]
+            self.assertEqual(dispatch["state"], "completed")
             self.assertEqual(
                 sum(method == "send_stream" for method, _ in gateway.calls),
                 1,
             )
-            timeline = app.list_timeline(account)
-            self.assertTrue(
-                any(
-                    entry["role"] == "assistant"
-                    and "\u6ca1\u6709\u6392\u961f" in entry["text"]
-                    for entry in timeline
+            self.assertEqual(
+                second.list_timeline(account)[-1]["text"],
+                "OA 登录状态有效。",
+            )
+            second.close()
+
+    def test_post_accept_disconnect_reconciles_without_redispatch(self) -> None:
+        class AcceptedDisconnectGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                self.calls.append(("send_stream", kwargs))
+
+                def events():
+                    yield {
+                        "type": "accepted",
+                        "runId": kwargs["idempotency_key"],
+                        "status": "started",
+                    }
+                    raise GatewayRequestError(
+                        "GATEWAY_CONNECTION_CLOSED",
+                        "connection closed",
+                        {"stage": "stream"},
+                    )
+
+                return events()
+
+            def run_history_evidence(self, **kwargs):
+                self.calls.append(("run_history_evidence", kwargs))
+                return {
+                    "prompt_observed": True,
+                    "had_tool_activity": True,
+                    "final_text": "recovered final result",
+                    "observed_run_id": kwargs["run_ref"],
+                }
+
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            gateway = AcceptedDisconnectGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+
+            events = list(
+                app.send_chat_stream(
+                    account,
+                    message="read only once",
+                    idempotency_key="accepted-disconnect-1",
                 )
             )
+
+            self.assertEqual(
+                sum(method == "send_stream" for method, _ in gateway.calls),
+                1,
+            )
+            self.assertEqual(events[-1]["state"], "final")
+            self.assertEqual(events[-1]["text"], "recovered final result")
+            self.assertEqual(app.list_timeline(account)[-1]["text"], "recovered final result")
 
 
 class WorkspaceGatewayClientTests(unittest.TestCase):
@@ -2653,6 +2963,15 @@ def _cookies(headers: http.client.HTTPMessage) -> dict[str, str]:
         name, cookie_value = pair.split("=", 1)
         result[name] = cookie_value
     return result
+
+
+def _wait_until(predicate, *, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return bool(predicate())
 
 
 class _CaptureInput:

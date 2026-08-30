@@ -163,6 +163,8 @@ class OpenClawGatewayClient:
         idempotency_key: str,
         attachments: list[dict] | None = None,
         timeout_seconds: float = 300,
+        retry_before_accept: bool = True,
+        abort_accepted_on_close: bool = True,
     ) -> Iterator[dict[str, Any]]:
         values = {
             "sessionKey": (session_key, 16, 1_024),
@@ -251,7 +253,7 @@ class OpenClawGatewayClient:
                                 ),
                                 "safeToRetry": False,
                             }
-                        if not _should_retry_before_accept(
+                        if not retry_before_accept or not _should_retry_before_accept(
                             exc,
                             accepted=accepted,
                             attempt=attempt,
@@ -284,7 +286,7 @@ class OpenClawGatewayClient:
                 close = getattr(source, "close", None)
                 if callable(close):
                     close()
-                if run_id and not terminal:
+                if run_id and not terminal and abort_accepted_on_close:
                     self.abort_chat(
                         session_key=normalized["sessionKey"],
                         run_id=run_id,
@@ -293,6 +295,24 @@ class OpenClawGatewayClient:
                     )
 
         return guarded_stream()
+
+    def run_history_evidence(
+        self,
+        *,
+        session_key: str,
+        run_ref: str,
+        timeout_seconds: float = 8,
+    ) -> dict[str, Any]:
+        history = self.call(
+            "chat.history",
+            {
+                "sessionKey": session_key,
+                "limit": 200,
+                "maxChars": 200_000,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return _history_evidence_for_run(history, run_ref)
 
     def _reconcile_accepted_run(
         self,
@@ -563,9 +583,11 @@ def _history_evidence_for_run(payload: Any, run_id: str) -> dict[str, Any]:
             "prompt_observed": False,
             "had_tool_activity": False,
             "final_text": "",
+            "observed_run_id": "",
         }
     prompt_key = f"{run_id}:user"
     prompt_index = -1
+    observed_run_id = ""
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if not isinstance(message, dict) or message.get("role") != "user":
@@ -575,12 +597,14 @@ def _history_evidence_for_run(payload: Any, run_id: str) -> dict[str, Any]:
             or message.get("runId") == run_id
         ):
             prompt_index = index
+            observed_run_id = str(message.get("runId") or run_id).strip()
             break
     if prompt_index < 0:
         return {
             "prompt_observed": False,
             "had_tool_activity": False,
             "final_text": "",
+            "observed_run_id": "",
         }
 
     had_tool_activity = False
@@ -600,6 +624,7 @@ def _history_evidence_for_run(payload: Any, run_id: str) -> dict[str, Any]:
         "prompt_observed": True,
         "had_tool_activity": had_tool_activity,
         "final_text": final_text,
+        "observed_run_id": observed_run_id,
     }
 
 

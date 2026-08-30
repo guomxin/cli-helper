@@ -2509,6 +2509,27 @@ class TaskHubStore:
             )
         return _timeline_from_row(row), False
 
+    def get_timeline_message(
+        self,
+        *,
+        user_subject: str,
+        message_key: str,
+    ) -> dict:
+        user_subject = _required_text(user_subject, "user_subject", 256)
+        message_key = _required_text(message_key, "message_key", 768)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM user_timeline
+                WHERE user_subject = ? AND dedupe_key = ?
+                  AND entry_type = 'chat_message'
+                """,
+                (user_subject, f"message:{message_key}"),
+            ).fetchone()
+        if row is None:
+            raise TaskNotFound("timeline message not found")
+        return _timeline_from_row(row)
+
     def list_timeline(
         self,
         *,
@@ -3173,11 +3194,24 @@ class TaskHubStore:
                 WHERE type = 'table' AND name = 'mcp_identity_tokens'
                 """
             ).fetchone() is not None
+            has_host_dispatches = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'agent_host_dispatches'
+                """
+            ).fetchone() is not None
             if has_workspace_accounts:
                 users.update(
                     str(row["user_subject"])
                     for row in connection.execute(
                         "SELECT DISTINCT user_subject FROM workspace_accounts"
+                    ).fetchall()
+                )
+            if has_host_dispatches:
+                users.update(
+                    str(row["user_subject"])
+                    for row in connection.execute(
+                        "SELECT DISTINCT user_subject FROM agent_host_dispatches"
                     ).fetchall()
                 )
 
@@ -3258,6 +3292,8 @@ class TaskHubStore:
                     (user_subject,),
                 ).fetchone()
                 workspace_count = 0
+                host_dispatch_states: dict[str, int] = {}
+                oldest_host_wait_at = None
                 if has_workspace_accounts:
                     workspace_count = int(
                         connection.execute(
@@ -3268,6 +3304,30 @@ class TaskHubStore:
                             (user_subject,),
                         ).fetchone()["count"]
                     )
+                if has_host_dispatches:
+                    host_dispatch_states = {
+                        str(row["state"]): int(row["count"])
+                        for row in connection.execute(
+                            """
+                            SELECT state, COUNT(*) AS count
+                            FROM agent_host_dispatches
+                            WHERE user_subject = ?
+                            GROUP BY state ORDER BY state
+                            """,
+                            (user_subject,),
+                        ).fetchall()
+                    }
+                    oldest_host_wait_at = connection.execute(
+                        """
+                        SELECT MIN(created_at) AS oldest_at
+                        FROM agent_host_dispatches
+                        WHERE user_subject = ? AND state IN (
+                            'queued', 'waiting_host', 'dispatching',
+                            'reconciling_acceptance'
+                        )
+                        """,
+                        (user_subject,),
+                    ).fetchone()["oldest_at"]
                 user_records.append(
                     {
                         "user_subject": user_subject,
@@ -3281,6 +3341,8 @@ class TaskHubStore:
                             for row in endpoint_rows
                         ],
                         "active_workspace_accounts": workspace_count,
+                        "host_dispatch_states": host_dispatch_states,
+                        "oldest_host_dispatch_wait_at": oldest_host_wait_at,
                         "task_statuses": {
                             str(row["status"]): int(row["count"])
                             for row in task_rows
@@ -3455,6 +3517,30 @@ class TaskHubStore:
                        OR endpoint.endpoint_id IS NULL
                        OR endpoint.user_subject <> account.user_subject
                 """
+            if has_host_dispatches:
+                violation_queries["host_dispatch_user_mismatch"] = """
+                    SELECT COUNT(*) AS count
+                    FROM agent_host_dispatches AS dispatch
+                    LEFT JOIN workspace_accounts AS account
+                      ON account.account_id = dispatch.account_id
+                    LEFT JOIN client_endpoints AS endpoint
+                      ON endpoint.endpoint_id = dispatch.origin_endpoint_id
+                    WHERE account.account_id IS NULL
+                       OR endpoint.endpoint_id IS NULL
+                       OR account.user_subject <> dispatch.user_subject
+                       OR endpoint.user_subject <> dispatch.user_subject
+                """
+                violation_queries["host_dispatch_acceptance_mismatch"] = """
+                    SELECT COUNT(*) AS count
+                    FROM agent_host_dispatches
+                    WHERE (
+                        state IN ('accepted', 'completed')
+                        AND accepted_run_id IS NULL
+                    ) OR (
+                        accepted_run_id IS NOT NULL
+                        AND accepted_at IS NULL
+                    )
+                """
             violations = {
                 name: int(connection.execute(query).fetchone()["count"])
                 for name, query in violation_queries.items()
@@ -3490,6 +3576,33 @@ class TaskHubStore:
                 """,
                 (now,),
             ).fetchone()
+            host_dispatch_totals = {
+                "active_host_dispatches": 0,
+                "waiting_host_dispatches": 0,
+                "acceptance_unknown_dispatches": 0,
+            }
+            if has_host_dispatches:
+                row = connection.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN state IN (
+                            'queued', 'waiting_host', 'dispatching',
+                            'reconciling_acceptance', 'accepted'
+                        ) THEN 1 ELSE 0 END) AS active_count,
+                        SUM(CASE WHEN state = 'waiting_host'
+                            THEN 1 ELSE 0 END) AS waiting_count,
+                        SUM(CASE WHEN state = 'acceptance_unknown'
+                            THEN 1 ELSE 0 END) AS unknown_count
+                    FROM agent_host_dispatches
+                    """
+                ).fetchone()
+                host_dispatch_totals = {
+                    "active_host_dispatches": int(row["active_count"] or 0),
+                    "waiting_host_dispatches": int(row["waiting_count"] or 0),
+                    "acceptance_unknown_dispatches": int(
+                        row["unknown_count"] or 0
+                    ),
+                }
         finally:
             connection.close()
 
@@ -3509,6 +3622,7 @@ class TaskHubStore:
                 "ready_artifacts": int(totals["ready_artifacts"]),
                 "expired_artifacts": int(totals["expired_artifacts"]),
                 "timeline_entries": int(totals["timeline_entries"]),
+                **host_dispatch_totals,
                 "isolation_violation_count": violation_count,
             },
             "users": user_records,

@@ -150,6 +150,15 @@ class AdminControlPlane:
                 "waiting_tasks": waiting_tasks,
                 "active_endpoints": task_summary.get("active_endpoints", 0),
                 "outstanding_deliveries": task_summary.get("outstanding_deliveries", 0),
+                "active_host_dispatches": task_summary.get(
+                    "active_host_dispatches", 0
+                ),
+                "waiting_host_dispatches": task_summary.get(
+                    "waiting_host_dispatches", 0
+                ),
+                "acceptance_unknown_dispatches": task_summary.get(
+                    "acceptance_unknown_dispatches", 0
+                ),
                 "isolation_violations": task_summary.get("isolation_violation_count", 0),
                 "open_incidents": runtime["governance"]["open_incidents"],
                 "critical_incidents": runtime["governance"]["critical_incidents"],
@@ -518,6 +527,15 @@ class AdminControlPlane:
                 "outstanding_deliveries": outstanding,
                 "deferred_deliveries": deferred,
                 "failed_deliveries": failed,
+                "active_host_dispatches": diagnostics.get("summary", {}).get(
+                    "active_host_dispatches", 0
+                ),
+                "waiting_host_dispatches": diagnostics.get("summary", {}).get(
+                    "waiting_host_dispatches", 0
+                ),
+                "acceptance_unknown_dispatches": diagnostics.get(
+                    "summary", {}
+                ).get("acceptance_unknown_dispatches", 0),
                 "ready_artifacts": sum(
                     1 for item in artifacts if item["state"] == "ready"
                 ),
