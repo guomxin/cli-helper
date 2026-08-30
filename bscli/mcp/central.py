@@ -1242,8 +1242,10 @@ def create_central_mcp_server(
             "dependsOn contains earlier stepKey values. bindings maps a target argument to "
             "{step: sourceStepKey, pointer: /json/path}. Example sequence: "
             "oa.workflow.done.list -> work_items_to_log_draft.v1, binding items from "
-            "read_done /items. Never include a commit, interaction resume, arbitrary HTTP, "
-            "or script step."
+            "read_done /items. Each arguments object may contain only properties declared "
+            "by that catalog entry's inputSchema; keep unsupported user requirements in "
+            "the goal or final explanation instead of inventing arguments. Never include a "
+            "commit, interaction resume, arbitrary HTTP, or script step."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,

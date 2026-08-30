@@ -232,6 +232,12 @@ class TaskPlanValidationTests(unittest.TestCase):
             "taihua.work_log.create.prepare",
             str(limited["prepareInputGuide"]["examples"]),
         )
+        self.assertTrue(
+            any(
+                "inputSchema.properties" in rule
+                for rule in limited["prepareInputGuide"]["rules"]
+            )
+        )
 
 
 if __name__ == "__main__":

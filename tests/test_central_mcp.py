@@ -362,6 +362,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("end_date", done["inputSchema"]["properties"])
         self.assertFalse(plan_prepare["annotations"]["readOnlyHint"])
         self.assertFalse(plan_prepare["annotations"]["destructiveHint"])
+        self.assertIn("inputSchema", plan_prepare["description"])
+        self.assertIn("inventing arguments", plan_prepare["description"])
         self.assertEqual(
             plan_prepare["inputSchema"]["properties"]["steps"]["maxItems"],
             12,

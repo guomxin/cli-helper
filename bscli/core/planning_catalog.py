@@ -127,6 +127,8 @@ def build_planning_catalog(
                 "capability 步骤使用 capabilityName，不得使用 transformName",
                 "transform 步骤使用 transformName，不得使用 capabilityName",
                 "bindings 的键是目标输入字段，值包含 step 和 JSON Pointer pointer",
+                "arguments 只能使用所选能力或转换 inputSchema.properties 中明确声明的字段",
+                "目录不支持的用户要求应保留在 goal 或最终说明中，不得臆造为步骤参数",
                 "只使用本目录实际返回的能力与转换名称",
             ],
             "examples": examples,

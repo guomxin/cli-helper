@@ -126,6 +126,8 @@ test("injects bounded same-user context only for explicit cross-end references",
     composedTask.prependContext,
     /agentbridge_task_plan_prepare/,
   );
+  assert.match(composedTask.prependContext, /inputSchema\.properties/);
+  assert.match(composedTask.prependContext, /Never invent an argument/);
   assert.match(composedTask.prependContext, /Do not emulate/);
 });
 
@@ -790,7 +792,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.69",
+      hostVersion: "0.4.70",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1208,7 +1210,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.69",
+        hostVersion: "0.4.70",
       },
     },
   });
@@ -1996,7 +1998,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.69",
+      hostVersion: "0.4.70",
     },
   });
   assert.equal(

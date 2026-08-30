@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.69";
+export const PLUGIN_VERSION = "0.4.70";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -50,6 +50,8 @@ const COMPOSED_TASK_PLANNING_CONTEXT = [
   "AgentBridge durable composed-task rule:",
   "- This request derives a later action or artifact from earlier business data.",
   "- First call agentbridge_task_plan_catalog, then submit exactly one supported plan through agentbridge_task_plan_prepare.",
+  "- For every step, copy only argument names declared in that catalog entry's inputSchema.properties. Never invent an argument from user wording.",
+  "- Keep a requested value in the plan goal or final explanation when no selected step inputSchema accepts it.",
   "- Do not emulate the composed task with separate source and sink tool calls.",
   "- Respect preview-only or do-not-submit wording by ending at a transform result or trusted prepare interaction; never call a private commit or resume tool.",
   "- If the filtered catalog cannot express the goal, report the unsupported capability or missing scope instead of bypassing the plan.",
