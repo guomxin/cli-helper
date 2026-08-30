@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from bscli.core.capability import CapabilityRegistry
+from bscli.core.task_plan_validation import task_plan_step_json_schema
 from bscli.core.transforms import TransformRegistry
 
 
@@ -47,6 +48,68 @@ def build_planning_catalog(
                 "mayRequireTrustedInteraction": spec.name in prepares,
             }
         )
+    transforms_catalog = [spec.to_dict() for spec in transforms.list()]
+    capability_names = {item["name"] for item in capabilities}
+    transform_names = {item["name"] for item in transforms_catalog}
+    examples: list[dict[str, Any]] = []
+    if (
+        "oa.workflow.done.list" in capability_names
+        and "work_items_to_log_draft.v1" in transform_names
+    ):
+        preview_steps: list[dict[str, Any]] = [
+            {
+                "stepKey": "read_done",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.done.list",
+                "arguments": {
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-07-31",
+                },
+            },
+            {
+                "stepKey": "draft_log",
+                "kind": "transform",
+                "transformName": "work_items_to_log_draft.v1",
+                "dependsOn": ["read_done"],
+                "bindings": {
+                    "items": {"step": "read_done", "pointer": "/items"}
+                },
+            },
+        ]
+        examples.append(
+            {
+                "title": "读取 OA 已办并生成可核对的日志草稿",
+                "goal": "汇总 2026 年 7 月 OA 已办并生成工作日志草稿",
+                "steps": preview_steps,
+            }
+        )
+        if "taihua.work_log.create.prepare" in capability_names:
+            examples.append(
+                {
+                    "title": "读取 OA 已办、生成草稿并打开泰华可信填单",
+                    "goal": "汇总 2026 年 7 月 OA 已办并准备填写 3 小时工作日志",
+                    "steps": preview_steps
+                    + [
+                        {
+                            "stepKey": "prepare_log",
+                            "kind": "capability",
+                            "capabilityName": "taihua.work_log.create.prepare",
+                            "dependsOn": ["draft_log"],
+                            "arguments": {
+                                "log_date": "2026-07-31",
+                                "hours": 3,
+                            },
+                            "bindings": {
+                                "content": {
+                                    "step": "draft_log",
+                                    "pointer": "/draft",
+                                }
+                            },
+                        }
+                    ],
+                }
+            )
+
     return {
         "schemaVersion": "agentbridge.planning-catalog.v1",
         "supportedStepKinds": ["capability", "transform"],
@@ -56,7 +119,18 @@ def build_planning_catalog(
             "maximumGoalCharacters": 500,
         },
         "capabilities": capabilities,
-        "transforms": [spec.to_dict() for spec in transforms.list()],
+        "transforms": transforms_catalog,
+        "prepareInputGuide": {
+            "requiredFields": ["goal", "steps"],
+            "stepSchema": task_plan_step_json_schema(),
+            "rules": [
+                "capability 步骤使用 capabilityName，不得使用 transformName",
+                "transform 步骤使用 transformName，不得使用 capabilityName",
+                "bindings 的键是目标输入字段，值包含 step 和 JSON Pointer pointer",
+                "只使用本目录实际返回的能力与转换名称",
+            ],
+            "examples": examples,
+        },
         "safety": {
             "hiddenCommitToolsExcluded": True,
             "arbitraryCodeExcluded": True,

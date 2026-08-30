@@ -4,7 +4,9 @@ from collections.abc import Callable, Iterable
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from bscli.core.capability import CapabilityRegistry
 from bscli.core.transforms import TransformRegistry
@@ -24,6 +26,115 @@ _ALLOWED_STEP_FIELDS = {
     "bindings",
 }
 _ALLOWED_BINDING_FIELDS = {"step", "pointer"}
+
+
+class TaskPlanBindingInput(BaseModel):
+    """A typed, model-visible binding from an earlier step output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=64,
+            description="Source stepKey. The source must be in this step's dependency chain.",
+        ),
+    ]
+    pointer: Annotated[
+        str,
+        Field(
+            max_length=512,
+            description=(
+                "JSON Pointer into the source step output, for example /items or /draft. "
+                "Use an empty string for the entire output object."
+            ),
+        ),
+    ]
+
+
+class _TaskPlanStepInputBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stepKey: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=64,
+            pattern=r"^[a-z][a-z0-9_]{0,63}$",
+            description="Unique lowercase step identifier, such as read_done or draft_log.",
+        ),
+    ]
+    dependsOn: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            max_length=12,
+            description="Earlier stepKey values that must complete before this step.",
+        ),
+    ]
+    arguments: Annotated[
+        dict[str, Any],
+        Field(
+            default_factory=dict,
+            description="Static arguments accepted by the selected capability or transform.",
+        ),
+    ]
+    bindings: Annotated[
+        dict[str, TaskPlanBindingInput],
+        Field(
+            default_factory=dict,
+            description=(
+                "Map each target input field to an earlier step output using step and pointer."
+            ),
+        ),
+    ]
+
+
+class TaskPlanCapabilityStepInput(_TaskPlanStepInputBase):
+    kind: Literal["capability"]
+    capabilityName: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=160,
+            description="Exact capability name returned by agentbridge_task_plan_catalog.",
+        ),
+    ]
+
+
+class TaskPlanTransformStepInput(_TaskPlanStepInputBase):
+    kind: Literal["transform"]
+    transformName: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=160,
+            description="Exact deterministic transform name returned by the planning catalog.",
+        ),
+    ]
+
+
+TaskPlanStepInput = Annotated[
+    TaskPlanCapabilityStepInput | TaskPlanTransformStepInput,
+    Field(discriminator="kind"),
+]
+_TASK_PLAN_STEP_ADAPTER = TypeAdapter(TaskPlanStepInput)
+
+
+def task_plan_step_json_schema() -> dict[str, Any]:
+    """Return the same step schema exposed by the MCP prepare tool."""
+
+    return _TASK_PLAN_STEP_ADAPTER.json_schema()
+
+
+def serialize_task_plan_steps(
+    steps: Iterable[TaskPlanCapabilityStepInput | TaskPlanTransformStepInput],
+) -> list[dict[str, Any]]:
+    return [
+        step.model_dump(exclude_none=True, exclude_unset=True)
+        for step in steps
+    ]
 
 
 class PlanValidationError(ValueError):

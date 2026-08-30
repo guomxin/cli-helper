@@ -1265,8 +1265,145 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Validate, compile, persist, and start one cross-system task plan bound to the current AgentTask. The host supplies public capability/transform steps only. AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at most one trusted prepare write sink. Example: oa.workflow.done.list with start_date/end_date -> work_items_to_log_draft.v1 using /items -> taihua.work_log.create.prepare with /draft bound to content. Never include a commit, interaction resume, arbitrary HTTP, or script step.",
+      "description": "Validate, compile, persist, and start one cross-system task plan bound to the current AgentTask. The host supplies public capability/transform steps only. AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at most one trusted prepare write sink. Every step requires stepKey and kind. A capability step uses capabilityName; a transform step uses transformName. dependsOn contains earlier stepKey values. bindings maps a target argument to {step: sourceStepKey, pointer: /json/path}. Example sequence: oa.workflow.done.list -> work_items_to_log_draft.v1, binding items from read_done /items. Never include a commit, interaction resume, arbitrary HTTP, or script step.",
       "inputSchema": {
+        "$defs": {
+          "TaskPlanBindingInput": {
+            "additionalProperties": false,
+            "description": "A typed, model-visible binding from an earlier step output.",
+            "properties": {
+              "pointer": {
+                "description": "JSON Pointer into the source step output, for example /items or /draft. Use an empty string for the entire output object.",
+                "maxLength": 512,
+                "title": "Pointer",
+                "type": "string"
+              },
+              "step": {
+                "description": "Source stepKey. The source must be in this step's dependency chain.",
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Step",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "pointer"
+            ],
+            "title": "TaskPlanBindingInput",
+            "type": "object"
+          },
+          "TaskPlanCapabilityStepInput": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {
+                "additionalProperties": true,
+                "description": "Static arguments accepted by the selected capability or transform.",
+                "title": "Arguments",
+                "type": "object"
+              },
+              "bindings": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/TaskPlanBindingInput"
+                },
+                "description": "Map each target input field to an earlier step output using step and pointer.",
+                "title": "Bindings",
+                "type": "object"
+              },
+              "capabilityName": {
+                "description": "Exact capability name returned by agentbridge_task_plan_catalog.",
+                "maxLength": 160,
+                "minLength": 1,
+                "title": "Capabilityname",
+                "type": "string"
+              },
+              "dependsOn": {
+                "description": "Earlier stepKey values that must complete before this step.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 12,
+                "title": "Dependson",
+                "type": "array"
+              },
+              "kind": {
+                "const": "capability",
+                "title": "Kind",
+                "type": "string"
+              },
+              "stepKey": {
+                "description": "Unique lowercase step identifier, such as read_done or draft_log.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "title": "Stepkey",
+                "type": "string"
+              }
+            },
+            "required": [
+              "stepKey",
+              "kind",
+              "capabilityName"
+            ],
+            "title": "TaskPlanCapabilityStepInput",
+            "type": "object"
+          },
+          "TaskPlanTransformStepInput": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments": {
+                "additionalProperties": true,
+                "description": "Static arguments accepted by the selected capability or transform.",
+                "title": "Arguments",
+                "type": "object"
+              },
+              "bindings": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/TaskPlanBindingInput"
+                },
+                "description": "Map each target input field to an earlier step output using step and pointer.",
+                "title": "Bindings",
+                "type": "object"
+              },
+              "dependsOn": {
+                "description": "Earlier stepKey values that must complete before this step.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 12,
+                "title": "Dependson",
+                "type": "array"
+              },
+              "kind": {
+                "const": "transform",
+                "title": "Kind",
+                "type": "string"
+              },
+              "stepKey": {
+                "description": "Unique lowercase step identifier, such as read_done or draft_log.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "title": "Stepkey",
+                "type": "string"
+              },
+              "transformName": {
+                "description": "Exact deterministic transform name returned by the planning catalog.",
+                "maxLength": 160,
+                "minLength": 1,
+                "title": "Transformname",
+                "type": "string"
+              }
+            },
+            "required": [
+              "stepKey",
+              "kind",
+              "transformName"
+            ],
+            "title": "TaskPlanTransformStepInput",
+            "type": "object"
+          }
+        },
         "properties": {
           "goal": {
             "maxLength": 500,
@@ -1289,8 +1426,21 @@
           },
           "steps": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "discriminator": {
+                "mapping": {
+                  "capability": "#/$defs/TaskPlanCapabilityStepInput",
+                  "transform": "#/$defs/TaskPlanTransformStepInput"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/TaskPlanCapabilityStepInput"
+                },
+                {
+                  "$ref": "#/$defs/TaskPlanTransformStepInput"
+                }
+              ]
             },
             "maxItems": 12,
             "minItems": 1,

@@ -366,6 +366,26 @@ class CentralMcpTests(unittest.TestCase):
             plan_prepare["inputSchema"]["properties"]["steps"]["maxItems"],
             12,
         )
+        step_items = plan_prepare["inputSchema"]["properties"]["steps"]["items"]
+        self.assertEqual(step_items["discriminator"]["propertyName"], "kind")
+        self.assertEqual(len(step_items["oneOf"]), 2)
+        step_definitions = plan_prepare["inputSchema"]["$defs"]
+        capability_step = step_definitions["TaskPlanCapabilityStepInput"]
+        transform_step = step_definitions["TaskPlanTransformStepInput"]
+        binding = step_definitions["TaskPlanBindingInput"]
+        self.assertFalse(capability_step["additionalProperties"])
+        self.assertFalse(transform_step["additionalProperties"])
+        self.assertTrue(
+            {"stepKey", "kind", "capabilityName"}.issubset(
+                capability_step["required"]
+            )
+        )
+        self.assertTrue(
+            {"stepKey", "kind", "transformName"}.issubset(
+                transform_step["required"]
+            )
+        )
+        self.assertEqual(set(binding["required"]), {"step", "pointer"})
         self.assertIn("Sent page", sent["description"])
         self.assertIn("Done", sent["description"])
         self.assertFalse(prepare["annotations"]["readOnlyHint"])

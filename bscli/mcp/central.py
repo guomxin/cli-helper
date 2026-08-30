@@ -129,6 +129,10 @@ from bscli.admin.server import (
     create_admin_http_server,
 )
 from bscli.auth.action_card import TrustedActionApplication
+from bscli.core.task_plan_validation import (
+    TaskPlanStepInput,
+    serialize_task_plan_steps,
+)
 from bscli.auth.card import TrustedAuthApplication
 from bscli.auth.field_card import TrustedFieldApplication
 from bscli.auth.interactive_browser import TrustedInteractiveBrowserApplication
@@ -1233,10 +1237,13 @@ def create_central_mcp_server(
             "Validate, compile, persist, and start one cross-system task plan bound to the "
             "current AgentTask. The host supplies public capability/transform steps only. "
             "AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at "
-            "most one trusted prepare write sink. Example: oa.workflow.done.list with "
-            "start_date/end_date -> work_items_to_log_draft.v1 using /items -> "
-            "taihua.work_log.create.prepare with /draft bound to content. Never include a "
-            "commit, interaction resume, arbitrary HTTP, or script step."
+            "most one trusted prepare write sink. Every step requires stepKey and kind. A "
+            "capability step uses capabilityName; a transform step uses transformName. "
+            "dependsOn contains earlier stepKey values. bindings maps a target argument to "
+            "{step: sourceStepKey, pointer: /json/path}. Example sequence: "
+            "oa.workflow.done.list -> work_items_to_log_draft.v1, binding items from "
+            "read_done /items. Never include a commit, interaction resume, arbitrary HTTP, "
+            "or script step."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -1250,7 +1257,7 @@ def create_central_mcp_server(
         ctx: Context,
         goal: Annotated[str, Field(min_length=1, max_length=500)],
         steps: Annotated[
-            list[dict[str, Any]],
+            list[TaskPlanStepInput],
             Field(min_length=1, max_length=12),
         ],
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -1258,7 +1265,7 @@ def create_central_mcp_server(
         proposal = {
             "schemaVersion": "agentbridge.task-plan.proposal.v1",
             "goal": goal,
-            "steps": steps,
+            "steps": serialize_task_plan_steps(steps),
         }
         required_scopes = await asyncio.to_thread(
             service.task_plan_required_scopes,
