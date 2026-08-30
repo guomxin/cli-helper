@@ -574,6 +574,7 @@ class WorkspaceApplication:
                     "idempotencyKey": dispatch["idempotency_key"],
                     "requestMessage": message.get("text") or "",
                     "attemptCount": dispatch["attempt_count"],
+                    "retryCount": dispatch["retry_count"],
                     "createdAt": dispatch["created_at"],
                     "updatedAt": dispatch["updated_at"],
                     "deadlineAt": dispatch["deadline_at"],
@@ -736,11 +737,15 @@ class WorkspaceApplication:
                         or "started",
                     )
                     accepted = True
-                    if dispatch["attempt_count"] > 1:
+                    recovery_attempts = dispatch["retry_count"] + max(
+                        dispatch["attempt_count"] - 1,
+                        0,
+                    )
+                    if recovery_attempts:
                         self._record_gateway_recovery(
                             account=account,
                             effective_key=dispatch["idempotency_key"],
-                            attempt=dispatch["attempt_count"] - 1,
+                            attempt=recovery_attempts,
                             status="succeeded",
                         )
                     continue
@@ -858,9 +863,9 @@ class WorkspaceApplication:
         return str(entry["text"]), attachments
 
     def _defer_dispatch(self, dispatch: dict, error_code: str) -> None:
-        attempt = max(int(dispatch.get("attempt_count") or 0), 0)
+        retry_count = max(int(dispatch.get("retry_count") or 0), 0)
         delay = _HOST_DISPATCH_RETRY_DELAYS[
-            min(max(attempt - 1, 0), len(_HOST_DISPATCH_RETRY_DELAYS) - 1)
+            min(retry_count, len(_HOST_DISPATCH_RETRY_DELAYS) - 1)
         ]
         updated = self.store.mark_host_dispatch_waiting(
             dispatch["dispatch_id"],

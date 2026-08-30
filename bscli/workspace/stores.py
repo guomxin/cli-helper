@@ -175,6 +175,7 @@ class WorkspaceStore:
                     state TEXT NOT NULL,
                     accepted_run_id TEXT,
                     attempt_count INTEGER NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
                     request_sent_at TEXT,
                     next_attempt_at TEXT NOT NULL,
                     deadline_at TEXT NOT NULL,
@@ -211,6 +212,17 @@ class WorkspaceStore:
                 ON agent_host_dispatch_events (dispatch_id, sequence);
                 """
             )
+            dispatch_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(agent_host_dispatches)"
+                )
+            }
+            if "retry_count" not in dispatch_columns:
+                connection.execute(
+                    "ALTER TABLE agent_host_dispatches "
+                    "ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+                )
 
     def start_link(self) -> dict:
         now = self._now()
@@ -933,9 +945,10 @@ class WorkspaceStore:
                     host_binding_ref, origin_endpoint_id, conversation_ref,
                     message_key, payload_hash, idempotency_key,
                     attachment_refs_json, state, attempt_count,
-                    next_attempt_at, deadline_at, had_tool_activity,
+                    retry_count, next_attempt_at, deadline_at,
+                    had_tool_activity,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, 0,
                           ?, ?, 0, ?, ?)
                 """,
                 (
@@ -1314,7 +1327,8 @@ class WorkspaceStore:
                 connection.execute(
                     """
                     UPDATE agent_host_dispatches
-                    SET state = 'waiting_host', next_attempt_at = ?,
+                    SET state = 'waiting_host', retry_count = retry_count + 1,
+                        next_attempt_at = ?,
                         claim_owner = NULL, claim_token = NULL,
                         claim_expires_at = NULL, last_error_code = ?,
                         request_sent_at = NULL, updated_at = ?
@@ -1746,6 +1760,7 @@ def _host_dispatch_from_row(row: sqlite3.Row) -> dict:
         "state": row["state"],
         "accepted_run_id": row["accepted_run_id"],
         "attempt_count": int(row["attempt_count"]),
+        "retry_count": int(row["retry_count"]),
         "request_sent_at": row["request_sent_at"],
         "next_attempt_at": row["next_attempt_at"],
         "deadline_at": row["deadline_at"],

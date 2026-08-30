@@ -572,6 +572,7 @@ class WorkspaceStoreTests(unittest.TestCase):
             self.assertFalse(reused)
             self.assertTrue(reused_again)
             self.assertEqual(created["dispatch_id"], same["dispatch_id"])
+            self.assertEqual(created["retry_count"], 0)
             with self.assertRaisesRegex(
                 WorkspaceConflictError,
                 "IDEMPOTENCY_PAYLOAD_MISMATCH",
@@ -614,6 +615,52 @@ class WorkspaceStoreTests(unittest.TestCase):
 
 
 class WorkspaceApplicationTests(unittest.TestCase):
+    def test_pre_accept_readiness_deferrals_use_persistent_backoff(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            account = _create_account(
+                service,
+                user_subject="user-a",
+                username="alice",
+                endpoint_key="telegram:*:alice",
+            )
+            clock = MutableClock()
+            service.workspace.clock = clock
+            dispatch, _ = service.workspace.create_host_dispatch(
+                account_id=account["account_id"],
+                user_subject=account["user_subject"],
+                agent_host="openclaw",
+                host_binding_ref=account["endpoint_key"],
+                origin_endpoint_id=account["endpoint_id"],
+                conversation_ref=account["openclaw_session_key"],
+                message_key="workspace:user:backoff-1",
+                payload_hash="a" * 64,
+                idempotency_key="backoff-1",
+            )
+            app = WorkspaceApplication(service=service, gateway=None)
+
+            for retry_count, expected_delay in enumerate((1, 2, 3), 1):
+                claimed = service.workspace.claim_next_host_dispatch(
+                    account_id=account["account_id"],
+                    claim_owner="test-worker",
+                )
+                self.assertIsNotNone(claimed)
+                started_at = clock.value
+                app._defer_dispatch(claimed, "GATEWAY_CONNECTION_FAILED")
+                dispatch = service.workspace.get_host_dispatch(
+                    dispatch["dispatch_id"]
+                )
+                next_attempt_at = datetime.fromisoformat(
+                    dispatch["next_attempt_at"].replace("Z", "+00:00")
+                )
+                self.assertEqual(dispatch["retry_count"], retry_count)
+                self.assertEqual(dispatch["attempt_count"], 0)
+                self.assertEqual(
+                    next_attempt_at - started_at,
+                    timedelta(seconds=expected_delay),
+                )
+                clock.value = next_attempt_at + timedelta(milliseconds=1)
+
     def test_workspace_images_reject_mime_spoofing_and_oversized_sets(self) -> None:
         png_content = base64.b64encode(b"not-a-png").decode("ascii")
         with self.assertRaisesRegex(ValueError, "does not match"):
@@ -1418,6 +1465,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )[0]
             self.assertEqual(completed["state"], "completed")
             self.assertEqual(completed["attempt_count"], 2)
+            self.assertEqual(completed["retry_count"], 1)
 
     def test_agentbridge_restart_resumes_waiting_dispatch(self) -> None:
         class OfflineGateway(FakeGateway):
