@@ -554,7 +554,7 @@ class TaskHubStore:
         *,
         max_age_minutes: int = ORPHAN_TASK_MAX_AGE_MINUTES,
     ) -> int:
-        """Expire stale task rows that never reached an operation or interaction."""
+        """Expire stale task rows that have no remaining user action."""
         cutoff = _utc_before(minutes=max_age_minutes)
         cursor = connection.execute(
             """
@@ -586,7 +586,44 @@ class TaskHubStore:
             """,
             (cutoff,),
         )
-        return max(int(cursor.rowcount or 0), 0)
+        expired = max(int(cursor.rowcount or 0), 0)
+        operations_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'operations'
+            """
+        ).fetchone()
+        if operations_table is None:
+            return expired
+        cursor = connection.execute(
+            """
+            UPDATE agent_tasks
+            SET status = 'expired',
+                version = version + 1,
+                finished_at = COALESCE(finished_at, updated_at)
+            WHERE status = 'waiting_user'
+              AND updated_at <= ?
+              AND current_operation_id IS NOT NULL
+              AND current_interaction_id IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM operations
+                  WHERE operations.operation_id =
+                        agent_tasks.current_operation_id
+                    AND operations.status = 'requires_user_action'
+                    AND operations.finished_at IS NOT NULL
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_interactions
+                  WHERE task_interactions.task_id = agent_tasks.task_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_batches
+                  WHERE task_batches.parent_task_id = agent_tasks.task_id
+              )
+            """,
+            (cutoff,),
+        )
+        return expired + max(int(cursor.rowcount or 0), 0)
 
     @staticmethod
     def _reconcile_pull_based_deliveries(

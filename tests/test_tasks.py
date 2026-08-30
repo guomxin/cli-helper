@@ -664,6 +664,85 @@ class TaskHubStoreTests(unittest.TestCase):
             ["task.created"],
         )
 
+    def test_expires_stale_waiting_task_without_actionable_interaction(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        operation_store = OperationStore(self.store.db_path)
+        operation, _ = operation_store.create(
+            user_subject="user-a",
+            capability_name="smartlight.system.overview",
+            capability_version="1.0.0",
+            input_summary={},
+        )
+        operation = operation_store.mark_requires_user_action(
+            operation["operation_id"],
+            code="LOGIN_REQUIRED",
+            message="Login required.",
+            next_action={"type": "session_login", "system": "smartlight"},
+        )
+        waiting = self.store.link_operation(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            operation=operation,
+        )
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET created_at = '2000-01-01T00:00:00+00:00',
+                    updated_at = '2000-01-01T00:00:00+00:00'
+                WHERE task_id = ?
+                """,
+                (task["task_id"],),
+            )
+
+        self.assertEqual(waiting["status"], "waiting_user")
+        reopened = TaskHubStore(self.store.db_path)
+        expired = reopened.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertEqual(expired["status"], "expired")
+        self.assertEqual(expired["current_operation_id"], operation["operation_id"])
+
+    def test_keeps_stale_waiting_task_with_actionable_interaction(self):
+        endpoint, _ = self._endpoint()
+        task, _ = self._task(endpoint["endpoint_id"])
+        self.store.link_interaction(
+            task_id=task["task_id"],
+            user_subject="user-a",
+            interaction_record={
+                "interaction_id": "interaction-pending",
+                "user_subject": "user-a",
+            },
+            interaction={
+                "interactionId": "interaction-pending",
+                "type": "execution_authorization",
+                "state": "pending",
+            },
+        )
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks
+                SET created_at = '2000-01-01T00:00:00+00:00',
+                    updated_at = '2000-01-01T00:00:00+00:00'
+                WHERE task_id = ?
+                """,
+                (task["task_id"],),
+            )
+
+        reopened = TaskHubStore(self.store.db_path)
+        waiting = reopened.get_task(
+            task["task_id"],
+            user_subject="user-a",
+        )
+        self.assertEqual(waiting["status"], "waiting_user")
+        self.assertEqual(
+            waiting["current_interaction_id"],
+            "interaction-pending",
+        )
+
     def test_central_service_finishes_unreferenced_host_tasks(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),
