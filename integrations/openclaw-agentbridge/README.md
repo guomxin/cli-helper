@@ -4,7 +4,10 @@
 OpenClaw。它是宿主兼容层，不包含协同办公、泰华、语雀或照明系统的业务实现，也不修改
 OpenClaw 核心源码。
 
-当前版本：`0.4.70`
+当前版本：`0.4.71`
+
+可信卡片的只读状态查询遇到可重试网络错误时，在原有等待期限内退避重试；不会重放业务提交。
+宿主运行状态日志保留清洗后的传输错误码，用于区分证书、连接和响应故障。
 
 兼容基线：OpenClaw `2026.7.1`
 完整身份设计见 [智能体宿主多用户身份路由](../../docs/架构设计/智能体宿主多用户身份路由.md)。
@@ -72,7 +75,7 @@ openclaw gateway status --deep --require-rpc --json
 日志核对实际版本：
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.70, ...)
+AgentBridge interaction plugin registered (version=0.4.71, ...)
 ```
 
 Windows 托管的 Gateway 重启可能超过两分钟。命令调用方超时不代表后台重启失败：

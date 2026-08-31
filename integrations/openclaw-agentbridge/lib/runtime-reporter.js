@@ -52,7 +52,7 @@ export function createHostRuntimeReporter({
         transportErrorCount += 1;
         lastErrorCode = safeErrorCode(error);
         logger?.warn?.(
-          `AgentBridge host runtime snapshot failed for ${binding.label || binding.key} (${lastErrorCode})`,
+          `AgentBridge host runtime snapshot failed for ${binding.label || binding.key} (${lastErrorCode}; transport=${safeErrorCode({ code: error.transportCode })})`,
         );
         results.push({ bindingKey: binding.key, errorCode: lastErrorCode });
       }

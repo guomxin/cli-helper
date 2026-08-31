@@ -1589,7 +1589,8 @@ function upsertTaskCardVariant(
   const status = document.createElement("span");
   status.className =
     `application-card-status ${escapeClass(cardStatus)}`;
-  status.textContent = statusLabel(cardStatus);
+  const completedInteraction = completedInteractionPresentation(interaction);
+  status.textContent = completedInteraction?.label || statusLabel(cardStatus);
   header.append(heading, status);
   card.append(header);
 
@@ -1598,9 +1599,11 @@ function upsertTaskCardVariant(
   const interactionActive =
     interaction &&
     ["pending", "processing"].includes(interaction.state);
-  description.textContent = interactionActive
-    ? interaction.message || taskCardStatusMessage(cardStatus, task.summary)
-    : taskCardStatusMessage(cardStatus, task.summary);
+  description.textContent = completedInteraction?.message || (
+    interactionActive
+      ? interaction.message || taskCardStatusMessage(cardStatus, task.summary)
+      : taskCardStatusMessage(cardStatus, task.summary)
+  );
   card.append(description);
 
   const facts = document.createElement("dl");
@@ -1655,6 +1658,23 @@ function upsertTaskCardVariant(
   actions.append(progress);
   card.append(actions);
   return nearBottom;
+}
+
+function completedInteractionPresentation(interaction) {
+  if (interaction?.state !== "completed") return null;
+  if (interaction.type === "business_input") {
+    return {
+      label: "字段已提交",
+      message: "字段核对已完成，不代表业务已提交；请查看后续授权卡和任务进度。",
+    };
+  }
+  if (interaction.type === "credential") {
+    return {
+      label: "认证已完成",
+      message: "认证步骤已完成，原任务结果请查看后续消息和任务进度。",
+    };
+  }
+  return null;
 }
 
 function taskCardStatusForInteraction(state, fallback) {

@@ -1420,10 +1420,14 @@ export class InteractionCoordinator {
     let consecutiveErrors = 0;
 
     while (!signal.aborted && this.now() < deadline) {
-      await this.sleep(this.config.pollIntervalSeconds * 1000, signal);
+      const intervalMs = consecutiveErrors >= MAX_POLL_ERRORS
+        ? Math.max(this.config.pollIntervalSeconds * 1000, 30_000)
+        : this.config.pollIntervalSeconds * 1000;
+      await this.sleep(Math.min(intervalMs, Math.max(0, deadline - this.now())), signal);
       if (signal.aborted) {
         return;
       }
+      if (this.now() >= deadline) break;
       let response;
       try {
         response = await record.mcpClient.callTool(
@@ -1431,10 +1435,21 @@ export class InteractionCoordinator {
           { interaction_id: record.interaction.interactionId },
           { signal },
         );
+        if (consecutiveErrors >= MAX_POLL_ERRORS) {
+          this.api.logger.info("AgentBridge trusted interaction polling recovered");
+        }
         consecutiveErrors = 0;
       } catch (error) {
         consecutiveErrors += 1;
         if (consecutiveErrors >= MAX_POLL_ERRORS) {
+          if (error?.retryable === true) {
+            if (consecutiveErrors === MAX_POLL_ERRORS) {
+              this.api.logger.warn(
+                `AgentBridge trusted interaction polling is backing off (${safeErrorCode(error)}; transport=${safeErrorCode({ code: error.transportCode })})`,
+              );
+            }
+            continue;
+          }
           await this.notify(record, "poll_failed", safeErrorCode(error));
           return;
         }

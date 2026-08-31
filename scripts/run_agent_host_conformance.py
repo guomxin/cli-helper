@@ -139,7 +139,7 @@ def main() -> int:
         "generatedAt": generated_at.isoformat(),
         "passed": passed,
         "hosts": [
-            {"name": "openclaw", "version": "0.4.70"},
+            {"name": "openclaw", "version": "0.4.71"},
             {"name": "reference-host", "version": "0.1.0"},
         ],
         "contractDigest": _contract_digest(),
