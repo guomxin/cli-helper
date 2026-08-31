@@ -615,8 +615,9 @@ class TaskPlanStore:
             rows = connection.execute(
                 """
                 SELECT * FROM task_plans
-                WHERE state IN ('validated', 'running')
-                ORDER BY updated_at, created_at
+                WHERE state IN ('validated', 'running', 'waiting_user')
+                ORDER BY CASE WHEN state = 'waiting_user' THEN 1 ELSE 0 END,
+                         updated_at, created_at
                 LIMIT ?
                 """,
                 (limit,),

@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from bscli.core.capability import CapabilityRegistry, CapabilitySpec
+from bscli.core.central_service import CentralCapabilityService
 from bscli.core.operations import OperationStore
 from bscli.core.task_plan_runtime import TaskPlanRuntime
 from bscli.core.task_plan_validation import validate_and_compile_task_plan
@@ -44,6 +45,12 @@ class FakeTaskHub:
 
     def cancel_task(self, **values):
         return {}
+
+    def task_id_for_interaction(self, *_args, **_kwargs):
+        return "task-1"
+
+    def get_batch_for_task(self, **_kwargs):
+        return None
 
 
 class FakePlanService:
@@ -347,6 +354,66 @@ class TaskPlanRuntimeTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "succeeded")
         self.assertEqual(len(self.service.tasks.events), event_count)
+
+    def test_polling_declined_interaction_cancels_plan_without_resume(self):
+        plan = self.create_plan(include_sink=True)
+        waiting = self.runtime.start(plan["plan_id"], user_subject="user-1")
+        self.service.interaction["state"] = "declined"
+        self.service.task_plan_runtime = self.runtime
+
+        for _ in range(2):
+            CentralCapabilityService.get_interaction(
+                self.service,
+                user_subject="user-1",
+                interaction_id=waiting["interaction"]["interactionId"],
+            )
+
+        stored = self.plans.get(plan["plan_id"], user_subject="user-1")
+        self.assertEqual(stored["state"], "canceled")
+        self.assertEqual(stored["steps"][-1]["state"], "canceled")
+        self.assertEqual(self.service.source_calls, 1)
+        self.assertEqual(sum(e["event_type"] == "plan.canceled" for e in self.service.tasks.events), 1)
+
+    def assert_terminal_recovery(self, state):
+        plan = self.create_plan(include_sink=True)
+        self.runtime.start(plan["plan_id"], user_subject="user-1")
+        self.service.interaction["state"] = state
+        restarted = TaskPlanRuntime(
+            service=self.service, plans=self.plans, transforms=self.transforms
+        )
+
+        result = restarted.recover()
+
+        stored = self.plans.get(plan["plan_id"], user_subject="user-1")
+        expected = "canceled" if state == "declined" else "failed"
+        self.assertEqual(stored["state"], expected)
+        self.assertEqual(result[expected], 1)
+        self.assertEqual(self.service.source_calls, 1)
+        self.assertTrue(all(s["attempt_count"] == 1 for s in stored["steps"]))
+
+    def test_recovery_reconciles_declined_interaction(self):
+        self.assert_terminal_recovery("declined")
+
+    def test_recovery_reconciles_expired_interaction(self):
+        self.assert_terminal_recovery("expired")
+
+    def test_recovery_reconciles_failed_interaction(self):
+        self.assert_terminal_recovery("failed")
+
+    def test_recovery_reconciles_superseded_interaction(self):
+        self.assert_terminal_recovery("superseded")
+
+    def test_recovery_does_not_consume_pending_or_completed_authorization(self):
+        plan = self.create_plan(include_sink=True)
+        self.runtime.start(plan["plan_id"], user_subject="user-1")
+        for state in ("pending", "completed"):
+            with self.subTest(state=state):
+                self.service.interaction["state"] = state
+                self.service.interaction["resume"] = {"ready": True, "completed": False}
+                result = self.runtime.recover()
+                self.assertEqual(result["waiting"], 1)
+                self.assertEqual(self.service.source_calls, 1)
+                self.assertEqual(self.plans.get(plan["plan_id"], user_subject="user-1")["state"], "waiting_user")
 
 
 if __name__ == "__main__":

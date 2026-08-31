@@ -1642,6 +1642,11 @@ class CentralCapabilityService:
                 "failed",
                 "superseded",
             }:
+                self.task_plan_runtime.handle_terminal_interaction(
+                    user_subject=user_subject,
+                    interaction_id=interaction_id,
+                    interaction_state=interaction["state"],
+                )
                 batch = self.tasks.get_batch_for_task(
                     parent_task_id=task_id,
                     user_subject=user_subject,

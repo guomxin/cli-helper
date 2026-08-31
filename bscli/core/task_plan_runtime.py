@@ -163,6 +163,12 @@ class TaskPlanRuntime:
             plan = self.plans.get(plan["plan_id"], user_subject=user_subject)
             if plan["state"] not in ACTIVE_PLAN_STATES:
                 return self._plan_result(plan)
+            if interaction_state == "declined":
+                return self.cancel(
+                    plan["plan_id"],
+                    user_subject=user_subject,
+                    reason="interaction_declined",
+                )
             state = "failed"
             error_code = {
                 "declined": "INTERACTION_DECLINED",
@@ -218,6 +224,7 @@ class TaskPlanRuntime:
             "restarted": 0,
             "waiting": 0,
             "completed": 0,
+            "canceled": 0,
             "failed": 0,
             "deferred": 0,
             "issues": [],
@@ -230,6 +237,38 @@ class TaskPlanRuntime:
                     plan = self.plans.get(
                         plan_id, user_subject=candidate["user_subject"]
                     )
+                    if plan["state"] == "waiting_user":
+                        step = next(
+                            (
+                                item for item in plan["steps"]
+                                if item["state"] == "waiting_user"
+                            ),
+                            None,
+                        )
+                        if step is not None and step.get("interaction_id"):
+                            _record, _resource, interaction = self.service._load_interaction(
+                                user_subject=plan["user_subject"],
+                                interaction_id=step["interaction_id"],
+                            )
+                            if interaction["state"] in {
+                                "declined", "expired", "failed", "superseded"
+                            }:
+                                result = self.handle_terminal_interaction(
+                                    user_subject=plan["user_subject"],
+                                    interaction_id=step["interaction_id"],
+                                    interaction_state=interaction["state"],
+                                )
+                                if result is not None:
+                                    outcome = (
+                                        "canceled"
+                                        if result["status"] == "canceled"
+                                        else "failed"
+                                    )
+                                    summary[outcome] += 1
+                                    continue
+                        # Reconciliation never consumes an approval or replays a write.
+                        summary["waiting"] += 1
+                        continue
                     if plan["state"] not in {"validated", "running"}:
                         summary["deferred"] += 1
                         continue
