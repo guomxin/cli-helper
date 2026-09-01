@@ -33,20 +33,30 @@ $task = New-ScheduledTask `
     -Description "Keeps AgentBridge Workspace connected to the local OpenClaw Gateway across IP and network changes."
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $wasRunning = $existing -and $existing.State -eq "Running"
+if ($wasRunning) {
+    Stop-ScheduledTask -TaskName $TaskName
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 500
+        $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    } while ($existing -and $existing.State -eq "Running" -and
+        [DateTimeOffset]::UtcNow -lt $deadline)
+}
+
+$scriptMarker = "-File `"$tunnelScript`""
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" `
+    -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*$scriptMarker*" } |
+    ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
 Register-ScheduledTask `
     -TaskName $TaskName `
     -InputObject $task `
     -Force `
     -ErrorAction Stop | Out-Null
 if (-not $NoStart) {
-    if ($wasRunning) {
-        Stop-ScheduledTask -TaskName $TaskName
-        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
-        do {
-            Start-Sleep -Milliseconds 500
-            $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        } while ($existing -and $existing.State -eq "Running" -and [DateTimeOffset]::UtcNow -lt $deadline)
-    }
 
     $forwardMarker = "-R 127.0.0.1:18789:127.0.0.1:18789"
     Get-CimInstance Win32_Process -Filter "Name = 'ssh.exe'" `

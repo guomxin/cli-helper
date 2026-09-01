@@ -8,6 +8,8 @@ param(
     [int]$RemotePort = 18789,
     [int]$ReconnectDelaySeconds = 5,
     [int]$NetworkPollSeconds = 2,
+    [int]$ResumeGapThresholdSeconds = 60,
+    [int]$StatusHeartbeatSeconds = 15,
     [switch]$Once
 )
 
@@ -27,6 +29,12 @@ if ($ReconnectDelaySeconds -lt 1 -or $ReconnectDelaySeconds -gt 300) {
 }
 if ($NetworkPollSeconds -lt 1 -or $NetworkPollSeconds -gt 30) {
     throw "NetworkPollSeconds is invalid"
+}
+if ($ResumeGapThresholdSeconds -lt 5 -or $ResumeGapThresholdSeconds -gt 300) {
+    throw "ResumeGapThresholdSeconds is invalid"
+}
+if ($StatusHeartbeatSeconds -lt 5 -or $StatusHeartbeatSeconds -gt 300) {
+    throw "StatusHeartbeatSeconds is invalid"
 }
 foreach ($path in @($IdentityFile, $KnownHostsFile)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -49,6 +57,9 @@ $logRoot = Join-Path $stateRoot "logs"
 $statusPath = Join-Path $stateRoot "workspace-tunnel-status.json"
 $statusTempPath = "$statusPath.tmp"
 $sshErrorPath = Join-Path $logRoot "workspace-tunnel-ssh.log"
+$sshAttemptErrorPath = Join-Path $logRoot "workspace-tunnel-ssh-$PID.attempt.log"
+$consecutiveFailures = 0
+$lastConnectedAt = $null
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 
 function Write-TunnelStatus {
@@ -69,6 +80,10 @@ function Write-TunnelStatus {
         localPort = $LocalPort
         remotePort = $RemotePort
         reason = $Reason
+        resumeGapThresholdSeconds = $ResumeGapThresholdSeconds
+        statusHeartbeatSeconds = $StatusHeartbeatSeconds
+        consecutiveFailures = $consecutiveFailures
+        lastConnectedAt = $lastConnectedAt
         businessCalls = 0
         businessListReads = 0
         businessWrites = 0
@@ -79,6 +94,53 @@ function Write-TunnelStatus {
         [Text.UTF8Encoding]::new($false)
     )
     Move-Item -LiteralPath $statusTempPath -Destination $statusPath -Force
+}
+
+function Complete-SshAttemptLog {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Nullable[int]]$ExitCode = $null
+    )
+
+    $detail = ""
+    if (Test-Path -LiteralPath $sshAttemptErrorPath -PathType Leaf) {
+        $detail = (Get-Content -LiteralPath $sshAttemptErrorPath -Raw).Trim()
+    }
+    $reason = if ($detail -match
+        'remote port forwarding failed|Address already in use|cannot listen to port') {
+        "remote_forward_conflict"
+    }
+    elseif ($detail -match 'Permission denied|Authentication failed') {
+        "authentication_failed"
+    }
+    elseif ($detail -match
+        'Connection timed out|Connection refused|No route to host|Network is unreachable') {
+        "network_unreachable"
+    }
+    else {
+        "ssh_exited"
+    }
+
+    if ((Test-Path -LiteralPath $sshErrorPath) -and
+        (Get-Item -LiteralPath $sshErrorPath).Length -gt 1MB) {
+        Move-Item -LiteralPath $sshErrorPath `
+            -Destination (Join-Path $logRoot "workspace-tunnel-ssh.1.log") `
+            -Force
+    }
+    $header = "{0} pid={1} exit={2} reason={3}" -f (
+        [DateTimeOffset]::UtcNow.ToString("o"),
+        $ProcessId,
+        $(if ($null -eq $ExitCode) { "unknown" } else { $ExitCode }),
+        $reason
+    )
+    Add-Content -LiteralPath $sshErrorPath -Value $header -Encoding utf8
+    if ($detail) {
+        Add-Content -LiteralPath $sshErrorPath -Value $detail -Encoding utf8
+    }
+    if (Test-Path -LiteralPath $sshAttemptErrorPath) {
+        Remove-Item -LiteralPath $sshAttemptErrorPath -Force
+    }
+    return $reason
 }
 
 function Get-NetworkFingerprint {
@@ -163,21 +225,38 @@ try {
             continue
         }
 
-        if (Test-Path -LiteralPath $sshErrorPath) {
-            Remove-Item -LiteralPath $sshErrorPath -Force
+        if (Test-Path -LiteralPath $sshAttemptErrorPath) {
+            Remove-Item -LiteralPath $sshAttemptErrorPath -Force
         }
         $sshProcess = Start-Process `
             -FilePath $ssh.Source `
             -ArgumentList $arguments `
             -NoNewWindow `
-            -RedirectStandardError $sshErrorPath `
+            -RedirectStandardError $sshAttemptErrorPath `
             -PassThru
         Write-TunnelStatus -State "connection_started" `
             -SshProcessId $sshProcess.Id
         $networkFingerprint = Get-NetworkFingerprint
         $connectedReported = $false
         $networkChanged = $false
+        $resumeDetected = $false
+        $lastPollAt = [DateTimeOffset]::UtcNow
+        $lastStatusHeartbeatAt = $lastPollAt
         while (-not $sshProcess.WaitForExit($NetworkPollSeconds * 1000)) {
+            $observedAt = [DateTimeOffset]::UtcNow
+            $pollGapSeconds = ($observedAt - $lastPollAt).TotalSeconds
+            $lastPollAt = $observedAt
+            if ($pollGapSeconds -gt $ResumeGapThresholdSeconds) {
+                $resumeDetected = $true
+                Write-TunnelStatus -State "resume_detected" `
+                    -SshProcessId $sshProcess.Id `
+                    -Reason "system_resume_or_long_pause"
+                Stop-Process -Id $sshProcess.Id -Force -ErrorAction SilentlyContinue
+                if (-not $sshProcess.HasExited) {
+                    $sshProcess.WaitForExit()
+                }
+                break
+            }
             $currentFingerprint = Get-NetworkFingerprint
             if ($currentFingerprint -ne $networkFingerprint) {
                 $networkChanged = $true
@@ -191,18 +270,41 @@ try {
                 break
             }
             if (-not $connectedReported) {
+                $consecutiveFailures = 0
+                $lastConnectedAt = [DateTimeOffset]::UtcNow.ToString("o")
                 Write-TunnelStatus -State "connected" `
                     -SshProcessId $sshProcess.Id
                 $connectedReported = $true
+                $lastStatusHeartbeatAt = [DateTimeOffset]::UtcNow
+            }
+            elseif (($observedAt - $lastStatusHeartbeatAt).TotalSeconds -ge
+                $StatusHeartbeatSeconds) {
+                Write-TunnelStatus -State "connected" `
+                    -SshProcessId $sshProcess.Id
+                $lastStatusHeartbeatAt = $observedAt
             }
         }
-        $exitCode = $sshProcess.ExitCode
+        $sshProcess.WaitForExit()
+        $exitCode = [int]$sshProcess.ExitCode
+        $sshExitReason = Complete-SshAttemptLog `
+            -ProcessId $sshProcess.Id `
+            -ExitCode $exitCode
+        $consecutiveFailures++
+        $exitReason = if ($resumeDetected) {
+            "system_resume_or_long_pause"
+        }
+        elseif ($networkChanged) {
+            "active_network_changed"
+        }
+        else {
+            $sshExitReason
+        }
         Write-TunnelStatus -State "connection_exited" `
             -SshProcessId $sshProcess.Id `
             -ExitCode $exitCode `
-            -Reason $(if ($networkChanged) { "active_network_changed" } else { "ssh_exited" })
+            -Reason $exitReason
         if ($Once) { exit $exitCode }
-        $delaySeconds = if ($networkChanged) {
+        $delaySeconds = if ($networkChanged -or $resumeDetected) {
             [Math]::Min(2, $ReconnectDelaySeconds)
         }
         else {

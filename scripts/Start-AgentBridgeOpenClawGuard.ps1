@@ -4,6 +4,7 @@ param(
     [ValidateRange(5, 300)][int]$IntervalSeconds = 15,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
     [ValidateRange(30, 600)][int]$GatewayStartupGraceSeconds = 180,
+    [ValidateRange(30, 600)][int]$TunnelStatusMaxAgeSeconds = 60,
     [string]$GatewayLifecycleScript = "",
     [switch]$Once
 )
@@ -29,6 +30,7 @@ $stateRoot = Join-Path $env:LOCALAPPDATA "AgentBridge"
 $logRoot = Join-Path $stateRoot "logs"
 $statusPath = Join-Path $stateRoot "openclaw-guard-status.json"
 $statusTempPath = "$statusPath.tmp"
+$tunnelStatusPath = Join-Path $stateRoot "workspace-tunnel-status.json"
 $logPath = Join-Path $logRoot "openclaw-guard.log"
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 
@@ -53,6 +55,68 @@ function Test-GatewayListener {
         Get-NetTCPConnection -State Listen -LocalPort $GatewayPort `
             -ErrorAction SilentlyContinue
     ).Count -gt 0
+}
+
+function Get-TunnelStatus {
+    if (-not (Test-Path -LiteralPath $tunnelStatusPath -PathType Leaf)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $tunnelStatusPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Stop-RecordedTunnelProcess {
+    param([Parameter(Mandatory = $true)]$TunnelStatus)
+
+    if (-not $TunnelStatus.sshProcessId) { return $false }
+    $candidate = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $([int]$TunnelStatus.sshProcessId)" `
+        -ErrorAction SilentlyContinue
+    if (-not $candidate -or $candidate.Name -ne "ssh.exe") { return $false }
+    $forwardMarker = "-R 127.0.0.1:$($TunnelStatus.remotePort):127.0.0.1:$($TunnelStatus.localPort)"
+    $targetMarker = "@$($TunnelStatus.hostName)"
+    if ($candidate.CommandLine -notlike "*$forwardMarker*" -or
+        $candidate.CommandLine -notlike "*$targetMarker*") {
+        return $false
+    }
+    Stop-Process -Id $candidate.ProcessId -Force -ErrorAction Stop
+    return $true
+}
+
+function Stop-RecordedTunnelWrapperProcess {
+    param([Parameter(Mandatory = $true)]$TunnelStatus)
+
+    if (-not $TunnelStatus.processId) { return $false }
+    $candidate = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $([int]$TunnelStatus.processId)" `
+        -ErrorAction SilentlyContinue
+    if (-not $candidate -or $candidate.Name -ne "powershell.exe" -or
+        $candidate.CommandLine -notlike "*Start-AgentBridgeWorkspaceTunnel.ps1*") {
+        return $false
+    }
+    Stop-Process -Id $candidate.ProcessId -Force -ErrorAction Stop
+    return $true
+}
+
+function Restart-TunnelTask {
+    param($TunnelStatus)
+
+    Stop-ScheduledTask -TaskName $TunnelTaskName -ErrorAction SilentlyContinue
+    if ($TunnelStatus) {
+        [void](Stop-RecordedTunnelProcess -TunnelStatus $TunnelStatus)
+        [void](Stop-RecordedTunnelWrapperProcess -TunnelStatus $TunnelStatus)
+    }
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 250
+        $task = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction SilentlyContinue
+    } while ($task -and $task.State -eq "Running" -and
+        [DateTimeOffset]::UtcNow -lt $deadline)
+    Start-ScheduledTask -TaskName $TunnelTaskName
 }
 
 function Get-GatewayProcesses {
@@ -125,6 +189,9 @@ try {
     do {
         $gatewayAction = "none"
         $tunnelAction = "none"
+        $tunnelState = "unknown"
+        $tunnelStatusAgeSeconds = $null
+        $tunnelSshProcessId = $null
         $lastError = $null
         try {
             $listener = @(
@@ -202,6 +269,37 @@ try {
                 $tunnelAction = "start_requested"
                 Write-GuardLog "Workspace tunnel was not running; scheduled task start requested."
             }
+            else {
+                $tunnelStatus = Get-TunnelStatus
+                if (-not $tunnelStatus) {
+                    $tunnelAction = "status_unavailable"
+                }
+                else {
+                    $tunnelState = [string]$tunnelStatus.state
+                    $tunnelSshProcessId = $tunnelStatus.sshProcessId
+                    $tunnelStatusAgeSeconds = [Math]::Round((
+                        [DateTimeOffset]::UtcNow -
+                        [DateTimeOffset]::Parse([string]$tunnelStatus.observedAt)
+                    ).TotalSeconds, 1)
+                    $wrapperAlive = [bool](Get-Process `
+                        -Id ([int]$tunnelStatus.processId) `
+                        -ErrorAction SilentlyContinue)
+                    if (-not $wrapperAlive -or
+                        $tunnelStatusAgeSeconds -gt $TunnelStatusMaxAgeSeconds) {
+                        Restart-TunnelTask -TunnelStatus $tunnelStatus
+                        $tunnelAction = "stale_status_restarted"
+                        Write-GuardLog (
+                            "Workspace tunnel status was stale or orphaned; " +
+                            "task restart requested without touching Gateway."
+                        )
+                    }
+                    elseif ($tunnelState -notin @(
+                        "connected", "existing_tunnel_observed"
+                    )) {
+                        $tunnelAction = "reconnecting"
+                    }
+                }
+            }
         }
         catch {
             $lastError = $_.Exception.GetType().Name
@@ -223,6 +321,10 @@ try {
             observedAt = [DateTimeOffset]::UtcNow.ToString("o")
             gatewayLifecycleScript = $resolvedLifecycleScript
             tunnelTaskName = $TunnelTaskName
+            tunnelState = $tunnelState
+            tunnelStatusAgeSeconds = $tunnelStatusAgeSeconds
+            tunnelStatusMaxAgeSeconds = $TunnelStatusMaxAgeSeconds
+            tunnelSshProcessId = $tunnelSshProcessId
             gatewayListening = Test-GatewayListener
             gatewayProcessCount = @(Get-GatewayProcesses).Count
             gatewayStartupGraceSeconds = $GatewayStartupGraceSeconds

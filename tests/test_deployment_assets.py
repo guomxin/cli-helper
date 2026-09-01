@@ -547,6 +547,15 @@ class DeploymentAssetTests(unittest.TestCase):
         installer = (ROOT / "scripts/Install-AgentBridgeWorkspaceTunnel.ps1").read_text(
             encoding="utf-8"
         )
+        server_installer = (
+            ROOT / "scripts/Install-AgentBridgeWorkspaceTunnelServer.ps1"
+        ).read_text(encoding="utf-8")
+        server_config = (
+            ROOT / "deploy/ssh/agentbridge_workspace_tunnel_sshd.conf"
+        ).read_text(encoding="ascii")
+        guard = (ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1").read_text(
+            encoding="utf-8"
+        )
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
             encoding="utf-8"
         )
@@ -565,13 +574,50 @@ class DeploymentAssetTests(unittest.TestCase):
             "$sshProcess.WaitForExit($NetworkPollSeconds * 1000)",
             '"existing_tunnel_observed"',
             '"workspace-tunnel-status.json"',
-            "-RedirectStandardError $sshErrorPath",
+            "ResumeGapThresholdSeconds",
+            '"resume_detected"',
+            '"system_resume_or_long_pause"',
+            "StatusHeartbeatSeconds",
+            "Complete-SshAttemptLog",
+            '"remote_forward_conflict"',
+            "-RedirectStandardError $sshAttemptErrorPath",
+            "Add-Content -LiteralPath $sshErrorPath",
         ):
             self.assertIn(marker, tunnel)
+        self.assertNotIn("Remove-Item -LiteralPath $sshErrorPath -Force", tunnel)
         self.assertIn("New-ScheduledTaskTrigger -AtLogOn", installer)
         self.assertIn("-WindowStyle Hidden", installer)
         self.assertIn("Get-CimInstance Win32_Process", installer)
         self.assertIn("Stop-Process -Id $_.ProcessId", installer)
+        self.assertLess(
+            installer.index("Stop-ScheduledTask -TaskName $TaskName"),
+            installer.index("Register-ScheduledTask"),
+        )
+        self.assertIn('$scriptMarker = "-File `"$tunnelScript`""', installer)
+        for marker in (
+            "TunnelStatusMaxAgeSeconds",
+            "Get-TunnelStatus",
+            "Stop-RecordedTunnelProcess",
+            "Stop-RecordedTunnelWrapperProcess",
+            '"stale_status_restarted"',
+            "tunnelStatusAgeSeconds",
+            "tunnelSshProcessId",
+        ):
+            self.assertIn(marker, guard)
+        for marker in (
+            "sshd -t",
+            "systemctl reload ssh.service",
+            "systemctl reload sshd.service",
+            "businessWrites = 0",
+        ):
+            self.assertIn(marker, server_installer)
+        for marker in (
+            "Match User root",
+            "ClientAliveInterval 5",
+            "ClientAliveCountMax 2",
+            "Match all",
+        ):
+            self.assertIn(marker, server_config)
         self.assertIn("--workspace-gateway-url ws://127.0.0.1:18789", unit)
         self.assertNotIn("--workspace-gateway-url ws://10.90.20.210:18789", unit)
 

@@ -11,6 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$tunnelInstaller = Join-Path $PSScriptRoot "Install-AgentBridgeWorkspaceTunnel.ps1"
 
 function Wait-Until {
     param(
@@ -63,33 +64,67 @@ function Get-GatewayReadyState {
     return $null
 }
 
+function Get-TunnelReadyStatus {
+    $path = Join-Path $env:LOCALAPPDATA "AgentBridge\workspace-tunnel-status.json"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try {
+        $status = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $age = [DateTimeOffset]::UtcNow -
+            [DateTimeOffset]::Parse([string]$status.observedAt)
+        if ($status.state -ne "connected" -or $age.TotalSeconds -gt 45 -or
+            -not (Get-Process -Id ([int]$status.processId) -ErrorAction SilentlyContinue) -or
+            -not (Get-Process -Id ([int]$status.sshProcessId) -ErrorAction SilentlyContinue)) {
+            return $null
+        }
+        if ($status.businessCalls -ne 0 -or
+            $status.businessListReads -ne 0 -or
+            $status.businessWrites -ne 0) {
+            throw "Workspace tunnel crossed its zero-business boundary"
+        }
+        return [ordered]@{
+            status = $status
+            ageSeconds = [Math]::Round($age.TotalSeconds, 1)
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-LatestAgentBridgePluginRegistration {
     param([DateTimeOffset]$NotBefore)
 
-    $logPath = Join-Path (
-        Join-Path ([IO.Path]::GetTempPath()) "openclaw"
-    ) ("openclaw-{0}.log" -f [DateTime]::Now.ToString("yyyy-MM-dd"))
-    if (-not (Test-Path -LiteralPath $logPath -PathType Leaf)) { return $null }
+    $logRoot = Join-Path ([IO.Path]::GetTempPath()) "openclaw"
+    $logFiles = @(
+        Get-ChildItem -LiteralPath $logRoot -Filter "openclaw-*.log" -File `
+            -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending
+    )
     $registrations = @()
-    foreach ($raw in @(Get-Content -LiteralPath $logPath -Tail 600)) {
-        try { $entry = $raw | ConvertFrom-Json } catch { continue }
-        if (-not $entry.PSObject.Properties["message"] -or
-            -not $entry.PSObject.Properties["time"]) {
-            continue
+    foreach ($logFile in $logFiles) {
+        foreach ($raw in @(Get-Content -LiteralPath $logFile.FullName -Tail 4000)) {
+            try { $entry = $raw | ConvertFrom-Json } catch { continue }
+            if (-not $entry.PSObject.Properties["message"] -or
+                -not $entry.PSObject.Properties["time"]) {
+                continue
+            }
+            if ($entry.message -notmatch
+                'AgentBridge interaction plugin registered \(version=([^,\)]+)') {
+                continue
+            }
+            $version = $Matches[1]
+            $registeredAt = [DateTimeOffset]::Parse([string]$entry.time)
+            if ($registeredAt -lt $NotBefore) { continue }
+            $registrations += [pscustomobject]@{
+                registeredAt = $registeredAt.ToString("o")
+                version = $version
+            }
         }
-        if ($entry.message -notmatch
-            'AgentBridge interaction plugin registered \(version=([^,\)]+)') {
-            continue
-        }
-        $version = $Matches[1]
-        $registeredAt = [DateTimeOffset]::Parse([string]$entry.time)
-        if ($registeredAt -lt $NotBefore) { continue }
-        $registrations += [pscustomobject]@{
-            registeredAt = $registeredAt.ToString("o")
-            version = $version
-        }
+        if ($registrations.Count -gt 0) { break }
     }
-    return $registrations | Select-Object -Last 1
+    return $registrations |
+        Sort-Object registeredAt |
+        Select-Object -Last 1
 }
 
 $tunnelTask = Get-ScheduledTask -TaskName $TunnelTaskName -ErrorAction Stop
@@ -140,6 +175,9 @@ if (-not $tunnelTask.Settings.StartWhenAvailable) {
 $beforeState = Wait-Until -Description "one ready OpenClaw Gateway" -Condition {
     Get-GatewayReadyState
 }
+$tunnelReady = Wait-Until -Description "one connected Workspace tunnel" -Condition {
+    Get-TunnelReadyStatus
+}
 $before = $beforeState.listener
 $pluginNotBefore = [DateTimeOffset]::MinValue
 $failureRecovery = $null
@@ -163,13 +201,15 @@ if ($ExerciseFailureRecovery) {
 }
 
 if ($ExerciseTunnelRestart) {
-    Stop-ScheduledTask -TaskName $TunnelTaskName
-    Start-Sleep -Seconds 2
-    Start-ScheduledTask -TaskName $TunnelTaskName
-    Wait-Until -Description "Workspace tunnel task restart" -Condition {
-        $task = Get-ScheduledTask -TaskName $TunnelTaskName
-        if ($task.State -eq "Running") { $task }
-    } | Out-Null
+    $previousTunnelPid = [int]$tunnelReady.status.processId
+    & $tunnelInstaller | Out-Null
+    $tunnelReady = Wait-Until -Description "Workspace tunnel task restart" -Condition {
+        $candidate = Get-TunnelReadyStatus
+        if ($candidate -and
+            [int]$candidate.status.processId -ne $previousTunnelPid) {
+            $candidate
+        }
+    }
 }
 
 $readyState = Wait-Until -Description "one ready OpenClaw Gateway" -Condition {
@@ -208,6 +248,12 @@ if ($tunnelTask.State -ne "Running") { throw "Workspace tunnel task is not runni
         taskState = $tunnelTask.State.ToString()
         restartPolicy = $tunnelTask.Settings.RestartCount
         restartExercised = [bool]$ExerciseTunnelRestart
+        state = [string]$tunnelReady.status.state
+        wrapperProcessId = [int]$tunnelReady.status.processId
+        sshProcessId = [int]$tunnelReady.status.sshProcessId
+        statusAgeSeconds = $tunnelReady.ageSeconds
+        resumeGapThresholdSeconds = [int]$tunnelReady.status.resumeGapThresholdSeconds
+        statusHeartbeatSeconds = [int]$tunnelReady.status.statusHeartbeatSeconds
     }
     failureRecovery = $failureRecovery
     businessCalls = 0
