@@ -23,11 +23,18 @@ const TERMINAL_STATES = new Set([
   "failed",
   "superseded",
 ]);
+const TERMINAL_TASK_EVENTS = new Set([
+  "task.completed",
+  "task.failed",
+  "task.canceled",
+]);
 const MAX_INTERACTIONS = 100;
+const MAX_TERMINAL_TASKS = 1000;
 const MAX_POLL_ERRORS = 5;
 const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const LOGIN_CONTINUATION_TTL_MS = 5 * 60 * 1000;
+const TERMINAL_TASK_TTL_MS = 30 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
 const QUIET_COMPANION_TASK_EVENTS = new Set([
   "task.created",
@@ -223,6 +230,8 @@ export function createInteractionSharedState() {
     taskContinuations: new Map(),
     taskContinuationChoices: new Map(),
     independentTaskBindings: new Map(),
+    resumeClaims: new Map(),
+    terminalTasks: new Map(),
     identitySessionBindings: new Map(),
     identitySessionEndpoints: new Map(),
   };
@@ -278,6 +287,10 @@ export class InteractionCoordinator {
     this.independentTaskBindings =
       sharedState.independentTaskBindings ||
       (sharedState.independentTaskBindings = new Map());
+    this.resumeClaims =
+      sharedState.resumeClaims || (sharedState.resumeClaims = new Map());
+    this.terminalTasks =
+      sharedState.terminalTasks || (sharedState.terminalTasks = new Map());
   }
 
   recordUserMessage(event, context) {
@@ -903,7 +916,12 @@ export class InteractionCoordinator {
     runId = null,
     mcpClient = null,
   }) {
-    if (!isPrivateSessionKey(sessionKey) || !taskId || !interaction) {
+    if (
+      !isPrivateSessionKey(sessionKey) ||
+      !taskId ||
+      !interaction ||
+      this.isTaskTerminal(taskId)
+    ) {
       return false;
     }
     const existing = this.records.get(interaction.interactionId);
@@ -1014,6 +1032,7 @@ export class InteractionCoordinator {
       if (record.sessionKey === sessionKey) {
         this.abortControllers.get(interactionId)?.abort();
         this.records.delete(interactionId);
+        this.resumeClaims.delete(interactionId);
       }
     }
     for (const [toolCallId, binding] of this.toolBindings) {
@@ -1147,9 +1166,19 @@ export class InteractionCoordinator {
       return 0;
     }
     const endpoint = response?.endpoint;
-    for (const notification of Array.isArray(response?.notifications)
+    const notifications = Array.isArray(response?.notifications)
       ? response.notifications
-      : []) {
+      : [];
+    for (const notification of notifications) {
+      const eventType = safeRoutePart(notification?.event?.eventType);
+      if (TERMINAL_TASK_EVENTS.has(eventType)) {
+        this.markTaskTerminal(
+          notification?.task?.taskId,
+          notification?.event?.payload?.status || eventType,
+        );
+      }
+    }
+    for (const notification of notifications) {
       let delivered = false;
       const sessionKey = endpoint?.conversationRef;
       const route = endpoint?.route;
@@ -1263,13 +1292,12 @@ export class InteractionCoordinator {
         }
       }
     }
-    return Array.isArray(response?.notifications)
-      ? response.notifications.length
-      : 0;
+    return notifications.length;
   }
 
   async restoreWorkspaceInteractionFromNotification(notification, client) {
-    if (!notification?.task?.taskId) {
+    const taskId = safeRoutePart(notification?.task?.taskId);
+    if (!taskId || this.isTaskTerminal(taskId)) {
       return false;
     }
     const sessionKey = safeRoutePart(
@@ -1310,6 +1338,9 @@ export class InteractionCoordinator {
         return false;
       }
     }
+    if (this.isTaskTerminal(taskId)) {
+      return false;
+    }
     const resumableCompleted = Boolean(
       interaction?.state === "completed" &&
         interaction.resume?.ready === true &&
@@ -1330,7 +1361,7 @@ export class InteractionCoordinator {
       threadId: null,
     });
     const restored = await this.restoreRecoveredInteraction({
-      taskId: notification.task.taskId,
+      taskId,
       interaction,
       sessionKey,
       mcpClient: client,
@@ -1487,10 +1518,19 @@ export class InteractionCoordinator {
   }
 
   async resume(record, signal) {
-    if (record.resumeStarted) {
+    const interactionId = record.interaction.interactionId;
+    if (
+      (record.taskId && this.isTaskTerminal(record.taskId)) ||
+      record.resumeStarted ||
+      this.resumeClaims.has(interactionId)
+    ) {
       return false;
     }
     record.resumeStarted = true;
+    this.resumeClaims.set(interactionId, {
+      taskId: record.taskId || null,
+      claimedAt: this.now(),
+    });
     let response;
     try {
       let coordinatorLease = null;
@@ -1505,6 +1545,22 @@ export class InteractionCoordinator {
           },
           { signal, meta: hostContextMeta() },
         );
+        if (
+          leaseResponse?.status === "ignored" &&
+          leaseResponse?.reason === "task_terminal"
+        ) {
+          this.markTaskTerminal(
+            record.taskId,
+            leaseResponse.taskStatus || "terminal",
+          );
+          this.api.logger.info(
+            "AgentBridge ignored stale interaction recovery because the parent task is terminal",
+          );
+          return true;
+        }
+        if (this.isTaskTerminal(record.taskId)) {
+          return true;
+        }
         coordinatorLease = leaseResponse?.coordinatorLease || null;
         if (
           !coordinatorLease ||
@@ -1545,7 +1601,11 @@ export class InteractionCoordinator {
         },
       );
     } catch (error) {
+      if (signal.aborted || (record.taskId && this.isTaskTerminal(record.taskId))) {
+        return true;
+      }
       record.resumeStarted = false;
+      this.resumeClaims.delete(interactionId);
       await this.notify(record, "resume_failed", safeErrorCode(error));
       return false;
     }
@@ -2364,6 +2424,7 @@ export class InteractionCoordinator {
       if (isInteractionExpired(record.interaction, this.now())) {
         this.abortControllers.get(interactionId)?.abort();
         this.records.delete(interactionId);
+        this.resumeClaims.delete(interactionId);
       }
     }
     while (this.records.size > MAX_INTERACTIONS) {
@@ -2373,7 +2434,45 @@ export class InteractionCoordinator {
       }
       this.abortControllers.get(oldest)?.abort();
       this.records.delete(oldest);
+      this.resumeClaims.delete(oldest);
     }
+    const terminalTaskCutoff = this.now() - TERMINAL_TASK_TTL_MS;
+    for (const [taskId, terminal] of this.terminalTasks) {
+      if (terminal.capturedAt <= terminalTaskCutoff) {
+        this.terminalTasks.delete(taskId);
+      }
+    }
+    while (this.terminalTasks.size > MAX_TERMINAL_TASKS) {
+      const oldest = this.terminalTasks.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      this.terminalTasks.delete(oldest);
+    }
+  }
+
+  isTaskTerminal(taskId) {
+    return Boolean(taskId && this.terminalTasks.has(taskId));
+  }
+
+  markTaskTerminal(taskId, status = "terminal") {
+    const normalizedTaskId = safeRoutePart(taskId);
+    if (!normalizedTaskId) {
+      return false;
+    }
+    this.terminalTasks.set(normalizedTaskId, {
+      status: safeRoutePart(status) || "terminal",
+      capturedAt: this.now(),
+    });
+    for (const [interactionId, record] of this.records) {
+      if (record.taskId !== normalizedTaskId) {
+        continue;
+      }
+      this.abortControllers.get(interactionId)?.abort();
+      this.records.delete(interactionId);
+      this.resumeClaims.delete(interactionId);
+    }
+    return true;
   }
 
   prunePreparedDocumentReceipts() {

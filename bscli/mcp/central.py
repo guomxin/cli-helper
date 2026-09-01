@@ -158,6 +158,7 @@ from bscli.core.host_contract import (
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
+from bscli.core.tasks import TERMINAL_TASK_STATUSES
 from bscli.mcp.presentation import (
     MCP_APP_MIME_TYPE,
     MCP_APP_RESOURCE_URI,
@@ -4650,6 +4651,18 @@ def create_central_mcp_server(
             identity=identity,
             minimum_level="L3",
         )
+        task = await asyncio.to_thread(
+            service.tasks.get_task,
+            task_id,
+            user_subject=identity["user_subject"],
+        )
+        if task["status"] in TERMINAL_TASK_STATUSES:
+            return {
+                "status": "ignored",
+                "reason": "task_terminal",
+                "taskStatus": task["status"],
+                "coordinatorLease": None,
+            }
         lease = await asyncio.to_thread(
             service.acquire_host_coordinator_lease,
             user_subject=identity["user_subject"],

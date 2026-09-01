@@ -1675,6 +1675,49 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(response.json()["result"]["isError"])
         service.resume_interaction.assert_not_called()
 
+    def test_terminal_task_does_not_receive_a_new_coordinator_lease(self):
+        host_meta = {
+            "io.agentbridge/host-context": {
+                "version": "1",
+                "agentHost": "openclaw",
+                "hostInstanceId": "openclaw-gateway",
+                "hostVersion": "0.4.72",
+            }
+        }
+        with self._server() as (service, _store, token, client):
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "openclaw-gateway",
+                "agentHost": "openclaw",
+                "hostVersion": "0.4.72",
+                "acceptedLevel": "L3",
+            }
+            service.tasks.get_task.return_value = {
+                "task_id": "task-terminal-1234567890",
+                "status": "succeeded",
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=6106,
+                token=token,
+                params={
+                    "name": "agentbridge_host_coordinator_lease_acquire",
+                    "arguments": {
+                        "task_id": "task-terminal-1234567890",
+                        "lease_seconds": 60,
+                    },
+                    "_meta": host_meta,
+                },
+            )
+
+        result = response.json()["result"]["structuredContent"]
+        self.assertFalse(response.json()["result"]["isError"])
+        self.assertEqual("ignored", result["status"])
+        self.assertEqual("task_terminal", result["reason"])
+        self.assertEqual("succeeded", result["taskStatus"])
+        self.assertIsNone(result["coordinatorLease"])
+        service.acquire_host_coordinator_lease.assert_not_called()
+
     def test_host_identity_profile_returns_scope_filtered_agent_tools(self):
         with self._server() as (service, store, _token, client):
             issued = store.issue(

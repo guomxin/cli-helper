@@ -792,7 +792,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.71",
+      hostVersion: "0.4.72",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1210,7 +1210,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.71",
+        hostVersion: "0.4.72",
       },
     },
   });
@@ -1998,7 +1998,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.71",
+      hostVersion: "0.4.72",
     },
   });
   assert.equal(
@@ -2084,6 +2084,149 @@ test("resumes a completed workspace interaction restored after restart", async (
       .some((item) => item.interactionId === authorization.interactionId),
     true,
   );
+  assert.equal(harness.sentPayloads.length, 0);
+});
+
+test("ignores recovered interaction when the parent task is already terminal", async () => {
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  const completed = interaction({
+    interactionId: "interaction-terminal-task-1234567890",
+    type: "execution_authorization",
+    state: "completed",
+    resume: {
+      tool: "agentbridge_interaction_resume",
+      ready: true,
+      completed: false,
+    },
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return {
+          status: "ignored",
+          reason: "task_terminal",
+          taskStatus: "succeeded",
+          coordinatorLease: null,
+        };
+      }
+      throw new Error(`unexpected tool call: ${name}`);
+    },
+  };
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+
+  const restored = await coordinator.restoreRecoveredInteraction({
+    taskId: "task-terminal-workspace-1234567890",
+    interaction: completed,
+    sessionKey: workspaceSessionKey,
+    mcpClient: client,
+  });
+
+  assert.equal(restored, true);
+  assert.deepEqual(
+    calls.map((item) => item.name),
+    ["agentbridge_host_coordinator_lease_acquire"],
+  );
+  assert.equal(coordinator.pendingForSession(workspaceSessionKey).length, 0);
+  assert.equal(harness.sentPayloads.length, 0);
+  assert.equal(harness.systemEvents.length, 0);
+});
+
+test("terminal task notification suppresses an earlier stale interaction event", async () => {
+  const workspaceSessionKey =
+    "agent:main:agentbridge-workspace:direct:workspace-account-a";
+  const companionSessionKey = "agent:main:telegram:direct:7052061588";
+  const task = {
+    taskId: "task-terminal-notification-1234567890",
+    originEndpointId: "workspace-endpoint-1234567890",
+    activeConversationRef: workspaceSessionKey,
+  };
+  const pending = interaction({
+    interactionId: "interaction-stale-notification-1234567890",
+    type: "execution_authorization",
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: companionSessionKey,
+            route: { channel: "telegram", to: "7052061588" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-stale-completed-1234567890",
+              deliveryMode: "status",
+              task,
+              event: {
+                eventType: "task.interaction.completed",
+                payload: { interactionId: pending.interactionId },
+              },
+              message: "Interaction completed.",
+            },
+            {
+              deliveryId: "delivery-task-terminal-1234567890",
+              deliveryMode: "status",
+              task,
+              event: {
+                eventType: "task.completed",
+                payload: { status: "succeeded" },
+              },
+              message: "Task completed.",
+            },
+          ],
+        };
+      }
+      if (name === "agentbridge_host_notification_ack") {
+        return { status: "succeeded" };
+      }
+      throw new Error(`unexpected tool call: ${name}`);
+    },
+  };
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  coordinator.upsert({
+    interaction: pending,
+    sessionKey: workspaceSessionKey,
+    taskId: task.taskId,
+  });
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:7052061588",
+      channel: "telegram",
+      senderId: "7052061588",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(
+    calls.some((item) => item.name === "agentbridge_interaction_get"),
+    false,
+  );
+  assert.equal(
+    calls.some((item) => item.name === "agentbridge_interaction_resume"),
+    false,
+  );
+  assert.equal(
+    calls.filter((item) => item.name === "agentbridge_host_notification_ack")
+      .length,
+    2,
+  );
+  assert.equal(coordinator.pendingForSession(workspaceSessionKey).length, 0);
   assert.equal(harness.sentPayloads.length, 0);
 });
 
