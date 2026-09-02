@@ -966,24 +966,34 @@ class CentralCapabilityService:
         }:
             return None
         descriptor = planning_descriptor(capability_name)
-        if not descriptor or "write_sink" not in descriptor.get("roles", []):
+        if not descriptor:
             return None
+        roles = set(descriptor.get("roles", []))
         source_names: set[str] = set()
         for spec in self.registry.list():
             candidate = planning_descriptor(spec.name)
             if candidate and "business_source" in candidate.get("roles", []):
                 source_names.add(spec.name)
-        if not self.tasks.task_has_succeeded_capability(
+        has_business_source = self.tasks.task_has_succeeded_capability(
             task_id=task_id,
             user_subject=user_subject,
             capability_names=source_names,
-        ):
+        )
+        if not has_business_source:
+            return None
+        if "business_source" in roles:
+            message = (
+                "该请求正在汇聚多个业务来源，必须进入持久计划后再继续读取。"
+            )
+        elif "write_sink" in roles:
+            message = "该写入内容依赖本任务已读取的业务数据，必须进入持久计划。"
+        else:
             return None
         return {
             "status": "planning_control",
             "error": {
                 "code": "PLAN_REQUIRED",
-                "message": "该写入内容依赖本任务已读取的业务数据，必须进入持久计划。",
+                "message": message,
             },
             "recovery": {
                 "action": "prepare_task_plan",

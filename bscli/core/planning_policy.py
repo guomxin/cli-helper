@@ -17,6 +17,7 @@ COMPOSED_TASK_PLANNING_POLICY = {
         (
             "AgentBridge durable composed-task policy:",
             "- When a later action or artifact depends on business data that must be read first, call agentbridge_task_plan_catalog and submit exactly one durable plan through agentbridge_task_plan_prepare.",
+            "- Combining, comparing, or summarizing two or more business sources or distinct business collections is a composed task even when the user only wants a preview. Use one durable plan; do not read them separately and synthesize the answer in model text.",
             "- Keep independent reads, target selection, approvals, batch approvals, and forms whose business content was supplied directly by the user on their existing atomic paths.",
             "- Preserve requested dates, ranges, hours, preview-only intent, and submit intent. If the catalog cannot express a required constraint, stop and explain the gap.",
             "- Use only catalog-declared arguments and bindings. Never call hidden commit/resume tools or emulate a composed task with separate source and sink calls.",

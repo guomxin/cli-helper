@@ -111,7 +111,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
             capability_required_scopes("oa.future.unmapped_write")
 
-    def test_planning_gate_only_blocks_a_sink_after_same_task_business_source(self):
+    def test_planning_gate_blocks_a_second_source_or_sink_after_business_source(self):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, MagicMock())
             task_id = self._ensure_host_task(service)
@@ -151,6 +151,12 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 capability_name="taihua.work_log.create.prepare",
                 host_type="openclaw",
             )
+            second_source = service.planning_gate_for_call(
+                user_subject="user-a",
+                task_id=task_id,
+                capability_name="oa.workflow.sent.list",
+                host_type="openclaw",
+            )
             unrelated = service.planning_gate_for_call(
                 user_subject="user-a",
                 task_id=unrelated_task_id,
@@ -165,6 +171,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(blocked["error"]["code"], "PLAN_REQUIRED")
+            self.assertEqual(
+                second_source["error"]["code"],
+                "PLAN_REQUIRED",
+            )
+            self.assertIn("多个业务来源", second_source["error"]["message"])
             self.assertIsNone(unrelated)
             self.assertIsNone(internal)
 
