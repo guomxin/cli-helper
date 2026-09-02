@@ -172,6 +172,15 @@ class CentralCapabilityServiceTests(unittest.TestCase):
 
             self.assertEqual(blocked["error"]["code"], "PLAN_REQUIRED")
             self.assertEqual(
+                blocked["nextAction"],
+                {
+                    "type": "tool_sequence",
+                    "tool": "agentbridge_task_plan_catalog",
+                    "then": "agentbridge_task_plan_prepare",
+                    "doNotRetryCapability": True,
+                },
+            )
+            self.assertEqual(
                 blocked["recovery"]["requiredProposalShape"],
                 {
                     "schemaVersion": "agentbridge.task-plan.proposal.v2",

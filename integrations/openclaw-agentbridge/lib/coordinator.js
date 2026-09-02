@@ -563,7 +563,17 @@ export class InteractionCoordinator {
     if (!publicPayload) {
       return undefined;
     }
-    this.rememberPlanningRepair(publicPayload, binding, context, taskId);
+    const planningRepair = this.rememberPlanningRepair(
+      publicPayload,
+      binding,
+      context,
+      taskId,
+    );
+    if (planningRepair) {
+      return {
+        result: planningRepairRequiredResult(event.result, publicPayload),
+      };
+    }
     this.rememberLoginContinuation(publicPayload, binding, context);
     const loginStart = this.autoStartLoginForRead(
       publicPayload,
@@ -603,15 +613,15 @@ export class InteractionCoordinator {
 
   rememberPlanningRepair(payload, binding, context, sourceTaskId = null) {
     if (payload?.error?.code !== "PLAN_REQUIRED") {
-      return;
+      return false;
     }
     const sessionKey = binding?.sessionKey || context.sessionKey;
     if (!isPrivateSessionKey(sessionKey)) {
-      return;
+      return false;
     }
     const existing = this.planningRepairs.get(sessionKey);
     if (existing && existing.expiresAt > this.now()) {
-      return;
+      return true;
     }
     const recent = this.recentUserMessages.get(sessionKey);
     const baseRef =
@@ -627,6 +637,7 @@ export class InteractionCoordinator {
     this.api.logger.info(
       "AgentBridge prepared a fresh host task reference for one composed-plan repair",
     );
+    return true;
   }
 
   autoStartLoginForRead(
@@ -2703,6 +2714,26 @@ function trustedLoginStartedResult(originalResult, loginTool) {
       },
     ],
     ...(trustedDetails ? { details: trustedDetails } : {}),
+    isError: false,
+  };
+}
+
+function planningRepairRequiredResult(originalResult, payload) {
+  return {
+    ...originalResult,
+    content: [
+      {
+        type: "text",
+        text: [
+          "AgentBridge requires this turn to continue as one durable composed task plan.",
+          "Do not retry the blocked business capability or synthesize from earlier conversation data.",
+          "Call agentbridge_task_plan_catalog now, then call agentbridge_task_plan_prepare with proposal v2.",
+          "For a read-only multi-source result, end with a catalog-declared result-projection transform and bind every business source into it.",
+          "A fresh planning task is reserved for this one repair.",
+        ].join(" "),
+      },
+    ],
+    structuredContent: payload,
     isError: false,
   };
 }

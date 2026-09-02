@@ -1009,6 +1009,12 @@ class CentralCapabilityService:
                 "code": "PLAN_REQUIRED",
                 "message": message,
             },
+            "nextAction": {
+                "type": "tool_sequence",
+                "tool": "agentbridge_task_plan_catalog",
+                "then": "agentbridge_task_plan_prepare",
+                "doNotRetryCapability": True,
+            },
             "recovery": {
                 "action": "prepare_task_plan",
                 "policyVersion": COMPOSED_TASK_POLICY_VERSION,

@@ -1080,7 +1080,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.74",
+      hostVersion: "0.4.75",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",

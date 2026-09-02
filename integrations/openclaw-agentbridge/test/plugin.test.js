@@ -803,7 +803,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.74",
+      hostVersion: "0.4.75",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1221,7 +1221,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.74",
+        hostVersion: "0.4.75",
       },
     },
   });
@@ -1864,7 +1864,7 @@ test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", 
     "oa_workflow_sent_list",
   );
 
-  coordinator.captureToolResult(
+  const replacement = coordinator.captureToolResult(
     {
       toolCallId: "tool-source-blocked",
       result: {
@@ -1907,6 +1907,14 @@ test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", 
   assert.notEqual(firstRepairRef, originalRef);
   assert.match(firstRepairRef, /:plan-repair$/);
   assert.equal(retryRepairRef, firstRepairRef);
+  assert.match(
+    replacement.result.content[0].text,
+    /Do not retry the blocked business capability/,
+  );
+  assert.equal(
+    replacement.result.structuredContent.error.code,
+    "PLAN_REQUIRED",
+  );
 
   coordinator.recordUserMessage(
     { sessionKey, content: "查看我的 OA 待办" },
@@ -2142,7 +2150,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.74",
+      hostVersion: "0.4.75",
     },
   });
   assert.equal(

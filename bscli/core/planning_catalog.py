@@ -181,8 +181,6 @@ def build_planning_catalog(
             "maximumWriteSinks": 1,
             "maximumGoalCharacters": 500,
         },
-        "capabilities": capabilities,
-        "transforms": transforms_catalog,
         "prepareInputGuide": {
             "requiredFields": ["goal", "steps"],
             "stepSchema": task_plan_step_json_schema(),
@@ -196,6 +194,8 @@ def build_planning_catalog(
             ],
             "examples": examples,
         },
+        "capabilities": capabilities,
+        "transforms": transforms_catalog,
         "safety": {
             "hiddenCommitToolsExcluded": True,
             "arbitraryCodeExcluded": True,
