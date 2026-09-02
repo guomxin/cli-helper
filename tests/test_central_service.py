@@ -179,6 +179,46 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertIsNone(unrelated)
             self.assertIsNone(internal)
 
+    def test_parallel_business_sources_are_serialized_and_second_is_redirected(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, MagicMock())
+            task_id = self._ensure_host_task(service)
+            first_entered = threading.Event()
+            release_first = threading.Event()
+
+            def invoke_adapter(*, capability_name, **_kwargs):
+                if capability_name == "oa.workflow.done.list":
+                    first_entered.set()
+                    self.assertTrue(release_first.wait(timeout=3))
+                return {"items": [], "coverage": {"status": "complete"}}
+
+            def invoke(name):
+                return service.invoke(
+                    user_subject="user-a",
+                    capability_name=name,
+                    arguments={},
+                    task_id=task_id,
+                    host_type="openclaw",
+                )
+
+            with patch.object(service, "_invoke_adapter", side_effect=invoke_adapter):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    first = executor.submit(invoke, "oa.workflow.done.list")
+                    self.assertTrue(first_entered.wait(timeout=3))
+                    second = executor.submit(invoke, "oa.workflow.sent.list")
+                    time.sleep(0.05)
+                    self.assertFalse(second.done())
+                    release_first.set()
+                    first_result = first.result(timeout=3)
+                    second_result = second.result(timeout=3)
+
+            self.assertEqual(first_result["status"], "succeeded")
+            self.assertEqual(second_result["status"], "planning_control")
+            self.assertEqual(
+                second_result["error"]["code"],
+                "PLAN_REQUIRED",
+            )
+
     def test_smartlight_alarm_remark_uses_field_authorization_and_commit_chain(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 import hashlib
 import json
 import os
@@ -687,6 +688,18 @@ def capability_required_scopes(capability_name: str) -> frozenset[str]:
         raise KeyError(f"write capability has no MCP scope policy: {capability_name}") from exc
 
 
+def _serialize_host_task_calls(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        task_id = kwargs.get("task_id")
+        if not task_id:
+            return method(self, *args, **kwargs)
+        with self._task_call_lock(str(task_id)):
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class CentralCapabilityService:
     def __init__(
         self,
@@ -780,6 +793,7 @@ class CentralCapabilityService:
         self.session_keepalive_lease_seconds = session_keepalive_lease_seconds
         self._locks_guard = threading.Lock()
         self._session_locks: dict[str, threading.Lock] = {}
+        self._task_call_locks = tuple(threading.RLock() for _ in range(64))
         self.task_plan_runtime = TaskPlanRuntime(
             service=self,
             plans=self.task_plans,
@@ -1049,6 +1063,7 @@ class CentralCapabilityService:
             f"The central runtime is not configured for {system_id}.",
         )
 
+    @_serialize_host_task_calls
     def invoke(
         self,
         *,
@@ -1180,6 +1195,23 @@ class CentralCapabilityService:
                 task_id=task_id,
                 capability_name=capability_name,
                 response=observed_response,
+            )
+        if task_id and host_type not in {
+            "task_plan",
+            "batch_coordinator",
+            "interaction_resume",
+        }:
+            linked_interaction = observed_response.get("interaction")
+            self.observe_host_task(
+                user_subject=user_subject,
+                task_id=task_id,
+                operation_ids=[operation["operation_id"]],
+                interaction_ids=(
+                    [linked_interaction["interactionId"]]
+                    if isinstance(linked_interaction, dict)
+                    and linked_interaction.get("interactionId")
+                    else []
+                ),
             )
         return observed_response
 
@@ -5282,6 +5314,15 @@ class CentralCapabilityService:
                 binding.get("last_verified_at") == session.get("last_verified_at"),
             )
         )
+
+    @contextmanager
+    def _task_call_lock(self, task_id: str) -> Iterator[None]:
+        digest = hashlib.sha256(task_id.encode("utf-8")).digest()
+        lock = self._task_call_locks[
+            int.from_bytes(digest[:4], "big") % len(self._task_call_locks)
+        ]
+        with lock:
+            yield
 
     @contextmanager
     def _session_lock(
