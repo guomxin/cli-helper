@@ -372,11 +372,25 @@ class TaskPlanValidationTests(unittest.TestCase):
             granted_scopes={"oa:read"},
         )
 
-        self.assertEqual(len(full["prepareInputGuide"]["examples"]), 2)
-        self.assertEqual(len(limited["prepareInputGuide"]["examples"]), 1)
+        self.assertEqual(len(full["prepareInputGuide"]["examples"]), 3)
+        self.assertEqual(len(limited["prepareInputGuide"]["examples"]), 2)
         self.assertEqual(
             limited["prepareInputGuide"]["examples"][0]["steps"][0]["stepKey"],
             "read_done",
+        )
+        self.assertEqual(
+            limited["prepareInputGuide"]["examples"][0]["steps"][-1][
+                "transformName"
+            ],
+            "merge_work_items.v1",
+        )
+        self.assertIn(
+            "只读展示",
+            limited["prepareInputGuide"]["examples"][0]["title"],
+        )
+        self.assertLess(
+            list(full).index("prepareInputGuide"),
+            list(full).index("capabilities"),
         )
         self.assertNotIn(
             "taihua.work_log.create.prepare",

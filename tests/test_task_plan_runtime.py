@@ -506,6 +506,27 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         )
         self.assertIsNone(self.service.interaction)
 
+    def test_v2_incomplete_source_remains_visible_for_read_only_preview(self):
+        self.service.source_coverage_status = "partial"
+        plan = self.create_v2_plan(include_sink=False)
+
+        response = self.runtime.start(plan["plan_id"], user_subject="user-1")
+
+        self.assertEqual(response["status"], "succeeded")
+        self.assertEqual(response["plan"]["state"], "succeeded")
+        self.assertEqual(response["plan"]["effectOutcome"], "preview_ready")
+        self.assertTrue(
+            response["plan"]["resultProjection"]["result"]["source_incomplete"]
+        )
+        self.assertEqual(
+            response["plan"]["resultProjection"]["result"]["coverage"]["status"],
+            "partial",
+        )
+        self.assertEqual(
+            [step["state"] for step in response["plan"]["steps"]],
+            ["succeeded", "succeeded", "succeeded", "succeeded"],
+        )
+
     def test_v2_revoked_authority_stops_before_first_business_call(self):
         self.service.authority_valid = False
         plan = self.create_v2_plan(include_sink=False)

@@ -23,6 +23,7 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- Preserve requested dates, ranges, hours, preview-only intent, and submit intent. If the catalog cannot express a required constraint, stop and explain the gap.",
             "- Use only catalog-declared arguments and bindings. Never call hidden commit/resume tools or emulate a composed task with separate source and sink calls.",
             "- If AgentBridge returns PLAN_REQUIRED, read the catalog and repair the route once. Do not ask the user to rephrase or loop between direct prepare and planning.",
+            "- If plan preparation or execution fails, report that authoritative plan failure. Do not query operation history to reconstruct and present a business result outside the plan.",
             "- Reuse an active plan's authoritative state instead of creating another plan or repeating successful source steps.",
         )
     ),

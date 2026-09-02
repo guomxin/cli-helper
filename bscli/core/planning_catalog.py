@@ -67,7 +67,7 @@ def build_planning_catalog(
         name in transform_names
         for name in ("merge_work_items.v1", "work_items_to_log_draft.v2")
     ):
-        preview_steps: list[dict[str, Any]] = [
+        source_steps: list[dict[str, Any]] = [
             {
                 "stepKey": "read_done",
                 "kind": "capability",
@@ -103,20 +103,35 @@ def build_planning_catalog(
                     }
                 },
             },
+        ]
+        examples.append(
             {
-                "stepKey": "draft_log",
-                "kind": "transform",
-                "transformName": "work_items_to_log_draft.v2",
-                "dependsOn": ["merge_items"],
-                "bindings": {
-                    "bundle": {
-                        "mode": "single",
-                        "step": "merge_items",
-                        "pointer": "",
+                "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                "title": "合并读取 OA 已办和已发并只读展示",
+                "goal": "汇总 2026 年 7 月 OA 已办和已发，只读展示",
+                "constraints": {
+                    "temporal": {
+                        "kind": "absolute_range",
+                        "start": "2026-07-01",
+                        "end": "2026-07-31",
                     }
                 },
+                "steps": source_steps,
+            }
+        )
+        draft_log_step = {
+            "stepKey": "draft_log",
+            "kind": "transform",
+            "transformName": "work_items_to_log_draft.v2",
+            "dependsOn": ["merge_items"],
+            "bindings": {
+                "bundle": {
+                    "mode": "single",
+                    "step": "merge_items",
+                    "pointer": "",
+                }
             },
-        ]
+        }
         examples.append(
             {
                 "schemaVersion": "agentbridge.task-plan.proposal.v2",
@@ -129,7 +144,7 @@ def build_planning_catalog(
                         "end": "2026-07-31",
                     }
                 },
-                "steps": preview_steps,
+                "steps": source_steps + [draft_log_step],
             }
         )
         if "taihua.work_log.create.prepare" in capability_names:
@@ -145,8 +160,9 @@ def build_planning_catalog(
                             "end": "2026-07-31",
                         }
                     },
-                    "steps": preview_steps
+                    "steps": source_steps
                     + [
+                        draft_log_step,
                         {
                             "stepKey": "prepare_log",
                             "kind": "capability",

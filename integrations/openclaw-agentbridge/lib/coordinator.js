@@ -2729,6 +2729,7 @@ function planningRepairRequiredResult(originalResult, payload) {
           "Do not retry the blocked business capability or synthesize from earlier conversation data.",
           "Call agentbridge_task_plan_catalog now, then call agentbridge_task_plan_prepare with proposal v2.",
           "For a read-only multi-source result, end with a catalog-declared result-projection transform and bind every business source into it.",
+          "If plan preparation or execution fails, report that plan failure instead of reconstructing a result from operation history.",
           "A fresh planning task is reserved for this one repair.",
         ].join(" "),
       },

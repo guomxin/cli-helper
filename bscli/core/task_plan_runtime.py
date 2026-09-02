@@ -531,7 +531,7 @@ class TaskPlanRuntime:
                 if transform.halts_on_incomplete and (
                     result.get("source_incomplete") is True
                     or (result.get("coverage") or {}).get("status") != "complete"
-                ):
+                ) and self._has_write_sink(plan):
                     return self._fail_plan(
                         plan,
                         step,
@@ -719,6 +719,19 @@ class TaskPlanRuntime:
             "error": {"code": error_code, "message": error_message[:500]},
             "plan": task_plan_response(updated),
         }
+
+    def _has_write_sink(self, plan: dict[str, Any]) -> bool:
+        for step in plan.get("steps") or []:
+            capability_name = step.get("capability_name")
+            if not capability_name:
+                continue
+            try:
+                spec = self.service.registry.get(capability_name)
+            except KeyError:
+                continue
+            if spec.effect != "read":
+                return True
+        return False
 
     def _store_result_projection(
         self,
