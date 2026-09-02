@@ -783,8 +783,10 @@ class TaskPlanRuntime:
             projection["result"] = {
                 key: result.get(key)
                 for key in (
+                    "items",
                     "source_summaries",
                     "coverage",
+                    "source_incomplete",
                     "empty",
                     "source_count",
                     "item_count",
@@ -837,11 +839,18 @@ class TaskPlanRuntime:
             "canceled": "canceled",
             "waiting_user": "requires_user_action",
         }.get(plan["state"], "running")
-        return {
+        response = {
             "protocolVersion": "0.1",
             "status": status,
             "plan": task_plan_response(plan),
         }
+        if status == "succeeded" and plan.get("result_projection"):
+            response["nextAction"] = {
+                "type": "report_plan_result",
+                "source": "plan.resultProjection.result",
+                "doNotQueryOperations": True,
+            }
+        return response
 
     def _event(
         self,

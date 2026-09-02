@@ -351,7 +351,7 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         )
         return plan
 
-    def compile_v2(self, *, include_sink):
+    def compile_v2(self, *, include_sink, include_draft=True):
         steps = [
             {
                 "stepKey": "read_done",
@@ -386,21 +386,25 @@ class TaskPlanRuntimeTests(unittest.TestCase):
                     }
                 },
             },
-            {
-                "stepKey": "draft",
-                "kind": "transform",
-                "transformName": "work_items_to_log_draft.v2",
-                "dependsOn": ["merge"],
-                "bindings": {
-                    "bundle": {
-                        "mode": "single",
-                        "step": "merge",
-                        "pointer": "",
-                    }
-                },
-            },
         ]
+        if include_draft:
+            steps.append(
+                {
+                    "stepKey": "draft",
+                    "kind": "transform",
+                    "transformName": "work_items_to_log_draft.v2",
+                    "dependsOn": ["merge"],
+                    "bindings": {
+                        "bundle": {
+                            "mode": "single",
+                            "step": "merge",
+                            "pointer": "",
+                        }
+                    },
+                }
+            )
         if include_sink:
+            self.assertTrue(include_draft)
             steps.append(
                 {
                     "stepKey": "write",
@@ -448,14 +452,17 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         }
         return compiled
 
-    def create_v2_plan(self, *, include_sink):
+    def create_v2_plan(self, *, include_sink, include_draft=True):
         plan, _ = self.plans.create(
             user_subject="user-1",
             parent_task_id="task-1",
-            compiled_plan=self.compile_v2(include_sink=include_sink),
+            compiled_plan=self.compile_v2(
+                include_sink=include_sink,
+                include_draft=include_draft,
+            ),
             proposal_source="agent_host",
             coordinator_lease_version=1,
-            idempotency_key=f"v2-{include_sink}",
+            idempotency_key=f"v2-{include_sink}-{include_draft}",
         )
         return plan
 
@@ -525,6 +532,26 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [step["state"] for step in response["plan"]["steps"]],
             ["succeeded", "succeeded", "succeeded", "succeeded"],
+        )
+
+    def test_v2_source_summary_projection_is_self_contained(self):
+        self.service.source_coverage_status = "partial"
+        plan = self.create_v2_plan(include_sink=False, include_draft=False)
+
+        response = self.runtime.start(plan["plan_id"], user_subject="user-1")
+
+        self.assertEqual(response["status"], "succeeded")
+        projection = response["plan"]["resultProjection"]
+        self.assertEqual(projection["kind"], "source_summary")
+        self.assertEqual(len(projection["result"]["items"]), 2)
+        self.assertTrue(projection["result"]["source_incomplete"])
+        self.assertEqual(
+            response["nextAction"],
+            {
+                "type": "report_plan_result",
+                "source": "plan.resultProjection.result",
+                "doNotQueryOperations": True,
+            },
         )
 
     def test_v2_revoked_authority_stops_before_first_business_call(self):
