@@ -2543,6 +2543,124 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual(notification["artifact"]["filename"], "certificate.pdf")
         self.assertTrue(notification["artifact"]["mediaUrl"].endswith("/file"))
 
+    def test_central_service_delivers_private_plan_result_to_companion_only(self):
+        service = CentralCapabilityService(
+            home=Path(self.temp.name),
+            base_url="http://oa.example.test/seeyon/main.do?method=main",
+        )
+        service.tasks.ensure_endpoint(
+            user_subject="user-a",
+            token_id="telegram-token",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+            client_type="telegram",
+            external_subject="1001",
+            conversation_ref="agent:main:telegram:direct:1001",
+            route={"channel": "telegram", "to": "1001"},
+            capabilities=["direct_status"],
+        )
+        origin = service.ensure_host_task(
+            user_subject="user-a",
+            token_id="workspace-token",
+            agent_host="openclaw",
+            host_task_key="workspace-plan-task",
+            endpoint_key="workspace:account-a",
+            client_type="web",
+            external_subject="account-a",
+            account_id="account-a",
+            conversation_ref=(
+                "agent:main:agentbridge-workspace:direct:account-a"
+            ),
+            title="总结昨日工作",
+            capabilities=["workspace.task.read"],
+        )
+        initial = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+        for item in initial["notifications"]:
+            service.acknowledge_host_notification(
+                user_subject="user-a",
+                agent_host="openclaw",
+                endpoint_key="telegram:*:1001",
+                delivery_id=item["deliveryId"],
+                succeeded=True,
+            )
+        plan, _ = service.task_plans.create(
+            user_subject="user-a",
+            parent_task_id=origin["task"]["taskId"],
+            compiled_plan={
+                "proposalSchemaVersion": "agentbridge.task-plan.proposal.v2",
+                "goal": "总结昨日工作",
+                "planHash": "d" * 64,
+                "riskSummary": {"systems": ["oa"], "writeSinkCount": 0},
+                "steps": [
+                    {
+                        "stepKey": "draft",
+                        "ordinal": 1,
+                        "kind": "transform",
+                        "title": "生成摘要",
+                        "transformName": "work_items_to_log_draft.v2",
+                        "version": "2",
+                        "dependsOn": [],
+                        "arguments": {},
+                        "bindings": {},
+                        "effect": "read",
+                        "systemId": "local",
+                    }
+                ],
+            },
+            proposal_source="agent_host",
+            coordinator_lease_version=1,
+            idempotency_key="private-plan-result",
+        )
+        private_draft = "昨日工作内容。" * 700
+        projection = {
+            "schemaVersion": "agentbridge.plan-result-projection.v1",
+            "visibility": "user_private",
+            "kind": "private_draft",
+            "resultHash": "sha256:" + "e" * 64,
+            "result": {
+                "draft": private_draft,
+                "included_count": 2,
+                "excluded_count": 1,
+                "coverage": {"status": "complete"},
+            },
+        }
+        service.task_plans.set_result_projection(
+            plan["plan_id"],
+            user_subject="user-a",
+            projection=projection,
+        )
+        service.tasks.record_plan_event(
+            task_id=origin["task"]["taskId"],
+            user_subject="user-a",
+            event_type="plan.result.ready",
+            payload={"planId": plan["plan_id"], "resultHash": projection["resultHash"]},
+        )
+
+        claimed = service.claim_host_notifications(
+            user_subject="user-a",
+            agent_host="openclaw",
+            endpoint_key="telegram:*:1001",
+        )
+
+        self.assertEqual(claimed["count"], 1)
+        notification = claimed["notifications"][0]
+        self.assertEqual(notification["deliveryMode"], "plan_result")
+        self.assertLessEqual(len(notification["message"]), 3_800)
+        self.assertIn("（已截断）", notification["message"])
+        self.assertEqual(notification["planResult"]["result"]["draft"], private_draft)
+        events = service.tasks.list_events(
+            task_id=origin["task"]["taskId"],
+            user_subject="user-a",
+        )
+        plan_event = next(
+            item for item in events if item["event_type"] == "plan.result.ready"
+        )
+        self.assertNotIn("draft", str(plan_event["payload"]))
+
     def test_central_service_presents_business_input_on_multiple_endpoints(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),

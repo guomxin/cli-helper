@@ -1799,6 +1799,33 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def task_has_succeeded_capability(
+        self,
+        *,
+        task_id: str,
+        user_subject: str,
+        capability_names: set[str],
+    ) -> bool:
+        if not capability_names:
+            return False
+        placeholders = ",".join("?" for _ in capability_names)
+        with self._connect() as connection:
+            self._select_owned_task(connection, task_id, user_subject)
+            row = connection.execute(
+                f"""
+                SELECT 1
+                FROM task_operations AS link
+                JOIN operations AS operation
+                  ON operation.operation_id = link.operation_id
+                WHERE link.task_id = ? AND link.user_subject = ?
+                  AND operation.status = 'succeeded'
+                  AND operation.capability_name IN ({placeholders})
+                LIMIT 1
+                """,
+                (task_id, user_subject, *sorted(capability_names)),
+            ).fetchone()
+        return row is not None
+
     def record_plan_event(
         self,
         *,
@@ -4296,6 +4323,13 @@ class TaskHubStore:
                             "task.operation.failed",
                             "task.failed",
                             "task.operation.outcome_unknown",
+                            "plan.result.ready",
+                            "plan.step.waiting",
+                            "plan.authorization.waiting",
+                            "plan.completed",
+                            "plan.canceled",
+                            "plan.step.failed",
+                            "plan.outcome_unknown",
                         ]
                     ),
                     created_at,

@@ -15,6 +15,7 @@ from bscli.core.task_plan_validation import (
     validate_and_compile_task_plan,
 )
 from bscli.core.planning_catalog import build_planning_catalog
+from bscli.core.planning_policy import compile_temporal_constraints
 from bscli.core.transforms import build_transform_registry
 
 
@@ -78,6 +79,73 @@ class TaskPlanValidationTests(unittest.TestCase):
             ],
         }
 
+    def proposal_v2(self, *, include_sink=True):
+        steps = [
+            {
+                "stepKey": "read_done",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.done.list",
+                "arguments": {"limit": 100},
+            },
+            {
+                "stepKey": "read_sent",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.sent.list",
+                "arguments": {"limit": 100},
+            },
+            {
+                "stepKey": "merge_items",
+                "kind": "transform",
+                "transformName": "merge_work_items.v1",
+                "dependsOn": ["read_done", "read_sent"],
+                "bindings": {
+                    "sources": {
+                        "mode": "many",
+                        "items": [
+                            {"step": "read_done", "pointer": ""},
+                            {"step": "read_sent", "pointer": ""},
+                        ],
+                    }
+                },
+            },
+            {
+                "stepKey": "draft_log",
+                "kind": "transform",
+                "transformName": "work_items_to_log_draft.v2",
+                "dependsOn": ["merge_items"],
+                "bindings": {
+                    "bundle": {
+                        "mode": "single",
+                        "step": "merge_items",
+                        "pointer": "",
+                    }
+                },
+            },
+        ]
+        if include_sink:
+            steps.append(
+                {
+                    "stepKey": "prepare_log",
+                    "kind": "capability",
+                    "capabilityName": TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
+                    "dependsOn": ["draft_log"],
+                    "arguments": {"log_date": "2026-08-30", "hours": 1},
+                    "bindings": {
+                        "content": {
+                            "mode": "single",
+                            "step": "draft_log",
+                            "pointer": "/draft",
+                        }
+                    },
+                }
+            )
+        return {
+            "schemaVersion": "agentbridge.task-plan.proposal.v2",
+            "goal": "汇总昨天 OA 已办和已发并形成日志",
+            "constraints": {"temporal": {"kind": "previous_day"}},
+            "steps": steps,
+        }
+
     def test_valid_plan_is_topologically_compiled_and_scoped(self):
         compiled = self.compile(
             self.proposal(),
@@ -103,6 +171,88 @@ class TaskPlanValidationTests(unittest.TestCase):
             self.compile(proposal)
 
         self.assertEqual(raised.exception.code, "PLAN_CAPABILITY_NOT_ALLOWED")
+
+    def test_v2_many_source_plan_compiles_with_explicit_provenance(self):
+        proposal, temporal = compile_temporal_constraints(
+            self.proposal_v2(),
+            accepted_at="2026-08-31T09:30:43+08:00",
+        )
+
+        compiled = validate_and_compile_task_plan(
+            proposal,
+            registry=self.registry,
+            transforms=self.transforms,
+            trusted_write_prepares=self.prepares,
+            hidden_commit_capabilities=self.commits,
+            scope_resolver=lambda name: (
+                frozenset({"taihua:write:worklog"})
+                if name.startswith("taihua.")
+                else frozenset({"oa:read"})
+            ),
+            granted_scopes={"oa:read", "taihua:write:worklog"},
+            temporal_context=temporal,
+        )
+
+        self.assertEqual(compiled["schemaVersion"], "agentbridge.task-plan.compiled.v2")
+        self.assertEqual(
+            compiled["temporalContext"]["absoluteRange"],
+            {"start": "2026-08-30", "end": "2026-08-30"},
+        )
+        self.assertEqual(
+            compiled["steps"][2]["bindings"]["sources"]["mode"], "many"
+        )
+
+    def test_v2_rejects_a_named_but_unbound_business_source(self):
+        proposal = self.proposal_v2()
+        proposal["steps"][2]["bindings"]["sources"]["items"] = [
+            {"step": "read_done", "pointer": ""}
+        ]
+
+        with self.assertRaises(PlanValidationError) as raised:
+            self.compile(proposal)
+
+        self.assertEqual(raised.exception.code, "PLAN_PROVENANCE_INCOMPLETE")
+
+    def test_v2_rejects_static_derived_content(self):
+        proposal = self.proposal_v2()
+        sink = proposal["steps"][-1]
+        sink["bindings"] = {}
+        sink["arguments"]["content"] = "模型自行编写的正文"
+
+        with self.assertRaises(PlanValidationError) as raised:
+            self.compile(proposal)
+
+        self.assertEqual(raised.exception.code, "PLAN_PROVENANCE_REQUIRED")
+
+    def test_v2_rejects_ambiguous_binding_without_mode(self):
+        proposal = self.proposal_v2()
+        proposal["steps"][3]["bindings"]["bundle"] = {
+            "step": "merge_items",
+            "pointer": "",
+        }
+
+        with self.assertRaises(PlanValidationError) as raised:
+            self.compile(proposal)
+
+        self.assertEqual(raised.exception.code, "PLAN_BINDING_INVALID")
+
+    def test_relative_time_uses_trusted_acceptance_time_and_rejects_override(self):
+        compiled, temporal = compile_temporal_constraints(
+            self.proposal_v2(include_sink=False),
+            accepted_at="2026-08-31T23:59:59+08:00",
+        )
+        self.assertEqual(
+            compiled["steps"][0]["arguments"]["start_date"], "2026-08-30"
+        )
+        self.assertEqual(temporal["timeZone"], "Asia/Shanghai")
+
+        conflicting = self.proposal_v2(include_sink=False)
+        conflicting["steps"][0]["arguments"]["start_date"] = "2026-08-29"
+        with self.assertRaisesRegex(ValueError, "时间约束不一致"):
+            compile_temporal_constraints(
+                conflicting,
+                accepted_at="2026-08-31T23:59:59+08:00",
+            )
 
     def test_missing_scope_is_rejected_before_execution(self):
         with self.assertRaises(PlanValidationError) as raised:

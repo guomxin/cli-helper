@@ -1,7 +1,9 @@
 import unittest
 
 from bscli.core.transforms import (
+    MERGE_WORK_ITEMS,
     WORK_ITEMS_TO_LOG_DRAFT,
+    WORK_ITEMS_TO_LOG_DRAFT_V2,
     TransformRejected,
     build_transform_registry,
 )
@@ -61,6 +63,77 @@ class TaskPlanTransformTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.code, "TRANSFORM_INPUT_TOO_LARGE")
+
+    def test_multi_source_merge_preserves_done_and_sent_business_actions(self):
+        done = self.source(
+            "done",
+            [{"affair_id": "same", "title": "项目申请", "date": "2026-08-30"}],
+        )
+        sent = self.source(
+            "sent",
+            [{"affair_id": "same", "title": "项目申请", "date": "2026-08-30"}],
+        )
+
+        merged = self.registry.invoke(MERGE_WORK_ITEMS, {"sources": [done, sent]})
+        draft = self.registry.invoke(
+            WORK_ITEMS_TO_LOG_DRAFT_V2,
+            {"bundle": merged},
+        )
+
+        self.assertEqual(merged["item_count"], 2)
+        self.assertEqual(merged["duplicate_count"], 0)
+        self.assertIn("处理《项目申请》", draft["draft"])
+        self.assertIn("发起《项目申请》", draft["draft"])
+        self.assertFalse(draft["source_incomplete"])
+
+    def test_incomplete_source_is_propagated_without_becoming_complete(self):
+        done = self.source("done", [], status="complete")
+        sent = self.source("sent", [], status="partial", has_more=True)
+
+        merged = self.registry.invoke(MERGE_WORK_ITEMS, {"sources": [done, sent]})
+
+        self.assertEqual(merged["coverage"]["status"], "partial")
+        self.assertTrue(merged["coverage"]["hasMore"])
+
+    def test_merge_rejects_more_than_two_hundred_business_items(self):
+        source = self.source(
+            "done",
+            [
+                {"affair_id": str(index), "title": f"事项 {index}", "date": "2026-08-30"}
+                for index in range(201)
+            ],
+        )
+
+        with self.assertRaises(TransformRejected) as raised:
+            self.registry.invoke(MERGE_WORK_ITEMS, {"sources": [source]})
+
+        self.assertEqual(raised.exception.code, "TRANSFORM_INPUT_TOO_LARGE")
+
+    @staticmethod
+    def source(collection, items, *, status="complete", has_more=False):
+        return {
+            "collection": collection,
+            "items": [
+                {
+                    "status": "",
+                    "category": "",
+                    **item,
+                }
+                for item in items
+            ],
+            "coverage": {
+                "status": status,
+                "queryApplied": True,
+                "dateBasis": "processed_at" if collection == "done" else "initiated_at",
+                "requestedRange": {"start": "2026-08-30", "end": "2026-08-30"},
+                "scannedCount": len(items),
+                "matchedCount": len(items),
+                "hasMore": has_more,
+                "completionReason": "test",
+                "observedAt": "2026-08-31T09:00:00+08:00",
+                "queryHash": f"sha256:{collection}",
+            },
+        }
 
 
 if __name__ == "__main__":

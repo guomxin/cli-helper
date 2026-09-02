@@ -407,7 +407,7 @@ class AdminControlPlaneTests(unittest.TestCase):
                 candidate_task_ids=[task["task_id"]],
                 reason="secret continuation reason",
             )
-            service.task_plans.create(
+            plan, _ = service.task_plans.create(
                 user_subject="user-a",
                 parent_task_id=task["task_id"],
                 compiled_plan={
@@ -436,6 +436,19 @@ class AdminControlPlaneTests(unittest.TestCase):
                 proposal_source="agent_host",
                 coordinator_lease_version=1,
                 idempotency_key="admin-plan-1",
+            )
+            service.task_plans.set_result_projection(
+                plan["plan_id"],
+                user_subject="user-a",
+                projection={
+                    "kind": "private_draft",
+                    "result": {
+                        "draft": "secret-private-plan-draft",
+                        "included_count": 3,
+                        "excluded_count": 1,
+                        "coverage": {"status": "complete"},
+                    },
+                },
             )
             claimed = service.claim_host_notifications(
                 user_subject="user-a",
@@ -485,6 +498,10 @@ class AdminControlPlaneTests(unittest.TestCase):
         self.assertEqual(result["artifacts"][0]["filename"], "certificate.pdf")
         self.assertEqual(result["plans"][0]["systems"], ["oa", "taihua"])
         self.assertEqual(result["plans"][0]["write_sink_count"], 1)
+        self.assertEqual(result["plans"][0]["result_kind"], "private_draft")
+        self.assertEqual(result["plans"][0]["coverage_status"], "complete")
+        self.assertEqual(result["plans"][0]["included_count"], 3)
+        self.assertEqual(result["plans"][0]["excluded_count"], 1)
         self.assertNotIn("download_url", result["artifacts"][0])
         self.assertNotIn("source_ref", result["artifacts"][0])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -501,6 +518,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             "secret-plan-goal",
             "secret-step-title",
             "secret-plan-argument",
+            "secret-private-plan-draft",
         ):
             self.assertNotIn(secret, serialized)
 

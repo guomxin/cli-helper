@@ -63,6 +63,11 @@ class TaskPlanRuntime:
                         self._step_event_payload(plan, step),
                     )
                 try:
+                    authority_validator = getattr(
+                        self.service, "validate_task_plan_authority", None
+                    )
+                    if callable(authority_validator):
+                        authority_validator(plan)
                     arguments = self._resolve_step_arguments(
                         plan=plan,
                         step=step,
@@ -376,7 +381,11 @@ class TaskPlanRuntime:
             capability_version=transform.version,
             input_summary={
                 "transform": transform_name,
-                "itemCount": len(arguments.get("items") or []),
+                "itemCount": (
+                    transform.input_item_counter(arguments)
+                    if transform.input_item_counter is not None
+                    else len(arguments.get("items") or [])
+                ),
             },
             input_identity=arguments,
             idempotency_key=(
@@ -511,6 +520,28 @@ class TaskPlanRuntime:
             }
         if status == "succeeded":
             result = operation.get("result")
+            if step["kind"] == "transform" and isinstance(result, dict):
+                self._store_result_projection(
+                    plan,
+                    step,
+                    operation_id=operation_id,
+                    result=result,
+                )
+                transform = self.transforms.get(step["transform_name"])
+                if transform.halts_on_incomplete and (
+                    result.get("source_incomplete") is True
+                    or (result.get("coverage") or {}).get("status") != "complete"
+                ):
+                    return self._fail_plan(
+                        plan,
+                        step,
+                        operation_id=operation_id,
+                        state="failed",
+                        error_code="PLAN_SOURCE_INCOMPLETE",
+                        error_message=(
+                            "业务来源未完整覆盖请求范围，计划已停止且不会进入写入。"
+                        ),
+                    )
             updated = self.plans.mark_step_succeeded(
                 plan["plan_id"],
                 user_subject=plan["user_subject"],
@@ -558,17 +589,25 @@ class TaskPlanRuntime:
     ) -> dict[str, Any]:
         arguments = dict(step.get("arguments") or {})
         for target_name, binding in (step.get("bindings") or {}).items():
-            operation_id = self.plans.step_output_operation(
-                plan["plan_id"],
-                user_subject=plan["user_subject"],
-                step_key=binding["step"],
+            references = (
+                binding.get("items") or []
+                if binding.get("mode") == "many"
+                else [binding]
             )
-            operation = self.service.operations.get(operation_id)
-            if operation["user_subject"] != plan["user_subject"]:
-                raise TaskPlanIntegrityError("bound operation belongs to another user")
-            arguments[target_name] = resolve_json_pointer(
-                operation.get("result"), binding["pointer"]
-            )
+            values = []
+            for reference in references:
+                operation_id = self.plans.step_output_operation(
+                    plan["plan_id"],
+                    user_subject=plan["user_subject"],
+                    step_key=reference["step"],
+                )
+                operation = self.service.operations.get(operation_id)
+                if operation["user_subject"] != plan["user_subject"]:
+                    raise TaskPlanIntegrityError("bound operation belongs to another user")
+                values.append(
+                    resolve_json_pointer(operation.get("result"), reference["pointer"])
+                )
+            arguments[target_name] = values if binding.get("mode") == "many" else values[0]
         return arguments
 
     def _complete_plan(
@@ -579,11 +618,22 @@ class TaskPlanRuntime:
         reason: str,
         skip_queued: bool = False,
     ) -> dict[str, Any]:
+        current = self.plans.get(plan_id, user_subject=user_subject)
+        if reason == "no_eligible_source_items":
+            effect_outcome = "no_effect"
+        elif any(
+            step["effect"] != "read" and step["state"] == "succeeded"
+            for step in current["steps"]
+        ):
+            effect_outcome = "write_verified"
+        else:
+            effect_outcome = "preview_ready"
         plan = self.plans.complete(
             plan_id,
             user_subject=user_subject,
             reason=reason,
             skip_queued=skip_queued,
+            effect_outcome=effect_outcome,
         )
         self._event(
             plan,
@@ -624,6 +674,13 @@ class TaskPlanRuntime:
             state=state,
             error_code=error_code,
             error_message=error_message,
+            effect_outcome=(
+                "source_incomplete"
+                if error_code == "PLAN_SOURCE_INCOMPLETE"
+                else "outcome_unknown"
+                if state == "outcome_unknown"
+                else None
+            ),
         )
         self._event(
             updated,
@@ -662,6 +719,84 @@ class TaskPlanRuntime:
             "error": {"code": error_code, "message": error_message[:500]},
             "plan": task_plan_response(updated),
         }
+
+    def _store_result_projection(
+        self,
+        plan: dict[str, Any],
+        step: dict[str, Any],
+        *,
+        operation_id: str,
+        result: dict[str, Any],
+    ) -> None:
+        transform = self.transforms.get(step["transform_name"])
+        if not transform.result_projection:
+            return
+        projection: dict[str, Any] = {
+            "schemaVersion": "agentbridge.plan-result-projection.v1",
+            "visibility": "user_private",
+            "kind": transform.result_projection,
+            "stepKey": step["step_key"],
+            "operationId": operation_id,
+            "resultHash": json_hash(result),
+            "sourceSteps": sorted(
+                {
+                    reference["step"]
+                    for binding in (step.get("bindings") or {}).values()
+                    for reference in (
+                        binding.get("items") or []
+                        if binding.get("mode") == "many"
+                        else [binding]
+                    )
+                }
+            ),
+        }
+        if transform.result_projection == "private_draft":
+            projection["result"] = {
+                key: result.get(key)
+                for key in (
+                    "draft",
+                    "empty",
+                    "source_incomplete",
+                    "source_count",
+                    "included_count",
+                    "excluded_count",
+                    "excluded_automatic_count",
+                    "excluded_duplicate_count",
+                    "source_summaries",
+                    "coverage",
+                )
+            }
+        else:
+            projection["result"] = {
+                key: result.get(key)
+                for key in (
+                    "source_summaries",
+                    "coverage",
+                    "empty",
+                    "source_count",
+                    "item_count",
+                    "duplicate_count",
+                )
+            }
+        updated = self.plans.set_result_projection(
+            plan["plan_id"],
+            user_subject=plan["user_subject"],
+            projection=projection,
+        )
+        if transform.result_projection == "private_draft":
+            self._event(
+                updated,
+                "plan.result.ready",
+                {
+                    "planId": plan["plan_id"],
+                    "stepKey": step["step_key"],
+                    "kind": transform.result_projection,
+                    "resultHash": projection["resultHash"],
+                    "includedCount": int(result.get("included_count") or 0),
+                    "excludedCount": int(result.get("excluded_count") or 0),
+                },
+                causation_ref=operation_id,
+            )
 
     def _waiting_result(
         self, plan: dict[str, Any], step: dict[str, Any]

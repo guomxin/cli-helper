@@ -193,6 +193,7 @@ export class AgentBridgeIdentityRouter {
           allowedToolNames: new Set(allowedToolNames),
           expiresAt: identityPart(result?.identity?.expiresAt, false),
           acceptedHostLevel,
+          planningPolicy: normalizePlanningPolicy(serverProfile?.planning),
         });
         this.identityProfiles.set(binding.key, profile);
         profiles.push({
@@ -212,6 +213,12 @@ export class AgentBridgeIdentityRouter {
 
   allowedToolNamesForBinding(binding) {
     return binding ? this.identityProfiles.get(binding.key)?.allowedToolNames || null : null;
+  }
+
+  planningPolicyForBinding(binding) {
+    return binding
+      ? this.identityProfiles.get(binding.key)?.planningPolicy || null
+      : null;
   }
 
   restoreSessionBinding({ sessionKey, bindingKey, endpointKey = null }) {
@@ -375,6 +382,24 @@ export class AgentBridgeIdentityRouter {
     }
     return client;
   }
+}
+
+function normalizePlanningPolicy(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    typeof value.schemaVersion !== "string" ||
+    !value.schemaVersion.startsWith("agentbridge.composed-task-planning-policy.") ||
+    typeof value.modelContext !== "string" ||
+    !value.modelContext.trim()
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    schemaVersion: value.schemaVersion,
+    modelContext: value.modelContext.slice(0, 6_000),
+  });
 }
 
 function isWorkspaceSessionKey(sessionKey) {

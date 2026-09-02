@@ -216,6 +216,74 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             "getSentList",
         )
 
+    def test_sent_date_range_can_prove_coverage_at_descending_boundary(self):
+        result = self.adapter.invoke_capability(
+            "oa.workflow.sent.list",
+            self.worker,
+            {"start_date": "2026-07-01", "end_date": "2026-07-08"},
+        )
+
+        self.assertEqual(result["coverage"]["status"], "complete")
+        self.assertEqual(
+            result["coverage"]["completionReason"],
+            "verified_descending_date_boundary",
+        )
+        self.assertEqual(result["coverage"]["dateBasis"], "initiated_at")
+
+    def test_date_filter_with_fallback_display_date_remains_incomplete(self):
+        parsed = {
+            "source": "history_page_grid",
+            "total": 1,
+            "page": 1,
+            "items": [
+                {
+                    "affair_id": "done-fallback-date",
+                    "title": "Fallback date row",
+                    "date": "2026-07-10 10:30",
+                    "date_basis": "fallback_display_date",
+                }
+            ],
+        }
+        with patch.object(self.adapter, "_fetch_workflow_collection", return_value=parsed):
+            result = self.adapter.invoke_capability(
+                "oa.workflow.done.list",
+                self.worker,
+                {"start_date": "2026-07-10", "end_date": "2026-07-10"},
+            )
+
+        self.assertEqual(result["coverage"]["status"], "partial")
+        self.assertEqual(
+            result["coverage"]["completionReason"], "date_basis_not_proven"
+        )
+
+    def test_unknown_total_before_date_boundary_reports_possible_more_rows(self):
+        parsed = {
+            "source": "history_page_grid",
+            "total": None,
+            "page": 1,
+            "items": [
+                {
+                    "affair_id": "done-newer",
+                    "title": "Newer completed row",
+                    "date": "2026-07-12 10:30",
+                    "date_basis": "processed_at",
+                }
+            ],
+        }
+        with patch.object(self.adapter, "_fetch_workflow_collection", return_value=parsed):
+            result = self.adapter.invoke_capability(
+                "oa.workflow.done.list",
+                self.worker,
+                {"start_date": "2026-07-10", "end_date": "2026-07-10"},
+            )
+
+        self.assertEqual(result["coverage"]["status"], "partial")
+        self.assertTrue(result["coverage"]["hasMore"])
+        self.assertEqual(
+            result["coverage"]["completionReason"],
+            "loaded_page_does_not_cover_requested_range",
+        )
+
     def test_tracked_list_uses_the_independent_more_track_grid(self):
         result = self.adapter.invoke_capability("oa.workflow.tracked.list", self.worker, {})
 
@@ -554,6 +622,7 @@ class FakeWorkflowPage:
                         "title": "Sent request",
                         "status": "In progress",
                         "date": "2026-07-08 09:00",
+                        "date_basis": "initiated_at",
                         "is_track": False,
                     },
                     {
@@ -561,6 +630,7 @@ class FakeWorkflowPage:
                         "title": "Shared tracked request",
                         "status": "In progress",
                         "date": "2026-07-01 09:00",
+                        "date_basis": "initiated_at",
                         "is_track": True,
                     },
                 ],
@@ -575,6 +645,7 @@ class FakeWorkflowPage:
                         "title": "Completed request",
                         "status": "Completed",
                         "date": "2026-07-10 10:30",
+                        "date_basis": "processed_at",
                         "is_track": False,
                     },
                     {
@@ -582,6 +653,7 @@ class FakeWorkflowPage:
                         "title": "Shared tracked request",
                         "status": "Completed",
                         "date": "2026-07-01 09:00",
+                        "date_basis": "processed_at",
                         "is_track": True,
                     },
                     {
@@ -589,6 +661,7 @@ class FakeWorkflowPage:
                         "title": "Done tracked request",
                         "status": "Completed",
                         "date": "2026-07-03 09:00",
+                        "date_basis": "processed_at",
                         "is_track": True,
                     },
                 ],

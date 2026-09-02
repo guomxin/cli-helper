@@ -1265,7 +1265,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Validate, compile, persist, and start one cross-system task plan bound to the current AgentTask. The host supplies public capability/transform steps only. AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at most one trusted prepare write sink. Every step requires stepKey and kind. A capability step uses capabilityName; a transform step uses transformName. dependsOn contains earlier stepKey values. bindings maps a target argument to {step: sourceStepKey, pointer: /json/path}. Example sequence: oa.workflow.done.list -> work_items_to_log_draft.v1, binding items from read_done /items. Each arguments object may contain only properties declared by that catalog entry's inputSchema; keep unsupported user requirements in the goal or final explanation instead of inventing arguments. Never include a commit, interaction resume, arbitrary HTTP, or script step.",
+      "description": "Validate, compile, persist, and start one durable composed task plan bound to the current AgentTask. The host supplies public capability/transform steps only. For new source-dependent plans use proposal v2 with a trusted temporal constraint, explicit single/many bindings, and catalog-declared transforms. AgentBridge enforces provenance, source completeness, authority rechecks, dependencies, scope union, and at most one trusted prepare write sink. Every step requires stepKey and kind. A capability step uses capabilityName; a transform step uses transformName. dependsOn contains earlier stepKey values. v2 bindings use mode=single with step and pointer, or mode=many with an ordered items array. Each arguments object may contain only properties declared by that catalog entry's inputSchema; if the catalog cannot express a user constraint, stop and explain instead of inventing arguments. Never include a commit, interaction resume, arbitrary HTTP, or script step.",
       "inputSchema": {
         "$defs": {
           "TaskPlanBindingInput": {
@@ -1293,6 +1293,28 @@
             "title": "TaskPlanBindingInput",
             "type": "object"
           },
+          "TaskPlanBindingItemInput": {
+            "additionalProperties": false,
+            "properties": {
+              "pointer": {
+                "maxLength": 512,
+                "title": "Pointer",
+                "type": "string"
+              },
+              "step": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Step",
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "pointer"
+            ],
+            "title": "TaskPlanBindingItemInput",
+            "type": "object"
+          },
           "TaskPlanCapabilityStepInput": {
             "additionalProperties": false,
             "properties": {
@@ -1304,7 +1326,28 @@
               },
               "bindings": {
                 "additionalProperties": {
-                  "$ref": "#/$defs/TaskPlanBindingInput"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TaskPlanBindingInput"
+                    },
+                    {
+                      "discriminator": {
+                        "mapping": {
+                          "many": "#/$defs/TaskPlanManyBindingInput",
+                          "single": "#/$defs/TaskPlanSingleBindingInput"
+                        },
+                        "propertyName": "mode"
+                      },
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/TaskPlanSingleBindingInput"
+                        },
+                        {
+                          "$ref": "#/$defs/TaskPlanManyBindingInput"
+                        }
+                      ]
+                    }
+                  ]
                 },
                 "description": "Map each target input field to an earlier step output using step and pointer.",
                 "title": "Bindings",
@@ -1348,6 +1391,122 @@
             "title": "TaskPlanCapabilityStepInput",
             "type": "object"
           },
+          "TaskPlanConstraintsInput": {
+            "additionalProperties": false,
+            "properties": {
+              "temporal": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TaskPlanTemporalConstraintInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "title": "TaskPlanConstraintsInput",
+            "type": "object"
+          },
+          "TaskPlanManyBindingInput": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/TaskPlanBindingItemInput"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "title": "Items",
+                "type": "array"
+              },
+              "mode": {
+                "const": "many",
+                "title": "Mode",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "items"
+            ],
+            "title": "TaskPlanManyBindingInput",
+            "type": "object"
+          },
+          "TaskPlanSingleBindingInput": {
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "single",
+                "title": "Mode",
+                "type": "string"
+              },
+              "pointer": {
+                "maxLength": 512,
+                "title": "Pointer",
+                "type": "string"
+              },
+              "step": {
+                "maxLength": 64,
+                "minLength": 1,
+                "title": "Step",
+                "type": "string"
+              }
+            },
+            "required": [
+              "mode",
+              "step",
+              "pointer"
+            ],
+            "title": "TaskPlanSingleBindingInput",
+            "type": "object"
+          },
+          "TaskPlanTemporalConstraintInput": {
+            "additionalProperties": false,
+            "properties": {
+              "end": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "End"
+              },
+              "kind": {
+                "enum": [
+                  "previous_day",
+                  "previous_calendar_week",
+                  "absolute_range"
+                ],
+                "title": "Kind",
+                "type": "string"
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Start"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "title": "TaskPlanTemporalConstraintInput",
+            "type": "object"
+          },
           "TaskPlanTransformStepInput": {
             "additionalProperties": false,
             "properties": {
@@ -1359,7 +1518,28 @@
               },
               "bindings": {
                 "additionalProperties": {
-                  "$ref": "#/$defs/TaskPlanBindingInput"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TaskPlanBindingInput"
+                    },
+                    {
+                      "discriminator": {
+                        "mapping": {
+                          "many": "#/$defs/TaskPlanManyBindingInput",
+                          "single": "#/$defs/TaskPlanSingleBindingInput"
+                        },
+                        "propertyName": "mode"
+                      },
+                      "oneOf": [
+                        {
+                          "$ref": "#/$defs/TaskPlanSingleBindingInput"
+                        },
+                        {
+                          "$ref": "#/$defs/TaskPlanManyBindingInput"
+                        }
+                      ]
+                    }
+                  ]
                 },
                 "description": "Map each target input field to an earlier step output using step and pointer.",
                 "title": "Bindings",
@@ -1405,6 +1585,17 @@
           }
         },
         "properties": {
+          "constraints": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TaskPlanConstraintsInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "goal": {
             "maxLength": 500,
             "minLength": 1,
@@ -1423,6 +1614,15 @@
             ],
             "default": null,
             "title": "Idempotency Key"
+          },
+          "schema_version": {
+            "default": "agentbridge.task-plan.proposal.v1",
+            "enum": [
+              "agentbridge.task-plan.proposal.v1",
+              "agentbridge.task-plan.proposal.v2"
+            ],
+            "title": "Schema Version",
+            "type": "string"
           },
           "steps": {
             "items": {
@@ -1793,6 +1993,19 @@
       "description": "List workflows initiated by the authenticated OA user from the Sent page. This is distinct from workflows the user has handled (Done) or follows (Tracked). Use this list to resolve a concise request such as 'revoke the business-trip request I just submitted'. Select only one unique recent match; if several remain, ask for a human-readable title or date, never an affair ID or task ID.",
       "inputSchema": {
         "properties": {
+          "end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Date"
+          },
           "idempotency_key": {
             "anyOf": [
               {
@@ -1825,6 +2038,19 @@
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Date"
           }
         },
         "title": "oa_workflow_sent_listArguments",

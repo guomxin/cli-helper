@@ -1136,17 +1136,28 @@ class AdminControlPlane:
     @staticmethod
     def _task_plan_projection(record: dict) -> dict:
         risk = record.get("risk_summary") or {}
+        temporal = record.get("temporal_context") or {}
+        result_projection = record.get("result_projection") or {}
+        result = result_projection.get("result") or {}
+        coverage = result.get("coverage") or {}
         return {
             "plan_id": record["plan_id"],
             "task_id": record["parent_task_id"],
             "user_subject": record["user_subject"],
             "revision": record["revision"],
+            "schema_version": record.get("schema_version"),
             "state": record["state"],
             "current_step_key": record.get("current_step_key"),
             "step_count": len(record.get("steps") or []),
             "step_counts": dict(record.get("step_counts") or {}),
             "systems": list(risk.get("systems") or []),
             "write_sink_count": int(risk.get("writeSinkCount") or 0),
+            "effect_outcome": record.get("effect_outcome"),
+            "temporal_range": temporal.get("absoluteRange"),
+            "result_kind": result_projection.get("kind"),
+            "coverage_status": coverage.get("status"),
+            "included_count": int(result.get("included_count") or 0),
+            "excluded_count": int(result.get("excluded_count") or 0),
             "terminal_reason": _runtime_code(record.get("terminal_reason")),
             "created_at": record["created_at"],
             "updated_at": record["updated_at"],

@@ -14,6 +14,7 @@ from bscli.core.host_contract import (
     HOST_PROFILE_META_KEY,
     TASK_CONTEXT_META_KEY,
 )
+from bscli.core.planning_policy import COMPOSED_TASK_PLANNING_POLICY
 
 
 MCP_APP_RESOURCE_URI = "ui://agentbridge/trusted-interaction.html"
@@ -104,6 +105,7 @@ def build_server_profile(*, mcp_url: str) -> dict[str, Any]:
             "modelMustNotCollectInteractionValues": True,
             "governedWriteFlow": "prepare -> authorize -> commit -> verify",
         },
+        "planning": deepcopy(COMPOSED_TASK_PLANNING_POLICY),
         "hostContract": {
             "schemaVersion": HOST_CONTRACT_SCHEMA,
             "negotiationTool": "agentbridge_server_profile",

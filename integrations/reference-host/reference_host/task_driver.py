@@ -125,6 +125,7 @@ class ReferenceTaskDriver:
             )
             identity_profile = identity_result.payload()
             require_accepted_level(identity_profile.get("host") or {}, "L3")
+            identity_profile["planning"] = profile.get("planning")
             listed_tools = await client.list_tools()
             allowed = set(
                 (identity_profile.get("agentToolAccess") or {}).get(

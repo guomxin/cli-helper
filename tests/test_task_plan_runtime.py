@@ -6,7 +6,7 @@ from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.operations import OperationStore
 from bscli.core.task_plan_runtime import TaskPlanRuntime
-from bscli.core.task_plan_validation import validate_and_compile_task_plan
+from bscli.core.task_plan_validation import PlanValidationError, validate_and_compile_task_plan
 from bscli.core.task_plans import TaskPlanStore
 from bscli.core.transforms import build_transform_registry
 
@@ -82,6 +82,37 @@ class FakePlanService:
                 workflow="source-v1",
             )
         )
+        source_output_schema = {
+            "type": "object",
+            "properties": {
+                "collection": {"type": "string"},
+                "items": {"type": "array", "items": {"type": "object"}},
+                "coverage": {"type": "object"},
+            },
+            "required": ["collection", "items", "coverage"],
+            "additionalProperties": False,
+        }
+        for name in ("oa.workflow.done.list", "oa.workflow.sent.list"):
+            self.registry.register(
+                CapabilitySpec(
+                    name=name,
+                    version="1.0.0",
+                    description=f"Read {name}",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "start_date": {"type": "string"},
+                            "end_date": {"type": "string"},
+                            "limit": {"type": "integer"},
+                        },
+                        "additionalProperties": False,
+                    },
+                    output_schema=source_output_schema,
+                    effect="read",
+                    adapter="fake",
+                    workflow=name,
+                )
+            )
         self.registry.register(
             CapabilitySpec(
                 name="sink.prepare",
@@ -99,11 +130,40 @@ class FakePlanService:
                 workflow="sink-v1",
             )
         )
+        self.registry.register(
+            CapabilitySpec(
+                name="taihua.work_log.create.prepare",
+                version="1.0.0",
+                description="Prepare Taihua work log",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                        "log_date": {"type": "string"},
+                        "hours": {"type": "number"},
+                    },
+                    "required": ["content", "log_date", "hours"],
+                    "additionalProperties": False,
+                },
+                output_schema={"type": "object"},
+                effect="controlled_write",
+                adapter="fake",
+                workflow="taihua-write-v1",
+            )
+        )
         self.operations = OperationStore(db_path)
         self.tasks = FakeTaskHub()
         self.interaction = None
         self.source_requires_login = False
         self.source_calls = 0
+        self.source_coverage_status = "complete"
+        self.authority_valid = True
+
+    def validate_task_plan_authority(self, _plan):
+        if not self.authority_valid:
+            raise PlanValidationError(
+                "PLAN_AUTHORITY_INVALID", "plan authority was revoked"
+            )
 
     def invoke(self, *, user_subject, capability_name, arguments, idempotency_key, **_):
         spec = self.registry.get(capability_name)
@@ -119,7 +179,9 @@ class FakePlanService:
             stored = self.operations.get(operation["operation_id"])
             return self._response(stored, reused=True)
         self.operations.mark_running(operation["operation_id"])
-        if capability_name == "source.items":
+        if capability_name == "source.items" or capability_name.startswith(
+            "oa.workflow."
+        ):
             self.source_calls += 1
             if self.source_requires_login and self.source_calls == 1:
                 interaction_id = "login-interaction-0000000000001"
@@ -133,18 +195,41 @@ class FakePlanService:
                     next_action={"interaction": self.interaction},
                 )
             else:
+                result = {
+                    "items": [
+                        {
+                            "affair_id": "1",
+                            "title": "流程一",
+                            "date": "2026-08-30",
+                            "category": "审批",
+                        }
+                    ]
+                }
+                if capability_name.startswith("oa.workflow."):
+                    collection = "done" if ".done." in capability_name else "sent"
+                    result = {
+                        "collection": collection,
+                        "items": result["items"],
+                        "coverage": {
+                            "status": self.source_coverage_status,
+                            "queryApplied": True,
+                            "dateBasis": (
+                                "processed_at" if collection == "done" else "initiated_at"
+                            ),
+                            "requestedRange": {
+                                "start": "2026-08-30",
+                                "end": "2026-08-30",
+                            },
+                            "scannedCount": 1,
+                            "matchedCount": 1,
+                            "hasMore": self.source_coverage_status != "complete",
+                            "completionReason": "test",
+                            "observedAt": "2026-08-31T09:00:00+08:00",
+                            "queryHash": f"sha256:{collection}",
+                        },
+                    }
                 operation = self.operations.mark_succeeded(
-                    operation["operation_id"],
-                    {
-                        "items": [
-                            {
-                                "affair_id": "1",
-                                "title": "流程一",
-                                "date": "2026-08-30",
-                                "category": "审批",
-                            }
-                        ]
-                    },
+                    operation["operation_id"], result
                 )
         else:
             interaction_id = "field-interaction-0000000000001"
@@ -266,6 +351,114 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         )
         return plan
 
+    def compile_v2(self, *, include_sink):
+        steps = [
+            {
+                "stepKey": "read_done",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.done.list",
+                "arguments": {
+                    "start_date": "2026-08-30",
+                    "end_date": "2026-08-30",
+                },
+            },
+            {
+                "stepKey": "read_sent",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.sent.list",
+                "arguments": {
+                    "start_date": "2026-08-30",
+                    "end_date": "2026-08-30",
+                },
+            },
+            {
+                "stepKey": "merge",
+                "kind": "transform",
+                "transformName": "merge_work_items.v1",
+                "dependsOn": ["read_done", "read_sent"],
+                "bindings": {
+                    "sources": {
+                        "mode": "many",
+                        "items": [
+                            {"step": "read_done", "pointer": ""},
+                            {"step": "read_sent", "pointer": ""},
+                        ],
+                    }
+                },
+            },
+            {
+                "stepKey": "draft",
+                "kind": "transform",
+                "transformName": "work_items_to_log_draft.v2",
+                "dependsOn": ["merge"],
+                "bindings": {
+                    "bundle": {
+                        "mode": "single",
+                        "step": "merge",
+                        "pointer": "",
+                    }
+                },
+            },
+        ]
+        if include_sink:
+            steps.append(
+                {
+                    "stepKey": "write",
+                    "kind": "capability",
+                    "capabilityName": "taihua.work_log.create.prepare",
+                    "dependsOn": ["draft"],
+                    "arguments": {"log_date": "2026-08-30", "hours": 1},
+                    "bindings": {
+                        "content": {
+                            "mode": "single",
+                            "step": "draft",
+                            "pointer": "/draft",
+                        }
+                    },
+                }
+            )
+        compiled = validate_and_compile_task_plan(
+            {
+                "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                "goal": "v2 composed plan",
+                "constraints": {
+                    "temporal": {
+                        "kind": "absolute_range",
+                        "start": "2026-08-30",
+                        "end": "2026-08-30",
+                    }
+                },
+                "steps": steps,
+            },
+            registry=self.service.registry,
+            transforms=self.transforms,
+            trusted_write_prepares={"taihua.work_log.create.prepare"},
+            hidden_commit_capabilities={"sink.commit"},
+            scope_resolver=lambda name: frozenset(
+                {"taihua:write:worklog"}
+                if name.startswith("taihua.")
+                else {"oa:read"}
+            ),
+            granted_scopes={"oa:read", "taihua:write:worklog"},
+        )
+        compiled["authoritySnapshot"] = {
+            "tokenId": "token-1",
+            "userSubject": "user-1",
+            "requiredScopes": compiled["requiredScopes"],
+        }
+        return compiled
+
+    def create_v2_plan(self, *, include_sink):
+        plan, _ = self.plans.create(
+            user_subject="user-1",
+            parent_task_id="task-1",
+            compiled_plan=self.compile_v2(include_sink=include_sink),
+            proposal_source="agent_host",
+            coordinator_lease_version=1,
+            idempotency_key=f"v2-{include_sink}",
+        )
+        return plan
+
     def test_read_and_transform_plan_completes_without_host_replanning(self):
         plan = self.create_plan(include_sink=False)
 
@@ -278,6 +471,50 @@ class TaskPlanRuntimeTests(unittest.TestCase):
             ["succeeded", "succeeded"],
         )
         self.assertEqual(len(self.service.tasks.completed), 1)
+
+    def test_v2_preview_persists_private_projection_and_effect_outcome(self):
+        plan = self.create_v2_plan(include_sink=False)
+
+        response = self.runtime.start(plan["plan_id"], user_subject="user-1")
+
+        self.assertEqual(response["status"], "succeeded")
+        self.assertEqual(response["plan"]["effectOutcome"], "preview_ready")
+        projection = response["plan"]["resultProjection"]
+        self.assertEqual(projection["kind"], "private_draft")
+        self.assertIn("处理《流程一》", projection["result"]["draft"])
+        self.assertIn("发起《流程一》", projection["result"]["draft"])
+        self.assertEqual(
+            sum(
+                event["event_type"] == "plan.result.ready"
+                for event in self.service.tasks.events
+            ),
+            1,
+        )
+
+    def test_v2_incomplete_source_stops_before_draft_or_write(self):
+        self.service.source_coverage_status = "partial"
+        plan = self.create_v2_plan(include_sink=True)
+
+        response = self.runtime.start(plan["plan_id"], user_subject="user-1")
+
+        self.assertEqual(response["status"], "failed")
+        self.assertEqual(response["error"]["code"], "PLAN_SOURCE_INCOMPLETE")
+        self.assertEqual(response["plan"]["effectOutcome"], "source_incomplete")
+        self.assertEqual(
+            [step["state"] for step in response["plan"]["steps"]],
+            ["succeeded", "succeeded", "failed", "canceled", "canceled"],
+        )
+        self.assertIsNone(self.service.interaction)
+
+    def test_v2_revoked_authority_stops_before_first_business_call(self):
+        self.service.authority_valid = False
+        plan = self.create_v2_plan(include_sink=False)
+
+        response = self.runtime.start(plan["plan_id"], user_subject="user-1")
+
+        self.assertEqual(response["status"], "failed")
+        self.assertEqual(response["error"]["code"], "PLAN_AUTHORITY_INVALID")
+        self.assertEqual(self.service.source_calls, 0)
 
     def test_write_prepare_waits_then_resumes_to_plan_completion(self):
         plan = self.create_plan(include_sink=True)

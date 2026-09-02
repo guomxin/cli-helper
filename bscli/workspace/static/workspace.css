@@ -1221,6 +1221,34 @@ code {
   font-size: 11px;
 }
 
+.task-plan-result {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.task-plan-result strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.task-plan-result pre {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.task-plan-result p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .timeline {
   position: relative;
   display: grid;

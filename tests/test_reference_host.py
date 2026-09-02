@@ -96,6 +96,10 @@ class ScriptedClient:
             return result(
                 {
                     "negotiation": {"acceptedLevel": "L3"},
+                    "planning": {
+                        "schemaVersion": "agentbridge.composed-task-planning-policy.v1",
+                        "modelContext": "Use a durable plan for source-dependent results.",
+                    },
                     "agentToolAccess": {
                         "allowedToolNames": ["oa_workflow_pending_list"]
                     },
@@ -288,6 +292,18 @@ class ReferenceHostTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             any(call[0] == "agentbridge_host_task_finish" for call in client.calls)
+        )
+        await driver.close()
+
+    async def test_identity_profile_preserves_central_planning_policy(self) -> None:
+        client = ScriptedClient()
+        driver = self.driver(client)
+
+        profile = await driver.ensure_identity(self.identity.label)
+
+        self.assertEqual(
+            profile["planning"]["schemaVersion"],
+            "agentbridge.composed-task-planning-policy.v1",
         )
         await driver.close()
 

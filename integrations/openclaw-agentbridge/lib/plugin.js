@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.72";
+export const PLUGIN_VERSION = "0.4.73";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -42,20 +42,6 @@ const CROSS_ENDPOINT_HINT_PATTERN =
   /(?:网页(?:端)?|浏览器(?:端)?|电脑(?:端)?|手机(?:端)?|telegram|\btg\b|微信|其他端|另一个端|跨端)/iu;
 const REFERENTIAL_HINT_PATTERN =
   /(?:刚才|刚刚|前面|之前|上一(?:条|步|个)|第\s*\d+\s*条|继续|这个|那个)/iu;
-const COMPOSED_TASK_SOURCE_HINT_PATTERN =
-  /(?:\u6c47\u603b|\u6574\u7406|\u8bfb\u53d6|\u67e5\u770b|\u67e5\u8be2|\u641c\u7d22|\u83b7\u53d6|\u6839\u636e)/iu;
-const COMPOSED_TASK_SINK_HINT_PATTERN =
-  /(?:\u586b\u5199|\u5199\u5165|\u521b\u5efa|\u63d0\u4ea4|\u4fdd\u5b58|\u767b\u8bb0|\u751f\u6210.{0,8}(?:\u65e5\u5fd7|\u7533\u8bf7|\u8bb0\u5f55|\u8349\u7a3f|\u62a5\u544a)|(?:\u6210|\u4e3a).{0,8}(?:\u65e5\u5fd7|\u7533\u8bf7|\u8bb0\u5f55|\u8349\u7a3f|\u62a5\u544a))/iu;
-const COMPOSED_TASK_PLANNING_CONTEXT = [
-  "AgentBridge durable composed-task rule:",
-  "- This request derives a later action or artifact from earlier business data.",
-  "- First call agentbridge_task_plan_catalog, then submit exactly one supported plan through agentbridge_task_plan_prepare.",
-  "- For every step, copy only argument names declared in that catalog entry's inputSchema.properties. Never invent an argument from user wording.",
-  "- Keep a requested value in the plan goal or final explanation when no selected step inputSchema accepts it.",
-  "- Do not emulate the composed task with separate source and sink tool calls.",
-  "- Respect preview-only or do-not-submit wording by ending at a transform result or trusted prepare interaction; never call a private commit or resume tool.",
-  "- If the filtered catalog cannot express the goal, report the unsupported capability or missing scope instead of bypassing the plan.",
-].join("\n");
 
 export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const config = resolvePluginConfig(api.pluginConfig);
@@ -500,7 +486,10 @@ async function taskContinuityPromptContext({
   syncTimeline = true,
 }) {
   const contexts = [];
-  const planningContext = composedTaskPlanningContext(prompt);
+  const planningContext = await composedTaskPlanningContext({
+    context,
+    identityRouter,
+  });
   if (planningContext) {
     contexts.push(planningContext);
   }
@@ -543,16 +532,28 @@ async function taskContinuityPromptContext({
     : undefined;
 }
 
-function composedTaskPlanningContext(prompt) {
-  const text = safeText(prompt, 20_000);
-  if (
-    !text ||
-    !COMPOSED_TASK_SOURCE_HINT_PATTERN.test(text) ||
-    !COMPOSED_TASK_SINK_HINT_PATTERN.test(text)
-  ) {
+async function composedTaskPlanningContext({ context, identityRouter }) {
+  const sessionKey = safeText(context.sessionKey, 1_024);
+  if (!isPrivateSessionKey(sessionKey)) {
     return null;
   }
-  return COMPOSED_TASK_PLANNING_CONTEXT;
+  let identity = identityRouter.resolveToolContext({
+    sessionKey,
+    messageChannel:
+      channelFromPrivateSessionKey(sessionKey) ||
+      context.messageProvider ||
+      context.channel ||
+      null,
+    requesterSenderId: null,
+    agentAccountId: null,
+  });
+  if (!identity?.bound && isWorkspaceSessionKey(sessionKey)) {
+    identity = await identityRouter.resolveWorkspaceSession(sessionKey);
+  }
+  if (!identity?.bound) {
+    return null;
+  }
+  return identityRouter.planningPolicyForBinding?.(identity.binding)?.modelContext || null;
 }
 
 async function resolveTaskContinuationContext({

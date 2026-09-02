@@ -1258,7 +1258,7 @@ export class InteractionCoordinator {
             notification.attachments,
           );
         } else if (
-          ["status", "timeline_message"].includes(
+          ["status", "timeline_message", "plan_result"].includes(
             notification.deliveryMode,
           ) &&
           typeof notification.message === "string"

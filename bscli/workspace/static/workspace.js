@@ -2293,6 +2293,7 @@ function eventLabel(type) {
       "plan.started": "跨系统计划已启动",
       "plan.step.started": "计划步骤已开始",
       "plan.step.succeeded": "计划步骤已完成",
+      "plan.result.ready": "组合任务结果已生成",
       "plan.step.resumed": "计划步骤已恢复",
       "plan.step.recovered": "重启后已恢复计划步骤",
       "plan.step.waiting": "计划正在等待用户",
@@ -2349,7 +2350,33 @@ function renderTaskPlan(plan) {
     steps.append(item);
   });
   section.append(steps);
+  if (plan.resultProjection) {
+    section.append(renderTaskPlanResult(plan.resultProjection));
+  }
   return section;
+}
+
+function renderTaskPlanResult(projection) {
+  const result = projection?.result || {};
+  const panel = document.createElement("div");
+  panel.className = "task-plan-result";
+  const heading = document.createElement("strong");
+  heading.textContent = projection?.kind === "private_draft"
+    ? "可核对草稿"
+    : "来源核对结果";
+  panel.append(heading);
+  if (typeof result.draft === "string" && result.draft.trim()) {
+    const draft = document.createElement("pre");
+    draft.textContent = result.draft.trim();
+    panel.append(draft);
+  }
+  const summary = document.createElement("p");
+  const included = Number(result.included_count ?? result.item_count ?? 0);
+  const excluded = Number(result.excluded_count ?? result.duplicate_count ?? 0);
+  const coverage = result.coverage?.status || "unknown";
+  summary.textContent = `采用 ${included} 项 · 排除 ${excluded} 项 · 来源${coverage === "complete" ? "完整" : "不完整"}`;
+  panel.append(summary);
+  return panel;
 }
 
 function appendArtifactList(

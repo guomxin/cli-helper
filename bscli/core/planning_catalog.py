@@ -4,6 +4,10 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from bscli.core.capability import CapabilityRegistry
+from bscli.core.planning_policy import (
+    COMPOSED_TASK_POLICY_VERSION,
+    planning_descriptor,
+)
 from bscli.core.task_plan_validation import task_plan_step_json_schema
 from bscli.core.transforms import TransformRegistry
 
@@ -32,6 +36,10 @@ def build_planning_catalog(
         required = scope_resolver(spec.name)
         if not required.issubset(granted):
             continue
+        descriptor = planning_descriptor(spec.name)
+        roles = list((descriptor or {}).get("roles") or [])
+        if not roles:
+            roles = ["write_sink" if spec.name in prepares else "precondition"]
         capabilities.append(
             {
                 "name": spec.name,
@@ -42,9 +50,9 @@ def build_planning_catalog(
                 "requiredScopes": sorted(required),
                 "inputSchema": spec.input_schema,
                 "outputSchema": spec.output_schema,
-                "planningRole": (
-                    "write_sink" if spec.name in prepares else "source"
-                ),
+                "planningRole": roles[0],
+                "planningRoles": roles,
+                "planningDescriptor": descriptor,
                 "mayRequireTrustedInteraction": spec.name in prepares,
             }
         )
@@ -52,9 +60,12 @@ def build_planning_catalog(
     capability_names = {item["name"] for item in capabilities}
     transform_names = {item["name"] for item in transforms_catalog}
     examples: list[dict[str, Any]] = []
-    if (
-        "oa.workflow.done.list" in capability_names
-        and "work_items_to_log_draft.v1" in transform_names
+    if all(
+        name in capability_names
+        for name in ("oa.workflow.done.list", "oa.workflow.sent.list")
+    ) and all(
+        name in transform_names
+        for name in ("merge_work_items.v1", "work_items_to_log_draft.v2")
     ):
         preview_steps: list[dict[str, Any]] = [
             {
@@ -64,30 +75,76 @@ def build_planning_catalog(
                 "arguments": {
                     "start_date": "2026-07-01",
                     "end_date": "2026-07-31",
+                    "limit": 100,
+                },
+            },
+            {
+                "stepKey": "read_sent",
+                "kind": "capability",
+                "capabilityName": "oa.workflow.sent.list",
+                "arguments": {
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-07-31",
+                    "limit": 100,
+                },
+            },
+            {
+                "stepKey": "merge_items",
+                "kind": "transform",
+                "transformName": "merge_work_items.v1",
+                "dependsOn": ["read_done", "read_sent"],
+                "bindings": {
+                    "sources": {
+                        "mode": "many",
+                        "items": [
+                            {"step": "read_done", "pointer": ""},
+                            {"step": "read_sent", "pointer": ""},
+                        ],
+                    }
                 },
             },
             {
                 "stepKey": "draft_log",
                 "kind": "transform",
-                "transformName": "work_items_to_log_draft.v1",
-                "dependsOn": ["read_done"],
+                "transformName": "work_items_to_log_draft.v2",
+                "dependsOn": ["merge_items"],
                 "bindings": {
-                    "items": {"step": "read_done", "pointer": "/items"}
+                    "bundle": {
+                        "mode": "single",
+                        "step": "merge_items",
+                        "pointer": "",
+                    }
                 },
             },
         ]
         examples.append(
             {
-                "title": "读取 OA 已办并生成可核对的日志草稿",
-                "goal": "汇总 2026 年 7 月 OA 已办并生成工作日志草稿",
+                "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                "title": "读取 OA 已办和已发并生成可核对的日志草稿",
+                "goal": "汇总 2026 年 7 月 OA 已办和已发并生成工作日志草稿",
+                "constraints": {
+                    "temporal": {
+                        "kind": "absolute_range",
+                        "start": "2026-07-01",
+                        "end": "2026-07-31",
+                    }
+                },
                 "steps": preview_steps,
             }
         )
         if "taihua.work_log.create.prepare" in capability_names:
             examples.append(
                 {
-                    "title": "读取 OA 已办、生成草稿并打开泰华可信填单",
-                    "goal": "汇总 2026 年 7 月 OA 已办并准备填写 3 小时工作日志",
+                    "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                    "title": "读取 OA 已办和已发、生成草稿并打开泰华可信填单",
+                    "goal": "汇总 2026 年 7 月 OA 已办和已发并准备填写 3 小时工作日志",
+                    "constraints": {
+                        "temporal": {
+                            "kind": "absolute_range",
+                            "start": "2026-07-01",
+                            "end": "2026-07-31",
+                        }
+                    },
                     "steps": preview_steps
                     + [
                         {
@@ -101,6 +158,7 @@ def build_planning_catalog(
                             },
                             "bindings": {
                                 "content": {
+                                    "mode": "single",
                                     "step": "draft_log",
                                     "pointer": "/draft",
                                 }
@@ -111,7 +169,12 @@ def build_planning_catalog(
             )
 
     return {
-        "schemaVersion": "agentbridge.planning-catalog.v1",
+        "schemaVersion": "agentbridge.planning-catalog.v2",
+        "policyVersion": COMPOSED_TASK_POLICY_VERSION,
+        "supportedProposalVersions": [
+            "agentbridge.task-plan.proposal.v1",
+            "agentbridge.task-plan.proposal.v2",
+        ],
         "supportedStepKinds": ["capability", "transform"],
         "limits": {
             "maximumSteps": 12,
@@ -126,7 +189,7 @@ def build_planning_catalog(
             "rules": [
                 "capability 步骤使用 capabilityName，不得使用 transformName",
                 "transform 步骤使用 transformName，不得使用 capabilityName",
-                "bindings 的键是目标输入字段，值包含 step 和 JSON Pointer pointer",
+                "v2 bindings 必须声明 mode=single 或 mode=many；many 最多包含 8 个来源",
                 "arguments 只能使用所选能力或转换 inputSchema.properties 中明确声明的字段",
                 "目录不支持的用户要求应保留在 goal 或最终说明中，不得臆造为步骤参数",
                 "只使用本目录实际返回的能力与转换名称",

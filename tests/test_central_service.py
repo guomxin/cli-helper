@@ -111,6 +111,63 @@ class CentralCapabilityServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, "no MCP scope policy"):
             capability_required_scopes("oa.future.unmapped_write")
 
+    def test_planning_gate_only_blocks_a_sink_after_same_task_business_source(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, MagicMock())
+            task_id = self._ensure_host_task(service)
+            unrelated_task_id = service.ensure_host_task(
+                user_subject="user-a",
+                token_id="token-a",
+                agent_host="test-host",
+                host_task_key="unrelated-task",
+                endpoint_key="batch-test-endpoint",
+                client_type="web",
+                external_subject="user-a",
+                conversation_ref="batch-test-conversation",
+                title="另一个任务",
+            )["task"]["taskId"]
+            spec = service.registry.get("oa.workflow.done.list")
+            operation, _ = service.operations.create(
+                user_subject="user-a",
+                capability_name=spec.name,
+                capability_version=spec.version,
+                input_summary={},
+                input_identity={},
+                idempotency_key="source-for-planning-gate",
+            )
+            service.operations.mark_running(operation["operation_id"])
+            operation = service.operations.mark_succeeded(
+                operation["operation_id"], {"items": []}
+            )
+            service.tasks.link_operation(
+                task_id=task_id,
+                user_subject="user-a",
+                operation=operation,
+            )
+
+            blocked = service.planning_gate_for_call(
+                user_subject="user-a",
+                task_id=task_id,
+                capability_name="taihua.work_log.create.prepare",
+                host_type="openclaw",
+            )
+            unrelated = service.planning_gate_for_call(
+                user_subject="user-a",
+                task_id=unrelated_task_id,
+                capability_name="taihua.work_log.create.prepare",
+                host_type="openclaw",
+            )
+            internal = service.planning_gate_for_call(
+                user_subject="user-a",
+                task_id=task_id,
+                capability_name="taihua.work_log.create.prepare",
+                host_type="task_plan",
+            )
+
+            self.assertEqual(blocked["error"]["code"], "PLAN_REQUIRED")
+            self.assertIsNone(unrelated)
+            self.assertIsNone(internal)
+
     def test_smartlight_alarm_remark_uses_field_authorization_and_commit_chain(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

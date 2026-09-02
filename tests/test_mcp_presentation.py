@@ -35,6 +35,12 @@ class McpPresentationTests(unittest.TestCase):
             profile["interactions"]["delivery"][3]["status"],
             "deferred",
         )
+        self.assertEqual(
+            profile["planning"]["schemaVersion"],
+            "agentbridge.composed-task-planning-policy.v1",
+        )
+        self.assertIn("later action", profile["planning"]["modelContext"])
+        self.assertNotIn("OA 转泰华", profile["planning"]["modelContext"])
 
     def test_interaction_tool_metadata_supports_modern_and_legacy_hosts(self):
         metadata = interaction_tool_meta()

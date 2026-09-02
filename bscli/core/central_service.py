@@ -256,6 +256,12 @@ from bscli.core.session_secrets import (
 from bscli.core.sessions import SessionRegistry
 from bscli.core.tasks import TaskHubStore, TaskIntegrityError, TaskNotFound
 from bscli.core.planning_catalog import build_planning_catalog
+from bscli.core.planning_policy import (
+    COMPOSED_TASK_POLICY_VERSION,
+    authority_snapshot,
+    compile_temporal_constraints,
+    planning_descriptor,
+)
 from bscli.core.task_plan_runtime import TaskPlanRuntime
 from bscli.core.task_plan_validation import (
     PlanValidationError,
@@ -779,6 +785,7 @@ class CentralCapabilityService:
             plans=self.task_plans,
             transforms=self.transforms,
         )
+        self._task_plan_authority_resolver = None
 
     def list_capabilities(self, *, system: str | None = None) -> dict:
         return {
@@ -832,20 +839,46 @@ class CentralCapabilityService:
         task_id: str,
         proposal: dict,
         granted_scopes: list[str] | set[str],
+        authority_identity: dict | None = None,
         idempotency_key: str | None = None,
         coordinator_lease_version: int | None = None,
         proposal_source: str = "agent_host",
     ) -> dict:
-        self.tasks.get_task(task_id, user_subject=user_subject)
+        task = self.tasks.get_task(task_id, user_subject=user_subject)
+        try:
+            compiled_proposal, temporal_context = compile_temporal_constraints(
+                proposal,
+                accepted_at=task.get("created_at"),
+            )
+        except ValueError as exc:
+            raise PlanValidationError(
+                "PLAN_TEMPORAL_CONSTRAINT_INVALID", str(exc)
+            ) from exc
         compiled = validate_and_compile_task_plan(
-            proposal,
+            compiled_proposal,
             registry=self.registry,
             transforms=self.transforms,
             trusted_write_prepares=_TRUSTED_WRITE_DEFINITIONS,
             hidden_commit_capabilities=_TRUSTED_WRITE_COMMITS,
             scope_resolver=self.planning_required_scopes,
             granted_scopes=granted_scopes,
+            temporal_context=temporal_context,
         )
+        if compiled["proposalSchemaVersion"].endswith(".v2"):
+            if not isinstance(authority_identity, dict):
+                raise PlanValidationError(
+                    "PLAN_AUTHORITY_REQUIRED",
+                    "v2 计划必须绑定当前 MCP 执行授权。",
+                )
+            if authority_identity.get("user_subject") != user_subject:
+                raise PlanValidationError(
+                    "PLAN_AUTHORITY_INVALID",
+                    "计划执行授权与用户不匹配。",
+                )
+            compiled["authoritySnapshot"] = authority_snapshot(
+                authority_identity,
+                required_scopes=compiled["requiredScopes"],
+            )
         plan, reused = self.task_plans.create(
             user_subject=user_subject,
             parent_task_id=task_id,
@@ -887,6 +920,77 @@ class CentralCapabilityService:
             plan["plan_id"], user_subject=user_subject
         )
         return {**response, "reused": False}
+
+    def set_task_plan_authority_resolver(self, resolver) -> None:
+        self._task_plan_authority_resolver = resolver
+
+    def validate_task_plan_authority(self, plan: dict) -> None:
+        snapshot = plan.get("authority_snapshot")
+        if not isinstance(snapshot, dict):
+            if str(plan.get("schema_version") or "").endswith(".v2"):
+                raise PlanValidationError(
+                    "PLAN_AUTHORITY_INVALID", "v2 计划缺少执行授权快照。"
+                )
+            return
+        resolver = self._task_plan_authority_resolver
+        if not callable(resolver):
+            raise PlanValidationError(
+                "PLAN_AUTHORITY_UNAVAILABLE", "中央服务暂时无法复核计划执行授权。"
+            )
+        try:
+            identity = resolver(
+                snapshot.get("tokenId"),
+                set(snapshot.get("requiredScopes") or []),
+            )
+        except Exception as exc:
+            raise PlanValidationError(
+                "PLAN_AUTHORITY_INVALID", "计划执行授权已过期、撤销或缩权。"
+            ) from exc
+        if identity.get("user_subject") != plan.get("user_subject"):
+            raise PlanValidationError(
+                "PLAN_AUTHORITY_INVALID", "计划执行授权主体已不匹配。"
+            )
+
+    def planning_gate_for_call(
+        self,
+        *,
+        user_subject: str,
+        task_id: str | None,
+        capability_name: str,
+        host_type: str,
+    ) -> dict | None:
+        if not task_id or host_type in {
+            "task_plan",
+            "batch_coordinator",
+            "interaction_resume",
+        }:
+            return None
+        descriptor = planning_descriptor(capability_name)
+        if not descriptor or "write_sink" not in descriptor.get("roles", []):
+            return None
+        source_names: set[str] = set()
+        for spec in self.registry.list():
+            candidate = planning_descriptor(spec.name)
+            if candidate and "business_source" in candidate.get("roles", []):
+                source_names.add(spec.name)
+        if not self.tasks.task_has_succeeded_capability(
+            task_id=task_id,
+            user_subject=user_subject,
+            capability_names=source_names,
+        ):
+            return None
+        return {
+            "status": "planning_control",
+            "error": {
+                "code": "PLAN_REQUIRED",
+                "message": "该写入内容依赖本任务已读取的业务数据，必须进入持久计划。",
+            },
+            "recovery": {
+                "action": "prepare_task_plan",
+                "policyVersion": COMPOSED_TASK_POLICY_VERSION,
+                "maximumRepairAttempts": 1,
+            },
+        }
 
     def get_task_plan(self, *, user_subject: str, plan_id: str) -> dict:
         plan = self.task_plans.get(plan_id, user_subject=user_subject)
@@ -951,6 +1055,12 @@ class CentralCapabilityService:
     ) -> dict:
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
+        planning_control = self.planning_gate_for_call(
+            user_subject=user_subject,
+            task_id=task_id,
+            capability_name=capability_name,
+            host_type=host_type,
+        )
         system_id = self._adapter_systems.get(spec.adapter, spec.system)
         effective_request_id = request_id or str(uuid4())
         trace, _trace_reused = self.runtime_governance.ensure_trace(
@@ -966,7 +1076,17 @@ class CentralCapabilityService:
             capability_name=capability_name,
         )
         runtime = self._runtime_for_system(system_id)
-        if runtime is None:
+        if planning_control is not None:
+            engine.register_handler(
+                capability_name,
+                lambda _context, _inputs: (_ for _ in ()).throw(
+                    CapabilityRejected(
+                        "PLAN_REQUIRED",
+                        planning_control["error"]["message"],
+                    )
+                ),
+            )
+        elif runtime is None:
             engine.register_handler(
                 capability_name,
                 lambda _context, _inputs: self._raise_system_not_configured(system_id),
@@ -1034,6 +1154,16 @@ class CentralCapabilityService:
                 system_id=system_id,
             )
         observed_response = {**response, "runtimeTraceId": trace["trace_id"]}
+        if (
+            planning_control is not None
+            and (response.get("error") or {}).get("code") == "PLAN_REQUIRED"
+        ):
+            observed_response = {
+                **observed_response,
+                **planning_control,
+                "operationId": response.get("operationId"),
+                "runtimeTraceId": trace["trace_id"],
+            }
         if task_id:
             observed_response = self._apply_batch_operation_response(
                 user_subject=user_subject,
@@ -1839,6 +1969,22 @@ class CentralCapabilityService:
                             task,
                             event,
                         )
+            elif event.get("eventType") == "plan.result.ready":
+                plan = self.task_plans.get_for_task(
+                    parent_task_id=task["task_id"],
+                    user_subject=user_subject,
+                )
+                projection = plan.get("result_projection") if plan else None
+                if isinstance(projection, dict):
+                    item["deliveryMode"] = "plan_result"
+                    item["planResult"] = projection
+                    item["message"] = _plan_result_notification_message(
+                        task,
+                        projection,
+                    )
+                else:
+                    item["deliveryMode"] = "status"
+                    item["message"] = _task_notification_message(task, event)
             elif event.get("eventType") in {
                 "task.created",
                 "task.operation.linked",
@@ -5884,6 +6030,8 @@ def _task_notification_message(task: dict, event: dict) -> str:
         return f"{title}：正在执行下一步。"
     if event_type == "plan.step.succeeded":
         return f"{title}：当前步骤已完成。"
+    if event_type == "plan.result.ready":
+        return f"{title}：可核对的组合任务结果已生成。"
     if event_type == "plan.step.resumed":
         return f"{title}：登录恢复后已自动继续。"
     if event_type == "plan.step.recovered":
@@ -5899,6 +6047,27 @@ def _task_notification_message(task: dict, event: dict) -> str:
     if event_type == "plan.outcome_unknown":
         return f"{title}：最终结果未能确认，请先在目标系统核对。"
     return f"{title}：任务状态已更新为 {task['status']}。"
+
+
+def _plan_result_notification_message(task: dict, projection: dict) -> str:
+    raw_title = str(task.get("title") or "AgentBridge 任务")
+    title = _TASK_TITLE_LABELS.get(raw_title, raw_title)
+    result = projection.get("result") if isinstance(projection.get("result"), dict) else {}
+    draft = str(result.get("draft") or "").strip()
+    included = int(result.get("included_count") or 0)
+    excluded = int(result.get("excluded_count") or 0)
+    if projection.get("kind") == "private_draft" and draft:
+        suffix = f"\n\n采用 {included} 项"
+        if excluded:
+            suffix += f"，排除 {excluded} 项"
+        prefix = f"{title}：草稿已生成。\n\n"
+        ending = f"{suffix}。"
+        maximum_message_chars = 3_800
+        available = max(0, maximum_message_chars - len(prefix) - len(ending))
+        if len(draft) > available:
+            draft = draft[: max(0, available - 7)].rstrip() + "\n（已截断）"
+        return f"{prefix}{draft}{ending}"
+    return f"{title}：可核对的组合任务结果已生成。"
 
 
 def challenge_response(challenge: dict) -> dict:

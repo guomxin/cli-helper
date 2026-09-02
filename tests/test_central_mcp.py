@@ -360,6 +360,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(sent["annotations"]["readOnlyHint"])
         self.assertIn("start_date", done["inputSchema"]["properties"])
         self.assertIn("end_date", done["inputSchema"]["properties"])
+        self.assertIn("start_date", sent["inputSchema"]["properties"])
+        self.assertIn("end_date", sent["inputSchema"]["properties"])
         self.assertFalse(plan_prepare["annotations"]["readOnlyHint"])
         self.assertFalse(plan_prepare["annotations"]["destructiveHint"])
         self.assertIn("inputSchema", plan_prepare["description"])
@@ -368,6 +370,11 @@ class CentralMcpTests(unittest.TestCase):
             plan_prepare["inputSchema"]["properties"]["steps"]["maxItems"],
             12,
         )
+        self.assertIn(
+            "agentbridge.task-plan.proposal.v2",
+            plan_prepare["inputSchema"]["properties"]["schema_version"]["enum"],
+        )
+        self.assertIn("constraints", plan_prepare["inputSchema"]["properties"])
         step_items = plan_prepare["inputSchema"]["properties"]["steps"]["items"]
         self.assertEqual(step_items["discriminator"]["propertyName"], "kind")
         self.assertEqual(len(step_items["oneOf"]), 2)
@@ -1869,8 +1876,13 @@ class CentralMcpTests(unittest.TestCase):
                 "steps": steps,
             },
             granted_scopes=["oa:read"],
+            authority_identity=ANY,
             idempotency_key="reference-plan-1",
             coordinator_lease_version=3,
+        )
+        self.assertEqual(
+            service.prepare_task_plan.call_args.kwargs["authority_identity"]["user_subject"],
+            "user-a",
         )
 
     def test_host_task_ensure_uses_token_identity_and_private_metadata(self):

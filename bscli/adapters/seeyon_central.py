@@ -222,17 +222,28 @@ _HISTORY_PAGE_CONTRACTS = {
         "grid_id": "listSent",
         "manager_method": "getSentList",
         "open_from": "listSent",
+        "date_fields": [
+            {"abbr": "startDate", "basis": "initiated_at"},
+            {"abbr": "createDate", "basis": "initiated_at"},
+            {"abbr": "dealDate", "basis": "fallback_display_date"},
+        ],
     },
     "done": {
         "method": "listDone",
         "grid_id": "listDone",
         "manager_method": "getDoneList",
         "open_from": "listDone",
+        "date_fields": [
+            {"abbr": "dealDate", "basis": "processed_at"},
+            {"abbr": "completeTime", "basis": "processed_at"},
+            {"abbr": "startDate", "basis": "fallback_display_date"},
+            {"abbr": "createDate", "basis": "fallback_display_date"},
+        ],
     },
 }
 
 _HISTORY_GRID_EXTRACT_SCRIPT = r"""
-({gridId}) => {
+({gridId, dateFields}) => {
   const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
   const host = document.getElementById(gridId);
   const gridObject = window.grid || null;
@@ -252,11 +263,22 @@ _HISTORY_GRID_EXTRACT_SCRIPT = r"""
     const affairMatch = action.match(/showFlowChartAJax\(\s*["']?(-?\d+)/);
     if (!affairMatch) continue;
     const trackText = cellValue(row, "isTrack");
+    let date = "";
+    let dateBasis = "unknown";
+    for (const field of (dateFields || [])) {
+      const candidate = cellValue(row, field.abbr);
+      if (candidate) {
+        date = candidate;
+        dateBasis = field.basis;
+        break;
+      }
+    }
     items.push({
       affair_id: affairMatch[1],
       title,
       status: cellValue(row, "currentNodesInfo") || cellValue(row, "state"),
-      date: cellValue(row, "dealDate") || cellValue(row, "startDate") || cellValue(row, "createDate"),
+      date,
+      date_basis: dateBasis,
       category: cellValue(row, "category"),
       sender: cellValue(row, "startMemberName") || cellValue(row, "senderName"),
       is_track: /^(?:是|yes|true|1)$/i.test(trackText),
@@ -360,6 +382,35 @@ _WORKFLOW_LIST_OUTPUT_SCHEMA = {
         "count": {"type": "integer"},
         "total": {"type": ["integer", "null"]},
         "page": {"type": ["integer", "null"]},
+        "coverage": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "queryApplied": {"type": "boolean"},
+                "dateBasis": {"type": "string"},
+                "requestedRange": {
+                    "type": "object",
+                    "properties": {
+                        "start": {"type": ["string", "null"]},
+                        "end": {"type": ["string", "null"]},
+                    },
+                    "required": ["start", "end"],
+                    "additionalProperties": False,
+                },
+                "scannedCount": {"type": "integer"},
+                "matchedCount": {"type": "integer"},
+                "hasMore": {"type": "boolean"},
+                "completionReason": {"type": "string"},
+                "observedAt": {"type": "string"},
+                "queryHash": {"type": "string"},
+            },
+            "required": [
+                "status", "queryApplied", "dateBasis", "requestedRange",
+                "scannedCount", "matchedCount", "hasMore", "completionReason",
+                "observedAt", "queryHash"
+            ],
+            "additionalProperties": False,
+        },
         "filters": {
             "type": "object",
             "properties": {
@@ -406,6 +457,7 @@ _WORKFLOW_LIST_OUTPUT_SCHEMA = {
         "count",
         "total",
         "page",
+        "coverage",
         "filters",
         "items",
         "transport",
@@ -748,7 +800,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
         registry.register(
             CapabilitySpec(
                 name=capability_name,
-                version="0.2.0",
+                version="0.3.0",
                 description=_WORKFLOW_COLLECTION_DESCRIPTIONS[collection],
                 input_schema=_WORKFLOW_LIST_INPUT_SCHEMA,
                 output_schema=_WORKFLOW_LIST_OUTPUT_SCHEMA,
@@ -1024,9 +1076,21 @@ class SeeyonCentralAdapter:
         if start_date and end_date and start_date > end_date:
             raise ValueError("start_date cannot be after end_date")
         parsed = self._fetch_workflow_collection(worker, collection)
+        expected_date_basis = {
+            "done": "processed_at",
+            "sent": "initiated_at",
+        }.get(collection, "collection_display_date")
+        raw_items = [item for item in parsed.get("items") or [] if isinstance(item, dict)]
+        date_basis_is_exact = all(
+            str(item.get("date_basis") or "unknown") == expected_date_basis
+            for item in raw_items
+        )
         public_items = [_public_workflow_item(item, collection) for item in parsed.get("items") or []]
         public_items = [item for item in public_items if item.get("title")]
         source_count = len(public_items)
+        parsed_source_dates = [
+            _workflow_item_date(item.get("date")) for item in public_items
+        ]
         unparsed_date_count = 0
         if start_date or end_date:
             date_filtered_items = []
@@ -1051,6 +1115,85 @@ class SeeyonCentralAdapter:
             ]
         matched_count = len(public_items)
         public_items = public_items[:limit]
+        output_truncated = matched_count > len(public_items)
+        total = parsed.get("total")
+        numeric_total = int(total) if isinstance(total, int) else None
+        source_exhausted = numeric_total is not None and numeric_total <= source_count
+        dates_are_descending = bool(parsed_source_dates) and all(
+            left is not None and right is not None and left >= right
+            for left, right in zip(parsed_source_dates, parsed_source_dates[1:])
+        )
+        date_boundary_reached = bool(
+            start_date
+            and parsed_source_dates
+            and unparsed_date_count == 0
+            and dates_are_descending
+            and parsed_source_dates[-1] is not None
+            and parsed_source_dates[-1] <= start_date
+            and int(parsed.get("page") or 1) == 1
+        )
+        query_applied = bool(start_date or end_date)
+        date_contract_satisfied = bool(
+            not query_applied
+            or (unparsed_date_count == 0 and date_basis_is_exact)
+        )
+        coverage_complete = date_contract_satisfied and (
+            source_exhausted or date_boundary_reached
+        ) and not output_truncated
+        has_more = bool(
+            output_truncated
+            or (
+                not coverage_complete
+                and not source_exhausted
+                and not date_boundary_reached
+                and (numeric_total is None or numeric_total > source_count)
+            )
+        )
+        completion_reason = (
+            "result_limit_truncated"
+            if output_truncated
+            else "date_basis_not_proven"
+            if query_applied and not date_basis_is_exact
+            else "unparsed_dates_in_scanned_rows"
+            if query_applied and unparsed_date_count
+            else "source_exhausted"
+            if source_exhausted
+            else "verified_descending_date_boundary"
+            if date_boundary_reached
+            else "loaded_page_does_not_cover_requested_range"
+            if query_applied
+            else "collection_not_exhausted"
+        )
+        query_identity = {
+            "collection": collection,
+            "keyword": keyword or None,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "limit": limit,
+        }
+        coverage = {
+            "status": "complete" if coverage_complete else "partial",
+            "queryApplied": query_applied,
+            "dateBasis": expected_date_basis,
+            "requestedRange": {
+                "start": start_date.isoformat() if start_date else None,
+                "end": end_date.isoformat() if end_date else None,
+            },
+            "scannedCount": source_count,
+            "matchedCount": matched_count,
+            "hasMore": has_more,
+            "completionReason": completion_reason,
+            "observedAt": datetime.now().astimezone().isoformat(),
+            "queryHash": "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    query_identity,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        }
         return {
             "schema_version": "bscli.oa_workflow_list.v2",
             "collection": collection,
@@ -1060,8 +1203,9 @@ class SeeyonCentralAdapter:
             "unparsed_date_count": unparsed_date_count,
             "matched_count": matched_count,
             "count": len(public_items),
-            "total": parsed.get("total"),
+            "total": total,
             "page": parsed.get("page"),
+            "coverage": coverage,
             "filters": {
                 "keyword": keyword or None,
                 "start_date": start_date.isoformat() if start_date else None,
@@ -1242,7 +1386,10 @@ class SeeyonCentralAdapter:
             )
             extracted = page.evaluate(
                 _HISTORY_GRID_EXTRACT_SCRIPT,
-                {"gridId": contract["grid_id"]},
+                {
+                    "gridId": contract["grid_id"],
+                    "dateFields": contract["date_fields"],
+                },
             )
         except Exception as exc:
             if _looks_like_login_url(worker.page_url):
@@ -1284,6 +1431,7 @@ class SeeyonCentralAdapter:
                     "title": title,
                     "status": str(raw_item.get("status") or ""),
                     "date": str(raw_item.get("date") or ""),
+                    "date_basis": str(raw_item.get("date_basis") or "unknown"),
                     "category": str(raw_item.get("category") or ""),
                     "sender": str(raw_item.get("sender") or ""),
                     "is_track": bool(raw_item.get("is_track")),

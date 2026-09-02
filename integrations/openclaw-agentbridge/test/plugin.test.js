@@ -70,6 +70,17 @@ test("injects bounded same-user context only for explicit cross-end references",
     clientForSession() {
       return client;
     },
+    planningPolicyForBinding() {
+      return {
+        schemaVersion: "agentbridge.composed-task-planning-policy.v1",
+        modelContext: [
+          "AgentBridge durable composed-task policy:",
+          "- First call agentbridge_task_plan_catalog, then call agentbridge_task_plan_prepare.",
+          "- Use only inputSchema.properties. Never invent an argument.",
+          "- Do not emulate a composed task with separate calls.",
+        ].join("\n"),
+      };
+    },
     removeSession() {},
   };
   const harness = fakeApi({ autoPoll: false, syncTimeline: true });
@@ -102,12 +113,12 @@ test("injects bounded same-user context only for explicit cross-end references",
     context,
   );
 
-  assert.equal(sameEndpoint, undefined);
+  assert.match(sameEndpoint.prependContext, /durable composed-task policy/);
   assert.equal(calls.length, 1);
-  assert.equal(routeContexts.length, 1);
-  assert.equal(routeContexts[0].messageChannel, "telegram");
-  assert.equal(routeContexts[0].requesterSenderId, null);
-  assert.equal(routeContexts[0].agentAccountId, null);
+  assert.equal(routeContexts.length, 4);
+  assert.ok(routeContexts.every((item) => item.messageChannel === "telegram"));
+  assert.ok(routeContexts.every((item) => item.requesterSenderId === null));
+  assert.ok(routeContexts.every((item) => item.agentAccountId === null));
   assert.equal(calls[0].name, "agentbridge_host_cross_endpoint_context");
   assert.deepEqual(calls[0].arguments_, {
     agent_host: "openclaw",
@@ -792,7 +803,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.72",
+      hostVersion: "0.4.73",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1210,7 +1221,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.72",
+        hostVersion: "0.4.73",
       },
     },
   });
@@ -1998,7 +2009,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.72",
+      hostVersion: "0.4.73",
     },
   });
   assert.equal(
@@ -2899,6 +2910,59 @@ test("suppresses routine companion status chatter but retains acknowledgement", 
     acknowledgements.every((item) => item.params.succeeded === true),
     true,
   );
+});
+
+test("delivers a private composed-plan result to a companion chat", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const calls = [];
+  const client = {
+    async callTool(name, params) {
+      calls.push({ name, params });
+      if (name === "agentbridge_host_notification_claim") {
+        return {
+          endpoint: {
+            clientType: "telegram",
+            conversationRef: "agent:main:telegram:direct:1001",
+            route: { channel: "telegram", to: "1001" },
+          },
+          notifications: [
+            {
+              deliveryId: "delivery-plan-result-1234567890",
+              deliveryMode: "plan_result",
+              event: { eventType: "plan.result.ready" },
+              message: "组合任务草稿已生成。\n\n1. 处理《测试事项》。",
+            },
+          ],
+        };
+      }
+      return { status: "succeeded" };
+    },
+  };
+
+  await coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => true },
+    {
+      key: "telegram:*:1001",
+      channel: "telegram",
+      senderId: "1001",
+      accountId: null,
+    },
+    client,
+    new AbortController().signal,
+  );
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "组合任务草稿已生成。\n\n1. 处理《测试事项》。",
+  );
+  const acknowledgement = calls.find(
+    (item) => item.name === "agentbridge_host_notification_ack",
+  );
+  assert.equal(acknowledgement.params.succeeded, true);
 });
 
 test("suppresses simple read success but delivers controlled write success", async () => {

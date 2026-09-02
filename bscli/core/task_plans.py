@@ -125,6 +125,26 @@ class TaskPlanStore:
                 ON task_plan_steps (plan_id, state, ordinal);
                 """
             )
+            self._migrate_v2(connection)
+
+    @staticmethod
+    def _migrate_v2(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(task_plans)").fetchall()
+        }
+        additions = {
+            "schema_version": "TEXT",
+            "temporal_context_json": "TEXT",
+            "authority_snapshot_json": "TEXT",
+            "result_projection_json": "TEXT",
+            "effect_outcome": "TEXT",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE task_plans ADD COLUMN {name} {sql_type}"
+                )
 
     def create(
         self,
@@ -191,9 +211,10 @@ class TaskPlanStore:
                     plan_id, parent_task_id, user_subject, proposal_source,
                     goal, proposal_summary_json, plan_hash, revision, state,
                     current_step_key, risk_summary_json,
-                    coordinator_lease_version, idempotency_key,
+                    coordinator_lease_version, idempotency_key, schema_version,
+                    temporal_context_json, authority_snapshot_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'validated', NULL, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'validated', NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan_id,
@@ -213,6 +234,12 @@ class TaskPlanStore:
                     _canonical_json(risk_summary),
                     coordinator_lease_version,
                     normalized_key,
+                    str(
+                        compiled_plan.get("proposalSchemaVersion")
+                        or "agentbridge.task-plan.proposal.v1"
+                    ),
+                    _canonical_json(compiled_plan.get("temporalContext")),
+                    _canonical_json(compiled_plan.get("authoritySnapshot")),
                     now,
                     now,
                 ),
@@ -398,6 +425,7 @@ class TaskPlanStore:
         state: str,
         error_code: str,
         error_message: str,
+        effect_outcome: str | None = None,
     ) -> dict[str, Any]:
         if state not in {"failed", "outcome_unknown"}:
             raise ValueError("unsupported failed step state")
@@ -438,10 +466,18 @@ class TaskPlanStore:
                 """
                 UPDATE task_plans
                 SET state = ?, terminal_reason = ?, current_step_key = ?,
-                    updated_at = ?, finished_at = ?
+                    effect_outcome = ?, updated_at = ?, finished_at = ?
                 WHERE plan_id = ?
                 """,
-                (state, str(error_code)[:120], step_key, now, now, plan_id),
+                (
+                    state,
+                    str(error_code)[:120],
+                    step_key,
+                    str(effect_outcome or "")[:80] or None,
+                    now,
+                    now,
+                    plan_id,
+                ),
             )
             return self._snapshot(connection, self._select_plan(connection, plan_id))
 
@@ -494,6 +530,7 @@ class TaskPlanStore:
         user_subject: str,
         reason: str,
         skip_queued: bool = False,
+        effect_outcome: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now()
         with self._connect() as connection:
@@ -525,10 +562,32 @@ class TaskPlanStore:
                 """
                 UPDATE task_plans
                 SET state = 'succeeded', terminal_reason = ?,
-                    current_step_key = NULL, updated_at = ?, finished_at = ?
+                    effect_outcome = ?, current_step_key = NULL,
+                    updated_at = ?, finished_at = ?
                 WHERE plan_id = ?
                 """,
-                (str(reason)[:120], now, now, plan_id),
+                (str(reason)[:120], str(effect_outcome or "")[:80] or None, now, now, plan_id),
+            )
+            return self._snapshot(connection, self._select_plan(connection, plan_id))
+
+    def set_result_projection(
+        self,
+        plan_id: str,
+        *,
+        user_subject: str,
+        projection: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._select_owned_plan(connection, plan_id, user_subject)
+            connection.execute(
+                """
+                UPDATE task_plans
+                SET result_projection_json = ?, updated_at = ?
+                WHERE plan_id = ?
+                """,
+                (_canonical_json(projection), now, plan_id),
             )
             return self._snapshot(connection, self._select_plan(connection, plan_id))
 
@@ -776,7 +835,9 @@ class TaskPlanStore:
 
 def task_plan_response(plan: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schemaVersion": "agentbridge.task-plan.v1",
+        "schemaVersion": "agentbridge.task-plan.v2",
+        "proposalSchemaVersion": plan.get("schema_version")
+        or "agentbridge.task-plan.proposal.v1",
         "planId": plan["plan_id"],
         "taskId": plan["parent_task_id"],
         "goal": plan["goal"],
@@ -785,6 +846,9 @@ def task_plan_response(plan: dict[str, Any]) -> dict[str, Any]:
         "currentStepKey": plan.get("current_step_key"),
         "riskSummary": plan["risk_summary"],
         "terminalReason": plan.get("terminal_reason"),
+        "effectOutcome": plan.get("effect_outcome"),
+        "temporalContext": plan.get("temporal_context"),
+        "resultProjection": plan.get("result_projection"),
         "createdAt": plan["created_at"],
         "updatedAt": plan["updated_at"],
         "finishedAt": plan.get("finished_at"),
@@ -813,6 +877,9 @@ def _plan_from_row(row: sqlite3.Row) -> dict[str, Any]:
     value = dict(row)
     value["proposal_summary"] = _json(value.pop("proposal_summary_json"))
     value["risk_summary"] = _json(value.pop("risk_summary_json"))
+    value["temporal_context"] = _json(value.pop("temporal_context_json", None))
+    value["authority_snapshot"] = _json(value.pop("authority_snapshot_json", None))
+    value["result_projection"] = _json(value.pop("result_projection_json", None))
     return value
 
 

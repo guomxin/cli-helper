@@ -130,6 +130,7 @@ from bscli.admin.server import (
 )
 from bscli.auth.action_card import TrustedActionApplication
 from bscli.core.task_plan_validation import (
+    TaskPlanConstraintsInput,
     TaskPlanStepInput,
     serialize_task_plan_steps,
 )
@@ -748,6 +749,12 @@ def create_central_mcp_server(
     config: CentralMcpServerConfig,
     auth_card_base_url: str,
 ) -> FastMCP:
+    service.set_task_plan_authority_resolver(
+        lambda token_id, required_scopes: identity_store.resolve_client(
+            token_id,
+            required_scopes=set(required_scopes),
+        )
+    )
     origin = _origin(config.public_base_url)
     netloc = urlparse(config.public_base_url).netloc
     verifier = StoredIdentityTokenVerifier(identity_store, resource=config.mcp_url)
@@ -1235,17 +1242,18 @@ def create_central_mcp_server(
         name="agentbridge_task_plan_prepare",
         title="Prepare and Start a Durable AgentBridge Task Plan",
         description=(
-            "Validate, compile, persist, and start one cross-system task plan bound to the "
+            "Validate, compile, persist, and start one durable composed task plan bound to the "
             "current AgentTask. The host supplies public capability/transform steps only. "
-            "AgentBridge enforces dependencies, JSON Pointer bindings, scope union, and at "
-            "most one trusted prepare write sink. Every step requires stepKey and kind. A "
+            "For new source-dependent plans use proposal v2 with a trusted temporal constraint, "
+            "explicit single/many bindings, and catalog-declared transforms. AgentBridge "
+            "enforces provenance, source completeness, authority rechecks, dependencies, scope "
+            "union, and at most one trusted prepare write sink. Every step requires stepKey and kind. A "
             "capability step uses capabilityName; a transform step uses transformName. "
-            "dependsOn contains earlier stepKey values. bindings maps a target argument to "
-            "{step: sourceStepKey, pointer: /json/path}. Example sequence: "
-            "oa.workflow.done.list -> work_items_to_log_draft.v1, binding items from "
-            "read_done /items. Each arguments object may contain only properties declared "
-            "by that catalog entry's inputSchema; keep unsupported user requirements in "
-            "the goal or final explanation instead of inventing arguments. Never include a "
+            "dependsOn contains earlier stepKey values. v2 bindings use mode=single with step "
+            "and pointer, or mode=many with an ordered items array. Each arguments object may "
+            "contain only properties declared by that catalog entry's inputSchema; if the "
+            "catalog cannot express a user constraint, stop and explain instead of inventing "
+            "arguments. Never include a "
             "commit, interaction resume, arbitrary HTTP, or script step."
         ),
         annotations=ToolAnnotations(
@@ -1263,13 +1271,20 @@ def create_central_mcp_server(
             list[TaskPlanStepInput],
             Field(min_length=1, max_length=12),
         ],
+        schema_version: Literal[
+            "agentbridge.task-plan.proposal.v1",
+            "agentbridge.task-plan.proposal.v2",
+        ] = "agentbridge.task-plan.proposal.v1",
+        constraints: TaskPlanConstraintsInput | None = None,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         proposal = {
-            "schemaVersion": "agentbridge.task-plan.proposal.v1",
+            "schemaVersion": schema_version,
             "goal": goal,
             "steps": serialize_task_plan_steps(steps),
         }
+        if constraints is not None:
+            proposal["constraints"] = constraints.model_dump(exclude_none=True)
         required_scopes = await asyncio.to_thread(
             service.task_plan_required_scopes,
             proposal,
@@ -1299,6 +1314,7 @@ def create_central_mcp_server(
             task_id=task_id,
             proposal=proposal,
             granted_scopes=identity["scopes"],
+            authority_identity=identity,
             idempotency_key=idempotency_key,
             coordinator_lease_version=(
                 int(lease_value) if lease_value is not None else None
@@ -1551,12 +1567,18 @@ def create_central_mcp_server(
     async def oa_workflow_sent_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
+        start_date: Annotated[str | None, Field(max_length=10)] = None,
+        end_date: Annotated[str | None, Field(max_length=10)] = None,
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments = {"limit": limit}
         if keyword:
             arguments["keyword"] = keyword
+        if start_date:
+            arguments["start_date"] = start_date
+        if end_date:
+            arguments["end_date"] = end_date
         return await invoke(ctx, "oa.workflow.sent.list", arguments, idempotency_key)
 
     @mcp.tool(
