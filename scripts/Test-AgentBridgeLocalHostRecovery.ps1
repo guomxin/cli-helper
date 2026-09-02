@@ -6,12 +6,20 @@ param(
     [ValidateRange(5, 300)][int]$TimeoutSeconds = 180,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
     [switch]$ExerciseFailureRecovery,
-    [switch]$ExerciseTunnelRestart
+    [switch]$ExerciseTunnelRestart,
+    [switch]$ExerciseLifecycleLease
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $tunnelInstaller = Join-Path $PSScriptRoot "Install-AgentBridgeWorkspaceTunnel.ps1"
+$lifecycleStateModule = Join-Path `
+    $PSScriptRoot `
+    "AgentBridgeOpenClawLifecycleLease.psm1"
+if (-not (Test-Path -LiteralPath $lifecycleStateModule -PathType Leaf)) {
+    throw "OpenClaw lifecycle lease module was not found"
+}
+Import-Module $lifecycleStateModule -Force
 
 function Wait-Until {
     param(
@@ -179,6 +187,84 @@ $tunnelReady = Wait-Until -Description "one connected Workspace tunnel" -Conditi
     Get-TunnelReadyStatus
 }
 $before = $beforeState.listener
+$lifecycleLeaseProbe = $null
+if ($ExerciseLifecycleLease) {
+    $operationPath = Join-Path `
+        $env:LOCALAPPDATA `
+        "AgentBridge\openclaw-lifecycle-operation.json"
+    $operationId = "fault-injection-{0}" -f [guid]::NewGuid().ToString("N")
+    $operationStartedAt = [DateTimeOffset]::UtcNow.AddMinutes(-10)
+    $lifecycleMutex = [Threading.Mutex]::new(
+        $false,
+        "Local\AgentBridgeOpenClawLifecycle-$env:USERNAME"
+    )
+    $lifecycleMutexAcquired = $false
+    $leaseWritten = $false
+    try {
+        $lifecycleMutexAcquired = $lifecycleMutex.WaitOne(
+            [TimeSpan]::FromSeconds(10)
+        )
+        if (-not $lifecycleMutexAcquired) {
+            throw "Unable to acquire the lifecycle mutex for lease injection"
+        }
+        Set-AgentBridgeOpenClawLifecycleLease `
+            -Path $operationPath `
+            -GatewayPort $GatewayPort `
+            -OperationId $operationId `
+            -Action "fault_injection" `
+            -State "active" `
+            -Phase "simulated_slow_start" `
+            -StartedAt $operationStartedAt `
+            -LeaseSeconds 45 | Out-Null
+        $leaseWritten = $true
+        $guardLeaseState = Wait-Until `
+            -Description "Guard to observe the simulated slow lifecycle lease" `
+            -Condition {
+                try {
+                    $candidate = Get-Content `
+                        -LiteralPath $guardStatusPath `
+                        -Raw | ConvertFrom-Json
+                    if ($candidate.gatewayAction -eq "lifecycle_in_progress" -and
+                        $candidate.lifecycleOperationId -eq $operationId -and
+                        $candidate.lifecycleLeaseState -eq "active") {
+                        return $candidate
+                    }
+                }
+                catch {
+                    return $null
+                }
+                return $null
+            }
+        $duringLease = Get-GatewayReadyState
+        if (-not $duringLease -or
+            [int]$duringLease.listener.OwningProcess -ne [int]$before.OwningProcess) {
+            throw "Gateway changed while the lifecycle lease was active"
+        }
+        $lifecycleLeaseProbe = [ordered]@{
+            exercised = $true
+            operationId = $operationId
+            simulatedStartAgeSeconds = 600
+            guardAction = [string]$guardLeaseState.gatewayAction
+            gatewayPidBefore = [int]$before.OwningProcess
+            gatewayPidDuring = [int]$duringLease.listener.OwningProcess
+            gatewayPreserved = $true
+        }
+    }
+    finally {
+        if ($leaseWritten) {
+            Set-AgentBridgeOpenClawLifecycleLease `
+                -Path $operationPath `
+                -GatewayPort $GatewayPort `
+                -OperationId $operationId `
+                -Action "fault_injection" `
+                -State "completed" `
+                -Phase "completed" `
+                -StartedAt $operationStartedAt | Out-Null
+        }
+        if ($lifecycleMutexAcquired) { $lifecycleMutex.ReleaseMutex() }
+        $lifecycleMutex.Dispose()
+    }
+}
 $pluginNotBefore = [DateTimeOffset]::MinValue
 $failureRecovery = $null
 if ($ExerciseFailureRecovery) {
@@ -256,6 +342,7 @@ if ($tunnelTask.State -ne "Running") { throw "Workspace tunnel task is not runni
         statusHeartbeatSeconds = [int]$tunnelReady.status.statusHeartbeatSeconds
     }
     failureRecovery = $failureRecovery
+    lifecycleLeaseProbe = $lifecycleLeaseProbe
     businessCalls = 0
     businessListReads = 0
     businessWrites = 0

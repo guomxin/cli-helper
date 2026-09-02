@@ -107,6 +107,9 @@ class DeploymentAssetTests(unittest.TestCase):
         lifecycle = (
             ROOT / "scripts/Restart-AgentBridgeOpenClawGateway.ps1"
         ).read_text(encoding="utf-8")
+        lifecycle_lease = (
+            ROOT / "scripts/AgentBridgeOpenClawLifecycleLease.psm1"
+        ).read_text(encoding="utf-8")
         foreground = (
             ROOT / "scripts/Invoke-AgentBridgeOpenClawGatewayForeground.ps1"
         ).read_text(encoding="utf-8")
@@ -126,6 +129,9 @@ class DeploymentAssetTests(unittest.TestCase):
             "wscript.exe",
             'shell.Run("{0}", 0, True)',
             "guardConsoleHidden = $true",
+            "Stop-ExistingGuardProcesses",
+            "stoppedGuardProcessIds = $stoppedGuardProcessIds",
+            "did not publish a current lifecycle-aware heartbeat",
             "startupLauncherRetired = $true",
             'mode = "startup_guard_visible_gateway"',
             "visibleForeground = $true",
@@ -134,6 +140,10 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             "AgentBridgeOpenClawGuard",
             "Invoke-GatewayLifecycle",
+            "Get-AgentBridgeOpenClawLifecycleLease",
+            'gatewayAction = "lifecycle_in_progress"',
+            "$replacement = Invoke-GatewayLifecycle -StartOnly",
+            "lifecycleHeartbeatAgeSeconds",
             "gatewayListening",
             "businessCalls = 0",
             "businessListReads = 0",
@@ -143,6 +153,9 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             "Remove-StaleGatewayLocks",
             "AgentBridgeOpenClawLifecycle",
+            "Set-AgentBridgeOpenClawLifecycleLease",
+            'Update-LifecycleLease -Phase "waiting_for_readiness"',
+            'Update-LifecycleLease -State "completed" -Phase "completed"',
             "Start-VisibleGateway",
             "Get-VisibleGatewayForeground",
             "AgentBridgeGateway",
@@ -151,6 +164,17 @@ class DeploymentAssetTests(unittest.TestCase):
             "businessWrites = 0",
         ):
             self.assertIn(marker, lifecycle)
+        for marker in (
+            "agentbridge.openclaw-lifecycle-operation.v1",
+            'reason = "owner_missing"',
+            'reason = "expired"',
+            "Move-Item -LiteralPath $tempPath -Destination $Path -Force",
+        ):
+            self.assertIn(marker, lifecycle_lease)
+        self.assertLess(
+            guard.index('if ($lifecycleLease.active)'),
+            guard.index('elseif ($listener)'),
+        )
         for marker in (
             "Test-GatewayVisibleForeground",
             "hidden_gateway_replaced",
@@ -164,7 +188,11 @@ class DeploymentAssetTests(unittest.TestCase):
             self.assertIn(marker, foreground)
         for marker in (
             "ExerciseFailureRecovery",
+            "ExerciseLifecycleLease",
             "Get-GatewayReadyState",
+            "simulated_slow_start",
+            'guardAction = [string]$guardLeaseState.gatewayAction',
+            "gatewayPreserved = $true",
             'http://127.0.0.1:$GatewayPort/readyz',
             "Get-LatestAgentBridgePluginRegistration",
             "listenerCount = 1",
@@ -286,7 +314,10 @@ class DeploymentAssetTests(unittest.TestCase):
             'http://127.0.0.1:$GatewayPort/readyz',
             "integrations\\openclaw-agentbridge\\package.json",
             "AgentBridge interaction plugin registered",
-            "was not registered by the current Gateway process",
+            "Gateway process within the stabilization window",
+            "StabilizationTimeoutSeconds = 45",
+            "$readinessAttempts++",
+            "$registrationDeadline",
             "plugin runtime version does not match its manifest",
             "pluginRegistrationFreshnessPolicy",
             '"current_gateway_process"',

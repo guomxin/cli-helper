@@ -29,6 +29,34 @@ $foregroundScript = (Resolve-Path (
 $stateRoot = Split-Path -Parent $GatewayRuntimeLauncher
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 $guardLauncher = Join-Path $stateRoot "openclaw-guard-hidden.vbs"
+$guardStatusPath = Join-Path $stateRoot "openclaw-guard-status.json"
+
+function Stop-ExistingGuardProcesses {
+    $escapedGuardScript = [regex]::Escape($guardScript)
+    $stopped = @()
+    foreach ($process in @(
+        Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -match 'Start-AgentBridgeOpenClawGuard\.ps1' -and
+                $_.CommandLine -match $escapedGuardScript
+            }
+    )) {
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop
+        $stopped += [int]$process.ProcessId
+    }
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+    foreach ($processId in $stopped) {
+        while ((Get-Process -Id $processId -ErrorAction SilentlyContinue) -and
+            [DateTimeOffset]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 200
+        }
+        if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+            throw "Previous OpenClaw Guard process did not stop: $processId"
+        }
+    }
+    return $stopped
+}
 $taskLauncherContent = Get-Content -LiteralPath $GatewayTaskLauncher -Raw
 $shimMarker = "AgentBridge visible Gateway task shim"
 if ($taskLauncherContent -notmatch [regex]::Escape($shimMarker)) {
@@ -105,6 +133,8 @@ if ($existingGuardTask -and $existingGuardTask.State -eq "Running") {
     Stop-ScheduledTask -TaskName $GuardTaskName
     Start-Sleep -Seconds 1
 }
+$stoppedGuardProcessIds = @(Stop-ExistingGuardProcesses)
+Remove-Item -LiteralPath $guardStatusPath -Force -ErrorAction SilentlyContinue
 Register-ScheduledTask `
     -TaskName $GuardTaskName `
     -InputObject $guardTask `
@@ -120,6 +150,36 @@ if ($startup) {
 
 if (-not $NoStart) {
     Start-ScheduledTask -TaskName $GuardTaskName
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    $guardReady = $false
+    do {
+        Start-Sleep -Milliseconds 250
+        $candidateTask = Get-ScheduledTask `
+            -TaskName $GuardTaskName `
+            -ErrorAction SilentlyContinue
+        if (-not $candidateTask -or $candidateTask.State -ne "Running" -or
+            -not (Test-Path -LiteralPath $guardStatusPath -PathType Leaf)) {
+            continue
+        }
+        try {
+            $candidateStatus = Get-Content `
+                -LiteralPath $guardStatusPath `
+                -Raw | ConvertFrom-Json
+            $statusProcess = Get-Process `
+                -Id ([int]$candidateStatus.processId) `
+                -ErrorAction SilentlyContinue
+            if ($statusProcess -and
+                $candidateStatus.PSObject.Properties["lifecycleLeaseState"]) {
+                $guardReady = $true
+            }
+        }
+        catch {
+            $guardReady = $false
+        }
+    } while (-not $guardReady -and [DateTimeOffset]::UtcNow -lt $deadline)
+    if (-not $guardReady) {
+        throw "OpenClaw Guard did not publish a current lifecycle-aware heartbeat"
+    }
 }
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -131,6 +191,7 @@ $installedGuardTask = Get-ScheduledTask -TaskName $GuardTaskName
     taskState = if ($task) { $task.State.ToString() } else { "absent" }
     guardTaskName = $GuardTaskName
     guardTaskState = $installedGuardTask.State.ToString()
+    stoppedGuardProcessIds = $stoppedGuardProcessIds
     taskShimInstalled = $true
     started = -not $NoStart
     gatewayTaskLauncher = (Resolve-Path -LiteralPath $GatewayTaskLauncher).Path

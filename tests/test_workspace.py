@@ -1628,6 +1628,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )
             gateway = AcceptedDisconnectGateway()
             app = WorkspaceApplication(service=service, gateway=gateway)
+            self.addCleanup(app.close)
 
             events = list(
                 app.send_chat_stream(
@@ -1644,6 +1645,54 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertEqual(events[-1]["state"], "final")
             self.assertEqual(events[-1]["text"], "recovered final result")
             self.assertEqual(app.list_timeline(account)[-1]["text"], "recovered final result")
+
+    def test_terminal_dispatch_drains_events_committed_between_reads(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp)
+            app = WorkspaceApplication(service=service, gateway=FakeGateway())
+            self.addCleanup(app.close)
+            event_pages = [
+                [
+                    {
+                        "sequence": 1,
+                        "payload": {"type": "progress", "kind": "accepted"},
+                    }
+                ],
+                [
+                    {
+                        "sequence": 2,
+                        "payload": {
+                            "type": "chat",
+                            "state": "final",
+                            "text": "committed final result",
+                        },
+                    }
+                ],
+                [],
+            ]
+
+            with (
+                patch.object(
+                    app.store,
+                    "list_host_dispatch_events",
+                    side_effect=lambda *args, **kwargs: event_pages.pop(0),
+                ),
+                patch.object(
+                    app.store,
+                    "get_host_dispatch",
+                    return_value={"state": "completed"},
+                ),
+            ):
+                events = list(
+                    app._stream_host_dispatch(
+                        user_subject="user-a",
+                        dispatch_id="dispatch-race",
+                    )
+                )
+
+            self.assertEqual([event["type"] for event in events], ["progress", "chat"])
+            self.assertEqual(events[-1]["state"], "final")
+            self.assertEqual(events[-1]["text"], "committed final result")
 
 
 class WorkspaceGatewayClientTests(unittest.TestCase):

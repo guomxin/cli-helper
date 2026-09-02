@@ -24,12 +24,44 @@ $foregroundScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeOpenClawGatewayFo
 if (-not (Test-Path -LiteralPath $foregroundScript -PathType Leaf)) {
     throw "Foreground Gateway host was not found: $foregroundScript"
 }
+$lifecycleStateModule = Join-Path `
+    $PSScriptRoot `
+    "AgentBridgeOpenClawLifecycleLease.psm1"
+if (-not (Test-Path -LiteralPath $lifecycleStateModule -PathType Leaf)) {
+    throw "OpenClaw lifecycle lease module was not found: $lifecycleStateModule"
+}
+Import-Module $lifecycleStateModule -Force
 
 $stateRoot = Join-Path $env:LOCALAPPDATA "AgentBridge"
 $logRoot = Join-Path $stateRoot "logs"
 $statusPath = Join-Path $stateRoot "openclaw-lifecycle-status.json"
+$operationPath = Join-Path $stateRoot "openclaw-lifecycle-operation.json"
 $logPath = Join-Path $logRoot "openclaw-lifecycle.log"
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+$script:operationId = [guid]::NewGuid().ToString("N")
+$script:operationStartedAt = [DateTimeOffset]::UtcNow
+$script:operationAction = "unknown"
+$script:operationInitialized = $false
+$script:operationFinished = $false
+
+function Update-LifecycleLease {
+    param(
+        [Parameter(Mandatory = $true)][string]$Phase,
+        [ValidateSet("active", "completed", "failed")]
+        [string]$State = "active",
+        [string]$ErrorCode = ""
+    )
+    if (-not $script:operationInitialized) { return }
+    Set-AgentBridgeOpenClawLifecycleLease `
+        -Path $operationPath `
+        -GatewayPort $GatewayPort `
+        -OperationId $script:operationId `
+        -Action $script:operationAction `
+        -State $State `
+        -Phase $Phase `
+        -StartedAt $script:operationStartedAt `
+        -ErrorCode $ErrorCode | Out-Null
+}
 
 function Write-LifecycleLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -105,6 +137,7 @@ function Stop-GatewayProcesses {
 function Wait-GatewayStopped {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($StopTimeoutSeconds)
     do {
+        Update-LifecycleLease -Phase "waiting_for_stop"
         if (@(Get-GatewayProcesses).Count -eq 0 -and
             @(Get-GatewayListener).Count -eq 0) {
             return
@@ -179,6 +212,7 @@ function Start-VisibleGateway {
 
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
     do {
+        Update-LifecycleLease -Phase "starting_visible_host"
         $candidate = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" `
             -ErrorAction SilentlyContinue |
             Where-Object {
@@ -226,6 +260,7 @@ function Test-GatewayReadyEndpoint {
 function Wait-GatewayReady {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
     do {
+        Update-LifecycleLease -Phase "waiting_for_readiness"
         $gatewayProcesses = @(Get-GatewayProcesses)
         $listeners = @(Get-GatewayListener)
         if ($listeners.Count -eq 1 -and $gatewayProcesses.Count -eq 1 -and
@@ -258,6 +293,9 @@ try {
     }
 
     $action = if ($StopOnly) { "stop" } elseif ($StartOnly) { "start" } else { "restart" }
+    $script:operationAction = $action
+    $script:operationInitialized = $true
+    Update-LifecycleLease -Phase "lifecycle_acquired"
     $stoppedPids = @()
     $removedLocks = @()
     $foregroundHost = $null
@@ -276,11 +314,14 @@ try {
     }
     else {
         if (-not $StartOnly -or $existingProcesses.Count -gt 0 -or $existingListeners.Count -gt 0) {
+            Update-LifecycleLease -Phase "stopping_previous_gateway"
             $stoppedPids = @(Stop-GatewayProcesses)
             Wait-GatewayStopped
         }
+        Update-LifecycleLease -Phase "removing_stale_locks"
         $removedLocks = @(Remove-StaleGatewayLocks)
         if (-not $StopOnly) {
+            Update-LifecycleLease -Phase "starting_gateway"
             $foregroundHost = Start-VisibleGateway
             $ready = Wait-GatewayReady
         }
@@ -291,6 +332,7 @@ try {
 
     $visibleForeground = $false
     if (-not $StopOnly -and $ready) {
+        Update-LifecycleLease -Phase "verifying_foreground"
         $actualForeground = Get-VisibleGatewayForeground `
             -GatewayProcessId ([int]$ready.processId)
         if (-not $actualForeground) {
@@ -320,6 +362,7 @@ try {
         businessCalls = 0
         businessListReads = 0
         businessWrites = 0
+        lifecycleOperationId = $script:operationId
     }
     [IO.File]::WriteAllText(
         $statusPath,
@@ -330,7 +373,19 @@ try {
         "Gateway lifecycle {0} succeeded; pid={1}; staleLocks={2}." -f `
             $action, $status.gatewayProcessId, $removedLocks.Count
     )
+    $script:operationAction = $action
+    Update-LifecycleLease -State "completed" -Phase "completed"
+    $script:operationFinished = $true
     $status | ConvertTo-Json -Compress -Depth 5
+}
+catch {
+    if ($script:operationInitialized -and -not $script:operationFinished) {
+        Update-LifecycleLease `
+            -State "failed" `
+            -Phase "failed" `
+            -ErrorCode $_.Exception.GetType().Name
+    }
+    throw
 }
 finally {
     if ($acquired) { $mutex.ReleaseMutex() }

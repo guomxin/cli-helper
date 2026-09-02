@@ -1183,6 +1183,17 @@ class WorkspaceApplication:
                 user_subject=user_subject,
             )
             if dispatch["state"] in _HOST_DISPATCH_TERMINAL_STATES:
+                while True:
+                    terminal_events = self.store.list_host_dispatch_events(
+                        dispatch_id,
+                        after_sequence=sequence,
+                        limit=200,
+                    )
+                    if not terminal_events:
+                        break
+                    for event in terminal_events:
+                        sequence = event["sequence"]
+                        yield {**event["payload"], "dispatchId": dispatch_id}
                 return
             time.sleep(0.1)
 

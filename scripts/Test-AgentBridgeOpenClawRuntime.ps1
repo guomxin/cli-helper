@@ -4,18 +4,44 @@ param(
     # Retained for CLI compatibility. Freshness is now tied to the current
     # Gateway process start, not to an arbitrary wall-clock age.
     [ValidateRange(30, 900)][int]$RegistrationMaxAgeSeconds = 300,
+    [ValidateRange(10, 120)][int]$StabilizationTimeoutSeconds = 45,
     [string]$PluginManifestPath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ready = Invoke-RestMethod `
-    -Uri "http://127.0.0.1:$GatewayPort/readyz" `
-    -TimeoutSec 5 `
-    -Method Get
-if (-not [bool]$ready.ready -or @($ready.failing).Count -ne 0) {
-    throw "OpenClaw Gateway ready endpoint is not healthy"
+$ready = $null
+$readinessAttempts = 0
+$readinessError = "unavailable"
+$readinessDeadline = [DateTimeOffset]::UtcNow.AddSeconds(
+    $StabilizationTimeoutSeconds
+)
+do {
+    $readinessAttempts++
+    try {
+        $candidate = Invoke-RestMethod `
+            -Uri "http://127.0.0.1:$GatewayPort/readyz" `
+            -TimeoutSec 5 `
+            -Method Get
+        if ([bool]$candidate.ready -and @($candidate.failing).Count -eq 0) {
+            $ready = $candidate
+            break
+        }
+        $readinessError = "not_healthy"
+    }
+    catch {
+        $readinessError = $_.Exception.GetType().Name
+    }
+    if ([DateTimeOffset]::UtcNow -lt $readinessDeadline) {
+        Start-Sleep -Seconds 1
+    }
+} while ([DateTimeOffset]::UtcNow -lt $readinessDeadline)
+if (-not $ready) {
+    throw (
+        "OpenClaw Gateway ready endpoint did not stabilize within {0}s; last={1}" -f `
+            $StabilizationTimeoutSeconds, $readinessError
+    )
 }
 
 $listeners = @(
@@ -52,14 +78,13 @@ if (-not $expectedVersion) {
 }
 
 $logRoot = Join-Path ([IO.Path]::GetTempPath()) "openclaw"
-$logFiles = @(
-    Get-ChildItem -LiteralPath $logRoot -Filter "openclaw-*.log" -File `
-        -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending
-)
 function Find-LatestPluginRegistration {
     $latest = $null
-    foreach ($logFile in $logFiles) {
+    foreach ($logFile in @(
+        Get-ChildItem -LiteralPath $logRoot -Filter "openclaw-*.log" -File `
+            -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending
+    )) {
         foreach ($line in @(Get-Content -LiteralPath $logFile.FullName -Tail 4000)) {
             try { $entry = $line | ConvertFrom-Json } catch { continue }
             $message = if ($entry.PSObject.Properties.Name -contains "message") {
@@ -84,13 +109,27 @@ function Find-LatestPluginRegistration {
     return $latest
 }
 
-$registration = Find-LatestPluginRegistration
-if (-not $registration) {
-    throw "AgentBridge OpenClaw plugin registration was not found in current logs"
-}
 $gatewayStartedAt = [DateTimeOffset]([DateTime]$gateways[0].CreationDate)
-if ($registration.observedAt -lt $gatewayStartedAt.AddSeconds(-5)) {
-    throw "AgentBridge OpenClaw plugin was not registered by the current Gateway process"
+$registration = $null
+$registrationDeadline = [DateTimeOffset]::UtcNow.AddSeconds(
+    $StabilizationTimeoutSeconds
+)
+do {
+    $candidateRegistration = Find-LatestPluginRegistration
+    if ($candidateRegistration -and
+        $candidateRegistration.observedAt -ge $gatewayStartedAt.AddSeconds(-5)) {
+        $registration = $candidateRegistration
+        break
+    }
+    if ([DateTimeOffset]::UtcNow -lt $registrationDeadline) {
+        Start-Sleep -Seconds 1
+    }
+} while ([DateTimeOffset]::UtcNow -lt $registrationDeadline)
+if (-not $registration) {
+    throw (
+        "AgentBridge OpenClaw plugin was not registered by the current " +
+        "Gateway process within the stabilization window"
+    )
 }
 if ($registration.version -ne $expectedVersion) {
     throw "AgentBridge OpenClaw plugin runtime version does not match its manifest"
@@ -103,6 +142,8 @@ if ($registration.version -ne $expectedVersion) {
     gatewayStartedAt = $gatewayStartedAt.ToString("o")
     listenerAddress = [string]$listeners[0].LocalAddress
     readyEndpoint = "ok"
+    readinessAttempts = $readinessAttempts
+    stabilizationTimeoutSeconds = $StabilizationTimeoutSeconds
     pluginStatus = "loaded"
     pluginVersion = $registration.version
     pluginRegistrationAt = $registration.observedAt.ToString("o")

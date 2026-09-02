@@ -30,6 +30,9 @@ $stateRoot = Join-Path $env:LOCALAPPDATA "AgentBridge"
 $logRoot = Join-Path $stateRoot "logs"
 $statusPath = Join-Path $stateRoot "openclaw-guard-status.json"
 $statusTempPath = "$statusPath.tmp"
+$lifecycleOperationPath = Join-Path `
+    $stateRoot `
+    "openclaw-lifecycle-operation.json"
 $tunnelStatusPath = Join-Path $stateRoot "workspace-tunnel-status.json"
 $logPath = Join-Path $logRoot "openclaw-guard.log"
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
@@ -38,6 +41,13 @@ if (-not (Test-Path -LiteralPath $GatewayLifecycleScript -PathType Leaf)) {
     throw "OpenClaw Gateway lifecycle script was not found: $GatewayLifecycleScript"
 }
 $resolvedLifecycleScript = (Resolve-Path -LiteralPath $GatewayLifecycleScript).Path
+$lifecycleStateModule = Join-Path `
+    $PSScriptRoot `
+    "AgentBridgeOpenClawLifecycleLease.psm1"
+if (-not (Test-Path -LiteralPath $lifecycleStateModule -PathType Leaf)) {
+    throw "OpenClaw lifecycle lease module was not found: $lifecycleStateModule"
+}
+Import-Module $lifecycleStateModule -Force
 
 function Write-GuardLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -192,6 +202,7 @@ try {
         $tunnelState = "unknown"
         $tunnelStatusAgeSeconds = $null
         $tunnelSshProcessId = $null
+        $lifecycleLease = $null
         $lastError = $null
         try {
             $listener = @(
@@ -199,8 +210,14 @@ try {
                     -ErrorAction SilentlyContinue
             ) | Select-Object -First 1
             $gatewayProcesses = @(Get-GatewayProcesses)
+            $lifecycleLease = Get-AgentBridgeOpenClawLifecycleLease `
+                -Path $lifecycleOperationPath `
+                -GatewayPort $GatewayPort
 
-            if ($listener) {
+            if ($lifecycleLease.active) {
+                $gatewayAction = "lifecycle_in_progress"
+            }
+            elseif ($listener) {
                 $duplicates = @(
                     $gatewayProcesses |
                         Where-Object { $_.ProcessId -ne $listener.OwningProcess }
@@ -247,7 +264,7 @@ try {
                     $gatewayAction = "startup_in_progress"
                 }
                 else {
-                    $replacement = Invoke-GatewayLifecycle
+                    $replacement = Invoke-GatewayLifecycle -StartOnly
                     $gatewayAction = "stale_start_replaced"
                     Write-GuardLog (
                         "Gateway startup grace expired; visible lifecycle restart created PID {0}." -f `
@@ -330,6 +347,26 @@ try {
             gatewayStartupGraceSeconds = $GatewayStartupGraceSeconds
             gatewayVisibleForeground = $statusVisibleForeground
             gatewayAction = $gatewayAction
+            lifecycleLeaseState = if ($lifecycleLease) {
+                $lifecycleLease.reason
+            } else {
+                "unavailable"
+            }
+            lifecycleOperationId = if ($lifecycleLease) {
+                $lifecycleLease.operationId
+            } else {
+                $null
+            }
+            lifecyclePhase = if ($lifecycleLease) {
+                $lifecycleLease.phase
+            } else {
+                $null
+            }
+            lifecycleHeartbeatAgeSeconds = if ($lifecycleLease) {
+                $lifecycleLease.heartbeatAgeSeconds
+            } else {
+                $null
+            }
             tunnelAction = $tunnelAction
             errorCode = $lastError
             businessCalls = 0
