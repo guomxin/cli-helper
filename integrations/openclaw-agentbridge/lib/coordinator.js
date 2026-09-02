@@ -34,6 +34,7 @@ const MAX_POLL_ERRORS = 5;
 const MAX_TOOL_BINDINGS = 1000;
 const TOOL_BINDING_TTL_MS = 5 * 60 * 1000;
 const LOGIN_CONTINUATION_TTL_MS = 5 * 60 * 1000;
+const PLANNING_REPAIR_TTL_MS = 5 * 60 * 1000;
 const TERMINAL_TASK_TTL_MS = 30 * 60 * 1000;
 const MAX_HYDRATION_REFERENCES = 3;
 const QUIET_COMPANION_TASK_EVENTS = new Set([
@@ -225,6 +226,7 @@ export function createInteractionSharedState() {
     directDeliveries: new Map(),
     loginContinuations: new Map(),
     recentUserMessages: new Map(),
+    planningRepairs: new Map(),
     documentDeliveries: new Map(),
     documentDeliveryReceipts: new Map(),
     taskContinuations: new Map(),
@@ -274,6 +276,8 @@ export class InteractionCoordinator {
       sharedState.loginContinuations || (sharedState.loginContinuations = new Map());
     this.recentUserMessages =
       sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
+    this.planningRepairs =
+      sharedState.planningRepairs || (sharedState.planningRepairs = new Map());
     this.documentDeliveries =
       sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
     this.documentDeliveryReceipts =
@@ -307,6 +311,7 @@ export class InteractionCoordinator {
     // fresh server-backed selection before this turn reaches any business tool.
     this.taskContinuations.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
+    this.planningRepairs.delete(sessionKey);
     this.recentUserMessages.set(sessionKey, {
       text,
       capturedAt: this.now(),
@@ -324,6 +329,7 @@ export class InteractionCoordinator {
     }
     this.taskContinuations.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
+    this.planningRepairs.delete(sessionKey);
     const normalizedMessage = safeMessageText(message, 1000);
     this.recentUserMessages.set(sessionKey, {
       text: normalizedMessage || null,
@@ -440,12 +446,20 @@ export class InteractionCoordinator {
   }
 
   taskRunRefForToolCall(toolCallId, sessionKey, toolName = null) {
+    this.prunePlanningRepairs();
     const normalized = normalizeToolCallId(toolCallId);
     const binding = normalized ? this.toolBindings.get(normalized) : null;
     if (!binding || (binding.sessionKey && binding.sessionKey !== sessionKey)) {
       return normalized;
     }
     const recent = this.recentUserMessages.get(sessionKey);
+    const planningRepair = this.planningRepairs.get(sessionKey);
+    if (
+      toolName === "agentbridge_task_plan_prepare" &&
+      planningRepair?.taskRunRef
+    ) {
+      return planningRepair.taskRunRef;
+    }
     if (
       !INDEPENDENT_TASK_ENTRY_TOOLS.has(String(toolName || "")) &&
       recent?.taskRunRef
@@ -549,6 +563,7 @@ export class InteractionCoordinator {
     if (!publicPayload) {
       return undefined;
     }
+    this.rememberPlanningRepair(publicPayload, binding, context, taskId);
     this.rememberLoginContinuation(publicPayload, binding, context);
     const loginStart = this.autoStartLoginForRead(
       publicPayload,
@@ -584,6 +599,34 @@ export class InteractionCoordinator {
       return;
     }
     this.loginContinuations.set(sessionKey, binding.readContinuation);
+  }
+
+  rememberPlanningRepair(payload, binding, context, sourceTaskId = null) {
+    if (payload?.error?.code !== "PLAN_REQUIRED") {
+      return;
+    }
+    const sessionKey = binding?.sessionKey || context.sessionKey;
+    if (!isPrivateSessionKey(sessionKey)) {
+      return;
+    }
+    const existing = this.planningRepairs.get(sessionKey);
+    if (existing && existing.expiresAt > this.now()) {
+      return;
+    }
+    const recent = this.recentUserMessages.get(sessionKey);
+    const baseRef =
+      recent?.taskRunRef ||
+      safeRoutePart(binding?.runId) ||
+      `repair:${randomUUID()}`;
+    this.planningRepairs.set(sessionKey, {
+      taskRunRef: `${baseRef}:plan-repair`.slice(0, 256),
+      sourceTaskId: safeRoutePart(sourceTaskId),
+      capturedAt: this.now(),
+      expiresAt: this.now() + PLANNING_REPAIR_TTL_MS,
+    });
+    this.api.logger.info(
+      "AgentBridge prepared a fresh host task reference for one composed-plan repair",
+    );
   }
 
   autoStartLoginForRead(
@@ -1042,6 +1085,7 @@ export class InteractionCoordinator {
     }
     this.loginContinuations.delete(sessionKey);
     this.recentUserMessages.delete(sessionKey);
+    this.planningRepairs.delete(sessionKey);
     this.taskContinuations.delete(sessionKey);
     this.taskContinuationChoices.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
@@ -1067,6 +1111,7 @@ export class InteractionCoordinator {
     this.toolBindings.clear();
     this.loginContinuations.clear();
     this.recentUserMessages.clear();
+    this.planningRepairs.clear();
     this.taskContinuations.clear();
     this.taskContinuationChoices.clear();
     this.independentTaskBindings.clear();
@@ -2399,6 +2444,7 @@ export class InteractionCoordinator {
   prune() {
     this.pruneToolBindings();
     this.prunePreparedDocumentReceipts();
+    this.prunePlanningRepairs();
     const continuationCutoff = this.now() - LOGIN_CONTINUATION_TTL_MS;
     for (const [sessionKey, continuation] of this.loginContinuations) {
       if (continuation.capturedAt <= continuationCutoff) {
@@ -2448,6 +2494,15 @@ export class InteractionCoordinator {
         break;
       }
       this.terminalTasks.delete(oldest);
+    }
+  }
+
+  prunePlanningRepairs() {
+    const current = this.now();
+    for (const [sessionKey, repair] of this.planningRepairs) {
+      if (repair.expiresAt <= current) {
+        this.planningRepairs.delete(sessionKey);
+      }
     }
   }
 

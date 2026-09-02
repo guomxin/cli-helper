@@ -172,6 +172,14 @@ class CentralCapabilityServiceTests(unittest.TestCase):
 
             self.assertEqual(blocked["error"]["code"], "PLAN_REQUIRED")
             self.assertEqual(
+                blocked["recovery"]["requiredProposalShape"],
+                {
+                    "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                    "readOnlyTerminal": "catalog_result_projection_transform",
+                    "bindEveryBusinessSource": True,
+                },
+            )
+            self.assertEqual(
                 second_source["error"]["code"],
                 "PLAN_REQUIRED",
             )

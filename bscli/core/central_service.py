@@ -1013,6 +1013,11 @@ class CentralCapabilityService:
                 "action": "prepare_task_plan",
                 "policyVersion": COMPOSED_TASK_POLICY_VERSION,
                 "maximumRepairAttempts": 1,
+                "requiredProposalShape": {
+                    "schemaVersion": "agentbridge.task-plan.proposal.v2",
+                    "readOnlyTerminal": "catalog_result_projection_transform",
+                    "bindEveryBusinessSource": True,
+                },
             },
         }
 

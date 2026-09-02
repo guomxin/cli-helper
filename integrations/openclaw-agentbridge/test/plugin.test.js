@@ -803,7 +803,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.73",
+      hostVersion: "0.4.74",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1221,7 +1221,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.73",
+        hostVersion: "0.4.74",
       },
     },
   });
@@ -1842,6 +1842,139 @@ test("uses one user-turn task reference when OpenClaw assigns per-tool run IDs",
   assert.equal(prepareRef, searchRef);
 });
 
+test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  coordinator.recordUserMessage(
+    { sessionKey, content: "把昨天的 OA 已办和已发合起来给我看" },
+    { sessionKey },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-source-blocked",
+    runId: "call-source|fc-blocked",
+    sessionKey,
+    toolName: "oa_workflow_sent_list",
+  });
+  const originalRef = coordinator.taskRunRefForToolCall(
+    "tool-source-blocked",
+    sessionKey,
+    "oa_workflow_sent_list",
+  );
+
+  coordinator.captureToolResult(
+    {
+      toolCallId: "tool-source-blocked",
+      result: {
+        structuredContent: {
+          status: "planning_control",
+          error: { code: "PLAN_REQUIRED", message: "prepare a plan" },
+        },
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "oa_workflow_sent_list",
+          agentbridgeTaskId: "12345678-1234-4123-8123-123456789120",
+        },
+      },
+    },
+    { sessionKey, runId: "call-source|fc-blocked" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-plan-first",
+    runId: "call-plan|fc-first",
+    sessionKey,
+    toolName: "agentbridge_task_plan_prepare",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-plan-retry",
+    runId: "call-plan|fc-retry",
+    sessionKey,
+    toolName: "agentbridge_task_plan_prepare",
+  });
+
+  const firstRepairRef = coordinator.taskRunRefForToolCall(
+    "tool-plan-first",
+    sessionKey,
+    "agentbridge_task_plan_prepare",
+  );
+  const retryRepairRef = coordinator.taskRunRefForToolCall(
+    "tool-plan-retry",
+    sessionKey,
+    "agentbridge_task_plan_prepare",
+  );
+  assert.notEqual(firstRepairRef, originalRef);
+  assert.match(firstRepairRef, /:plan-repair$/);
+  assert.equal(retryRepairRef, firstRepairRef);
+
+  coordinator.recordUserMessage(
+    { sessionKey, content: "查看我的 OA 待办" },
+    { sessionKey },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-plan-new-turn",
+    runId: "call-plan|fc-new-turn",
+    sessionKey,
+    toolName: "agentbridge_task_plan_prepare",
+  });
+  const newTurnRef = coordinator.taskRunRefForToolCall(
+    "tool-plan-new-turn",
+    sessionKey,
+    "agentbridge_task_plan_prepare",
+  );
+  assert.match(newTurnRef, /^turn:/);
+  assert.doesNotMatch(newTurnRef, /:plan-repair$/);
+});
+
+test("does not create a planning repair reference for ordinary tool failures", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  coordinator.recordUserMessage(
+    { sessionKey, content: "查看我的 OA 待办" },
+    { sessionKey },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-source-failed",
+    runId: "call-source|fc-failed",
+    sessionKey,
+    toolName: "oa_workflow_pending_list",
+  });
+  coordinator.captureToolResult(
+    {
+      toolCallId: "tool-source-failed",
+      result: {
+        structuredContent: {
+          status: "failed",
+          error: { code: "DOWNSTREAM_UNAVAILABLE" },
+        },
+        details: {
+          mcpServer: "agentbridge",
+          mcpTool: "oa_workflow_pending_list",
+        },
+      },
+    },
+    { sessionKey, runId: "call-source|fc-failed" },
+  );
+  bindToolCall(harness, {
+    toolCallId: "tool-plan-after-failure",
+    runId: "call-plan|fc-after-failure",
+    sessionKey,
+    toolName: "agentbridge_task_plan_prepare",
+  });
+
+  const planRef = coordinator.taskRunRefForToolCall(
+    "tool-plan-after-failure",
+    sessionKey,
+    "agentbridge_task_plan_prepare",
+  );
+  assert.match(planRef, /^turn:/);
+  assert.doesNotMatch(planRef, /:plan-repair$/);
+});
+
 test("uses one task reference for a multimodal user turn", () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
@@ -2009,7 +2142,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.73",
+      hostVersion: "0.4.74",
     },
   });
   assert.equal(
