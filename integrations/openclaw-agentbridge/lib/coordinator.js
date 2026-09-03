@@ -1674,6 +1674,7 @@ export class InteractionCoordinator {
           leaseError.code = "HOST_COORDINATOR_LEASE_CONFLICT";
           throw leaseError;
         }
+        record.coordinatorLeaseVersion = coordinatorLease.version;
       }
       response = await record.mcpClient.callTool(
         "agentbridge_interaction_resume",
@@ -1710,6 +1711,14 @@ export class InteractionCoordinator {
       this.resumeClaims.delete(interactionId);
       await this.notify(record, "resume_failed", safeErrorCode(error));
       return false;
+    }
+
+    if (response?.nextAction?.type === "original_request_completed") {
+      if (record.taskId) {
+        this.markTaskTerminal(record.taskId, response.taskStatus || safeStatus(response));
+      }
+      this.api.logger.info("AgentBridge persisted login read continuation and feedback centrally");
+      return true;
     }
 
     const processed = processToolResult(
@@ -1867,13 +1876,17 @@ export class InteractionCoordinator {
         continuation.toolName,
         continuation.arguments,
         {
-          meta: record.taskId
-            ? {
+          meta: {
+            ...hostContextMeta(),
+            ...(record.taskId ? {
                 [TASK_CONTEXT_META_KEY]: {
                   taskId: record.taskId,
+                  ...(record.coordinatorLeaseVersion ? {
+                    coordinatorLeaseVersion: String(record.coordinatorLeaseVersion),
+                  } : {}),
                 },
-              }
-            : undefined,
+              } : {}),
+          },
         },
       );
       await this.observeTaskResponse(record, response);
@@ -3120,7 +3133,7 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
     normalizedToolName === "yuque_document_search"
       ? 50
       : descriptor.kind === "oa_workflow"
-        ? 100
+        ? (["oa_workflow_done_list", "oa_workflow_sent_list"].includes(normalizedToolName) ? 1000 : 100)
         : 500;
   if (
     Number.isInteger(source.limit) &&
@@ -3156,6 +3169,13 @@ function normalizeReadContinuation(toolName, params, capturedAt) {
     }
     for (const name of ["dept_id", "member_id", "watch_group_id"]) {
       if (Number.isInteger(source[name]) && source[name] >= 1) {
+        arguments_[name] = source[name];
+      }
+    }
+  }
+  if (["oa_workflow_done_list", "oa_workflow_sent_list"].includes(normalizedToolName)) {
+    for (const name of ["start_date", "end_date"]) {
+      if (typeof source[name] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(source[name])) {
         arguments_[name] = source[name];
       }
     }

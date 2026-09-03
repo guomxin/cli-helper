@@ -1635,6 +1635,45 @@ class CentralMcpTests(unittest.TestCase):
             artifact_limit=20,
         )
 
+    def test_login_read_resume_requires_formal_host_and_current_coordinator_metadata(self):
+        task_id = "task-login-read-1234567890"
+        host_meta = {
+            "io.agentbridge/host-context": {
+                "version": "1", "agentHost": "openclaw",
+                "hostInstanceId": "openclaw-gateway", "hostVersion": "0.4.79",
+            },
+            "io.agentbridge/task": {"taskId": task_id, "coordinatorLeaseVersion": "7"},
+        }
+        with self._server() as (service, _store, token, client):
+            service.require_host_registration.return_value = {
+                "hostInstanceId": "openclaw-gateway", "agentHost": "openclaw",
+                "hostVersion": "0.4.79", "acceptedLevel": "L3",
+            }
+            service.interaction_required_scopes.return_value = frozenset({"oa:read"})
+            service.assert_host_coordinator_lease = MagicMock()
+            service.tasks.task_id_for_interaction.return_value = task_id
+            service.resume_interaction.return_value = {
+                "status": "succeeded", "taskStatus": "succeeded", "interaction": None,
+                "nextAction": {"type": "original_request_completed"},
+            }
+            params = {"name": "agentbridge_interaction_resume", "arguments": {
+                "interaction_id": "login-interaction-1234567890",
+            }}
+            rejected = self._request(client, "tools/call", request_id=6201, token=token,
+                params={**params, "_meta": {"io.agentbridge/task": host_meta["io.agentbridge/task"]}})
+            self.assertTrue(rejected.json()["result"]["isError"])
+            service.resume_interaction.assert_not_called()
+            accepted = self._request(client, "tools/call", request_id=6202, token=token,
+                params={**params, "_meta": host_meta})
+            self.assertFalse(accepted.json()["result"]["isError"], accepted.json())
+            self.assertEqual(accepted.json()["result"]["structuredContent"]["nextAction"]["type"],
+                "original_request_completed")
+            service.assert_host_coordinator_lease.assert_called_once_with(
+                user_subject="user-a", task_id=task_id,
+                registration=service.require_host_registration.return_value, expected_version=7,
+            )
+            service.resume_interaction.assert_called_once()
+
     def test_non_coordinator_cannot_resume_task_interaction(self):
         host_meta = {
             "io.agentbridge/host-context": {

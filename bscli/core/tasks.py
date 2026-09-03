@@ -1799,6 +1799,30 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def operation_before_interaction(
+        self, *, task_id: str, user_subject: str, interaction_id: str
+    ) -> dict | None:
+        """Find the persisted operation that immediately preceded this task's card."""
+        with self._connect() as connection:
+            self._select_owned_task(connection, task_id, user_subject)
+            row = connection.execute(
+                """
+                SELECT operation.* FROM task_operations AS link
+                JOIN operations AS operation ON operation.operation_id = link.operation_id
+                JOIN task_interactions AS card ON card.task_id = link.task_id
+                JOIN interactions AS interaction ON interaction.interaction_id = card.interaction_id
+                WHERE link.task_id = ? AND link.user_subject = ?
+                  AND operation.user_subject = ? AND card.user_subject = ?
+                  AND interaction.user_subject = ? AND card.interaction_id = ?
+                  AND link.linked_at <= interaction.created_at
+                ORDER BY link.linked_at DESC, operation.created_at DESC LIMIT 1
+                """,
+                (task_id, user_subject, user_subject, user_subject, user_subject, interaction_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"operation_id": row["operation_id"]}
+
     def task_has_succeeded_capability(
         self,
         *,
@@ -2669,6 +2693,7 @@ class TaskHubStore:
         text: str,
         task_id: str | None = None,
         payload: dict[str, Any] | None = None,
+        notify_source: bool = False,
     ) -> tuple[dict, bool]:
         user_subject = _required_text(user_subject, "user_subject", 256)
         message_key = _required_text(message_key, "message_key", 768)
@@ -2735,6 +2760,7 @@ class TaskHubStore:
                 connection,
                 entry=row,
                 source_endpoint_id=source_endpoint_id,
+                notify_source=notify_source,
             )
         return _timeline_from_row(row), False
 
@@ -4436,6 +4462,7 @@ class TaskHubStore:
         *,
         entry: sqlite3.Row,
         source_endpoint_id: str,
+        notify_source: bool = False,
     ) -> None:
         source = connection.execute(
             """
@@ -4450,9 +4477,9 @@ class TaskHubStore:
             SELECT endpoint_id, client_type, capabilities_json
             FROM client_endpoints
             WHERE user_subject = ? AND state = 'active'
-              AND endpoint_id != ?
+              AND (endpoint_id != ? OR ?)
             """,
-            (entry["user_subject"], source_endpoint_id),
+            (entry["user_subject"], source_endpoint_id, notify_source),
         ).fetchall()
         entry_payload = json.loads(entry["payload_json"] or "{}")
         payload = _canonical_json(
