@@ -7,6 +7,8 @@ import json
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from bscli.core.query_contracts import oa_history_query_contract
+
 
 COMPOSED_TASK_POLICY_VERSION = "agentbridge.composed-task-planning-policy.v1"
 
@@ -21,9 +23,11 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- A read-only multi-source plan must end with a catalog-declared result-projection transform. Bind every business source into that transform; source capability steps alone are not a complete plan.",
             "- Keep independent reads, target selection, approvals, batch approvals, and forms whose business content was supplied directly by the user on their existing atomic paths.",
             "- Preserve requested dates, ranges, hours, preview-only intent, and submit intent. If the catalog cannot express a required constraint, stop and explain the gap.",
+            "- Use each business source's queryContract: send user-requested date bounds to the source capability, never fetch an unfiltered first page and filter it in model text. Done dates mean the current user's processing date; Sent dates mean initiation date. For complete summaries use the declared maximum limit and inspect coverage; never infer completeness from row order or a 50-row page.",
             "- Use only catalog-declared arguments and bindings. Never call hidden commit/resume tools or emulate a composed task with separate source and sink calls.",
             "- If AgentBridge returns PLAN_REQUIRED, read the catalog and repair the route once. Do not ask the user to rephrase or loop between direct prepare and planning.",
             "- If plan preparation or execution fails, report that authoritative plan failure. Do not query operation history to reconstruct and present a business result outside the plan.",
+            "- PLAN_SOURCE_INCOMPLETE means safely stopped before the write sink. Report the incomplete sources and no business submission. Do not retry atomic source/sink tools in the same turn, ask to authorize a partial submission, or claim the business write failed.",
             "- When a plan succeeds, answer from plan.resultProjection.result. Do not query source operations again; the projection is the bounded authoritative result for the user.",
             "- Reuse an active plan's authoritative state instead of creating another plan or repeating successful source steps.",
         )
@@ -48,6 +52,7 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
             "coveragePointer": "/coverage",
             "dateArguments": ["start_date", "end_date"],
             "dateBasis": "processed_at",
+            "queryContract": oa_history_query_contract("done"),
         },
     },
     "oa.workflow.sent.list": {
@@ -57,6 +62,7 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
             "coveragePointer": "/coverage",
             "dateArguments": ["start_date", "end_date"],
             "dateBasis": "initiated_at",
+            "queryContract": oa_history_query_contract("sent"),
         },
     },
     "taihua.work_log.create.prepare": {
@@ -107,7 +113,7 @@ def compile_temporal_constraints(
     if not isinstance(temporal, dict) or set(temporal) - {"kind", "start", "end"}:
         raise ValueError("计划 temporal 约束不合法。")
     kind = str(temporal.get("kind") or "").strip()
-    if kind not in {"previous_day", "previous_calendar_week", "absolute_range"}:
+    if kind not in {"previous_day", "day_before_yesterday", "previous_calendar_week", "absolute_range"}:
         raise ValueError("计划 temporal.kind 不受支持。")
     if kind != "absolute_range" and (
         temporal.get("start") is not None or temporal.get("end") is not None
@@ -129,6 +135,8 @@ def compile_temporal_constraints(
     local_day = anchor.astimezone(timezone).date()
     if kind == "previous_day":
         start = end = local_day - timedelta(days=1)
+    elif kind == "day_before_yesterday":
+        start = end = local_day - timedelta(days=2)
     elif kind == "previous_calendar_week":
         this_monday = local_day - timedelta(days=local_day.weekday())
         start = this_monday - timedelta(days=7)

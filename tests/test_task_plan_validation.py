@@ -202,6 +202,17 @@ class TaskPlanValidationTests(unittest.TestCase):
             compiled["steps"][2]["bindings"]["sources"]["mode"], "many"
         )
 
+    def test_day_before_yesterday_uses_trusted_acceptance_date_in_shanghai(self):
+        proposal = self.proposal_v2()
+        proposal["constraints"]["temporal"]["kind"] = "day_before_yesterday"
+        for step in proposal["steps"]:
+            if step.get("capabilityName") in {"oa.workflow.done.list", "oa.workflow.sent.list"}:
+                step["arguments"] = {"limit": 1000}
+        compiled, context = compile_temporal_constraints(proposal, accepted_at="2026-09-02T17:00:00Z")
+        self.assertEqual(context["absoluteRange"], {"start": "2026-09-01", "end": "2026-09-01"})
+        for step in compiled["steps"][:2]:
+            self.assertEqual(step["arguments"]["start_date"], "2026-09-01")
+
     def test_v2_rejects_a_named_but_unbound_business_source(self):
         proposal = self.proposal_v2()
         proposal["steps"][2]["bindings"]["sources"]["items"] = [

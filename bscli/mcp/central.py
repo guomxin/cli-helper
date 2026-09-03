@@ -1556,6 +1556,11 @@ def create_central_mcp_server(
         title="List Sent OA Workflows",
         description=(
             "List workflows initiated by the authenticated OA user from the Sent page. "
+            "Pass user-requested start_date/end_date (inclusive YYYY-MM-DD, Asia/Shanghai): "
+            "OA filters by initiation date and the adapter paginates only filtered results. "
+            "One-sided ranges are supported. For complete summaries use limit=1000 and require "
+            "coverage.status=complete; output truncation or scan limits mean partial, not all records. "
+            "keyword filters public fields after the server date filter. Without dates only the loaded page is read. "
             "This is distinct from workflows the user has handled (Done) or follows (Tracked). "
             "Use this list to resolve a concise request such as 'revoke the business-trip "
             "request I just submitted'. Select only one unique recent match; if several remain, "
@@ -1567,9 +1572,9 @@ def create_central_mcp_server(
     async def oa_workflow_sent_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
-        start_date: Annotated[str | None, Field(max_length=10)] = None,
-        end_date: Annotated[str | None, Field(max_length=10)] = None,
-        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        start_date: Annotated[str | None, Field(max_length=10, description="发起日期下界，包含当天，YYYY-MM-DD")] = None,
+        end_date: Annotated[str | None, Field(max_length=10, description="发起日期上界，包含当天，YYYY-MM-DD")] = None,
+        limit: Annotated[int, Field(ge=1, le=1000)] = 50,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments = {"limit": limit}
@@ -1586,6 +1591,11 @@ def create_central_mcp_server(
         title="List Completed OA Workflows",
         description=(
             "List workflows already handled by the authenticated OA user from the Done page. "
+            "Pass user-requested start_date/end_date (inclusive YYYY-MM-DD, Asia/Shanghai): "
+            "OA filters by the current user's processing date, NOT initiation date, and the adapter "
+            "paginates only filtered results. One-sided ranges are supported. For complete summaries "
+            "use limit=1000 and require coverage.status=complete; truncation or scan limits mean partial. "
+            "keyword filters public fields after the date filter. Without dates only the loaded page is read. "
             "This is distinct from workflows initiated by the user (Sent)."
         ),
         annotations=read_annotations,
@@ -1594,9 +1604,9 @@ def create_central_mcp_server(
     async def oa_workflow_done_list(
         ctx: Context,
         keyword: Annotated[str | None, Field(max_length=200)] = None,
-        start_date: Annotated[str | None, Field(max_length=10)] = None,
-        end_date: Annotated[str | None, Field(max_length=10)] = None,
-        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        start_date: Annotated[str | None, Field(max_length=10, description="本人处理日期下界，包含当天，YYYY-MM-DD；不是发起日期")] = None,
+        end_date: Annotated[str | None, Field(max_length=10, description="本人处理日期上界，包含当天，YYYY-MM-DD")] = None,
+        limit: Annotated[int, Field(ge=1, le=1000)] = 50,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
         arguments = {"limit": limit}

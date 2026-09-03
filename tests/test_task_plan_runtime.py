@@ -507,6 +507,12 @@ class TaskPlanRuntimeTests(unittest.TestCase):
         self.assertEqual(response["status"], "failed")
         self.assertEqual(response["error"]["code"], "PLAN_SOURCE_INCOMPLETE")
         self.assertEqual(response["plan"]["effectOutcome"], "source_incomplete")
+        self.assertTrue(response["nextAction"]["doNotRetryAtomicTools"])
+        self.assertFalse(response["nextAction"]["businessWriteOccurred"])
+        stopped = self.runtime._plan_result(self.plans.get(
+            plan["plan_id"], user_subject="user-1"
+        ))
+        self.assertEqual(stopped["nextAction"], response["nextAction"])
         self.assertEqual(
             [step["state"] for step in response["plan"]["steps"]],
             ["succeeded", "succeeded", "failed", "canceled", "canceled"],

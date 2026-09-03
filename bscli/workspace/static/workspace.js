@@ -1590,7 +1590,8 @@ function upsertTaskCardVariant(
   status.className =
     `application-card-status ${escapeClass(cardStatus)}`;
   const completedInteraction = completedInteractionPresentation(interaction);
-  status.textContent = completedInteraction?.label || statusLabel(cardStatus);
+  const planFailure = taskPlanFailurePresentation(result.plan);
+  status.textContent = planFailure?.label || completedInteraction?.label || statusLabel(cardStatus);
   header.append(heading, status);
   card.append(header);
 
@@ -1599,7 +1600,7 @@ function upsertTaskCardVariant(
   const interactionActive =
     interaction &&
     ["pending", "processing"].includes(interaction.state);
-  description.textContent = completedInteraction?.message || (
+  description.textContent = planFailure?.message || completedInteraction?.message || (
     interactionActive
       ? interaction.message || taskCardStatusMessage(cardStatus, task.summary)
       : taskCardStatusMessage(cardStatus, task.summary)
@@ -2320,6 +2321,23 @@ function taskPlanProgress(plan) {
   return `${completed}/${steps.length} 步${suffix}`;
 }
 
+function taskPlanFailurePresentation(plan) {
+  if (plan?.terminalReason !== "PLAN_SOURCE_INCOMPLETE") return null;
+  const sources = plan.resultProjection?.result?.source_summaries || [];
+  const incomplete = sources.filter(source => source.status !== "complete");
+  const names = { done: "OA 已办", sent: "OA 已发" };
+  const detail = incomplete.map(source => {
+    const coverage = source.coverage || {};
+    const total = Number.isInteger(coverage.sourceQueryTotal)
+      ? ` / 筛选命中 ${coverage.sourceQueryTotal} 条` : "";
+    return `${names[source.collection] || source.collection}：已读 ${source.scanned_count ?? 0} 条${total}`;
+  }).join("；");
+  return {
+    label: "已安全停止",
+    message: `${detail ? `${detail}。` : ""}来源未完整覆盖请求范围，未进入业务写入。`,
+  };
+}
+
 function renderTaskPlan(plan) {
   const section = document.createElement("section");
   section.className = "task-plan";
@@ -2331,6 +2349,13 @@ function renderTaskPlan(plan) {
   progress.textContent = taskPlanProgress(plan);
   header.append(title, progress);
   section.append(header);
+  const failure = taskPlanFailurePresentation(plan);
+  if (failure) {
+    const notice = document.createElement("p");
+    notice.className = "task-plan-result";
+    notice.textContent = `${failure.label}：${failure.message}`;
+    section.append(notice);
+  }
 
   const steps = document.createElement("ol");
   steps.className = "task-plan-steps";

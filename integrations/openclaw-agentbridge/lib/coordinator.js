@@ -278,6 +278,8 @@ export class InteractionCoordinator {
       sharedState.recentUserMessages || (sharedState.recentUserMessages = new Map());
     this.planningRepairs =
       sharedState.planningRepairs || (sharedState.planningRepairs = new Map());
+    this.terminalPlanFailures =
+      sharedState.terminalPlanFailures || (sharedState.terminalPlanFailures = new Map());
     this.documentDeliveries =
       sharedState.documentDeliveries || (sharedState.documentDeliveries = new Map());
     this.documentDeliveryReceipts =
@@ -312,6 +314,7 @@ export class InteractionCoordinator {
     this.taskContinuations.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
     this.planningRepairs.delete(sessionKey);
+    this.terminalPlanFailures.delete(sessionKey);
     this.recentUserMessages.set(sessionKey, {
       text,
       capturedAt: this.now(),
@@ -330,6 +333,7 @@ export class InteractionCoordinator {
     this.taskContinuations.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
     this.planningRepairs.delete(sessionKey);
+    this.terminalPlanFailures.delete(sessionKey);
     const normalizedMessage = safeMessageText(message, 1000);
     this.recentUserMessages.set(sessionKey, {
       text: normalizedMessage || null,
@@ -563,6 +567,18 @@ export class InteractionCoordinator {
     if (!publicPayload) {
       return undefined;
     }
+    const failedPlan = publicPayload.plan || publicPayload.result?.plan;
+    if (failedPlan?.state === "failed" && failedPlan.terminalReason === "PLAN_SOURCE_INCOMPLETE") {
+      const sessionKey = binding?.sessionKey || context.sessionKey;
+      if (isPrivateSessionKey(sessionKey)) {
+        this.terminalPlanFailures.set(sessionKey, {
+          planId: failedPlan.planId,
+          turnRef: this.recentUserMessages.get(sessionKey)?.taskRunRef || null,
+          runId: binding?.runId || context.runId || null,
+          expiresAt: this.now() + PLANNING_REPAIR_TTL_MS,
+        });
+      }
+    }
     const planningRepair = this.rememberPlanningRepair(
       publicPayload,
       binding,
@@ -598,6 +614,28 @@ export class InteractionCoordinator {
       context,
       taskId,
     );
+  }
+
+  terminalPlanFailureForCall({ sessionKey, runId, toolCallId }) {
+    const failure = this.terminalPlanFailures.get(sessionKey);
+    if (!failure) return null;
+    if (failure.expiresAt <= this.now()) {
+      this.terminalPlanFailures.delete(sessionKey);
+      return null;
+    }
+    const currentRun = this.toolBindings.get(normalizeToolCallId(toolCallId))?.runId || runId;
+    const sameTurn = failure.turnRef
+      ? failure.turnRef === this.recentUserMessages.get(sessionKey)?.taskRunRef
+      : failure.runId && failure.runId === currentRun;
+    if (!sameTurn) return null;
+    return {
+      status: "failed", planId: failure.planId,
+      error: {
+        code: "PLAN_SOURCE_INCOMPLETE",
+        message: "计划因来源不完整已安全停止，未进入业务写入。本轮不得绕过计划重新调用来源或写入工具，请报告原计划结果。",
+      },
+      nextAction: { type: "report_plan_failure", doNotRetryAtomicTools: true, businessWriteOccurred: false },
+    };
   }
 
   rememberLoginContinuation(payload, binding, context) {
@@ -1097,6 +1135,7 @@ export class InteractionCoordinator {
     this.loginContinuations.delete(sessionKey);
     this.recentUserMessages.delete(sessionKey);
     this.planningRepairs.delete(sessionKey);
+    this.terminalPlanFailures.delete(sessionKey);
     this.taskContinuations.delete(sessionKey);
     this.taskContinuationChoices.delete(sessionKey);
     this.independentTaskBindings.delete(sessionKey);
@@ -1123,6 +1162,7 @@ export class InteractionCoordinator {
     this.loginContinuations.clear();
     this.recentUserMessages.clear();
     this.planningRepairs.clear();
+    this.terminalPlanFailures.clear();
     this.taskContinuations.clear();
     this.taskContinuationChoices.clear();
     this.independentTaskBindings.clear();

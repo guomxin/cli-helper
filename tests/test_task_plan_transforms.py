@@ -109,6 +109,15 @@ class TaskPlanTransformTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "TRANSFORM_INPUT_TOO_LARGE")
 
+    def test_merge_preserves_server_query_evidence_for_each_source(self):
+        source = self.source("done", [{"title": "审批", "affair_id": "1", "date": "2026-08-30"}])
+        source["coverage"].update({
+            "serverFilterApplied": True, "sourceQueryTotal": 1,
+            "sourceQueryPages": 1, "pagesFetched": 1, "scanBudget": 1000,
+        })
+        merged = self.registry.invoke(MERGE_WORK_ITEMS, {"sources": [source]})
+        self.assertEqual(merged["source_summaries"][0]["coverage"], source["coverage"])
+
     @staticmethod
     def source(collection, items, *, status="complete", has_more=False):
         return {

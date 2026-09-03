@@ -1481,6 +1481,7 @@
               "kind": {
                 "enum": [
                   "previous_day",
+                  "day_before_yesterday",
                   "previous_calendar_week",
                   "absolute_range"
                 ],
@@ -1990,7 +1991,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List workflows initiated by the authenticated OA user from the Sent page. This is distinct from workflows the user has handled (Done) or follows (Tracked). Use this list to resolve a concise request such as 'revoke the business-trip request I just submitted'. Select only one unique recent match; if several remain, ask for a human-readable title or date, never an affair ID or task ID.",
+      "description": "List workflows initiated by the authenticated OA user from the Sent page. Pass user-requested start_date/end_date (inclusive YYYY-MM-DD, Asia/Shanghai): OA filters by initiation date and the adapter paginates only filtered results. One-sided ranges are supported. For complete summaries use limit=1000 and require coverage.status=complete; output truncation or scan limits mean partial, not all records. keyword filters public fields after the server date filter. Without dates only the loaded page is read. This is distinct from workflows the user has handled (Done) or follows (Tracked). Use this list to resolve a concise request such as 'revoke the business-trip request I just submitted'. Select only one unique recent match; if several remain, ask for a human-readable title or date, never an affair ID or task ID.",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -2004,6 +2005,7 @@
               }
             ],
             "default": null,
+            "description": "发起日期上界，包含当天，YYYY-MM-DD",
             "title": "End Date"
           },
           "idempotency_key": {
@@ -2034,7 +2036,7 @@
           },
           "limit": {
             "default": 50,
-            "maximum": 100,
+            "maximum": 1000,
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
@@ -2050,6 +2052,7 @@
               }
             ],
             "default": null,
+            "description": "发起日期下界，包含当天，YYYY-MM-DD",
             "title": "Start Date"
           }
         },
@@ -2071,7 +2074,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List workflows already handled by the authenticated OA user from the Done page. This is distinct from workflows initiated by the user (Sent).",
+      "description": "List workflows already handled by the authenticated OA user from the Done page. Pass user-requested start_date/end_date (inclusive YYYY-MM-DD, Asia/Shanghai): OA filters by the current user's processing date, NOT initiation date, and the adapter paginates only filtered results. One-sided ranges are supported. For complete summaries use limit=1000 and require coverage.status=complete; truncation or scan limits mean partial. keyword filters public fields after the date filter. Without dates only the loaded page is read. This is distinct from workflows initiated by the user (Sent).",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -2085,6 +2088,7 @@
               }
             ],
             "default": null,
+            "description": "本人处理日期上界，包含当天，YYYY-MM-DD",
             "title": "End Date"
           },
           "idempotency_key": {
@@ -2115,7 +2119,7 @@
           },
           "limit": {
             "default": 50,
-            "maximum": 100,
+            "maximum": 1000,
             "minimum": 1,
             "title": "Limit",
             "type": "integer"
@@ -2131,6 +2135,7 @@
               }
             ],
             "default": null,
+            "description": "本人处理日期下界，包含当天，YYYY-MM-DD；不是发起日期",
             "title": "Start Date"
           }
         },

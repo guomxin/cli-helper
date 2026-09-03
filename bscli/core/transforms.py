@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any, Callable
 
+from bscli.core.query_contracts import HISTORY_QUERY_EVIDENCE_SCHEMA
+
 
 class TransformRejected(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -323,6 +325,7 @@ def _coverage_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
+            **HISTORY_QUERY_EVIDENCE_SCHEMA,
             "status": {"type": "string", "enum": ["complete", "partial", "unknown"]},
             "queryApplied": {"type": "boolean"},
             "dateBasis": {"type": "string"},
@@ -396,6 +399,7 @@ def _source_summary_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
+            "coverage": _coverage_schema(),
             "collection": {"type": "string"},
             "status": {"type": "string"},
             "scanned_count": {"type": "integer"},
@@ -549,6 +553,7 @@ def _merge_work_items(arguments: dict[str, Any]) -> dict[str, Any]:
                 "matched_count": matched,
                 "included_count": len(merged) - before,
                 "query_hash": str(coverage["queryHash"]),
+                "coverage": dict(coverage),
             }
         )
 

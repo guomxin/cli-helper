@@ -1935,6 +1935,39 @@ test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", 
   assert.doesNotMatch(newTurnRef, /:plan-repair$/);
 });
 
+test("source-incomplete plan blocks same-turn atomic retries without blocking a new turn or another user", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  coordinator.bindWorkspaceTurn(sessionKey, "turn-failed");
+  coordinator.captureToolResult({
+    result: {
+      structuredContent: { status: "failed", plan: {
+        planId: "plan-incomplete", state: "failed", terminalReason: "PLAN_SOURCE_INCOMPLETE",
+      } },
+      details: { mcpServer: "agentbridge", mcpTool: "agentbridge_task_plan_prepare" },
+    },
+  }, { sessionKey });
+  const guard = request => coordinator.terminalPlanFailureForCall(request);
+  const stopped = guard({ sessionKey });
+  assert.equal(stopped.error.code, "PLAN_SOURCE_INCOMPLETE");
+  assert.equal(guard({ sessionKey: "agent:main:telegram:direct:user-b" }), null);
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey }, serverName: "agentbridge", terminalPlanGuard: guard,
+    identityRouter: { resolveToolContext: () => ({ bound: true, client: {
+      callTool: () => { throw new Error("must not reach the network"); },
+      callToolResult: () => { throw new Error("must not reach the network"); },
+    } }) },
+  });
+  for (const toolName of ["oa_workflow_done_list", "oa_workflow_sent_list", "taihua_work_log_create_prepare"]) {
+    const response = await tools.find(tool => tool.name === toolName).execute("retry", {});
+    assert.match(JSON.stringify(response), /PLAN_SOURCE_INCOMPLETE/);
+  }
+  coordinator.bindWorkspaceTurn(sessionKey, "next-user-turn");
+  assert.equal(guard({ sessionKey }), null);
+  coordinator.stopAll();
+});
+
 test("does not create a planning repair reference for ordinary tool failures", () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {

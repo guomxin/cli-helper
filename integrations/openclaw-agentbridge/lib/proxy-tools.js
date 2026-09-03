@@ -88,6 +88,7 @@ export function createAgentBridgeProxyTools({
   taskRunRefResolver = null,
   taskContinuationResolver = null,
   interactionGetGuard = null,
+  terminalPlanGuard = null,
   argumentNormalizer = null,
   logger = null,
 }) {
@@ -131,6 +132,7 @@ export function createAgentBridgeProxyTools({
         taskRunRefResolver,
         taskContinuationResolver,
         interactionGetGuard,
+        terminalPlanGuard,
         argumentNormalizer,
         logger,
       }),
@@ -182,6 +184,7 @@ function createProxyTool({
   taskRunRefResolver,
   taskContinuationResolver,
   interactionGetGuard,
+  terminalPlanGuard,
   argumentNormalizer,
   logger,
 }) {
@@ -205,6 +208,10 @@ function createProxyTool({
         });
       }
       const normalizedParams = normalizeParams(rawParams);
+      if (isTaskEligibleTool(descriptor.name)) {
+        const stopped = terminalPlanGuard?.({ sessionKey: context.sessionKey, runId: context.runId, toolCallId });
+        if (stopped) return jsonToolResult(stopped);
+      }
       const params =
         argumentNormalizer?.({
           sessionKey: context.sessionKey,

@@ -29,3 +29,22 @@ test("pending, failed, canceled and business authorization retain their actual s
   assert.equal(presentation({ state: "completed", type: "execution_authorization" }), null);
   assert.equal(presentation(null), null);
 });
+
+const failureStart = source.indexOf("function taskPlanFailurePresentation(");
+const failureEnd = source.indexOf("function renderTaskPlan(", failureStart);
+const failurePresentation = runInNewContext(
+  `${source.slice(failureStart, failureEnd)}\ntaskPlanFailurePresentation;`,
+);
+test("incomplete source plan shows safe stop with source counts and no business write", () => {
+  const result = failurePresentation({
+    terminalReason: "PLAN_SOURCE_INCOMPLETE",
+    resultProjection: { result: { source_summaries: [
+      { collection: "done", status: "partial", scanned_count: 50, coverage: { sourceQueryTotal: 100 } },
+      { collection: "sent", status: "complete", scanned_count: 0 },
+    ] } },
+  });
+  assert.equal(result.label, "已安全停止");
+  assert.match(result.message, /OA 已办.*50.*100.*未进入业务写入/);
+  assert.doesNotMatch(result.message, /OA 已发/);
+  assert.equal(failurePresentation({ terminalReason: "OTHER" }), null);
+});

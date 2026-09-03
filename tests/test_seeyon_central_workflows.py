@@ -188,7 +188,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(result["schema_version"], "bscli.oa_workflow_list.v2")
-        self.assertEqual(result["source_count"], 3)
+        self.assertEqual(result["source_count"], 2)
         self.assertEqual(result["date_filtered_count"], 2)
         self.assertEqual(result["matched_count"], 2)
         self.assertEqual(result["count"], 1)
@@ -216,7 +216,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
             "getSentList",
         )
 
-    def test_sent_date_range_can_prove_coverage_at_descending_boundary(self):
+    def test_sent_date_range_proves_coverage_from_server_filtered_total(self):
         result = self.adapter.invoke_capability(
             "oa.workflow.sent.list",
             self.worker,
@@ -226,7 +226,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["status"], "complete")
         self.assertEqual(
             result["coverage"]["completionReason"],
-            "verified_descending_date_boundary",
+            "server_filtered_source_exhausted",
         )
         self.assertEqual(result["coverage"]["dateBasis"], "initiated_at")
 
@@ -612,6 +612,15 @@ class FakeWorkflowPage:
         self.wait_calls.append({**arg, "timeout": timeout})
 
     def evaluate(self, _expression, arg):
+        if arg.get("managerMethod") in {"getSentList", "getDoneList"}:
+            collection = "listSent" if arg["managerMethod"] == "getSentList" else "listDone"
+            rows = self.evaluate("", {"gridId": collection})["items"]
+            value = arg["filters"].get("createDate") or arg["filters"].get("dealDate")
+            start, end = value.split("#")
+            rows = [row for row in rows if (not start or row["date"][:10] >= start)
+                    and (not end or row["date"][:10] <= end)]
+            return {"total": len(rows), "pages": 1 if rows else 0,
+                    "page": arg["pageNumber"], "size": arg["pageSize"], "items": rows}
         if arg.get("gridId") == "listSent":
             return {
                 "total": 215,

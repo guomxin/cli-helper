@@ -712,13 +712,21 @@ class TaskPlanRuntime:
                 )
             except Exception:
                 pass
-        return {
+        response = {
             "protocolVersion": "0.1",
             "status": state,
             "operationId": operation_id,
             "error": {"code": error_code, "message": error_message[:500]},
             "plan": task_plan_response(updated),
         }
+        if error_code == "PLAN_SOURCE_INCOMPLETE":
+            response["nextAction"] = {
+                "type": "report_plan_failure",
+                "doNotRetryAtomicTools": True,
+                "businessWriteOccurred": False,
+                "source": "plan.resultProjection.result.source_summaries",
+            }
+        return response
 
     def _has_write_sink(self, plan: dict[str, Any]) -> bool:
         for step in plan.get("steps") or []:
@@ -849,6 +857,12 @@ class TaskPlanRuntime:
                 "type": "report_plan_result",
                 "source": "plan.resultProjection.result",
                 "doNotQueryOperations": True,
+            }
+        if plan.get("terminal_reason") == "PLAN_SOURCE_INCOMPLETE":
+            response["nextAction"] = {
+                "type": "report_plan_failure", "doNotRetryAtomicTools": True,
+                "businessWriteOccurred": False,
+                "source": "plan.resultProjection.result.source_summaries",
             }
         return response
 

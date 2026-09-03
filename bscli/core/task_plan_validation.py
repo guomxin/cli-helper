@@ -97,7 +97,7 @@ TaskPlanBindingDefinitionInput = Annotated[
 class TaskPlanTemporalConstraintInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["previous_day", "previous_calendar_week", "absolute_range"]
+    kind: Literal["previous_day", "day_before_yesterday", "previous_calendar_week", "absolute_range"]
     start: Annotated[str | None, Field(max_length=10)] = None
     end: Annotated[str | None, Field(max_length=10)] = None
 
@@ -691,7 +691,7 @@ def _normalize_constraints(value: Any, *, proposal_version: str) -> dict[str, An
             "PLAN_SCHEMA_INVALID", "temporal 约束不合法。"
         )
     kind = temporal.get("kind")
-    if kind not in {"previous_day", "previous_calendar_week", "absolute_range"}:
+    if kind not in {"previous_day", "day_before_yesterday", "previous_calendar_week", "absolute_range"}:
         raise PlanValidationError(
             "PLAN_SCHEMA_INVALID", "temporal.kind 不受支持。"
         )

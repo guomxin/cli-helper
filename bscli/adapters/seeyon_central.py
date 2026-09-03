@@ -8,7 +8,11 @@ import json
 import logging
 import re
 import time
+from copy import deepcopy
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+
+from bscli.adapters.seeyon_history_query import read_filtered_history
+from bscli.core.query_contracts import HISTORY_QUERY_EVIDENCE_SCHEMA, oa_history_query_contract
 
 from bscli.adapters.base import (
     AdapterAuthenticationRejected,
@@ -211,8 +215,18 @@ _INTERNAL_WORKFLOW_COLLECTIONS = _WORKFLOW_COLLECTIONS
 
 _WORKFLOW_COLLECTION_DESCRIPTIONS = {
     "pending": "List workflows waiting for the current OA user in the Pending page.",
-    "sent": "List workflows initiated by the current OA user in the Sent page.",
-    "done": "List workflows already handled by the current OA user in the Done page.",
+    "sent": (
+        "查询当前用户已发事项，日期范围按发起时间在 OA 服务端筛选，并自动读取筛选结果的分页。"
+        "start_date/end_date 为上海时区包含边界的日期，可只传一端。keyword 在筛选结果中匹配公开字段。"
+        "完整汇总使用 limit=1000 并检查 coverage.status；数量截断、分页异常或预算不足均为 partial，不能用于后续写入。"
+        "不传日期时只返回已加载页，不代表全部历史。"
+    ),
+    "done": (
+        "查询当前用户已办事项，日期范围按本人处理时间（不是流程发起时间）在 OA 服务端筛选，"
+        "并自动读取筛选结果的分页。start_date/end_date 为上海时区包含边界的日期，可只传一端。"
+        "keyword 在筛选结果中匹配公开字段。完整汇总使用 limit=1000 并检查 coverage.status；"
+        "数量截断、分页异常或预算不足均为 partial，不能用于后续写入。不传日期时只返回已加载页。"
+    ),
     "tracked": "List workflows followed by the current OA user in the Tracked page.",
 }
 
@@ -234,6 +248,7 @@ _HISTORY_PAGE_CONTRACTS = {
         "manager_method": "getDoneList",
         "open_from": "listDone",
         "date_fields": [
+            {"abbr": "dealTime", "basis": "processed_at"},
             {"abbr": "dealDate", "basis": "processed_at"},
             {"abbr": "completeTime", "basis": "processed_at"},
             {"abbr": "startDate", "basis": "fallback_display_date"},
@@ -385,6 +400,7 @@ _WORKFLOW_LIST_OUTPUT_SCHEMA = {
         "coverage": {
             "type": "object",
             "properties": {
+                **HISTORY_QUERY_EVIDENCE_SCHEMA,
                 "status": {"type": "string"},
                 "queryApplied": {"type": "boolean"},
                 "dateBasis": {"type": "string"},
@@ -475,6 +491,24 @@ _WORKFLOW_DETAIL_INPUT_SCHEMA = {
     "required": ["collection", "affair_id"],
     "additionalProperties": False,
 }
+
+
+def _workflow_list_input_schema(collection: str) -> dict:
+    schema = deepcopy(_WORKFLOW_LIST_INPUT_SCHEMA)
+    if collection in {"done", "sent"}:
+        schema["x-agentbridge-query"] = oa_history_query_contract(collection)
+        label = "本人处理日期" if collection == "done" else "发起日期"
+        for name, boundary in (("start_date", "起始"), ("end_date", "截止")):
+            schema["properties"][name].update({
+                "format": "date",
+                "description": f"{label}的{boundary}日期，包含当天，YYYY-MM-DD；自动下推 OA 服务端。",
+            })
+        schema["properties"]["limit"].update({
+            "minimum": 1, "maximum": 1000, "default": 50,
+            "description": "最多返回的匹配条数；完整汇总建议 1000，并核对 coverage.status。",
+        })
+    return schema
+
 
 _WORKFLOW_OPINIONS_INPUT_SCHEMA = {
     "type": "object",
@@ -800,9 +834,9 @@ def build_central_capability_registry() -> CapabilityRegistry:
         registry.register(
             CapabilitySpec(
                 name=capability_name,
-                version="0.3.0",
+                version="0.4.0" if collection in {"done", "sent"} else "0.3.0",
                 description=_WORKFLOW_COLLECTION_DESCRIPTIONS[collection],
-                input_schema=_WORKFLOW_LIST_INPUT_SCHEMA,
+                input_schema=_workflow_list_input_schema(collection),
                 output_schema=_WORKFLOW_LIST_OUTPUT_SCHEMA,
                 effect="read",
                 adapter="seeyon-central",
@@ -1070,12 +1104,17 @@ class SeeyonCentralAdapter:
         collection = _validated_internal_collection(collection)
         arguments = arguments or {}
         keyword = _validated_optional_string(arguments.get("keyword"), "keyword", maximum=200)
-        limit = _validated_integer(arguments.get("limit"), "limit", default=50, minimum=1, maximum=100)
+        limit = _validated_integer(
+            arguments.get("limit"), "limit", default=50, minimum=1,
+            maximum=1000 if collection in {"done", "sent"} else 100,
+        )
         start_date = _validated_optional_date(arguments.get("start_date"), "start_date")
         end_date = _validated_optional_date(arguments.get("end_date"), "end_date")
         if start_date and end_date and start_date > end_date:
             raise ValueError("start_date cannot be after end_date")
-        parsed = self._fetch_workflow_collection(worker, collection)
+        parsed = self._fetch_workflow_collection(
+            worker, collection, start_date=start_date, end_date=end_date
+        )
         expected_date_basis = {
             "done": "processed_at",
             "sent": "initiated_at",
@@ -1088,9 +1127,6 @@ class SeeyonCentralAdapter:
         public_items = [_public_workflow_item(item, collection) for item in parsed.get("items") or []]
         public_items = [item for item in public_items if item.get("title")]
         source_count = len(public_items)
-        parsed_source_dates = [
-            _workflow_item_date(item.get("date")) for item in public_items
-        ]
         unparsed_date_count = 0
         if start_date or end_date:
             date_filtered_items = []
@@ -1118,48 +1154,38 @@ class SeeyonCentralAdapter:
         output_truncated = matched_count > len(public_items)
         total = parsed.get("total")
         numeric_total = int(total) if isinstance(total, int) else None
-        source_exhausted = numeric_total is not None and numeric_total <= source_count
-        dates_are_descending = bool(parsed_source_dates) and all(
-            left is not None and right is not None and left >= right
-            for left, right in zip(parsed_source_dates, parsed_source_dates[1:])
-        )
-        date_boundary_reached = bool(
-            start_date
-            and parsed_source_dates
-            and unparsed_date_count == 0
-            and dates_are_descending
-            and parsed_source_dates[-1] is not None
-            and parsed_source_dates[-1] <= start_date
+        source_exhausted = (
+            numeric_total is not None and numeric_total == source_count
             and int(parsed.get("page") or 1) == 1
         )
+        evidence = parsed.get("query_evidence") or {}
+        if evidence:
+            source_exhausted = evidence.get("complete") is True
         query_applied = bool(start_date or end_date)
         date_contract_satisfied = bool(
             not query_applied
             or (unparsed_date_count == 0 and date_basis_is_exact)
         )
-        coverage_complete = date_contract_satisfied and (
-            source_exhausted or date_boundary_reached
-        ) and not output_truncated
+        coverage_complete = date_contract_satisfied and source_exhausted and not output_truncated
         has_more = bool(
             output_truncated
             or (
                 not coverage_complete
                 and not source_exhausted
-                and not date_boundary_reached
                 and (numeric_total is None or numeric_total > source_count)
             )
         )
         completion_reason = (
             "result_limit_truncated"
             if output_truncated
+            else str(evidence["completionReason"])
+            if evidence
             else "date_basis_not_proven"
             if query_applied and not date_basis_is_exact
             else "unparsed_dates_in_scanned_rows"
             if query_applied and unparsed_date_count
             else "source_exhausted"
             if source_exhausted
-            else "verified_descending_date_boundary"
-            if date_boundary_reached
             else "loaded_page_does_not_cover_requested_range"
             if query_applied
             else "collection_not_exhausted"
@@ -1174,6 +1200,11 @@ class SeeyonCentralAdapter:
         coverage = {
             "status": "complete" if coverage_complete else "partial",
             "queryApplied": query_applied,
+            "serverFilterApplied": evidence.get("serverFilterApplied") is True,
+            "sourceQueryTotal": evidence.get("sourceQueryTotal"),
+            "sourceQueryPages": evidence.get("sourceQueryPages"),
+            "pagesFetched": int(evidence.get("pagesFetched", 1)),
+            "scanBudget": int(evidence.get("scanBudget", source_count)),
             "dateBasis": expected_date_basis,
             "requestedRange": {
                 "start": start_date.isoformat() if start_date else None,
@@ -1328,8 +1359,14 @@ class SeeyonCentralAdapter:
             worker, normalized_item
         )
 
-    def _fetch_workflow_collection(self, worker, collection: str) -> dict:
+    def _fetch_workflow_collection(
+        self, worker, collection: str, *, start_date: date | None = None, end_date: date | None = None
+    ) -> dict:
         self.list_templates(worker)
+        if collection in {"done", "sent"} and (start_date or end_date):
+            return self._read_history_page(
+                worker, collection, start_date=start_date, end_date=end_date
+            )
         if collection != "pending":
             return self._fetch_history_page_collection(worker, collection)
 
@@ -1356,7 +1393,9 @@ class SeeyonCentralAdapter:
             return self._read_tracked_page(worker)
         return self._read_history_page(worker, collection)
 
-    def _read_history_page(self, worker, collection: str) -> dict:
+    def _read_history_page(
+        self, worker, collection: str, *, start_date: date | None = None, end_date: date | None = None
+    ) -> dict:
         contract = _HISTORY_PAGE_CONTRACTS.get(collection)
         if contract is None:
             raise SeeyonReadContractMismatch(
@@ -1384,7 +1423,9 @@ class SeeyonCentralAdapter:
                 },
                 timeout=12000,
             )
-            extracted = page.evaluate(
+            extracted = read_filtered_history(
+                page, collection=collection, start_date=start_date, end_date=end_date
+            ) if start_date or end_date else page.evaluate(
                 _HISTORY_GRID_EXTRACT_SCRIPT,
                 {
                     "gridId": contract["grid_id"],
@@ -1440,11 +1481,12 @@ class SeeyonCentralAdapter:
                 }
             )
         return {
-            "source": "history_page_grid",
+            "source": "history_filtered_query" if start_date or end_date else "history_page_grid",
             "count": len(items),
             "total": extracted.get("total"),
             "page": extracted.get("page"),
             "items": items,
+            "query_evidence": extracted.get("query_evidence"),
         }
 
     def _read_tracked_page_fallback(self, worker) -> dict:

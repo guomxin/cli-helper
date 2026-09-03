@@ -75,7 +75,7 @@ def build_planning_catalog(
                 "arguments": {
                     "start_date": "2026-07-01",
                     "end_date": "2026-07-31",
-                    "limit": 100,
+                    "limit": 1000,
                 },
             },
             {
@@ -85,7 +85,7 @@ def build_planning_catalog(
                 "arguments": {
                     "start_date": "2026-07-01",
                     "end_date": "2026-07-31",
-                    "limit": 100,
+                    "limit": 1000,
                 },
             },
             {
@@ -207,6 +207,9 @@ def build_planning_catalog(
                 "arguments 只能使用所选能力或转换 inputSchema.properties 中明确声明的字段",
                 "目录不支持的用户要求应保留在 goal 或最终说明中，不得臆造为步骤参数",
                 "只使用本目录实际返回的能力与转换名称",
+                "日期约束由中央服务按原请求时间和上海时区编译；前天使用 day_before_yesterday，昨天使用 previous_day，上周使用 previous_calendar_week",
+                "已办按本人处理日期、已发按发起日期下推；按 sourceContract.queryContract 选择参数，不在模型文本中筛选无条件首页",
+                "完整汇总使用能力声明的最大 limit；coverage 非 complete 时不得继续派生写入",
             ],
             "examples": examples,
         },

@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.76";
+export const PLUGIN_VERSION = "0.4.77";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -138,6 +138,8 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
             coordinator.taskContinuationForSession(sessionKey),
           interactionGetGuard: (request) =>
             coordinator.redundantInteractionGet(request),
+          terminalPlanGuard: (request) =>
+            coordinator.terminalPlanFailureForCall(request),
           argumentNormalizer: (request) =>
             coordinator.normalizeBusinessToolArguments(request),
           logger: api.logger,
