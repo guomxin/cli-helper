@@ -361,6 +361,12 @@ class HostContractStore:
                 "L3",
                 "shared-contract-h01-h29-task-plan-query-contract-v1",
             ),
+            (
+                "openclaw",
+                "0.4.78",
+                "L3",
+                "shared-contract-h01-h29-task-plan-workspace-repair-v1",
+            ),
             ("reference-host", "0.1.0", "L3", "shared-contract-h01-h25"),
         )
         for name, version, level, evidence in builtins:

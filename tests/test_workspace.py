@@ -355,6 +355,25 @@ class WorkspaceStoreTests(unittest.TestCase):
                 f"{account['openclaw_session_key']}|workspace:request-one",
             )
 
+            service.finish_host_task(
+                user_subject="user-a", task_id=first["task"]["taskId"],
+                outcome="failed", error_code="PLAN_REQUIRED",
+            )
+            repair = service.ensure_host_task(
+                **common, host_task_key="session|request-one:plan-repair",
+                title="Prepare task plan", task_scope="independent",
+            )
+            repeated_repair = service.ensure_host_task(
+                **common, host_task_key="session|request-one:plan-repair",
+                title="Prepare task plan", task_scope="independent",
+            )
+            self.assertNotEqual(first["task"]["taskId"], repair["task"]["taskId"])
+            self.assertEqual(repair["task"]["taskId"], repeated_repair["task"]["taskId"])
+            self.assertNotEqual(repair["task"]["status"], "failed")
+            self.assertEqual(service.tasks.get_task(
+                first["task"]["taskId"], user_subject="user-a",
+            )["status"], "failed")
+
             next_grant = service.workspace.issue_gateway_grant(
                 account["account_id"]
             )

@@ -86,6 +86,7 @@ export function createAgentBridgeProxyTools({
   taskIdResolver = null,
   taskIdBinder = null,
   taskRunRefResolver = null,
+  taskScopeResolver = null,
   taskContinuationResolver = null,
   interactionGetGuard = null,
   terminalPlanGuard = null,
@@ -130,6 +131,7 @@ export function createAgentBridgeProxyTools({
         taskIdResolver,
         taskIdBinder,
         taskRunRefResolver,
+        taskScopeResolver,
         taskContinuationResolver,
         interactionGetGuard,
         terminalPlanGuard,
@@ -182,6 +184,7 @@ function createProxyTool({
   taskIdResolver,
   taskIdBinder,
   taskRunRefResolver,
+  taskScopeResolver,
   taskContinuationResolver,
   interactionGetGuard,
   terminalPlanGuard,
@@ -269,6 +272,7 @@ function createProxyTool({
         taskIdResolver,
         taskIdBinder,
         taskRunRefResolver,
+        taskScopeResolver,
         logger,
       });
       const coordinatorLease = taskId
@@ -492,6 +496,7 @@ async function resolveTaskId({
   taskIdResolver,
   taskIdBinder,
   taskRunRefResolver,
+  taskScopeResolver,
   logger,
 }) {
   if (!isTaskEligibleTool(descriptor.name)) {
@@ -570,7 +575,8 @@ async function resolveTaskId({
             ]
           : ["direct_status", "trusted_interaction"],
         task_scope: workspaceSession
-          ? INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name)
+          ? INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name) ||
+            taskScopeResolver?.(sessionKey, descriptor.name) === "independent"
             ? "independent"
             : "user_turn"
           : "host_run",

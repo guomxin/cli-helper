@@ -1842,7 +1842,7 @@ test("uses one user-turn task reference when OpenClaw assigns per-tool run IDs",
   assert.equal(prepareRef, searchRef);
 });
 
-test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", () => {
+test("uses a fresh stable independent task when PLAN_REQUIRED upgrades a Workspace turn", async () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
     mcpClient: null,
@@ -1916,6 +1916,39 @@ test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", 
     "PLAN_REQUIRED",
   );
 
+  const ensures = [];
+  const client = {
+    async callTool(name, args) {
+      if (name === "agentbridge_host_task_ensure") {
+        ensures.push(args);
+        return { task: { taskId: args.task_scope === "independent" ? "repair-task" : "terminal-original" } };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return args.task_id === "repair-task" ? coordinatorLease() : { status: "ignored", reason: "task_terminal" };
+      }
+      return { status: "succeeded" };
+    },
+    async callToolResult() { return { structuredContent: { status: "succeeded" } }; },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey }, serverName: "agentbridge",
+    identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+    taskScopeResolver: (key, name) => coordinator.taskScopeForBusinessCall(key, name),
+    taskRunRefResolver: (id, key, name) => coordinator.taskRunRefForToolCall(id, key, name),
+  });
+  const planTool = tools.find(tool => tool.name === "agentbridge_task_plan_prepare");
+  for (const id of ["tool-plan-first", "tool-plan-retry"]) {
+    const response = await planTool.execute(id, {});
+    assert.equal(response.structuredContent.status, "succeeded");
+  }
+  assert.deepEqual(ensures.map(args => args.task_scope), ["independent", "independent"]);
+  assert.equal(ensures[0].host_task_key, ensures[1].host_task_key);
+  assert.equal(coordinator.taskScopeForBusinessCall(sessionKey, "oa_workflow_sent_list"), null);
+  assert.equal(coordinator.taskScopeForBusinessCall("agent:main:telegram:direct:user-b", "agentbridge_task_plan_prepare"), null);
+
   coordinator.recordUserMessage(
     { sessionKey, content: "查看我的 OA 待办" },
     { sessionKey },
@@ -1933,6 +1966,7 @@ test("uses a fresh stable task reference when PLAN_REQUIRED upgrades the turn", 
   );
   assert.match(newTurnRef, /^turn:/);
   assert.doesNotMatch(newTurnRef, /:plan-repair$/);
+  assert.equal(coordinator.taskScopeForBusinessCall(sessionKey, "agentbridge_task_plan_prepare"), null);
 });
 
 test("source-incomplete plan blocks same-turn atomic retries without blocking a new turn or another user", async () => {

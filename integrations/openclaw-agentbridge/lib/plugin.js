@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.77";
+export const PLUGIN_VERSION = "0.4.78";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -128,6 +128,8 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
             coordinator.taskIdForBusinessCall(sessionKey, toolName),
           taskIdBinder: (sessionKey, toolName, taskId) =>
             coordinator.bindIndependentTask(sessionKey, toolName, taskId),
+          taskScopeResolver: (sessionKey, toolName) =>
+            coordinator.taskScopeForBusinessCall(sessionKey, toolName),
           taskRunRefResolver: (toolCallId, sessionKey, toolName) =>
             coordinator.taskRunRefForToolCall(
               toolCallId,

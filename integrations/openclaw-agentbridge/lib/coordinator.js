@@ -473,6 +473,12 @@ export class InteractionCoordinator {
     return binding.runId || normalized;
   }
 
+  taskScopeForBusinessCall(sessionKey, toolName) {
+    this.prunePlanningRepairs();
+    return toolName === "agentbridge_task_plan_prepare" &&
+      this.planningRepairs.has(sessionKey) ? "independent" : null;
+  }
+
   deliverPreparedDocumentResult(event, context) {
     const payload = trustedAgentBridgeStructuredContent(
       event.result,
