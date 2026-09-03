@@ -543,6 +543,19 @@ export class InteractionCoordinator {
     });
   }
 
+  async captureNativeToolResult(event, context) {
+    const processed = processToolResult(event.result, this.config.allowedCardOrigins);
+    if (!processed.sanitized) return event.result;
+    // Retain the binding for middleware handling of any non-card result data.
+    const binding = this.toolBindings.get(normalizeToolCallId(event.toolCallId));
+    const sessionKey = binding?.sessionKey || context.sessionKey;
+    const interactions =
+      (await this.presentInteractions(processed.interactions, sessionKey)) ||
+      processed.interactions;
+    this.captureInteractions(interactions, binding, context, taskIdFromToolResult(event.result));
+    return processed.result;
+  }
+
   captureToolResult(event, context) {
     const binding = this.takeToolBinding(event.toolCallId);
     const taskId = taskIdFromToolResult(event.result);
@@ -1044,12 +1057,14 @@ export class InteractionCoordinator {
       record.interaction.resume?.ready === true &&
       record.interaction.resume?.completed !== true
     ) {
-      await this.resume(record, new AbortController().signal);
-      return true;
+      if (record.resumeStarted || this.resumeClaims.has(interaction.interactionId)) {
+        return true;
+      }
+      return await this.resume(record, new AbortController().signal);
     }
     this.startPolling(record);
     if (!alreadyDelivered) {
-      await this.deliverInteractionsDirect(sessionKey, presented);
+      return await this.deliverInteractionsDirect(sessionKey, presented);
     }
     return true;
   }
@@ -1284,11 +1299,14 @@ export class InteractionCoordinator {
       let delivered = false;
       const sessionKey = endpoint?.conversationRef;
       const route = endpoint?.route;
-      await this.restoreWorkspaceInteractionFromNotification(
+      const recovered = await this.restoreInteractionFromNotification(
         notification,
         client,
+        { identityRouter, binding, endpoint },
       );
-      if (
+      if (recovered === false) {
+        this.api.logger.warn("AgentBridge interaction notification retained for recovery retry");
+      } else if (
         notification?.deliveryMode === "origin_handled" ||
         notification?.deliveryMode === "no_op"
       ) {
@@ -1373,7 +1391,8 @@ export class InteractionCoordinator {
       }
       try {
         const deferUntilActivity =
-          !delivered && isActivityGatedDirectEndpoint(endpoint, route, binding);
+          !delivered && recovered !== false &&
+          isActivityGatedDirectEndpoint(endpoint, route, binding);
         await client.callTool(
           "agentbridge_host_notification_ack",
           {
@@ -1397,22 +1416,37 @@ export class InteractionCoordinator {
     return notifications.length;
   }
 
-  async restoreWorkspaceInteractionFromNotification(notification, client) {
+  async restoreInteractionFromNotification(notification, client, { identityRouter, binding, endpoint }) {
     const taskId = safeRoutePart(notification?.task?.taskId);
     if (!taskId || this.isTaskTerminal(taskId)) {
-      return false;
+      return null;
     }
     const sessionKey = safeRoutePart(
       notification.task.activeConversationRef,
     );
-    if (!isWorkspaceSessionKey(sessionKey)) {
-      return false;
-    }
+    const workspaceSession = isWorkspaceSessionKey(sessionKey);
+    const originHandled = notification.deliveryMode === "origin_handled";
+    if (!workspaceSession && !originHandled) return null;
     let interaction = notification.interaction || null;
     const eventType = safeRoutePart(notification?.event?.eventType);
     const eventInteractionId = safeRoutePart(
       notification?.event?.payload?.interactionId,
     );
+    if (!interaction && !["task.interaction.waiting", "task.interaction.completed"].includes(eventType)) {
+      return null;
+    }
+    if (
+      !isPrivateSessionKey(sessionKey) ||
+      (!workspaceSession && sessionKey !== endpoint?.conversationRef) ||
+      !identityRouter.restoreSessionBinding({ sessionKey, bindingKey: binding.key })
+    ) {
+      return false;
+    }
+    const existing = this.records.get(interaction?.interactionId || eventInteractionId);
+    if (existing && (existing.sessionKey !== sessionKey || (existing.taskId && existing.taskId !== taskId))) {
+      return false;
+    }
+    if (existing?.resumeStarted || this.resumeClaims.has(eventInteractionId)) return true;
     if (
       !interaction &&
       eventInteractionId &&
@@ -1435,32 +1469,28 @@ export class InteractionCoordinator {
         );
       } catch (error) {
         this.api.logger.warn(
-          `AgentBridge Workspace interaction notification recovery failed: ${safeErrorCode(error)}`,
+          `AgentBridge interaction notification recovery failed: ${safeErrorCode(error)}`,
         );
         return false;
       }
     }
     if (this.isTaskTerminal(taskId)) {
-      return false;
+      return true;
     }
     const resumableCompleted = Boolean(
       interaction?.state === "completed" &&
         interaction.resume?.ready === true &&
         interaction.resume?.completed !== true,
     );
-    if (
-      !interaction ||
-      (!resumableCompleted &&
-        !["pending", "processing"].includes(interaction.state))
-    ) {
-      return false;
-    }
+    if (!interaction) return false;
+    if (!resumableCompleted && !["pending", "processing"].includes(interaction.state)) return true;
+    if (!workspaceSession && !endpoint?.route) return false;
     this.bindDeliveryRoute({
       sessionKey,
-      channel: "webchat",
-      to: notification.task.originEndpointId || sessionKey,
-      accountId: null,
-      threadId: null,
+      channel: workspaceSession ? "webchat" : endpoint.route.channel || binding.channel,
+      to: workspaceSession ? notification.task.originEndpointId || sessionKey : endpoint.route.to || binding.senderId,
+      accountId: workspaceSession ? null : endpoint.route.accountId || binding.accountId,
+      threadId: workspaceSession ? null : endpoint.route.threadId,
     });
     const restored = await this.restoreRecoveredInteraction({
       taskId,
@@ -1470,7 +1500,7 @@ export class InteractionCoordinator {
     });
     if (restored) {
       this.api.logger.info(
-        "AgentBridge restored Workspace interaction polling from the companion endpoint notification",
+        "AgentBridge restored private interaction coordination from endpoint notification",
       );
     }
     return restored;
@@ -1634,6 +1664,7 @@ export class InteractionCoordinator {
       claimedAt: this.now(),
     });
     let response;
+    let resumeDispatched = false;
     try {
       let coordinatorLease = null;
       if (record.taskId) {
@@ -1676,6 +1707,7 @@ export class InteractionCoordinator {
         }
         record.coordinatorLeaseVersion = coordinatorLease.version;
       }
+      resumeDispatched = true;
       response = await record.mcpClient.callTool(
         "agentbridge_interaction_resume",
         {
@@ -1707,10 +1739,14 @@ export class InteractionCoordinator {
       if (signal.aborted || (record.taskId && this.isTaskTerminal(record.taskId))) {
         return true;
       }
-      record.resumeStarted = false;
-      this.resumeClaims.delete(interactionId);
+      // A lost resume reply may follow a business write. Outbox recovery must
+      // not turn that uncertainty into a second execution attempt.
+      if (!resumeDispatched) {
+        record.resumeStarted = false;
+        this.resumeClaims.delete(interactionId);
+      }
       await this.notify(record, "resume_failed", safeErrorCode(error));
-      return false;
+      return resumeDispatched;
     }
 
     if (response?.nextAction?.type === "original_request_completed") {

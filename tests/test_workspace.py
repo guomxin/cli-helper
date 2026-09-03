@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import closing
+from contextlib import ExitStack, closing
 from datetime import datetime, timedelta, timezone
 import http.client
 import json
@@ -994,7 +994,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertNotIn("source_ref", artifact)
 
     def test_chat_binds_identity_before_send_and_hides_tool_messages(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory() as tmp, ExitStack() as cleanup:
             service = _service(tmp)
             account = _create_account(
                 service,
@@ -1015,6 +1015,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             )
             gateway = FakeGateway()
             app = WorkspaceApplication(service=service, gateway=gateway)
+            cleanup.callback(app.close)
 
             history = app.chat_history(account)
             streamed = list(app.chat_stream(account))
@@ -1056,18 +1057,24 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 any(item["type"] == "accepted" for item in send_streamed)
             )
             methods = [method for method, _params in gateway.calls]
+            # Readiness may be rechecked when execution exceeds its cache TTL.
+            business_calls = [
+                (method, params)
+                for method, params in gateway.calls
+                if method != "system.info"
+            ]
             self.assertEqual(
-                methods,
+                [method for method, _params in business_calls],
                 [
                     "chat.history",
                     "stream",
-                    "system.info",
                     "send_stream",
                     "send_stream",
                 ],
             )
-            streamed_send = gateway.calls[3][1]
-            compatibility_send = gateway.calls[4][1]
+            self.assertLess(methods.index("system.info"), methods.index("send_stream"))
+            streamed_send = business_calls[2][1]
+            compatibility_send = business_calls[3][1]
             self.assertEqual(
                 streamed_send["sessionKey"],
                 account["openclaw_session_key"],
@@ -1646,24 +1653,22 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 endpoint_key="telegram:*:alice",
             )
             gateway = AcceptedDisconnectGateway()
-            app = WorkspaceApplication(service=service, gateway=gateway)
-            self.addCleanup(app.close)
-
-            events = list(
-                app.send_chat_stream(
-                    account,
-                    message="read only once",
-                    idempotency_key="accepted-disconnect-1",
+            with closing(WorkspaceApplication(service=service, gateway=gateway)) as app:
+                events = list(
+                    app.send_chat_stream(
+                        account,
+                        message="read only once",
+                        idempotency_key="accepted-disconnect-1",
+                    )
                 )
-            )
 
-            self.assertEqual(
-                sum(method == "send_stream" for method, _ in gateway.calls),
-                1,
-            )
-            self.assertEqual(events[-1]["state"], "final")
-            self.assertEqual(events[-1]["text"], "recovered final result")
-            self.assertEqual(app.list_timeline(account)[-1]["text"], "recovered final result")
+                self.assertEqual(
+                    sum(method == "send_stream" for method, _ in gateway.calls),
+                    1,
+                )
+                self.assertEqual(events[-1]["state"], "final")
+                self.assertEqual(events[-1]["text"], "recovered final result")
+                self.assertEqual(app.list_timeline(account)[-1]["text"], "recovered final result")
 
     def test_terminal_dispatch_drains_events_committed_between_reads(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -91,6 +91,7 @@ export function createAgentBridgeProxyTools({
   interactionGetGuard = null,
   terminalPlanGuard = null,
   argumentNormalizer = null,
+  trustedResultHandler = null,
   logger = null,
 }) {
   const identity = identityRouter.resolveToolContext(context);
@@ -136,6 +137,7 @@ export function createAgentBridgeProxyTools({
         interactionGetGuard,
         terminalPlanGuard,
         argumentNormalizer,
+        trustedResultHandler,
         logger,
       }),
     ),
@@ -189,6 +191,7 @@ function createProxyTool({
   interactionGetGuard,
   terminalPlanGuard,
   argumentNormalizer,
+  trustedResultHandler,
   logger,
 }) {
   return {
@@ -354,7 +357,7 @@ function createProxyTool({
           });
         }
       }
-      return {
+      const nativeResult = {
         ...result,
         details: {
           mcpServer: serverName,
@@ -370,6 +373,13 @@ function createProxyTool({
             : {}),
         },
       };
+      // The embedded host forwards only content/details to result middleware.
+      return trustedResultHandler
+        ? await trustedResultHandler(
+            { toolCallId, toolName: descriptor.name, result: nativeResult },
+            context,
+          )
+        : nativeResult;
     },
   };
 }

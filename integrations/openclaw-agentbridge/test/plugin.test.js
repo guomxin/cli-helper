@@ -803,7 +803,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.79",
+      hostVersion: "0.4.80",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1221,7 +1221,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.79",
+        hostVersion: "0.4.80",
       },
     },
   });
@@ -2217,7 +2217,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.79",
+      hostVersion: "0.4.80",
     },
   });
   assert.equal(
@@ -2518,6 +2518,174 @@ test("delivers a non-origin authorization and acknowledges its outbox item", asy
   assert.equal(calls.at(-1).params.succeeded, true);
 });
 
+test("captures native field cards before the embedded host drops MCP metadata, isolated by user", async () => {
+  const calls = [];
+  const sessions = ["agent:main:telegram:direct:1001", "agent:main:openclaw-weixin:direct:user-b"];
+  const cards = ["a", "b"].map((key) => interaction({
+    interactionId: `interaction-native-field-${key}-1234567890`,
+    type: "business_input",
+    presentation: { url: `${CARD_ORIGIN}/input/native-${key}-1234567890` },
+  }));
+  const harness = fakeApi({
+    autoPoll: false,
+    mcpUrl: "https://10.10.50.213:8790/mcp",
+    identityBindings: [
+      { channel: "telegram", senderId: "1001", tokenEnv: "TOKEN_A", label: "A" },
+      { channel: "openclaw-weixin", senderId: "user-b", tokenEnv: "TOKEN_B", label: "B" },
+    ],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      const index = options.headers.Authorization === "Bearer token-a" ? 0 : 1;
+      const name = body.params.name;
+      calls.push(name);
+      let result = { structuredContent: { status: "succeeded" } };
+      if (name === "agentbridge_host_task_ensure") result.structuredContent.task = { taskId: `task-native-${index}` };
+      if (name === "agentbridge_host_coordinator_lease_acquire") result.structuredContent = coordinatorLease();
+      if (name === "taihua_work_log_create_prepare") {
+        result = {
+          content: [{ type: "text", text: "Please use the displayed trusted card." }],
+          structuredContent: openClawPublicResult(cards[index]).details.structuredContent,
+          _meta: { "io.agentbridge/interaction": cards[index] },
+        };
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  for (const [index, sessionKey] of sessions.entries()) {
+    const channel = index === 0 ? "telegram" : "openclaw-weixin";
+    const senderId = index === 0 ? "1001" : "user-b";
+    const toolCallId = `native-field-${index}`;
+    const context = { sessionKey, messageChannel: channel, requesterSenderId: senderId, runId: toolCallId };
+    bindToolCall(harness, { toolCallId, runId: toolCallId, sessionKey, channel, toolName: "taihua_work_log_create_prepare" });
+    const tool = harness.toolFactory(context).find((item) => item.name === "taihua_work_log_create_prepare");
+    const result = await tool.execute(toolCallId, { hours: 2 });
+    assert.equal(JSON.stringify(result).includes(cards[index].presentation.url), false);
+    assert.equal(Object.hasOwn(result.details, "structuredContent"), false);
+    // Match buildAgentToolResultMiddlewareFactory, not the unprojected MCP result.
+    const projected = { content: result.content, details: result.details };
+    await harness.middleware({ toolCallId, toolName: tool.name, result: projected }, { runtime: "openclaw" });
+    assert.deepEqual(coordinator.pendingForSession(sessionKey).map((item) => item.interactionId), [cards[index].interactionId]);
+    const reply = harness.hooks.reply_payload_sending({
+      kind: "final", sessionKey, channel, payload: { text: "Please confirm." },
+    }, { sessionKey, channelId: channel });
+    assert.ok(JSON.stringify(reply).includes(cards[index].presentation.url));
+    assert.equal(JSON.stringify(reply).includes(cards[1 - index].presentation.url), false);
+  }
+  assert.equal(coordinator.records.size, 2);
+  assert.equal(calls.includes("agentbridge_interaction_get"), false);
+  assert.equal(harness.logs.info.filter((line) => line.includes("interaction captured")).length, 2);
+});
+
+for (const channel of ["telegram", "openclaw-weixin"]) {
+  test(`recovers ${channel} origin field completion and delivers one authorization without committing`, async () => {
+    const h = originRecoveryHarness({ channel, completed: true });
+    await h.run();
+    await h.run();
+    assert.equal(h.calls.filter((call) => call.name === "agentbridge_interaction_resume").length, 1);
+    assert.equal(h.sentPayloads.length, 1);
+    assert.ok(JSON.stringify(h.sentPayloads[0]).includes(h.authorization.presentation.url));
+    assert.equal(h.coordinator.pendingForSession(h.sessionKey)[0].type, "execution_authorization");
+    assert.ok(h.calls.filter((call) => call.name === "agentbridge_host_notification_ack").every((call) => call.params.succeeded));
+    assert.equal(h.calls.some((call) => call.name.includes("commit")), false);
+    assert.equal(h.heartbeatRuns.length, 0);
+  });
+}
+
+test("does not acknowledge an origin card until failed presentation can be retried", async () => {
+  const h = originRecoveryHarness({ failDelivery: true });
+  await h.run();
+  assert.equal(h.calls.at(-1).params.succeeded, false);
+  h.failDelivery = false;
+  await h.run();
+  await h.run();
+  assert.equal(h.calls.at(-1).params.succeeded, true);
+  assert.equal(h.sentPayloads.length, 1);
+});
+
+test("retains failed origin metadata recovery without requiring new WeChat activity", async () => {
+  const h = originRecoveryHarness({ channel: "openclaw-weixin", failLoad: true });
+  await h.run();
+  assert.equal(h.calls.at(-1).params.succeeded, false);
+  assert.equal(h.calls.at(-1).params.defer_until_activity, false);
+  h.failLoad = false;
+  await h.run();
+  assert.equal(h.calls.at(-1).params.succeeded, true);
+  assert.equal(h.sentPayloads.length, 1);
+});
+
+test("rejects origin recovery with a conflicting user binding or coordinator lease", async () => {
+  for (const options of [{ allowBinding: false }, { leaseConflict: true }]) {
+    const h = originRecoveryHarness({ completed: true, ...options });
+    await h.run();
+    assert.equal(h.calls.some((call) => call.name === "agentbridge_interaction_resume"), false);
+    assert.equal(h.calls.at(-1).params.succeeded, false);
+    assert.equal(h.coordinator.pendingForSession(h.sessionKey).length, 0);
+  }
+});
+
+test("does not replay a dispatched resume when its response is lost", async () => {
+  const h = originRecoveryHarness({ completed: true, resumeFailure: true });
+  await h.run();
+  await h.run();
+  assert.equal(h.calls.filter((call) => call.name === "agentbridge_interaction_resume").length, 1);
+  assert.equal(h.coordinator.pendingForSession(h.sessionKey).length, 0);
+  assert.equal(h.sentPayloads.length, 1);
+  assert.ok(JSON.stringify(h.sentPayloads[0]).includes("MCP_TIMEOUT"));
+});
+
+function originRecoveryHarness({ channel = "telegram", completed = false, failDelivery = false, failLoad = false, allowBinding = true, leaseConflict = false, resumeFailure = false } = {}) {
+  const harness = fakeApi({ autoPoll: false });
+  const state = { ...harness, failDelivery, failLoad, calls: [] };
+  const sessionKey = `agent:main:${channel}:direct:1001`;
+  const field = interaction({
+    interactionId: "interaction-origin-field-1234567890", type: "business_input",
+    state: completed ? "completed" : "pending",
+    resume: { ready: completed, completed: false },
+  });
+  const authorization = interaction({
+    interactionId: "interaction-origin-authorization-1234567890", type: "execution_authorization",
+    presentation: { url: `${CARD_ORIGIN}/authorize/diagnostic-1234567890` },
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const send = coordinator.sendRoutePayload.bind(coordinator);
+  coordinator.sendRoutePayload = (...args) => state.failDelivery ? false : send(...args);
+  const client = {
+    async callTool(name, params, options) {
+      state.calls.push({ name, params, options });
+      if (name === "agentbridge_host_notification_claim") return {
+        endpoint: { clientType: channel, conversationRef: sessionKey, route: { channel, to: "1001" } },
+        notifications: [{
+          deliveryId: "origin-delivery-1234567890", deliveryMode: "origin_handled",
+          task: { taskId: "origin-task-1234567890", activeConversationRef: sessionKey },
+          event: { eventType: completed ? "task.interaction.completed" : "task.interaction.waiting", payload: { interactionId: field.interactionId } },
+        }],
+      };
+      if (name === "agentbridge_interaction_get") {
+        if (state.failLoad) throw Object.assign(new Error("offline"), { code: "MCP_TIMEOUT" });
+        return toolResult(field);
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") return leaseConflict ? { status: "conflict" } : coordinatorLease();
+      if (name === "agentbridge_interaction_resume") {
+        if (resumeFailure) throw Object.assign(new Error("reply lost"), { code: "MCP_TIMEOUT" });
+        return toolResult(authorization);
+      }
+      if (name === "agentbridge_host_notification_ack" || name === "agentbridge_host_task_observe") return { status: "succeeded" };
+      throw new Error(`unexpected call: ${name}`);
+    },
+  };
+  Object.assign(state, { sessionKey, coordinator, authorization, run: () => coordinator.deliverEndpointNotifications(
+    { restoreSessionBinding: () => allowBinding },
+    { key: `${channel}:*:1001`, channel, senderId: "1001", accountId: null },
+    client, new AbortController().signal,
+  ) });
+  return state;
+}
+
 test("continues a workspace interaction after its field card is delivered to a companion endpoint", async () => {
   const workspaceSessionKey =
     "agent:main:agentbridge-workspace:direct:workspace-account-a";
@@ -2739,7 +2907,7 @@ test("resumes a workspace field card completed before companion notification cla
 
   assert.equal(
     calls.filter((item) => item.name === "agentbridge_interaction_get").length,
-    2,
+    1,
   );
   const resumeCalls = calls.filter(
     (item) => item.name === "agentbridge_interaction_resume",
