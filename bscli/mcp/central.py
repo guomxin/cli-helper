@@ -2563,8 +2563,11 @@ def create_central_mcp_server(
             "requirement, occupancy, and the OA-visible booking owner and department. Supply "
             "start_time and end_time together to evaluate "
             "availability for an exact Asia/Shanghai interval. Set only_available=true when "
-            "the user asks which rooms are free. This reads the Meeting Room module and does "
-            "not create a meeting or a room application. Use it before meeting creation."
+            "the user asks which rooms are free. room_name accepts the OA name or a natural "
+            "numeric alias such as 三号会议室; ambiguous matches are returned as candidates "
+            "instead of being guessed. Approval is required only when OA's room metadata marks "
+            "the room with its review-required enum. This reads the Meeting Room module and "
+            "does not create a meeting or a room application. Use it before meeting creation."
         ),
         annotations=read_annotations,
         structured_output=True,

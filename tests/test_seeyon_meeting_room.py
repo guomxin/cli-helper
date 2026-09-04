@@ -6,6 +6,7 @@ from bscli.adapters.seeyon_meeting_room import (
     MeetingRoomContractMismatch,
     list_meeting_room_availability,
     list_my_meeting_room_applications,
+    resolve_room,
 )
 
 
@@ -28,7 +29,9 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
         occupied = next(room for room in result["rooms"] if room["room_id"] == "room-3")
         self.assertFalse(occupied["available"])
         self.assertEqual(occupied["capacity"], 18)
-        self.assertTrue(occupied["requires_approval"])
+        self.assertFalse(occupied["requires_approval"])
+        self.assertEqual(occupied["approval_requirement_code"], "2")
+        self.assertEqual(occupied["approval_requirement_label"], "无需审批")
         self.assertEqual(occupied["busy_intervals"][0]["status_label"], "已审核")
         self.assertEqual(
             occupied["busy_intervals"][0]["booked_by_name"],
@@ -75,6 +78,45 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
         self.assertFalse(result["availability_evaluated"])
         self.assertTrue(all(room["available"] is None for room in result["rooms"]))
         self.assertTrue(all(not room["busy_intervals"] for room in result["rooms"]))
+
+    def test_room_approval_requirement_uses_oa_three_state_enum(self):
+        result = list_meeting_room_availability(
+            FakeAdapter(),
+            FakeMeetingRoomWorker(),
+            {},
+        )
+
+        room_2 = next(room for room in result["rooms"] if room["room_id"] == "room-2")
+        room_3 = next(room for room in result["rooms"] if room["room_id"] == "room-3")
+        self.assertTrue(room_2["requires_approval"])
+        self.assertEqual(room_2["approval_requirement_code"], "1")
+        self.assertFalse(room_3["requires_approval"])
+        self.assertEqual(room_3["approval_requirement_code"], "2")
+
+    def test_room_name_alias_is_resolved_against_full_directory(self):
+        worker = FakeMeetingRoomWorker()
+
+        result = list_meeting_room_availability(
+            FakeAdapter(),
+            worker,
+            {"room_name": "三号会议室"},
+        )
+
+        self.assertEqual([room["room_name"] for room in result["rooms"]], ["4层3#会议室"])
+        self.assertEqual(result["room_match"]["status"], "unique")
+        self.assertEqual(result["room_match"]["strategy"], "numeric_alias")
+        self.assertEqual(worker.arguments[0][0]["roomName"], "")
+
+    def test_broad_floor_name_is_not_mistaken_for_room_number(self):
+        snapshot = {
+            "roomsInfo": [
+                {"roomId": "room-3", "roomName": "4层3#会议室"},
+                {"roomId": "room-2", "roomName": "4层2#会议室"},
+            ]
+        }
+
+        with self.assertRaisesRegex(MeetingRoomContractMismatch, "ambiguous"):
+            resolve_room("4层", snapshot)
 
     def test_availability_requires_complete_interval(self):
         with self.assertRaisesRegex(ValueError, "supplied together"):
@@ -164,14 +206,14 @@ class FakeMeetingRoomWorker:
                         "roomName": "4层3#会议室",
                         "roomTypeId": "type-1",
                         "seatCount": 18,
-                        "needApp": 1,
+                        "needApp": 2,
                     },
                     {
                         "roomId": "room-2",
                         "roomName": "4层2#会议室",
                         "roomTypeId": "type-1",
                         "seatCount": 30,
-                        "needApp": 0,
+                        "needApp": 1,
                     },
                 ],
                 "roomAppsInfo": [

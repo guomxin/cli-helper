@@ -173,7 +173,7 @@ def build_meeting_room_application_field_card_schema(
         try:
             requested = resolve_room(seed["room"], snapshot)
         except MeetingRoomContractMismatch:
-            room_match_note = "未能精确匹配输入的会议室，请从 OA 当前空闲会议室中选择。"
+            room_match_note = "未能唯一匹配输入的会议室，请从 OA 当前空闲会议室中选择。"
         else:
             requested_app = room_app(
                 requested,

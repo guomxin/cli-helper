@@ -69,7 +69,7 @@ class SeeyonMeetingTests(unittest.TestCase):
         room_field = next(item for item in schema["fields"] if item["name"] == "room")
         self.assertEqual(room_field["value"], "")
         self.assertEqual(len(room_field["options"]), 2)
-        self.assertIn("未能精确匹配", schema["notice"])
+        self.assertIn("未能唯一匹配", schema["notice"])
 
     def test_card_preflight_only_lists_rooms_free_for_requested_time(self):
         worker = FakeMeetingWorker(

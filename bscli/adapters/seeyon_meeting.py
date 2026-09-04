@@ -118,7 +118,7 @@ def build_meeting_field_card_schema(adapter, worker, arguments: dict) -> dict:
         try:
             requested_room = _resolve_room(seed["room"], room_list)
         except MeetingContractMismatch:
-            room_match_note = "未能精确匹配输入的会议室，请从 OA 当前空闲会议室中选择。"
+            room_match_note = "未能唯一匹配输入的会议室，请从 OA 当前空闲会议室中选择。"
         else:
             requested_app = _room_app(
                 requested_room,

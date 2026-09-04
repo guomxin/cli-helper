@@ -53,6 +53,8 @@ MEETING_ROOM_INPUT_SCHEMAS = {
 _SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 _AUDIT_STATUS_TO_CODE = {"pending": "0", "approved": "1", "rejected": "2"}
 _AUDIT_CODE_TO_LABEL = {"0": "待审核", "1": "审核通过", "2": "审核未通过"}
+_ROOM_APPROVAL_KNOWN_CODES = frozenset({"0", "1", "2"})
+_ROOM_APPROVAL_REQUIRED_CODE = "1"
 
 
 class MeetingRoomContractMismatch(RuntimeError):
@@ -81,9 +83,12 @@ def list_meeting_room_availability(adapter, worker, arguments: dict) -> dict:
         adapter,
         start_ms=start_ms,
         end_ms=end_ms,
-        room_name=query["room_name"],
+        # OA applies literal server-side matching here. Load the visible directory
+        # so aliases such as "三号会议室" can resolve to "4层3#会议室".
+        room_name="",
     )
-    rooms = snapshot.get("roomsInfo") if isinstance(snapshot, dict) else []
+    room_match = match_meeting_rooms(query["room_name"], snapshot)
+    rooms = room_match.pop("rooms")
     public_rooms = []
     for room in rooms if isinstance(rooms, list) else []:
         if not isinstance(room, dict):
@@ -91,8 +96,6 @@ def list_meeting_room_availability(adapter, worker, arguments: dict) -> dict:
         room_name = str(room.get("roomName") or "").strip()
         room_id = str(room.get("roomId") or "").strip()
         if not room_name or not room_id:
-            continue
-        if query["room_name"] and query["room_name"].casefold() not in room_name.casefold():
             continue
         capacity = _safe_int(room.get("seatCount"))
         if query["minimum_capacity"] and (capacity or 0) < query["minimum_capacity"]:
@@ -110,7 +113,7 @@ def list_meeting_room_availability(adapter, worker, arguments: dict) -> dict:
                 "room_id": room_id,
                 "room_name": room_name,
                 "capacity": capacity,
-                "requires_approval": _as_bool(room.get("needApp")),
+                **_public_approval_requirement(room.get("needApp")),
                 "available": available,
                 "busy_intervals": _public_busy_intervals(
                     snapshot,
@@ -135,6 +138,7 @@ def list_meeting_room_availability(adapter, worker, arguments: dict) -> dict:
             "only_available": query["only_available"],
         },
         "availability_evaluated": start_ms is not None,
+        "room_match": room_match,
         "count": len(public_rooms),
         "matched_count": matched_count,
         "rooms": public_rooms,
@@ -355,32 +359,93 @@ def available_rooms(room_list: Any, *, start_ms: int, end_ms: int) -> list[dict]
 
 
 def resolve_room(requested: str, room_list: Any) -> dict:
-    rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
-    rooms = rooms if isinstance(rooms, list) else []
-    exact: list[dict] = []
-    numeric: list[dict] = []
-    requested_norm = _normalize_room_name(requested)
-    requested_number = _room_number(requested, requested=True)
-    for room in rooms:
-        if not isinstance(room, dict):
-            continue
-        name = str(room.get("roomName") or "")
-        name_norm = _normalize_room_name(name)
-        if requested_norm and (
-            requested_norm == name_norm
-            or requested_norm in name_norm
-            or name_norm in requested_norm
-        ):
-            exact.append(room)
-        elif requested_number and _room_number(name, requested=False) == requested_number:
-            numeric.append(room)
-    candidates = exact or numeric
+    match = match_meeting_rooms(requested, room_list)
+    candidates = match["rooms"]
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
         raise MeetingRoomContractMismatch(f"OA meeting room was not found: {requested}")
     names = ", ".join(str(item.get("roomName") or "") for item in candidates)
     raise MeetingRoomContractMismatch(f"OA meeting room is ambiguous: {requested} -> {names}")
+
+
+def match_meeting_rooms(requested: str, room_list: Any) -> dict:
+    raw_rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
+    rooms = [
+        room
+        for room in raw_rooms if isinstance(raw_rooms, list)
+        if isinstance(room, dict)
+        and str(room.get("roomId") or "").strip()
+        and str(room.get("roomName") or "").strip()
+    ]
+    requested = str(requested or "").strip()
+    if not requested:
+        return {
+            "requested_name": None,
+            "status": "not_filtered",
+            "strategy": None,
+            "candidate_count": len(rooms),
+            "rooms": rooms,
+        }
+
+    requested_casefold = requested.casefold()
+    requested_norm = _normalize_room_name(requested)
+    requested_number = _room_number(requested, requested=True)
+
+    exact_name = [
+        room
+        for room in rooms
+        if str(room.get("roomName") or "").strip().casefold() == requested_casefold
+    ]
+    normalized_name = [
+        room
+        for room in rooms
+        if requested_norm
+        and _normalize_room_name(str(room.get("roomName") or "")) == requested_norm
+    ]
+    numeric_alias = [
+        room
+        for room in rooms
+        if requested_number
+        and _room_number(str(room.get("roomName") or ""), requested=False)
+        == requested_number
+    ]
+    text_contains = [
+        room
+        for room in rooms
+        if requested_casefold in str(room.get("roomName") or "").casefold()
+        or (
+            requested_norm
+            and requested_norm
+            in _normalize_room_name(str(room.get("roomName") or ""))
+        )
+    ]
+
+    strategy = "not_found"
+    candidates: list[dict] = []
+    for strategy_name, matches in (
+        ("exact_name", exact_name),
+        ("normalized_name", normalized_name),
+        ("numeric_alias", numeric_alias),
+        ("text_contains", text_contains),
+    ):
+        if matches:
+            strategy = strategy_name
+            candidates = matches
+            break
+    return {
+        "requested_name": requested,
+        "status": (
+            "not_found"
+            if not candidates
+            else "unique"
+            if len(candidates) == 1
+            else "multiple"
+        ),
+        "strategy": strategy,
+        "candidate_count": len(candidates),
+        "rooms": candidates,
+    }
 
 
 def response_json(response: dict, *, context: str) -> Any:
@@ -630,6 +695,22 @@ def _as_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _public_approval_requirement(value: Any) -> dict:
+    code = str(value).strip() if value is not None else ""
+    if code not in _ROOM_APPROVAL_KNOWN_CODES:
+        return {
+            "requires_approval": None,
+            "approval_requirement_code": code or None,
+            "approval_requirement_label": "未知",
+        }
+    requires_approval = code == _ROOM_APPROVAL_REQUIRED_CODE
+    return {
+        "requires_approval": requires_approval,
+        "approval_requirement_code": code,
+        "approval_requirement_label": "需审批" if requires_approval else "无需审批",
+    }
+
+
 def _safe_int(value: Any) -> int | None:
     try:
         return int(value)
@@ -665,9 +746,14 @@ def _normalize_room_name(value: str) -> str:
 def _room_number(value: str, *, requested: bool) -> str:
     text = _replace_chinese_numerals(str(value or ""))
     if requested:
-        match = re.search(r"(\d+)\s*(?:号|#)?\s*会议室", text)
+        match = re.search(r"(\d+)\s*(?:号|#)\s*(?:会议室)?", text)
         if match:
             return match.group(1)
+        match = re.search(r"(?:第\s*)?(\d+)\s*会议室", text)
+        if match:
+            return match.group(1)
+        if re.fullmatch(r"\s*\d+\s*", text):
+            return text.strip()
     for pattern in (
         r"层\s*(\d+)\s*(?:#|号)\s*会议室",
         r"楼\s*(\d+)\s*(?:#|号)\s*会议室",
@@ -676,10 +762,6 @@ def _room_number(value: str, *, requested: bool) -> str:
         match = re.search(pattern, text)
         if match:
             return match.group(1)
-    if requested:
-        match = re.search(r"\d+", text)
-        if match:
-            return match.group(0)
     return ""
 
 
