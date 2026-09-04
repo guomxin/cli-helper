@@ -43,6 +43,10 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_CREATE_CAPABILITY,
     MEETING_PREPARE_CAPABILITY,
 )
+from bscli.adapters.seeyon_meeting_room import (
+    MEETING_ROOM_AVAILABILITY_CAPABILITY,
+    MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
+)
 from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
@@ -240,6 +244,8 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_missed_punch_approval_batch_prepare": frozenset(
         {"oa:write:approval"}
     ),
+    "oa_meeting_room_availability_list": frozenset({"oa:read"}),
+    "oa_meeting_room_my_applications_list": frozenset({"oa:read"}),
     "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
     "taihua_work_log_my_list": frozenset({"taihua:read"}),
     "taihua_work_log_team_list": frozenset({"taihua:read"}),
@@ -856,9 +862,11 @@ def create_central_mcp_server(
             "so do not call agentbridge_interaction_get again in the same turn. Only when "
             "the user reports in a later turn that no card appeared may you fetch it again. "
             "Resume only "
-            "after resume.ready is true. For meeting preparation, forward scheduling values "
-            "already supplied by the user and never invent missing values; AgentBridge checks "
-            "live room availability before opening a prefilled card. Writes remain "
+            "after resume.ready is true. Use the meeting-room availability tool for room "
+            "directories and occupancy questions; do not open a meeting-create card just to "
+            "answer a read request. For meeting preparation, forward scheduling values already "
+            "supplied by the user and never invent missing values; AgentBridge reuses the same "
+            "live room source before opening a prefilled card. Writes remain "
             "prepare -> authorize -> commit -> verify. When the user asks to handle all "
             "pending missed-punch requests, call oa_missed_punch_approval_batch_prepare "
             "once; do not loop over the singular prepare tool or ask the user to say continue."
@@ -2537,6 +2545,85 @@ def create_central_mcp_server(
             {"authorization_id": authorization_id},
             idempotency_key,
             {"oa:write:approval"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_availability_list",
+        title="List OA Meeting-Room Availability",
+        description=(
+            "List the authenticated user's visible OA meeting rooms, capacity, approval "
+            "requirement, and occupancy. Supply start_time and end_time together to evaluate "
+            "availability for an exact Asia/Shanghai interval. Set only_available=true when "
+            "the user asks which rooms are free. This reads the Meeting Room module and does "
+            "not create a meeting or a room application. Use it before meeting creation."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_meeting_room_availability_list(
+        ctx: Context,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        room_name: Annotated[str | None, Field(max_length=100)] = None,
+        minimum_capacity: Annotated[int, Field(ge=0, le=100000)] = 0,
+        only_available: bool = False,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "minimum_capacity": minimum_capacity,
+            "only_available": only_available,
+            "limit": limit,
+        }
+        for name, value in (
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("room_name", room_name),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            MEETING_ROOM_AVAILABILITY_CAPABILITY,
+            arguments,
+            idempotency_key,
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_my_applications_list",
+        title="List My OA Meeting-Room Applications",
+        description=(
+            "List the authenticated user's applications from OA Meeting Room > My "
+            "Applications. Optional room name, application-date range, and audit status "
+            "are pushed to OA. This is distinct from sent meetings and does not revoke, "
+            "end, remind, or otherwise change an application."
+        ),
+        annotations=read_annotations,
+        structured_output=True,
+    )
+    async def oa_meeting_room_my_applications_list(
+        ctx: Context,
+        room_name: Annotated[str | None, Field(max_length=100)] = None,
+        application_start_date: Annotated[str | None, Field(max_length=10)] = None,
+        application_end_date: Annotated[str | None, Field(max_length=10)] = None,
+        audit_status: Literal["pending", "approved", "rejected"] | None = None,
+        limit: Annotated[int, Field(ge=1, le=500)] = 50,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"limit": limit}
+        for name, value in (
+            ("room_name", room_name),
+            ("application_start_date", application_start_date),
+            ("application_end_date", application_end_date),
+            ("audit_status", audit_status),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
+            arguments,
+            idempotency_key,
         )
 
     @mcp.tool(

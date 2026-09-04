@@ -50,6 +50,8 @@
       "oa_missed_punch_prepare",
       "oa_missed_punch_approval_prepare",
       "oa_missed_punch_approval_batch_prepare",
+      "oa_meeting_room_availability_list",
+      "oa_meeting_room_my_applications_list",
       "oa_meeting_create_prepare",
       "yuque_public_books_list",
       "yuque_document_catalog",

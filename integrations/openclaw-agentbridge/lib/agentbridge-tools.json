@@ -4261,6 +4261,197 @@
       "title": "Approve Authorized OA Missed-Punch Request"
     },
     {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List the authenticated user's visible OA meeting rooms, capacity, approval requirement, and occupancy. Supply start_time and end_time together to evaluate availability for an exact Asia/Shanghai interval. Set only_available=true when the user asks which rooms are free. This reads the Meeting Room module and does not create a meeting or a room application. Use it before meeting creation.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "minimum_capacity": {
+            "default": 0,
+            "maximum": 100000,
+            "minimum": 0,
+            "title": "Minimum Capacity",
+            "type": "integer"
+          },
+          "only_available": {
+            "default": false,
+            "title": "Only Available",
+            "type": "boolean"
+          },
+          "room_name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Room Name"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "oa_meeting_room_availability_listArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_availability_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_availability_listDictOutput",
+        "type": "object"
+      },
+      "title": "List OA Meeting-Room Availability"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "List the authenticated user's applications from OA Meeting Room > My Applications. Optional room name, application-date range, and audit status are pushed to OA. This is distinct from sent meetings and does not revoke, end, remind, or otherwise change an application.",
+      "inputSchema": {
+        "properties": {
+          "application_end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Application End Date"
+          },
+          "application_start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Application Start Date"
+          },
+          "audit_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "approved",
+                  "rejected"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Audit Status"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "room_name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Room Name"
+          }
+        },
+        "title": "oa_meeting_room_my_applications_listArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_my_applications_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_my_applications_listDictOutput",
+        "type": "object"
+      },
+      "title": "List My OA Meeting-Room Applications"
+    },
+    {
       "_meta": {
         "ui": {
           "resourceUri": "ui://agentbridge/trusted-interaction.html",

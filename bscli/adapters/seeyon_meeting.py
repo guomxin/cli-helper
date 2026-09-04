@@ -8,6 +8,15 @@ import re
 from typing import Any, Callable
 from urllib.parse import urlencode, urljoin, urlparse
 
+from bscli.adapters.seeyon_meeting_room import (
+    MeetingRoomContractMismatch,
+    available_rooms as shared_available_rooms,
+    query_meeting_room_snapshot,
+    resolve_room as shared_resolve_room,
+    room_app as shared_room_app,
+    room_is_available as shared_room_is_available,
+)
+
 
 MEETING_PREPARE_CAPABILITY = "oa.meeting.create.prepare"
 MEETING_CREATE_CAPABILITY = "oa.meeting.create"
@@ -96,12 +105,7 @@ def build_meeting_field_card_schema(adapter, worker, arguments: dict) -> dict:
     end_ms = _datetime_ms(seed["end_time"])
     meeting_info = _ajax(worker, adapter, "meetingInfo", [{"meetingId": "", "templateId": ""}])
     _validate_meeting_info(meeting_info)
-    room_list = _ajax(
-        worker,
-        adapter,
-        "roomListInfo",
-        [{"startDatetime": start_ms, "endDatetime": end_ms}],
-    )
+    room_list = _query_room_list(worker, adapter, start_ms=start_ms, end_ms=end_ms)
     available_rooms = _available_rooms(room_list, start_ms=start_ms, end_ms=end_ms)
     if not available_rooms:
         raise MeetingContractMismatch(
@@ -165,12 +169,7 @@ def prepare_meeting_create(adapter, worker, arguments: dict) -> dict:
     end_ms = _datetime_ms(inputs["end_time"])
     meeting_info = _ajax(worker, adapter, "meetingInfo", [{"meetingId": "", "templateId": ""}])
     _validate_meeting_info(meeting_info)
-    room_list = _ajax(
-        worker,
-        adapter,
-        "roomListInfo",
-        [{"startDatetime": start_ms, "endDatetime": end_ms}],
-    )
+    room_list = _query_room_list(worker, adapter, start_ms=start_ms, end_ms=end_ms)
     room = _resolve_room(inputs["room"], room_list)
     room_app = _room_app(room, start_ms=start_ms, end_ms=end_ms)
     _assert_room_available(room_list, room_app)
@@ -220,8 +219,7 @@ def create_meeting(
 
     meeting_info = _ajax(worker, adapter, "meetingInfo", [{"meetingId": "", "templateId": ""}])
     _validate_meeting_info(meeting_info)
-    room_list_args = [{"startDatetime": start_ms, "endDatetime": end_ms}]
-    room_list = _ajax(worker, adapter, "roomListInfo", room_list_args)
+    room_list = _query_room_list(worker, adapter, start_ms=start_ms, end_ms=end_ms)
     room = _resolve_room(inputs["room"], room_list)
     room_app = _room_app(room, start_ms=start_ms, end_ms=end_ms)
     target = plan.get("target") if isinstance(plan.get("target"), dict) else {}
@@ -250,7 +248,7 @@ def create_meeting(
             raise MeetingOutcomeUnknown(
                 str(send_result.get("message") or "OA reported that meeting creation failed.")
             )
-        verify_list = _ajax(worker, adapter, "roomListInfo", room_list_args)
+        verify_list = _query_room_list(worker, adapter, start_ms=start_ms, end_ms=end_ms)
         room_readback = _verify_room_readback(
             verify_list,
             room_id=room_app["roomId"],
@@ -502,117 +500,30 @@ def _validate_meeting_info(meeting_info: Any) -> None:
         raise MeetingContractMismatch("OA meetingInfo did not identify the current user.")
 
 
+def _query_room_list(worker, adapter, *, start_ms: int, end_ms: int) -> dict:
+    try:
+        return query_meeting_room_snapshot(
+            worker,
+            adapter,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+    except MeetingRoomContractMismatch as exc:
+        raise MeetingContractMismatch(str(exc)) from exc
+
+
 def _resolve_room(requested: str, room_list: Any) -> dict:
-    rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
-    if not isinstance(rooms, list):
-        rooms = []
-    exact: list[dict] = []
-    numeric: list[dict] = []
-    requested_norm = _normalize_room_name(requested)
-    requested_number = _room_number(requested, requested=True)
-    for room in rooms:
-        if not isinstance(room, dict):
-            continue
-        name = str(room.get("roomName") or "")
-        name_norm = _normalize_room_name(name)
-        if requested_norm and (
-            requested_norm == name_norm
-            or requested_norm in name_norm
-            or name_norm in requested_norm
-        ):
-            exact.append(room)
-        elif requested_number and _room_number(name, requested=False) == requested_number:
-            numeric.append(room)
-    candidates = exact or numeric
-    if len(candidates) == 1:
-        return candidates[0]
-    if not candidates:
-        raise MeetingContractMismatch(f"OA meeting room was not found: {requested}")
-    names = ", ".join(str(item.get("roomName") or "") for item in candidates)
-    raise MeetingContractMismatch(f"OA meeting room is ambiguous: {requested} -> {names}")
-
-
-def _normalize_room_name(value: str) -> str:
-    text = _replace_chinese_numerals(str(value or "").lower())
-    text = re.sub(r"\s+", "", text)
-    for token in ("会议室", "會議室", "号", "#", "層", "层", "樓", "楼"):
-        text = text.replace(token, "")
-    return text
-
-
-def _room_number(value: str, *, requested: bool) -> str:
-    text = _replace_chinese_numerals(str(value or ""))
-    if requested:
-        match = re.search(r"(\d+)\s*(?:号|#)?\s*会议室", text)
-        if match:
-            return match.group(1)
-    for pattern in (
-        r"层\s*(\d+)\s*(?:#|号)\s*会议室",
-        r"楼\s*(\d+)\s*(?:#|号)\s*会议室",
-        r"(\d+)\s*(?:#|号)\s*会议室",
-    ):
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    if requested:
-        match = re.search(r"\d+", text)
-        if match:
-            return match.group(0)
-    return ""
-
-
-_CHINESE_DIGITS = {
-    "零": 0,
-    "〇": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-_CHINESE_UNITS = {"十": 10, "百": 100}
-
-
-def _replace_chinese_numerals(value: str) -> str:
-    def replace(match: re.Match) -> str:
-        return str(_parse_chinese_numeral(match.group(0)))
-
-    return re.sub(r"[零〇一二两三四五六七八九十百]+", replace, value)
-
-
-def _parse_chinese_numeral(value: str) -> int:
-    if not any(character in _CHINESE_UNITS for character in value):
-        digits = "".join(str(_CHINESE_DIGITS[character]) for character in value)
-        return int(digits)
-    total = 0
-    current = 0
-    for character in value:
-        if character in _CHINESE_DIGITS:
-            current = _CHINESE_DIGITS[character]
-            continue
-        unit = _CHINESE_UNITS[character]
-        total += (current or 1) * unit
-        current = 0
-    return total + current
+    try:
+        return shared_resolve_room(requested, room_list)
+    except MeetingRoomContractMismatch as exc:
+        raise MeetingContractMismatch(str(exc)) from exc
 
 
 def _room_app(room: dict, *, start_ms: int, end_ms: int) -> dict:
-    room_id = str(room.get("roomId") or "")
-    room_name = str(room.get("roomName") or "")
-    if not room_id or not room_name:
-        raise MeetingContractMismatch("The resolved OA meeting room is incomplete.")
-    return {
-        "roomId": room_id,
-        "roomName": room_name,
-        "pId": str(room.get("roomTypeId") or "-1"),
-        "appBeginDate": int(start_ms),
-        "appEndDate": int(end_ms),
-    }
+    try:
+        return shared_room_app(room, start_ms=start_ms, end_ms=end_ms)
+    except MeetingRoomContractMismatch as exc:
+        raise MeetingContractMismatch(str(exc)) from exc
 
 
 def _assert_room_available(room_list: Any, room_app: dict) -> None:
@@ -624,32 +535,11 @@ def _assert_room_available(room_list: Any, room_app: dict) -> None:
 
 
 def _room_is_available(room_list: Any, room_app: dict) -> bool:
-    apps = room_list.get("roomAppsInfo") if isinstance(room_list, dict) else []
-    for app in apps if isinstance(apps, list) else []:
-        if not isinstance(app, dict) or str(app.get("roomId") or "") != room_app["roomId"]:
-            continue
-        app_start = _safe_int(app.get("appBeginDate"))
-        app_end = _safe_int(app.get("appEndDate"))
-        if app_start is None or app_end is None:
-            continue
-        if app_start < room_app["appEndDate"] and app_end > room_app["appBeginDate"]:
-            return False
-    return True
+    return shared_room_is_available(room_list, room_app)
 
 
 def _available_rooms(room_list: Any, *, start_ms: int, end_ms: int) -> list[dict]:
-    rooms = room_list.get("roomsInfo") if isinstance(room_list, dict) else []
-    available = []
-    for room in rooms if isinstance(rooms, list) else []:
-        if not isinstance(room, dict):
-            continue
-        try:
-            room_app = _room_app(room, start_ms=start_ms, end_ms=end_ms)
-        except MeetingContractMismatch:
-            continue
-        if _room_is_available(room_list, room_app):
-            available.append(room)
-    return available
+    return shared_available_rooms(room_list, start_ms=start_ms, end_ms=end_ms)
 
 
 def _validate_room_apps(worker, adapter, room_app: dict) -> None:

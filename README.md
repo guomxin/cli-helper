@@ -108,6 +108,8 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 - `oa.addressbook.group.list` / `group.members`
 - `oa.addressbook.private_contact.search` / `private_contact.get`
 - `oa.addressbook.export`
+- `oa.meeting_room.availability.list`
+- `oa.meeting_room.my_applications.list`
 
 写入能力按具体业务流程组织，已覆盖出差、请假、补签、效能数据、差旅费、劳动合同续签、
 知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
@@ -116,8 +118,9 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 补签接收处理还提供 `oa.missed_punch.approval.batch.prepare`：中心端冻结当前用户的补签待办，逐项展示
 独立字段卡和授权卡，当前项权威成功后自动进入下一项，不需要用户在事项之间发送“继续”。
 
-协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)和
-[OA 通讯录只读能力](docs/系统适配/协同办公系统/通讯录只读能力.md)。
+协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)、
+[OA 通讯录只读能力](docs/系统适配/协同办公系统/通讯录只读能力.md)和
+[OA 会议室读取能力](docs/系统适配/协同办公系统/会议室读取能力.md)。
 
 ### 泰华日志能力
 

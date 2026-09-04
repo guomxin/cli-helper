@@ -34,6 +34,8 @@ param(
         "SmartlightReport",
         "OaPendingRead",
         "OaPendingInspect",
+        "OaMeetingRooms",
+        "OaMeetingRoomApplications",
         "OaAddressbookOrganization",
         "OaAddressbookPersonSearch",
         "OaAddressbookGroups",

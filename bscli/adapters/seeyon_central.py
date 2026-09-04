@@ -66,6 +66,13 @@ from bscli.adapters.seeyon_meeting import (
     MEETING_PREPARE_CAPABILITY,
     MEETING_PREPARE_INPUT_SCHEMA,
 )
+from bscli.adapters.seeyon_meeting_room import (
+    MEETING_ROOM_AVAILABILITY_CAPABILITY,
+    MEETING_ROOM_CAPABILITIES,
+    MEETING_ROOM_INPUT_SCHEMAS,
+    MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
+    invoke_meeting_room_capability,
+)
 from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_BATCH_PREPARE_INPUT_SCHEMA,
@@ -566,6 +573,30 @@ def build_central_capability_registry() -> CapabilityRegistry:
             workflow="business-trip-draft-prepare-v2",
         )
     )
+    for capability_name, description, workflow in (
+        (
+            MEETING_ROOM_AVAILABILITY_CAPABILITY,
+            "List OA meeting rooms and their occupancy for an optional exact time range.",
+            "meeting-room-availability-list-v1",
+        ),
+        (
+            MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
+            "List the authenticated user's meeting-room applications with OA-side filters.",
+            "meeting-room-my-applications-list-v1",
+        ),
+    ):
+        registry.register(
+            CapabilitySpec(
+                name=capability_name,
+                version="0.1.0",
+                description=description,
+                input_schema=MEETING_ROOM_INPUT_SCHEMAS[capability_name],
+                output_schema={"type": "object"},
+                effect="read",
+                adapter="seeyon-central",
+                workflow=workflow,
+            )
+        )
     registry.register(
         CapabilitySpec(
             name=BUSINESS_TRIP_SAVE_CAPABILITY,
@@ -1065,6 +1096,13 @@ class SeeyonCentralAdapter:
                 worker,
                 base_url=self.base_url,
                 arguments=arguments,
+            )
+        if capability_name in MEETING_ROOM_CAPABILITIES:
+            return invoke_meeting_room_capability(
+                capability_name,
+                self,
+                worker,
+                arguments,
             )
         collection = _WORKFLOW_LIST_CAPABILITIES.get(capability_name)
         if collection:

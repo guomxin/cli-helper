@@ -316,6 +316,8 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_missed_punch_approval_prepare", names)
         self.assertIn("oa_missed_punch_approval_batch_prepare", names)
         self.assertIn("oa_missed_punch_approve", names)
+        self.assertIn("oa_meeting_room_availability_list", names)
+        self.assertIn("oa_meeting_room_my_applications_list", names)
         self.assertIn("oa_meeting_create_prepare", names)
         self.assertIn("oa_meeting_create", names)
         for tool_name in (
@@ -415,10 +417,20 @@ class CentralMcpTests(unittest.TestCase):
             tool for tool in tools if tool["name"] == "oa_meeting_create_prepare"
         )
         create_meeting = next(tool for tool in tools if tool["name"] == "oa_meeting_create")
+        room_availability = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_room_availability_list"
+        )
+        room_applications = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_room_my_applications_list"
+        )
         self.assertTrue(approve["annotations"]["destructiveHint"])
         self.assertFalse(batch_prepare["annotations"]["destructiveHint"])
         self.assertNotIn("affair_id", batch_prepare["inputSchema"]["properties"])
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
+        self.assertTrue(room_availability["annotations"]["readOnlyHint"])
+        self.assertTrue(room_applications["annotations"]["readOnlyHint"])
+        self.assertIn("only_available", room_availability["inputSchema"]["properties"])
+        self.assertIn("audit_status", room_applications["inputSchema"]["properties"])
         self.assertNotIn("user_subject", json.dumps(tools))
         self.assertNotIn("expected_principal", json.dumps(tools))
         team_log_schema = team_logs["inputSchema"]["properties"]

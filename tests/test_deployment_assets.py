@@ -449,6 +449,8 @@ class DeploymentAssetTests(unittest.TestCase):
             "oa_weekly_report_acknowledge",
             "oa_standard_collaboration_approval_prepare",
             "oa_standard_collaboration_approve",
+            "oa_meeting_room_availability_list",
+            "oa_meeting_room_my_applications_list",
             "oa_meeting_create_prepare",
             "oa_meeting_create",
             "smartlight_alarm_remark_update_prepare",
