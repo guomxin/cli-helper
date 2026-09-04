@@ -10,7 +10,7 @@ from bscli.adapters.seeyon_meeting_room import (
 
 
 class SeeyonMeetingRoomTests(unittest.TestCase):
-    def test_availability_returns_public_room_state_without_meeting_details(self):
+    def test_availability_returns_booking_owner_without_meeting_details(self):
         worker = FakeMeetingRoomWorker()
 
         result = list_meeting_room_availability(
@@ -30,8 +30,16 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
         self.assertEqual(occupied["capacity"], 18)
         self.assertTrue(occupied["requires_approval"])
         self.assertEqual(occupied["busy_intervals"][0]["status_label"], "已审核")
+        self.assertEqual(
+            occupied["busy_intervals"][0]["booked_by_name"],
+            "张三",
+        )
+        self.assertEqual(
+            occupied["busy_intervals"][0]["booked_by_department"],
+            "研发中心",
+        )
         self.assertNotIn("meeting_name", occupied["busy_intervals"][0])
-        self.assertNotIn("applicant", json.dumps(result, ensure_ascii=False).lower())
+        self.assertNotIn("person-secret", json.dumps(result, ensure_ascii=False))
         self.assertEqual(worker.methods, ["roomListInfo"])
         self.assertEqual(
             worker.arguments[0],
@@ -174,7 +182,9 @@ class FakeMeetingRoomWorker:
                         "status": "1",
                         "statusName": "已审核",
                         "meetingName": "private subject",
-                        "applicant": "private person",
+                        "perName": "张三",
+                        "perDeptName": "研发中心",
+                        "perId": "person-secret",
                     }
                 ],
             }

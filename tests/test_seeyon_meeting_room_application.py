@@ -187,6 +187,27 @@ class SeeyonMeetingRoomApplicationTests(unittest.TestCase):
         )
         self.assertEqual(worker.mutations, ["cancelRoomApp"])
 
+    def test_cancel_uses_room_snapshot_when_my_applications_is_stale(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            stale_cancel_readback=True,
+            expose_apps_in_room_snapshot=True,
+        )
+
+        result = cancel_meeting_room_application(
+            FakeAdapter(),
+            worker,
+            _cancel_plan(),
+            enter_commit_boundary=lambda: None,
+        )
+
+        self.assertTrue(result["meeting_room_application_canceled"])
+        self.assertEqual(
+            result["verification"]["state"],
+            "absent_from_room_snapshot",
+        )
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
     def test_cancel_detects_target_change_before_boundary(self):
         worker = FakeWorker(initial_apps=[_application("cancel-me", status=1)])
         boundary = []
@@ -212,12 +233,17 @@ class FakeWorker:
         initial_apps=None,
         conflict=False,
         missing_create_readback=False,
+        stale_cancel_readback=False,
+        expose_apps_in_room_snapshot=False,
         events=None,
     ):
         self.rooms = list(rooms) if rooms is not None else [_room()]
         self.apps = list(initial_apps or [])
         self.conflict = conflict
         self.missing_create_readback = missing_create_readback
+        self.stale_cancel_readback = stale_cancel_readback
+        self.expose_apps_in_room_snapshot = expose_apps_in_room_snapshot
+        self.canceled_application_ids = set()
         self.events = events if events is not None else []
         self.manager_methods = []
         self.mutations = []
@@ -229,13 +255,22 @@ class FakeWorker:
         arguments = json.loads(fields["arguments"][0])
         self.manager_methods.append(manager_method)
         if manager_method == "roomListInfo":
-            bookings = []
+            bookings = [
+                {
+                    "appId": item["roomAppId"],
+                    "roomId": item["roomId"],
+                    "appBeginDate": item["startDatetime"],
+                    "appEndDate": item["endDatetime"],
+                }
+                for item in self.apps
+                if item["roomAppId"] not in self.canceled_application_ids
+            ] if self.expose_apps_in_room_snapshot else []
             if self.conflict:
-                bookings = [{
+                bookings.append({
                     "roomId": "room-3",
                     "appBeginDate": 1784527200000,
                     "appEndDate": 1784534400000,
-                }]
+                })
             return _response({"roomsInfo": self.rooms, "roomAppsInfo": bookings}, url)
         if manager_method == "validateRoomApps":
             return _response({"success": True, "data": []}, url)
@@ -263,7 +298,12 @@ class FakeWorker:
             self.events.append("cancelRoomApp")
             self.mutations.append("cancelRoomApp")
             application_id = arguments[0]["appIds"]
-            self.apps = [item for item in self.apps if item["roomAppId"] != application_id]
+            self.canceled_application_ids.add(application_id)
+            if not self.stale_cancel_readback:
+                self.apps = [
+                    item for item in self.apps
+                    if item["roomAppId"] != application_id
+                ]
             return _response({"success": True}, url)
         raise AssertionError(f"unexpected method: {manager_method} {arguments}")
 

@@ -492,6 +492,11 @@ def _public_busy_intervals(
                 "end_time": _format_datetime(app_end),
                 "status_code": status_code or None,
                 "status_label": status_label,
+                "booked_by_name": str(app.get("perName") or "").strip() or None,
+                "booked_by_department": str(
+                    app.get("perDeptName") or ""
+                ).strip()
+                or None,
             }
         )
     public.sort(key=lambda item: (item["start_time"] or "", item["end_time"] or ""))

@@ -2560,7 +2560,8 @@ def create_central_mcp_server(
         title="List OA Meeting-Room Availability",
         description=(
             "List the authenticated user's visible OA meeting rooms, capacity, approval "
-            "requirement, and occupancy. Supply start_time and end_time together to evaluate "
+            "requirement, occupancy, and the OA-visible booking owner and department. Supply "
+            "start_time and end_time together to evaluate "
             "availability for an exact Asia/Shanghai interval. Set only_available=true when "
             "the user asks which rooms are free. This reads the Meeting Room module and does "
             "not create a meeting or a room application. Use it before meeting creation."

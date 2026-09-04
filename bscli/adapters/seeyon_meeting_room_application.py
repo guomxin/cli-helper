@@ -407,6 +407,13 @@ def cancel_meeting_room_application(
     current = _resolve_application(worker, adapter, application_id)
     _assert_same_frozen_application(target, current)
     _assert_cancelable(current)
+    snapshot = _query_room_snapshot(
+        worker,
+        adapter,
+        start_ms=_datetime_ms(target["start_time"]),
+        end_ms=_datetime_ms(target["end_time"]),
+    )
+    target_was_in_room_snapshot = _snapshot_contains_application(snapshot, target)
 
     enter_commit_boundary()
     try:
@@ -423,7 +430,12 @@ def cancel_meeting_room_application(
             ],
         )
         _ensure_write_accepted(response, "meeting-room application cancellation")
-        state = _verify_cancellation(worker, adapter, application_id)
+        state = _verify_cancellation(
+            worker,
+            adapter,
+            target,
+            target_was_in_room_snapshot=target_was_in_room_snapshot,
+        )
         return {
             "schema_version": "agentbridge.oa_meeting_room_application_cancel_result.v1",
             "business_intent": "cancel_meeting_room_application",
@@ -689,10 +701,13 @@ def _assert_cancelable(raw: dict) -> None:
 def _verify_cancellation(
     worker,
     adapter,
-    application_id: str,
+    target: dict,
     *,
-    attempts: int = 4,
+    target_was_in_room_snapshot: bool,
+    attempts: int = 7,
 ) -> str:
+    application_id = str(target.get("application_id") or "")
+    delays = (0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
     for attempt in range(attempts):
         rows = query_my_meeting_room_applications(worker, adapter)["items"]
         matches = [item for item in rows if _raw_application_id(item) == application_id]
@@ -700,10 +715,35 @@ def _verify_cancellation(
             return "absent_from_my_applications"
         if len(matches) == 1 and _status_code(matches[0]) == "4":
             return "terminal_status_4"
+        if target_was_in_room_snapshot:
+            snapshot = _query_room_snapshot(
+                worker,
+                adapter,
+                start_ms=_datetime_ms(target["start_time"]),
+                end_ms=_datetime_ms(target["end_time"]),
+            )
+            if not _snapshot_contains_application(snapshot, target):
+                return "absent_from_room_snapshot"
         if attempt + 1 < attempts:
-            time.sleep(0.5)
+            time.sleep(delays[min(attempt, len(delays) - 1)])
     raise MeetingRoomApplicationOutcomeUnknown(
         "The canceled meeting-room application remained active in My Applications."
+    )
+
+
+def _snapshot_contains_application(snapshot: dict, target: dict) -> bool:
+    application_id = str(target.get("application_id") or "")
+    room_id = str(target.get("room_id") or "")
+    if not application_id or not room_id:
+        return False
+    apps = snapshot.get("roomAppsInfo") if isinstance(snapshot, dict) else []
+    if not isinstance(apps, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and _raw_application_id(item) == application_id
+        and str(item.get("roomId") or "") == room_id
+        for item in apps
     )
 
 
