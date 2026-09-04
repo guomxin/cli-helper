@@ -803,7 +803,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.81",
+      hostVersion: "0.4.82",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1221,7 +1221,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.81",
+        hostVersion: "0.4.82",
       },
     },
   });
@@ -2217,7 +2217,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.81",
+      hostVersion: "0.4.82",
     },
   });
   assert.equal(

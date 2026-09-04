@@ -54,6 +54,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.leave.submit.prepare",
                 "oa.meeting.create",
                 "oa.meeting.create.prepare",
+                "oa.meeting_room.application.cancel",
+                "oa.meeting_room.application.cancel.prepare",
+                "oa.meeting_room.application.create",
+                "oa.meeting_room.application.prepare",
                 "oa.meeting_room.availability.list",
                 "oa.meeting_room.my_applications.list",
                 "oa.missed_punch.approval.batch.prepare",
@@ -137,6 +141,13 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.resignation.approve"], "controlled_write")
         self.assertEqual(effects["oa.meeting.create.prepare"], "controlled_write")
         self.assertEqual(effects["oa.meeting.create"], "controlled_write")
+        for capability_name in (
+            "oa.meeting_room.application.prepare",
+            "oa.meeting_room.application.create",
+            "oa.meeting_room.application.cancel.prepare",
+            "oa.meeting_room.application.cancel",
+        ):
+            self.assertEqual(effects[capability_name], "controlled_write")
         self.assertTrue(
             all(
                 effects[name] == "read"

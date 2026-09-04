@@ -688,6 +688,10 @@ test("agent-facing catalogs hide internal commit and continuation tools", () => 
   assert.equal(visible.has("oa_workflow_revoke_prepare"), true);
   assert.equal(visible.has("oa_meeting_room_availability_list"), true);
   assert.equal(visible.has("oa_meeting_room_my_applications_list"), true);
+  assert.equal(visible.has("oa_meeting_room_application_prepare"), true);
+  assert.equal(visible.has("oa_meeting_room_application_create"), false);
+  assert.equal(visible.has("oa_meeting_room_application_cancel_prepare"), true);
+  assert.equal(visible.has("oa_meeting_room_application_cancel"), false);
   assert.equal(visible.has("oa_meeting_create_prepare"), true);
   assert.equal(visible.has("taihua_work_log_create_prepare"), true);
   const expectedGoverned = AGENTBRIDGE_TOOL_CATALOG
@@ -1082,7 +1086,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.81",
+      hostVersion: "0.4.82",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",

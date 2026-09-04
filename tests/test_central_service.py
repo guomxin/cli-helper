@@ -18,6 +18,9 @@ from bscli.adapters.seeyon_business_trip_submit import (
 )
 from bscli.adapters.seeyon_leave_submit import LeaveBusinessValidationRequired
 from bscli.adapters.seeyon_meeting import MEETING_FIELD_CARD_SCHEMA
+from bscli.adapters.seeyon_meeting_room_application import (
+    MEETING_ROOM_APPLICATION_FIELD_CARD_SCHEMA,
+)
 from bscli.adapters.seeyon_pending_actions import PendingActionContractMismatch
 from bscli.adapters.seeyon_central import (
     SeeyonLoginRequired,
@@ -2527,6 +2530,101 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 )
             self.assertEqual(committed["status"], "succeeded")
             self.assertTrue(committed["result"]["meeting_created"])
+            self.assertEqual(
+                service.write_authorizations.get(authorization_id)["state"],
+                "consumed",
+            )
+
+    def test_meeting_room_application_uses_dynamic_card_and_private_commit(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            initial_arguments = {
+                "purpose": "项目讨论",
+                "room": "三号会议室",
+                "start_time": "2026-09-10 14:00",
+                "end_time": "2026-09-10 15:00",
+            }
+            with patch(
+                "bscli.core.central_service.build_meeting_room_application_field_card_schema",
+                return_value=MEETING_ROOM_APPLICATION_FIELD_CARD_SCHEMA,
+            ) as build_schema:
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting_room.application.prepare",
+                    arguments=initial_arguments,
+                )
+            build_schema.assert_called_once()
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            self.assertEqual(
+                service.interaction_required_scopes(
+                    user_subject="user-a",
+                    interaction_id=started["interaction"]["interactionId"],
+                ),
+                frozenset({"oa:write:meeting"}),
+            )
+
+            fields = {
+                "purpose": "项目讨论",
+                "room": "3号会议室",
+                "start_time": "2026-09-10 14:00",
+                "end_time": "2026-09-10 15:00",
+            }
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values=fields,
+            )
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "apply_meeting_room",
+                    "target": {"room_id": "room-3", "room_name": "3号会议室"},
+                    "action_contract": {"version": "v1", "fingerprint": "sha256:test"},
+                    "exact_input": fields,
+                },
+                "summary": {"title": "申请会议室", "system": "致远 OA", "fields": []},
+            }
+            with patch(
+                "bscli.core.central_service.prepare_meeting_room_application",
+                return_value=prepared_payload,
+            ):
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting_room.application.prepare",
+                    arguments={"input_submission_id": submission_id},
+                )
+            authorization_id = prepared["nextAction"]["authorizationId"]
+            csrf = service.write_authorizations.issue_csrf(authorization_id)
+            service.write_authorizations.decide(
+                authorization_id,
+                decision="approve",
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+            )
+
+            def create(_adapter, _worker, _plan, *, enter_commit_boundary):
+                enter_commit_boundary()
+                return {
+                    "meeting_room_application_created": True,
+                    "meeting_created": False,
+                    "submitted_count": 1,
+                }
+
+            with patch(
+                "bscli.core.central_service.create_meeting_room_application",
+                side_effect=create,
+            ):
+                committed = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.meeting_room.application.create",
+                    arguments={"authorization_id": authorization_id},
+                )
+            self.assertEqual(committed["status"], "succeeded")
+            self.assertTrue(
+                committed["result"]["meeting_room_application_created"]
+            )
             self.assertEqual(
                 service.write_authorizations.get(authorization_id)["state"],
                 "consumed",

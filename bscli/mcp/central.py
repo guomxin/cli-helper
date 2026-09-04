@@ -47,6 +47,12 @@ from bscli.adapters.seeyon_meeting_room import (
     MEETING_ROOM_AVAILABILITY_CAPABILITY,
     MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
 )
+from bscli.adapters.seeyon_meeting_room_application import (
+    MEETING_ROOM_APPLICATION_CANCEL_CAPABILITY,
+    MEETING_ROOM_APPLICATION_CANCEL_PREPARE_CAPABILITY,
+    MEETING_ROOM_APPLICATION_CREATE_CAPABILITY,
+    MEETING_ROOM_APPLICATION_PREPARE_CAPABILITY,
+)
 from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
@@ -246,6 +252,8 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     ),
     "oa_meeting_room_availability_list": frozenset({"oa:read"}),
     "oa_meeting_room_my_applications_list": frozenset({"oa:read"}),
+    "oa_meeting_room_application_prepare": frozenset({"oa:write:meeting"}),
+    "oa_meeting_room_application_cancel_prepare": frozenset({"oa:write:meeting"}),
     "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
     "taihua_work_log_my_list": frozenset({"taihua:read"}),
     "taihua_work_log_team_list": frozenset({"taihua:read"}),
@@ -2624,6 +2632,160 @@ def create_central_mcp_server(
             MEETING_ROOM_MY_APPLICATIONS_CAPABILITY,
             arguments,
             idempotency_key,
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_application_prepare",
+        title="Prepare OA Meeting-Room Application",
+        meta=interaction_tool_meta(),
+        description=(
+            "Apply only for a meeting-room time slot; this does not create or send a "
+            "meeting. Pass the user's purpose, requested room wording, start_time, and "
+            "end_time. AgentBridge first checks live availability, then opens a prefilled "
+            "trusted field card whose room field contains only current OA room options. "
+            "After field submission it validates again and creates a separate final "
+            "authorization. Use oa_meeting_create_prepare instead when the user asks to "
+            "create a meeting, invite attendees, or send a meeting notice."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_room_application_prepare(
+        ctx: Context,
+        purpose: Annotated[str | None, Field(max_length=80)] = None,
+        room: Annotated[str | None, Field(max_length=100)] = None,
+        start_time: Annotated[str | None, Field(max_length=32)] = None,
+        end_time: Annotated[str | None, Field(max_length=32)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        for name, value in (
+            ("purpose", purpose),
+            ("room", room),
+            ("start_time", start_time),
+            ("end_time", end_time),
+            ("input_submission_id", input_submission_id),
+        ):
+            if value is not None:
+                arguments[name] = value
+        return await invoke(
+            ctx,
+            MEETING_ROOM_APPLICATION_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:meeting"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_application_create",
+        title="Create Authorized OA Meeting-Room Application",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, recheck room availability and the OA "
+            "room rules, submit one standalone room application, and verify the new row "
+            "in Meeting Room > My Applications. This private commit tool must follow the "
+            "trusted prepare flow."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_room_application_create(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MEETING_ROOM_APPLICATION_CREATE_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:meeting"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_application_cancel_prepare",
+        title="Prepare OA Meeting-Room Application Cancellation",
+        meta=interaction_tool_meta(),
+        description=(
+            "Cancel one exact standalone application owned by the authenticated user. "
+            "First list My Applications and pass its application_id. AgentBridge refuses "
+            "applications linked to a full meeting, already terminal applications, rooms "
+            "currently in use, and elapsed time slots. It collects the cancellation reason "
+            "in a trusted field card and requires separate final authorization."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_room_application_cancel_prepare(
+        ctx: Context,
+        application_id: Annotated[str, Field(min_length=1, max_length=128)],
+        cancellation_reason: Annotated[str | None, Field(max_length=100)] = None,
+        input_submission_id: Annotated[
+            str | None,
+            Field(min_length=32, max_length=128),
+        ] = None,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"application_id": application_id}
+        if cancellation_reason is not None:
+            arguments["cancellation_reason"] = cancellation_reason
+        if input_submission_id is not None:
+            arguments["input_submission_id"] = input_submission_id
+        return await invoke(
+            ctx,
+            MEETING_ROOM_APPLICATION_CANCEL_PREPARE_CAPABILITY,
+            arguments,
+            idempotency_key,
+            {"oa:write:meeting"},
+        )
+
+    @mcp.tool(
+        name="oa_meeting_room_application_cancel",
+        title="Cancel Authorized OA Meeting-Room Application",
+        meta=interaction_tool_meta(),
+        description=(
+            "Consume one approved authorization, recheck the exact own application, cancel "
+            "it with operation=0, and verify that it left the active My Applications view "
+            "or reached OA's terminal status."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def oa_meeting_room_application_cancel(
+        ctx: Context,
+        authorization_id: Annotated[str, Field(min_length=32, max_length=128)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(
+            ctx,
+            MEETING_ROOM_APPLICATION_CANCEL_CAPABILITY,
+            {"authorization_id": authorization_id},
+            idempotency_key,
+            {"oa:write:meeting"},
         )
 
     @mcp.tool(

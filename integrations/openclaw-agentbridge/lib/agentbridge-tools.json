@@ -4468,6 +4468,306 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
+      "description": "Apply only for a meeting-room time slot; this does not create or send a meeting. Pass the user's purpose, requested room wording, start_time, and end_time. AgentBridge first checks live availability, then opens a prefilled trusted field card whose room field contains only current OA room options. After field submission it validates again and creates a separate final authorization. Use oa_meeting_create_prepare instead when the user asks to create a meeting, invite attendees, or send a meeting notice.",
+      "inputSchema": {
+        "properties": {
+          "end_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Time"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Purpose"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Room"
+          },
+          "start_time": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Time"
+          }
+        },
+        "title": "oa_meeting_room_application_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_application_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_application_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Meeting-Room Application"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, recheck room availability and the OA room rules, submit one standalone room application, and verify the new row in Meeting Room > My Applications. This private commit tool must follow the trusted prepare flow.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_meeting_room_application_createArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_application_create",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_application_createDictOutput",
+        "type": "object"
+      },
+      "title": "Create Authorized OA Meeting-Room Application"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Cancel one exact standalone application owned by the authenticated user. First list My Applications and pass its application_id. AgentBridge refuses applications linked to a full meeting, already terminal applications, rooms currently in use, and elapsed time slots. It collects the cancellation reason in a trusted field card and requires separate final authorization.",
+      "inputSchema": {
+        "properties": {
+          "application_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Application Id",
+            "type": "string"
+          },
+          "cancellation_reason": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cancellation Reason"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          }
+        },
+        "required": [
+          "application_id"
+        ],
+        "title": "oa_meeting_room_application_cancel_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_application_cancel_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_application_cancel_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Meeting-Room Application Cancellation"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization, recheck the exact own application, cancel it with operation=0, and verify that it left the active My Applications view or reached OA's terminal status.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "oa_meeting_room_application_cancelArguments",
+        "type": "object"
+      },
+      "name": "oa_meeting_room_application_cancel",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_meeting_room_application_cancelDictOutput",
+        "type": "object"
+      },
+      "title": "Cancel Authorized OA Meeting-Room Application"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
       "description": "On the first call, pass any subject, requested room wording, start_time, and end_time already supplied by the user. AgentBridge checks live OA room availability before opening a prefilled card with real room options. After field submission it rechecks availability and creates a separate confirmation.",
       "inputSchema": {
         "properties": {

@@ -318,6 +318,10 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_missed_punch_approve", names)
         self.assertIn("oa_meeting_room_availability_list", names)
         self.assertIn("oa_meeting_room_my_applications_list", names)
+        self.assertIn("oa_meeting_room_application_prepare", names)
+        self.assertIn("oa_meeting_room_application_create", names)
+        self.assertIn("oa_meeting_room_application_cancel_prepare", names)
+        self.assertIn("oa_meeting_room_application_cancel", names)
         self.assertIn("oa_meeting_create_prepare", names)
         self.assertIn("oa_meeting_create", names)
         for tool_name in (
@@ -423,12 +427,33 @@ class CentralMcpTests(unittest.TestCase):
         room_applications = next(
             tool for tool in tools if tool["name"] == "oa_meeting_room_my_applications_list"
         )
+        room_application_prepare = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_room_application_prepare"
+        )
+        room_application_create = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_room_application_create"
+        )
+        room_application_cancel_prepare = next(
+            tool
+            for tool in tools
+            if tool["name"] == "oa_meeting_room_application_cancel_prepare"
+        )
+        room_application_cancel = next(
+            tool for tool in tools if tool["name"] == "oa_meeting_room_application_cancel"
+        )
         self.assertTrue(approve["annotations"]["destructiveHint"])
         self.assertFalse(batch_prepare["annotations"]["destructiveHint"])
         self.assertNotIn("affair_id", batch_prepare["inputSchema"]["properties"])
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
         self.assertTrue(room_availability["annotations"]["readOnlyHint"])
         self.assertTrue(room_applications["annotations"]["readOnlyHint"])
+        self.assertFalse(room_application_prepare["annotations"]["destructiveHint"])
+        self.assertTrue(room_application_create["annotations"]["destructiveHint"])
+        self.assertFalse(
+            room_application_cancel_prepare["annotations"]["destructiveHint"]
+        )
+        self.assertTrue(room_application_cancel["annotations"]["destructiveHint"])
+        self.assertIn("does not create or send", room_application_prepare["description"])
         self.assertIn("only_available", room_availability["inputSchema"]["properties"])
         self.assertIn("audit_status", room_applications["inputSchema"]["properties"])
         self.assertNotIn("user_subject", json.dumps(tools))

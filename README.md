@@ -70,11 +70,11 @@ python -m bscli.cli.main --home .bscli capability describe oa.template.list
 python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prepare
 ```
 
-截至 2026-08-30，中央注册表包含 95 个业务能力：
+截至 2026-09-04，中央注册表包含 101 个业务能力：
 
 | 系统 | 数量 | 主要范围 |
 | --- | ---: | --- |
-| 协同办公 | 51 | 模板、流程与意见、证书、组织通讯录、发起、审批、知会、确认、会议、撤销 |
+| 协同办公 | 58 | 模板、流程与意见、证书、组织通讯录、发起、审批、知会、确认、会议、会议室申请与撤销 |
 | 泰华日志 | 5 | 个人日志、团队日志、项目搜索、日志填写与创建 |
 | 语雀部门信息库 | 4 | 知识库、跨库目录、组织搜索、结构化文档读取 |
 | 照明实验室 | 34 | 静态资产、运行态、RTU/单灯告警、能耗、RTU/单灯巡测、真实支路漏电、巡检与检修、报告、RTU 告警受控写入 |
@@ -110,6 +110,8 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 - `oa.addressbook.export`
 - `oa.meeting_room.availability.list`
 - `oa.meeting_room.my_applications.list`
+- `oa.meeting_room.application.prepare` / `application.create`
+- `oa.meeting_room.application.cancel.prepare` / `application.cancel`
 
 写入能力按具体业务流程组织，已覆盖出差、请假、补签、效能数据、差旅费、劳动合同续签、
 知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
@@ -120,7 +122,8 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 
 协同办公详细能力见 [事项能力矩阵](docs/系统适配/协同办公系统/事项能力矩阵.md)、
 [OA 通讯录只读能力](docs/系统适配/协同办公系统/通讯录只读能力.md)和
-[OA 会议室读取能力](docs/系统适配/协同办公系统/会议室读取能力.md)。
+[OA 会议室读取能力](docs/系统适配/协同办公系统/会议室读取能力.md)和
+[OA 会议室申请与撤销能力](docs/系统适配/协同办公系统/会议室申请与撤销能力.md)。
 
 ### 泰华日志能力
 

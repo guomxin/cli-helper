@@ -164,30 +164,18 @@ def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
     if query["audit_status"]:
         search_params["status"] = _AUDIT_STATUS_TO_CODE[query["audit_status"]]
 
-    page = 1
     page_size = min(50, max(1, query["limit"]))
-    source_total: int | None = None
-    source_pages: int | None = None
-    raw_items: list[dict] = []
-    while page <= 20 and len(raw_items) < max(query["limit"], page_size):
-        payload = meeting_ajax(
-            worker,
-            adapter,
-            "getMyApps",
-            [{"page": page, "size": page_size}, search_params],
-        )
-        if not isinstance(payload, dict):
-            raise MeetingRoomContractMismatch("OA getMyApps did not return an object.")
-        data = payload.get("data")
-        page_items = [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
-        raw_items.extend(page_items)
-        source_total = _safe_int(payload.get("total"))
-        source_pages = _safe_int(payload.get("pages"))
-        if not page_items or (source_pages is not None and page >= source_pages):
-            break
-        if source_total is not None and len(raw_items) >= source_total:
-            break
-        page += 1
+    raw_result = query_my_meeting_room_applications(
+        worker,
+        adapter,
+        search_params=search_params,
+        page_size=page_size,
+        maximum_items=max(query["limit"], page_size),
+    )
+    raw_items = raw_result["items"]
+    source_total = raw_result["total"]
+    source_pages = raw_result["pages"]
+    page = raw_result["pages_loaded"]
 
     items = [_public_application(item) for item in raw_items]
     items = [item for item in items if _application_matches(item, query)]
@@ -222,6 +210,56 @@ def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
         },
         "transport": "central_browser_session",
     }
+
+
+def query_my_meeting_room_applications(
+    worker,
+    adapter,
+    *,
+    search_params: dict[str, Any] | None = None,
+    page_size: int = 100,
+    maximum_items: int = 2000,
+) -> dict:
+    """Load the authenticated user's raw meeting-room applications."""
+    page = 1
+    page_size = min(200, max(1, int(page_size)))
+    maximum_items = min(4000, max(1, int(maximum_items)))
+    source_total: int | None = None
+    source_pages: int | None = None
+    raw_items: list[dict] = []
+    while page <= 20 and len(raw_items) < maximum_items:
+        payload = meeting_ajax(
+            worker,
+            adapter,
+            "getMyApps",
+            [{"page": page, "size": page_size}, dict(search_params or {})],
+        )
+        if not isinstance(payload, dict):
+            raise MeetingRoomContractMismatch("OA getMyApps did not return an object.")
+        data = payload.get("data")
+        page_items = (
+            [item for item in data if isinstance(item, dict)]
+            if isinstance(data, list)
+            else []
+        )
+        raw_items.extend(page_items)
+        source_total = _safe_int(payload.get("total"))
+        source_pages = _safe_int(payload.get("pages"))
+        if not page_items or (source_pages is not None and page >= source_pages):
+            break
+        if source_total is not None and len(raw_items) >= source_total:
+            break
+        page += 1
+    return {
+        "items": raw_items[:maximum_items],
+        "total": source_total,
+        "pages": source_pages,
+        "pages_loaded": page,
+    }
+
+
+def public_meeting_room_application(item: dict) -> dict:
+    return _public_application(item)
 
 
 def query_meeting_room_snapshot(
@@ -462,6 +500,9 @@ def _public_busy_intervals(
 
 def _public_application(item: dict) -> dict:
     status_code = str(item.get("appStatus") if item.get("appStatus") is not None else "")
+    usage_status = item.get("usedStatusDisplay")
+    if usage_status is None:
+        usage_status = item.get("usedStatus")
     return {
         "application_id": str(item.get("roomAppId") or item.get("appId") or ""),
         "room_id": str(item.get("roomId") or ""),
@@ -470,13 +511,14 @@ def _public_application(item: dict) -> dict:
         "administrator_names": str(item.get("adminNames") or "").strip(),
         "meeting_id": str(item.get("meetingId") or ""),
         "meeting_name": str(item.get("meetingName") or "").strip(),
+        "description": str(item.get("description") or "").strip(),
         "applied_at": _format_datetime(item.get("appDatetime")),
         "start_time": _format_datetime(item.get("startDatetime")),
         "end_time": _format_datetime(item.get("endDatetime")),
         "audit_status_code": status_code or None,
         "audit_status": _audit_status_name(status_code),
         "audit_status_label": str(item.get("appStatusName") or _AUDIT_CODE_TO_LABEL.get(status_code) or "").strip(),
-        "usage_status_code": str(item.get("usedStatus") if item.get("usedStatus") is not None else "") or None,
+        "usage_status_code": str(usage_status if usage_status is not None else "") or None,
         "usage_status_label": str(item.get("usedStatusName") or "").strip(),
     }
 
