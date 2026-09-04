@@ -454,6 +454,8 @@ class CentralMcpTests(unittest.TestCase):
         )
         self.assertTrue(room_application_cancel["annotations"]["destructiveHint"])
         self.assertIn("does not create or send", room_application_prepare["description"])
+        self.assertIn("Default to this tool", room_application_prepare["description"])
+        self.assertIn("Do not use this tool", prepare_meeting["description"])
         self.assertIn("only_available", room_availability["inputSchema"]["properties"])
         self.assertIn("audit_status", room_applications["inputSchema"]["properties"])
         self.assertNotIn("user_subject", json.dumps(tools))
@@ -509,6 +511,7 @@ class CentralMcpTests(unittest.TestCase):
             "room",
             "start_time",
             "end_time",
+            "meeting_creation_intent",
             "input_submission_id",
         ):
             self.assertIn(field_name, meeting_prepare_schema)
@@ -552,6 +555,107 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["capability_name"], "oa.document.certificate.search")
         self.assertNotIn("name", call["arguments"])
         self.assertEqual(call["arguments"]["names"], ["系统甲V1.0", "系统乙V1.0"])
+
+    def test_meeting_create_prepare_rejects_room_only_first_call(self):
+        with self._server() as (service, _store, token, client):
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=193,
+                token=token,
+                params={
+                    "name": "oa_meeting_create_prepare",
+                    "arguments": {
+                        "room": "三号会议室",
+                        "start_time": "2026-09-07 10:00",
+                        "end_time": "2026-09-07 12:00",
+                    },
+                },
+            )
+
+        result = response.json()["result"]
+        self.assertTrue(result["isError"])
+        self.assertIn("oa_meeting_room_application_prepare", response.text)
+        service.invoke.assert_not_called()
+
+    def test_meeting_create_prepare_accepts_explicit_intent_without_forwarding_guard(self):
+        with self._server() as (service, store, _token, client):
+            token = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                label="meeting-client",
+                scopes=["oa:read", "oa:write:meeting"],
+                ttl_seconds=3600,
+            )["token"]
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "meeting-prepare",
+                "operationId": "meeting-operation",
+                "status": "requires_user_action",
+                "result": None,
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=194,
+                token=token,
+                params={
+                    "name": "oa_meeting_create_prepare",
+                    "arguments": {
+                        "subject": "路由测试",
+                        "room": "三号会议室",
+                        "start_time": "2026-09-07 10:00",
+                        "end_time": "2026-09-07 12:00",
+                        "meeting_creation_intent": True,
+                    },
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"], response.json())
+        call = service.invoke.call_args.kwargs
+        self.assertEqual(call["capability_name"], "oa.meeting.create.prepare")
+        self.assertNotIn("meeting_creation_intent", call["arguments"])
+
+    def test_meeting_create_prepare_continuation_does_not_repeat_intent_guard(self):
+        with self._server() as (service, store, _token, client):
+            token = store.issue(
+                user_subject="user-a",
+                expected_principal_ref="Alice",
+                label="meeting-client",
+                scopes=["oa:read", "oa:write:meeting"],
+                ttl_seconds=3600,
+            )["token"]
+            service.invoke.return_value = {
+                "protocolVersion": "0.1",
+                "requestId": "meeting-continue",
+                "operationId": "meeting-operation",
+                "status": "requires_user_action",
+                "result": None,
+                "error": None,
+                "evidenceRefs": [],
+                "nextAction": None,
+                "reused": False,
+            }
+            response = self._request(
+                client,
+                "tools/call",
+                request_id=195,
+                token=token,
+                params={
+                    "name": "oa_meeting_create_prepare",
+                    "arguments": {"input_submission_id": "s" * 32},
+                },
+            )
+
+        self.assertFalse(response.json()["result"]["isError"], response.json())
+        self.assertEqual(
+            service.invoke.call_args.kwargs["arguments"],
+            {"input_submission_id": "s" * 32},
+        )
 
     def test_certificate_tool_forwards_structured_documents(self):
         with self._server() as (service, _store, token, client):

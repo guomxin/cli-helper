@@ -2640,13 +2640,15 @@ def create_central_mcp_server(
         title="Prepare OA Meeting-Room Application",
         meta=interaction_tool_meta(),
         description=(
-            "Apply only for a meeting-room time slot; this does not create or send a "
-            "meeting. Pass the user's purpose, requested room wording, start_time, and "
-            "end_time. AgentBridge first checks live availability, then opens a prefilled "
-            "trusted field card whose room field contains only current OA room options. "
-            "After field submission it validates again and creates a separate final "
-            "authorization. Use oa_meeting_create_prepare instead when the user asks to "
-            "create a meeting, invite attendees, or send a meeting notice."
+            "Default to this tool when the user only asks to apply for, book, or reserve "
+            "a meeting-room time slot, even if they say room number and time but no "
+            "purpose. This does not create or send a meeting. Pass the user's purpose, "
+            "requested room wording, start_time, and end_time. AgentBridge first checks "
+            "live availability, then opens a prefilled trusted field card whose room "
+            "field contains only current OA room options. After field submission it "
+            "validates again and creates a separate final authorization. Use "
+            "oa_meeting_create_prepare only when the user explicitly asks to create or "
+            "send a meeting, invite attendees, or send a meeting notice."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -2794,10 +2796,15 @@ def create_central_mcp_server(
         title="Prepare OA Meeting Creation",
         meta=interaction_tool_meta(),
         description=(
-            "On the first call, pass any subject, requested room wording, start_time, and "
-            "end_time already supplied by the user. AgentBridge checks live OA room "
-            "availability before opening a prefilled card with real room options. After "
-            "field submission it rechecks availability and creates a separate confirmation."
+            "Create and send a full OA meeting, optionally including a room reservation. "
+            "Do not use this tool when the user only asks to apply for, book, or reserve a "
+            "meeting room; use oa_meeting_room_application_prepare for that request. On "
+            "the first call, set meeting_creation_intent=true only when the user explicitly "
+            "asks to create or send a meeting, invite attendees, or send a meeting notice, "
+            "and pass any subject, requested room wording, start_time, and end_time already "
+            "supplied by the user. AgentBridge checks live OA room availability before "
+            "opening a prefilled full-meeting card with real room options. After field "
+            "submission it rechecks availability and creates a separate confirmation."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -2813,12 +2820,27 @@ def create_central_mcp_server(
         room: Annotated[str | None, Field(max_length=100)] = None,
         start_time: Annotated[str | None, Field(max_length=32)] = None,
         end_time: Annotated[str | None, Field(max_length=32)] = None,
+        meeting_creation_intent: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Set true on the first call only when the user explicitly requested "
+                    "creating or sending a full meeting. A room-only reservation is false."
+                )
+            ),
+        ] = None,
         input_submission_id: Annotated[
             str | None,
             Field(min_length=32, max_length=128),
         ] = None,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
     ) -> dict[str, Any]:
+        if input_submission_id is None and meeting_creation_intent is not True:
+            raise ValueError(
+                "Full meeting creation requires meeting_creation_intent=true. "
+                "For a room-only booking or reservation, call "
+                "oa_meeting_room_application_prepare instead."
+            )
         arguments: dict[str, Any] = {}
         for name, value in (
             ("subject", subject),

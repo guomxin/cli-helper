@@ -38,6 +38,8 @@ class SeeyonMeetingTests(unittest.TestCase):
         )
 
         fields = {item["name"]: item for item in schema["fields"]}
+        self.assertEqual(schema["title"], "填写会议创建信息")
+        self.assertIn("不是独立会议室申请", schema["notice"])
         self.assertEqual(fields["subject"]["value"], "智能体测试")
         self.assertEqual(fields["start_time"]["value"], "2026-07-20 14:00")
         self.assertEqual(fields["end_time"]["value"], "2026-07-20 16:00")

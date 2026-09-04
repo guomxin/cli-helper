@@ -36,11 +36,11 @@ MEETING_PREPARE_INPUT_SCHEMA = {
 
 MEETING_FIELD_CARD_SCHEMA = {
     "schema_version": "agentbridge.oa_meeting_create_fields.v1",
-    "title": "填写会议预订信息",
+    "title": "填写会议创建信息",
     "system": "致远 OA",
-    "effect": "创建并发送一项会议安排",
+    "effect": "创建并发送完整会议，可同时占用会议室",
     "submit_label": "提交字段",
-    "notice": "字段提交后还需单独授权；授权前不会预订会议室或发送会议。",
+    "notice": "这是会议创建流程，不是独立会议室申请。字段提交后还需单独授权；授权前不会创建或发送会议。",
     "fields": [
         {
             "name": "subject",
@@ -156,7 +156,7 @@ def build_meeting_field_card_schema(adapter, worker, arguments: dict) -> dict:
         for part in (
             checked_note,
             room_match_note,
-            "提交字段后会再次校验；授权前不会预订会议室或发送会议。",
+            "这是会议创建流程，不是独立会议室申请。提交字段后会再次校验；授权前不会创建或发送会议。",
         )
         if part
     )

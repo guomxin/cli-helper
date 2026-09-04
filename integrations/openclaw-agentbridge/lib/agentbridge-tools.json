@@ -4468,7 +4468,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Apply only for a meeting-room time slot; this does not create or send a meeting. Pass the user's purpose, requested room wording, start_time, and end_time. AgentBridge first checks live availability, then opens a prefilled trusted field card whose room field contains only current OA room options. After field submission it validates again and creates a separate final authorization. Use oa_meeting_create_prepare instead when the user asks to create a meeting, invite attendees, or send a meeting notice.",
+      "description": "Default to this tool when the user only asks to apply for, book, or reserve a meeting-room time slot, even if they say room number and time but no purpose. This does not create or send a meeting. Pass the user's purpose, requested room wording, start_time, and end_time. AgentBridge first checks live availability, then opens a prefilled trusted field card whose room field contains only current OA room options. After field submission it validates again and creates a separate final authorization. Use oa_meeting_create_prepare only when the user explicitly asks to create or send a meeting, invite attendees, or send a meeting notice.",
       "inputSchema": {
         "properties": {
           "end_time": {
@@ -4768,7 +4768,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "On the first call, pass any subject, requested room wording, start_time, and end_time already supplied by the user. AgentBridge checks live OA room availability before opening a prefilled card with real room options. After field submission it rechecks availability and creates a separate confirmation.",
+      "description": "Create and send a full OA meeting, optionally including a room reservation. Do not use this tool when the user only asks to apply for, book, or reserve a meeting room; use oa_meeting_room_application_prepare for that request. On the first call, set meeting_creation_intent=true only when the user explicitly asks to create or send a meeting, invite attendees, or send a meeting notice, and pass any subject, requested room wording, start_time, and end_time already supplied by the user. AgentBridge checks live OA room availability before opening a prefilled full-meeting card with real room options. After field submission it rechecks availability and creates a separate confirmation.",
       "inputSchema": {
         "properties": {
           "end_time": {
@@ -4810,6 +4810,19 @@
             ],
             "default": null,
             "title": "Input Submission Id"
+          },
+          "meeting_creation_intent": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Set true on the first call only when the user explicitly requested creating or sending a full meeting. A room-only reservation is false.",
+            "title": "Meeting Creation Intent"
           },
           "room": {
             "anyOf": [
