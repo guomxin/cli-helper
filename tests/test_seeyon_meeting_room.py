@@ -1,16 +1,44 @@
 import json
 from urllib.parse import parse_qs
 import unittest
+from unittest.mock import patch
 
 from bscli.adapters.seeyon_meeting_room import (
     MeetingRoomContractMismatch,
     list_meeting_room_availability,
     list_my_meeting_room_applications,
+    query_my_meeting_room_applications,
+    response_json,
     resolve_room,
 )
 
 
 class SeeyonMeetingRoomTests(unittest.TestCase):
+    def test_null_response_is_only_allowed_for_void_write_acknowledgements(self):
+        response = {"status": 200, "url": "https://oa.example/seeyon/ajax.do", "json": None, "text": "null"}
+        with self.assertRaises(MeetingRoomContractMismatch):
+            response_json(response, context="getMyApps")
+        self.assertEqual(response_json(response, context="cancelRoomApp", allow_empty_success=True), {})
+        with self.assertRaises(MeetingRoomContractMismatch):
+            response_json({**response, "status": 500}, context="cancelRoomApp", allow_empty_success=True)
+
+    def test_raw_application_completeness_rejects_truncation_duplicates_and_total_changes(self):
+        row1, row2 = {"roomAppId": "1"}, {"roomAppId": "2"}
+        cases = [
+            ([{"data": [], "total": 0, "pages": 0}], 20, True),
+            ([{"data": [row1, row2], "total": 2, "pages": 1}], 1, False),
+            ([{"data": [row1, row1], "total": 2, "pages": 1}], 20, False),
+            ([{"data": [row1], "total": 1, "pages": 1}], 20, True),
+            ([{"data": [row1], "total": 3, "pages": 2},
+              {"data": [row2], "total": 2, "pages": 2}], 20, False),
+        ]
+        for payloads, maximum, expected in cases:
+            with self.subTest(payloads=payloads, maximum=maximum), patch(
+                "bscli.adapters.seeyon_meeting_room.meeting_ajax", side_effect=payloads,
+            ):
+                result = query_my_meeting_room_applications(None, None, maximum_items=maximum)
+                self.assertEqual(result["complete"], expected)
+
     def test_availability_returns_booking_owner_without_meeting_details(self):
         worker = FakeMeetingRoomWorker()
 

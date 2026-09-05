@@ -257,6 +257,7 @@ def query_my_meeting_room_applications(
     source_total: int | None = None
     source_pages: int | None = None
     raw_items: list[dict] = []
+    observed_totals: set[int] = set()
     while page <= 20 and len(raw_items) < maximum_items:
         payload = meeting_ajax(
             worker,
@@ -267,24 +268,33 @@ def query_my_meeting_room_applications(
         if not isinstance(payload, dict):
             raise MeetingRoomContractMismatch("OA getMyApps did not return an object.")
         data = payload.get("data")
-        page_items = (
-            [item for item in data if isinstance(item, dict)]
-            if isinstance(data, list)
-            else []
-        )
+        if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+            raise MeetingRoomContractMismatch("OA getMyApps returned an invalid data list.")
+        page_items = data
         raw_items.extend(page_items)
         source_total = _safe_int(payload.get("total"))
+        if source_total is not None:
+            observed_totals.add(source_total)
         source_pages = _safe_int(payload.get("pages"))
         if not page_items or (source_pages is not None and page >= source_pages):
             break
         if source_total is not None and len(raw_items) >= source_total:
             break
         page += 1
+    ids = [str(item.get("roomAppId") or item.get("appId") or "") for item in raw_items]
+    complete = (
+        source_total is not None
+        and len(observed_totals) == 1
+        and source_total == len(raw_items) == len(set(ids))
+        and all(ids)
+        and len(raw_items) <= maximum_items
+    )
     return {
         "items": raw_items[:maximum_items],
         "total": source_total,
         "pages": source_pages,
         "pages_loaded": page,
+        "complete": complete,
     }
 
 
@@ -325,6 +335,7 @@ def meeting_ajax(
     arguments: list[Any],
     *,
     allow_empty_success: bool = False,
+    response_diagnostics: dict | None = None,
 ) -> Any:
     url = urljoin(
         adapter.base_url,
@@ -342,6 +353,18 @@ def meeting_ajax(
         headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
         body=body,
     )
+    if response_diagnostics is not None:
+        text = str(response.get("text") or "").strip()
+        response_diagnostics.update({
+            "http_status": int(response.get("status") or 0),
+            "content_type": str(response.get("content_type") or "")[:120],
+            "body_kind": (
+                "empty" if not text else "json_null" if text == "null"
+                else "parsed_json" if response.get("json") is not None
+                else "unparsed_body"
+            ),
+            "body_length": len(text),
+        })
     data = response_json(
         response,
         context=manager_method,
@@ -510,7 +533,7 @@ def response_json(
         raise MeetingRoomContractMismatch(f"OA {context} returned HTTP {status}.")
     data = response.get("json")
     if data is None:
-        if allow_empty_success and not response_text.strip():
+        if allow_empty_success and response_text.strip() in {"", "null"}:
             return {}
         raise MeetingRoomContractMismatch(f"OA {context} did not return JSON.")
     return data

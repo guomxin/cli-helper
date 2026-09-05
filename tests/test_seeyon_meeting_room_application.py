@@ -229,6 +229,67 @@ class SeeyonMeetingRoomApplicationTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 6)
         self.assertEqual(worker.mutations, ["cancelRoomApp"])
 
+    def test_cancel_response_errors_do_not_skip_authoritative_readback(self):
+        for response in ("null", "unexpected response", "transport-error", "http-error", "rejected"):
+            with self.subTest(response=response):
+                worker = FakeWorker(initial_apps=[_application("cancel-me")], cancel_response=response)
+                result = cancel_meeting_room_application(
+                    FakeAdapter(), worker, _cancel_plan(), enter_commit_boundary=lambda: None,
+                )
+                self.assertTrue(result["meeting_room_application_canceled"])
+                self.assertEqual(result["verification"]["state"], "absent_from_my_applications")
+                self.assertEqual(worker.mutations, ["cancelRoomApp"])
+                ack = result["acknowledgement"]
+                self.assertEqual(ack["stage"], "cancel_response")
+                if response == "null":
+                    self.assertEqual(ack["body_kind"], "json_null")
+                    self.assertEqual(ack["state"], "received")
+                else:
+                    self.assertEqual(ack["state"], "unconfirmed")
+
+    def test_cancel_bad_response_and_active_readback_remain_unknown_without_retry(self):
+        for response in ("null", "unexpected response", "transport-error", "http-error", "rejected"):
+            with self.subTest(response=response), patch("bscli.adapters.seeyon_meeting_room_application.time.sleep"):
+                worker = FakeWorker(
+                    initial_apps=[_application("cancel-me")], cancel_response=response,
+                    stale_cancel_readback=True,
+                )
+                with self.assertRaisesRegex(MeetingRoomApplicationOutcomeUnknown, "Cancellation readback"):
+                    cancel_meeting_room_application(
+                        FakeAdapter(), worker, _cancel_plan(), enter_commit_boundary=lambda: None,
+                    )
+                self.assertEqual(worker.mutations, ["cancelRoomApp"])
+                self.assertEqual(worker.manager_methods.count("getMyApps"), 8)
+
+    def test_cancel_incomplete_listing_cannot_prove_absence(self):
+        payloads = ({}, {"data": None}, {"data": [None]},
+                    {"data": [], "total": 10, "pages": 1},
+                    {"data": [], "pages": 1})
+        for payload in payloads:
+            with self.subTest(payload=payload), patch("bscli.adapters.seeyon_meeting_room_application.time.sleep"):
+                worker = FakeWorker(initial_apps=[_application("cancel-me")], cancel_listing=payload)
+                with self.assertRaisesRegex(MeetingRoomApplicationOutcomeUnknown, "my_applications=MeetingRoomContractMismatch"):
+                    cancel_meeting_room_application(
+                        FakeAdapter(), worker, _cancel_plan(), enter_commit_boundary=lambda: None,
+                    )
+                self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
+    def test_cancel_invalid_snapshot_cannot_prove_absence(self):
+        payloads = ({}, {"roomAppsInfo": []}, {"roomsInfo": [_room()]},
+                    {"roomsInfo": [_room()], "roomAppsInfo": [None]},
+                    {"roomsInfo": [], "roomAppsInfo": []})
+        for payload in payloads:
+            with self.subTest(payload=payload), patch("bscli.adapters.seeyon_meeting_room_application.time.sleep"):
+                worker = FakeWorker(
+                    initial_apps=[_application("cancel-me")], stale_cancel_readback=True,
+                    expose_apps_in_room_snapshot=True, cancel_snapshot=payload,
+                )
+                with self.assertRaisesRegex(MeetingRoomApplicationOutcomeUnknown, "room_snapshot=MeetingRoomContractMismatch"):
+                    cancel_meeting_room_application(
+                        FakeAdapter(), worker, _cancel_plan(), enter_commit_boundary=lambda: None,
+                    )
+                self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
     def test_cancel_uses_room_snapshot_when_my_applications_is_stale(self):
         worker = FakeWorker(
             initial_apps=[_application("cancel-me")],
@@ -362,6 +423,9 @@ class FakeWorker:
         empty_cancel_response=False,
         cancel_readback_failures=0,
         cancel_room_snapshot_failures=0,
+        cancel_response=None,
+        cancel_listing=None,
+        cancel_snapshot=None,
         events=None,
     ):
         self.rooms = list(rooms) if rooms is not None else [_room()]
@@ -373,6 +437,9 @@ class FakeWorker:
         self.empty_cancel_response = empty_cancel_response
         self.cancel_readback_failures = cancel_readback_failures
         self.cancel_room_snapshot_failures = cancel_room_snapshot_failures
+        self.cancel_response = cancel_response
+        self.cancel_listing = cancel_listing
+        self.cancel_snapshot = cancel_snapshot
         self.canceled_application_ids = set()
         self.events = events if events is not None else []
         self.manager_methods = []
@@ -385,6 +452,8 @@ class FakeWorker:
         arguments = json.loads(fields["arguments"][0])
         self.manager_methods.append(manager_method)
         if manager_method == "roomListInfo":
+            if self.canceled_application_ids and self.cancel_snapshot is not None:
+                return _response(self.cancel_snapshot, url)
             if self.canceled_application_ids and self.cancel_room_snapshot_failures:
                 self.cancel_room_snapshot_failures -= 1
                 raise RuntimeError("transient room snapshot readback failure")
@@ -408,6 +477,8 @@ class FakeWorker:
         if manager_method == "validateRoomApps":
             return _response({"success": True, "data": []}, url)
         if manager_method == "getMyApps":
+            if self.canceled_application_ids and self.cancel_listing is not None:
+                return _response(self.cancel_listing, url)
             if self.canceled_application_ids and self.cancel_readback_failures:
                 self.cancel_readback_failures -= 1
                 raise RuntimeError("transient application readback failure")
@@ -447,6 +518,14 @@ class FakeWorker:
                     "json": None,
                     "text": "",
                 }
+            if self.cancel_response == "transport-error":
+                raise ConnectionError("acknowledgement lost")
+            if self.cancel_response == "http-error":
+                return {"status": 502, "url": url, "text": "Bad Gateway", "json": None}
+            if self.cancel_response == "rejected":
+                return _response({"success": False, "message": "rejected"}, url)
+            if self.cancel_response is not None:
+                return {"status": 200, "url": url, "text": self.cancel_response, "json": None}
             return _response({"success": True}, url)
         raise AssertionError(f"unexpected method: {manager_method} {arguments}")
 

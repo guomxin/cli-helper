@@ -416,6 +416,7 @@ def cancel_meeting_room_application(
     target_was_in_room_snapshot = _snapshot_contains_application(snapshot, target)
 
     enter_commit_boundary()
+    acknowledgement = {"stage": "cancel_response", "state": "received"}
     try:
         response = meeting_ajax(
             worker,
@@ -429,8 +430,13 @@ def cancel_meeting_room_application(
                 }
             ],
             allow_empty_success=True,
+            response_diagnostics=acknowledgement,
         )
         _ensure_write_accepted(response, "meeting-room application cancellation")
+    except Exception as exc:
+        # The write may already have taken effect. Never replay it; verify independently.
+        acknowledgement.update({"state": "unconfirmed", "error_type": type(exc).__name__})
+    try:
         verification = _verify_cancellation(
             worker,
             adapter,
@@ -443,6 +449,7 @@ def cancel_meeting_room_application(
             "meeting_room_application_canceled": True,
             "canceled_count": 1,
             "target": target,
+            "acknowledgement": acknowledgement,
             "verification": {
                 "confirmed": True,
                 "method": "my_application_terminal_readback",
@@ -450,12 +457,17 @@ def cancel_meeting_room_application(
             },
             "transport": "central_http_session",
         }
-    except MeetingRoomApplicationOutcomeUnknown:
-        raise
+    except MeetingRoomApplicationOutcomeUnknown as exc:
+        raise MeetingRoomApplicationOutcomeUnknown(
+            f"Cancellation readback: {exc} Response state: "
+            f"{acknowledgement['state']}; "
+            f"response error: {acknowledgement.get('error_type', 'none')}."
+        ) from exc
     except Exception as exc:
         raise MeetingRoomApplicationOutcomeUnknown(
             "The OA meeting-room cancellation boundary was crossed, but an "
-            f"unexpected verification error occurred ({type(exc).__name__})."
+            f"unexpected readback error occurred ({type(exc).__name__}); "
+            f"response error: {acknowledgement.get('error_type', 'none')}."
         ) from exc
 
 
@@ -716,7 +728,10 @@ def _verify_cancellation(
     saw_active_application = False
     for attempt in range(attempts):
         try:
-            rows = query_my_meeting_room_applications(worker, adapter)["items"]
+            listing = query_my_meeting_room_applications(worker, adapter)
+            rows = listing["items"]
+            if not listing["complete"]:
+                raise MeetingRoomContractMismatch("Cancellation requires a complete application listing.")
         except Exception as exc:
             read_error_count += 1
             last_read_errors["my_applications"] = type(exc).__name__
@@ -753,6 +768,7 @@ def _verify_cancellation(
                     start_ms=_datetime_ms(target["start_time"]),
                     end_ms=_datetime_ms(target["end_time"]),
                 )
+                target_still_in_snapshot = _snapshot_contains_application(snapshot, target)
             except Exception as exc:
                 read_error_count += 1
                 last_read_errors["room_snapshot"] = type(exc).__name__
@@ -761,7 +777,7 @@ def _verify_cancellation(
                 )
             else:
                 last_read_errors.pop("room_snapshot", None)
-                if not _snapshot_contains_application(snapshot, target):
+                if not target_still_in_snapshot:
                     return {
                         "state": "absent_from_room_snapshot",
                         "readback_attempts": attempt + 1,
@@ -794,9 +810,16 @@ def _snapshot_contains_application(snapshot: dict, target: dict) -> bool:
     room_id = str(target.get("room_id") or "")
     if not application_id or not room_id:
         return False
-    apps = snapshot.get("roomAppsInfo") if isinstance(snapshot, dict) else []
-    if not isinstance(apps, list):
-        return False
+    apps = snapshot.get("roomAppsInfo")
+    rooms = snapshot.get("roomsInfo")
+    if (
+        not isinstance(apps, list)
+        or any(not isinstance(item, dict) or not _raw_application_id(item)
+               or not item.get("roomId") for item in apps)
+        or not isinstance(rooms, list)
+        or not any(isinstance(room, dict) and str(room.get("roomId")) == room_id for room in rooms)
+    ):
+        raise MeetingRoomContractMismatch("Cancellation requires a complete target-room snapshot.")
     return any(
         isinstance(item, dict)
         and _raw_application_id(item) == application_id
