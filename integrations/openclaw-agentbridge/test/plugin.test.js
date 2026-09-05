@@ -7,7 +7,12 @@ import {
 } from "../lib/coordinator.js";
 import { normalizeInteraction } from "../lib/interaction.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
-import { createAgentBridgeProxyTools } from "../lib/proxy-tools.js";
+import {
+  AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
+  AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES,
+  createAgentBridgeProxyTools,
+  isIndependentTaskEntryTool,
+} from "../lib/proxy-tools.js";
 import {
   CARD_ORIGIN,
   CARD_URL,
@@ -26,6 +31,47 @@ function coordinatorLease() {
     },
   };
 }
+
+test("classifies governed write preparation as an independent task entry", () => {
+  const expected = AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES.filter(
+    (name) => name.endsWith("_prepare") && name !== "agentbridge_task_plan_prepare",
+  );
+
+  assert.deepEqual(AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES, expected);
+  assert.equal(
+    isIndependentTaskEntryTool("oa_meeting_room_application_cancel_prepare"),
+    true,
+  );
+  assert.equal(isIndependentTaskEntryTool("oa_overtime_approval_prepare"), true);
+  assert.equal(
+    isIndependentTaskEntryTool("taihua_work_log_create_prepare"),
+    true,
+  );
+  assert.equal(isIndependentTaskEntryTool("agentbridge_task_plan_prepare"), false);
+  assert.equal(isIndependentTaskEntryTool("oa_session_login"), false);
+  assert.equal(isIndependentTaskEntryTool("oa_workflow_pending_list"), false);
+});
+
+test("releases an independent write binding when its task becomes terminal", () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null,
+  });
+  const sessionKey =
+    "agent:main:agentbridge-workspace:direct:account-independent";
+  const toolName = "oa_meeting_room_application_cancel_prepare";
+  const taskId = "task-independent-terminal-1234567890";
+
+  assert.equal(
+    coordinator.bindIndependentTask(sessionKey, toolName, taskId),
+    true,
+  );
+  assert.equal(coordinator.taskIdForBusinessCall(sessionKey, toolName), taskId);
+
+  coordinator.markTaskTerminal(taskId, "succeeded");
+
+  assert.equal(coordinator.taskIdForBusinessCall(sessionKey, toolName), null);
+});
 
 test("injects bounded same-user context only for explicit cross-end references", async () => {
   const calls = [];
@@ -803,7 +849,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.84",
+      hostVersion: "0.4.85",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1221,7 +1267,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.84",
+        hostVersion: "0.4.85",
       },
     },
   });
@@ -1405,7 +1451,7 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
   );
 });
 
-test("uses the shared Workspace turn as a local task-key fast path", async () => {
+test("splits governed writes from prerequisite Workspace reads and keeps each write stable", async () => {
   const sharedState = createInteractionSharedState();
   const requests = [];
   const pluginConfig = {
@@ -1424,11 +1470,17 @@ test("uses the shared Workspace turn as a local task-key fast path", async () =>
     const body = JSON.parse(options.body);
     requests.push(body);
     const name = body.params?.name;
+    const taskKey = body.params?.arguments?.host_task_key || "";
+    const ensuredTaskId = taskKey.includes("call-cancel-fields")
+      ? "task-meeting-cancel-1234567890"
+      : taskKey.includes("call-revoke")
+        ? "task-workflow-revoke-1234567890"
+        : "task-workspace-turn-1234567890";
     const structuredContent =
       name === "agentbridge_host_task_ensure"
         ? {
             status: "succeeded",
-            task: { taskId: "task-workspace-turn-1234567890" },
+            task: { taskId: ensuredTaskId },
           }
         : name === "agentbridge_host_coordinator_lease_acquire"
           ? {
@@ -1505,6 +1557,43 @@ test("uses the shared Workspace turn as a local task-key fast path", async () =>
   await secondTools
     .find((tool) => tool.name === "oa_workflow_sent_list")
     .execute("tool-prepare", { limit: 5 });
+  const cancelFieldTools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+    runId: "call-cancel-fields|fc-cancel-fields",
+  });
+  runtime.hooks.before_tool_call(
+    {
+      toolCallId: "tool-cancel-fields",
+      runId: "call-cancel-fields|fc-cancel-fields",
+      toolName: "oa_meeting_room_application_cancel_prepare",
+    },
+    { sessionKey },
+  );
+  await cancelFieldTools
+    .find((tool) => tool.name === "oa_meeting_room_application_cancel_prepare")
+    .execute("tool-cancel-fields", {
+      application_id: "meeting-application-123",
+    });
+  const cancelAuthorizationTools = runtime.toolFactory({
+    sessionKey,
+    messageChannel: "webchat",
+    runId: "call-cancel-authorization|fc-cancel-authorization",
+  });
+  runtime.hooks.before_tool_call(
+    {
+      toolCallId: "tool-cancel-authorization",
+      runId: "call-cancel-authorization|fc-cancel-authorization",
+      toolName: "oa_meeting_room_application_cancel_prepare",
+    },
+    { sessionKey },
+  );
+  await cancelAuthorizationTools
+    .find((tool) => tool.name === "oa_meeting_room_application_cancel_prepare")
+    .execute("tool-cancel-authorization", {
+      application_id: "meeting-application-123",
+      reason: "智能体测试",
+    });
   const revokeTools = runtime.toolFactory({
     sessionKey,
     messageChannel: "webchat",
@@ -1525,7 +1614,7 @@ test("uses the shared Workspace turn as a local task-key fast path", async () =>
   const taskEnsures = requests.filter(
     (request) => request.params?.name === "agentbridge_host_task_ensure",
   );
-  assert.equal(taskEnsures.length, 3);
+  assert.equal(taskEnsures.length, 4);
   assert.deepEqual(
     taskEnsures.map(
       (request) => request.params.arguments.host_task_key,
@@ -1533,12 +1622,35 @@ test("uses the shared Workspace turn as a local task-key fast path", async () =>
     [
       `${sessionKey}|workspace:request-123456`,
       `${sessionKey}|workspace:request-123456`,
+      `${sessionKey}|call-cancel-fields|fc-cancel-fields`,
       `${sessionKey}|call-revoke|fc-revoke`,
     ],
   );
   assert.deepEqual(
     taskEnsures.map((request) => request.params.arguments.task_scope),
-    ["user_turn", "user_turn", "independent"],
+    ["user_turn", "user_turn", "independent", "independent"],
+  );
+  const cancellationCalls = requests.filter(
+    (request) =>
+      request.params?.name === "oa_meeting_room_application_cancel_prepare",
+  );
+  assert.equal(cancellationCalls.length, 2);
+  assert.deepEqual(
+    cancellationCalls.map(
+      (request) => request.params._meta["io.agentbridge/task"].taskId,
+    ),
+    [
+      "task-meeting-cancel-1234567890",
+      "task-meeting-cancel-1234567890",
+    ],
+  );
+  assert.equal(
+    cancellationCalls.some(
+      (request) =>
+        request.params._meta["io.agentbridge/task"].taskId ===
+        "task-workspace-turn-1234567890",
+    ),
+    false,
   );
 });
 
@@ -2217,7 +2329,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.84",
+      hostVersion: "0.4.85",
     },
   });
   assert.equal(

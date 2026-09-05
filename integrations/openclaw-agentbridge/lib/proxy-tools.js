@@ -47,9 +47,14 @@ export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
 const AGENTBRIDGE_GOVERNED_ENTRY_TOOLS = new Set(
   AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
 );
-const INDEPENDENT_WORKSPACE_TASK_TOOLS = new Set([
-  "oa_workflow_revoke_prepare",
-]);
+export const AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES = Object.freeze(
+  AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES.filter(
+    (name) => name.endsWith("_prepare") && name !== "agentbridge_task_plan_prepare",
+  ),
+);
+const AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOLS = new Set(
+  AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES,
+);
 const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
 const SAFE_MCP_RETRY_DELAYS_MS = Object.freeze([500, 2_000]);
 const UNREFERENCED_FAILURE_STATUSES = new Set([
@@ -80,6 +85,10 @@ export const AGENTBRIDGE_AGENT_FACING_TOOL_NAMES = Object.freeze([
   ...AGENTBRIDGE_AGENT_FACING_TOOL_CATALOG.map((tool) => tool.name),
 ]);
 export const AGENTBRIDGE_PROXY_TOOL_NAMES = AGENTBRIDGE_AGENT_FACING_TOOL_NAMES;
+
+export function isIndependentTaskEntryTool(name) {
+  return AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOLS.has(String(name || ""));
+}
 
 export function createAgentBridgeProxyTools({
   context,
@@ -525,7 +534,8 @@ async function resolveTaskId({
   if (resumedTaskId) {
     return resumedTaskId;
   }
-  const sharedTurnRef = INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name)
+  const independentTaskEntry = isIndependentTaskEntryTool(descriptor.name);
+  const sharedTurnRef = independentTaskEntry
     ? null
     : boundedText(
         taskRunRefResolver?.(toolCallId, sessionKey, descriptor.name),
@@ -587,7 +597,7 @@ async function resolveTaskId({
             ]
           : ["direct_status", "trusted_interaction"],
         task_scope: workspaceSession
-          ? INDEPENDENT_WORKSPACE_TASK_TOOLS.has(descriptor.name) ||
+          ? independentTaskEntry ||
             taskScopeResolver?.(sessionKey, descriptor.name) === "independent"
             ? "independent"
             : "user_turn"

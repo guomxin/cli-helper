@@ -14,6 +14,7 @@ import {
 import {
   collectTaskReferences,
   hostContextMeta,
+  isIndependentTaskEntryTool,
   TASK_CONTEXT_META_KEY,
 } from "./proxy-tools.js";
 
@@ -62,9 +63,6 @@ const PREPARED_DOCUMENT_NATIVE_ATTEMPTS = 2;
 const PREPARED_DOCUMENT_RETRY_DELAY_MS = 1_000;
 const PREPARED_DOCUMENT_RECEIPT_TTL_MS = 10 * 60 * 1000;
 const MAX_PREPARED_DOCUMENT_RECEIPTS = 1_000;
-const INDEPENDENT_TASK_ENTRY_TOOLS = new Set([
-  "oa_workflow_revoke_prepare",
-]);
 const LOGIN_READ_TOOLS = new Map([
   [
     "oa_workflow_pending_list",
@@ -465,7 +463,7 @@ export class InteractionCoordinator {
       return planningRepair.taskRunRef;
     }
     if (
-      !INDEPENDENT_TASK_ENTRY_TOOLS.has(String(toolName || "")) &&
+      !isIndependentTaskEntryTool(toolName) &&
       recent?.taskRunRef
     ) {
       return recent.taskRunRef;
@@ -984,9 +982,9 @@ export class InteractionCoordinator {
   }
 
   taskIdForBusinessCall(sessionKey, toolName = null) {
-    if (INDEPENDENT_TASK_ENTRY_TOOLS.has(toolName)) {
-      // Revoke is a new user-visible job even when it references the workflow
-      // produced by a previous submission task.
+    if (isIndependentTaskEntryTool(toolName)) {
+      // A governed write is a new user-visible job even when it follows a
+      // lookup or references a resource produced by a previous task.
       this.taskContinuations.delete(sessionKey);
       const binding = this.independentTaskBindings.get(sessionKey);
       return binding?.toolName === toolName ? binding.taskId : null;
@@ -1005,7 +1003,7 @@ export class InteractionCoordinator {
   bindIndependentTask(sessionKey, toolName, taskId) {
     if (
       !isPrivateSessionKey(sessionKey) ||
-      !INDEPENDENT_TASK_ENTRY_TOOLS.has(toolName)
+      !isIndependentTaskEntryTool(toolName)
     ) {
       return false;
     }
@@ -2632,6 +2630,11 @@ export class InteractionCoordinator {
       this.abortControllers.get(interactionId)?.abort();
       this.records.delete(interactionId);
       this.resumeClaims.delete(interactionId);
+    }
+    for (const [sessionKey, binding] of this.independentTaskBindings) {
+      if (binding.taskId === normalizedTaskId) {
+        this.independentTaskBindings.delete(sessionKey);
+      }
     }
     return true;
   }

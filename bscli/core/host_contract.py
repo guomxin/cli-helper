@@ -403,6 +403,12 @@ class HostContractStore:
                 "L3",
                 "shared-contract-h01-h29-oa-meeting-intent-routing-guard-v1",
             ),
+            (
+                "openclaw",
+                "0.4.85",
+                "L3",
+                "shared-contract-h01-h29-governed-write-task-boundary-v1",
+            ),
             ("reference-host", "0.1.0", "L3", "shared-contract-h01-h25"),
         )
         for name, version, level, evidence in builtins:
