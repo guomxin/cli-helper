@@ -318,7 +318,14 @@ def query_meeting_room_snapshot(
     return payload
 
 
-def meeting_ajax(worker, adapter, manager_method: str, arguments: list[Any]) -> Any:
+def meeting_ajax(
+    worker,
+    adapter,
+    manager_method: str,
+    arguments: list[Any],
+    *,
+    allow_empty_success: bool = False,
+) -> Any:
     url = urljoin(
         adapter.base_url,
         "/seeyon/ajax.do?method=ajaxAction&managerName=meetingAjaxManager",
@@ -335,7 +342,11 @@ def meeting_ajax(worker, adapter, manager_method: str, arguments: list[Any]) -> 
         headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
         body=body,
     )
-    data = response_json(response, context=manager_method)
+    data = response_json(
+        response,
+        context=manager_method,
+        allow_empty_success=allow_empty_success,
+    )
     if isinstance(data, dict) and data.get("code") and data.get("message"):
         raise MeetingRoomContractMismatch(str(data.get("message")))
     return data
@@ -474,7 +485,12 @@ def match_meeting_rooms(requested: str, room_list: Any) -> dict:
     }
 
 
-def response_json(response: dict, *, context: str) -> Any:
+def response_json(
+    response: dict,
+    *,
+    context: str,
+    allow_empty_success: bool = False,
+) -> Any:
     status = int(response.get("status") or 0)
     final_url = str(response.get("url") or "")
     response_text = str(response.get("text") or "")
@@ -494,6 +510,8 @@ def response_json(response: dict, *, context: str) -> Any:
         raise MeetingRoomContractMismatch(f"OA {context} returned HTTP {status}.")
     data = response.get("json")
     if data is None:
+        if allow_empty_success and not response_text.strip():
+            return {}
         raise MeetingRoomContractMismatch(f"OA {context} did not return JSON.")
     return data
 

@@ -428,6 +428,7 @@ def cancel_meeting_room_application(
                     "cancelComment": reason,
                 }
             ],
+            allow_empty_success=True,
         )
         _ensure_write_accepted(response, "meeting-room application cancellation")
         state = _verify_cancellation(

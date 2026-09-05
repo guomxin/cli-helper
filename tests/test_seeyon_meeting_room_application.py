@@ -1,6 +1,7 @@
 import json
 from urllib.parse import parse_qs
 import unittest
+from unittest.mock import patch
 
 from bscli.adapters.seeyon_meeting_room_application import (
     MEETING_ROOM_APPLICATION_CANCEL_CONTRACT_VERSION,
@@ -187,6 +188,47 @@ class SeeyonMeetingRoomApplicationTests(unittest.TestCase):
         )
         self.assertEqual(worker.mutations, ["cancelRoomApp"])
 
+    def test_cancel_accepts_empty_http_success_then_requires_readback(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            empty_cancel_response=True,
+        )
+
+        result = cancel_meeting_room_application(
+            FakeAdapter(),
+            worker,
+            _cancel_plan(),
+            enter_commit_boundary=lambda: None,
+        )
+
+        self.assertTrue(result["meeting_room_application_canceled"])
+        self.assertEqual(
+            result["verification"]["state"],
+            "absent_from_my_applications",
+        )
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
+    def test_cancel_empty_http_success_is_unknown_when_readback_stays_active(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            stale_cancel_readback=True,
+            empty_cancel_response=True,
+        )
+
+        with patch(
+            "bscli.adapters.seeyon_meeting_room_application.time.sleep"
+        ) as sleep:
+            with self.assertRaises(MeetingRoomApplicationOutcomeUnknown):
+                cancel_meeting_room_application(
+                    FakeAdapter(),
+                    worker,
+                    _cancel_plan(),
+                    enter_commit_boundary=lambda: None,
+                )
+
+        self.assertEqual(sleep.call_count, 6)
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
     def test_cancel_uses_room_snapshot_when_my_applications_is_stale(self):
         worker = FakeWorker(
             initial_apps=[_application("cancel-me")],
@@ -235,6 +277,7 @@ class FakeWorker:
         missing_create_readback=False,
         stale_cancel_readback=False,
         expose_apps_in_room_snapshot=False,
+        empty_cancel_response=False,
         events=None,
     ):
         self.rooms = list(rooms) if rooms is not None else [_room()]
@@ -243,6 +286,7 @@ class FakeWorker:
         self.missing_create_readback = missing_create_readback
         self.stale_cancel_readback = stale_cancel_readback
         self.expose_apps_in_room_snapshot = expose_apps_in_room_snapshot
+        self.empty_cancel_response = empty_cancel_response
         self.canceled_application_ids = set()
         self.events = events if events is not None else []
         self.manager_methods = []
@@ -304,6 +348,13 @@ class FakeWorker:
                     item for item in self.apps
                     if item["roomAppId"] != application_id
                 ]
+            if self.empty_cancel_response:
+                return {
+                    "status": 200,
+                    "url": url,
+                    "json": None,
+                    "text": "",
+                }
             return _response({"success": True}, url)
         raise AssertionError(f"unexpected method: {manager_method} {arguments}")
 
