@@ -34,8 +34,26 @@ MEETING_ROOM_MY_APPLICATIONS_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "room_name": {"type": "string", "maxLength": 100},
-        "application_start_date": {"type": "string", "format": "date"},
-        "application_end_date": {"type": "string", "format": "date"},
+        "application_start_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Lower bound for the date the application was submitted.",
+        },
+        "application_end_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Upper bound for the date the application was submitted.",
+        },
+        "usage_start_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Lower bound for the reserved room usage date.",
+        },
+        "usage_end_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Upper bound for the reserved room usage date.",
+        },
         "audit_status": {
             "type": "string",
             "enum": ["pending", "approved", "rejected"],
@@ -159,8 +177,6 @@ def list_meeting_room_availability(adapter, worker, arguments: dict) -> dict:
 def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
     query = _normalize_my_applications_arguments(arguments)
     search_params: dict[str, Any] = {}
-    if query["room_name"]:
-        search_params["roomName"] = query["room_name"]
     if query["application_start_date"]:
         search_params["beginDate"] = f"{query['application_start_date']} 00:00"
     if query["application_end_date"]:
@@ -168,13 +184,16 @@ def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
     if query["audit_status"]:
         search_params["status"] = _AUDIT_STATUS_TO_CODE[query["audit_status"]]
 
-    page_size = min(50, max(1, query["limit"]))
+    # OA treats roomName as a literal filter, so conversational aliases such as
+    # "五号会议室" would hide the formal "4层5#会议室" row. Load the bounded
+    # application collection and apply the shared room-name semantics locally.
+    page_size = 200
     raw_result = query_my_meeting_room_applications(
         worker,
         adapter,
         search_params=search_params,
         page_size=page_size,
-        maximum_items=max(query["limit"], page_size),
+        maximum_items=4000,
     )
     raw_items = raw_result["items"]
     source_total = raw_result["total"]
@@ -199,6 +218,8 @@ def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
             "room_name": query["room_name"] or None,
             "application_start_date": query["application_start_date"] or None,
             "application_end_date": query["application_end_date"] or None,
+            "usage_start_date": query["usage_start_date"] or None,
+            "usage_end_date": query["usage_end_date"] or None,
             "audit_status": query["audit_status"] or None,
         },
         "count": len(items),
@@ -209,6 +230,11 @@ def list_my_meeting_room_applications(adapter, worker, arguments: dict) -> dict:
             "status": "complete" if source_exhausted and not output_truncated else "partial",
             "source": "meetingAjaxManager.getMyApps",
             "server_filters": sorted(search_params),
+            "local_filters": [
+                name
+                for name in ("room_name", "usage_start_date", "usage_end_date")
+                if query[name]
+            ],
             "output_truncated": output_truncated,
             "source_pages_loaded": page,
         },
@@ -513,6 +539,10 @@ def _normalize_my_applications_arguments(arguments: dict) -> dict:
     end = _optional_date(arguments.get("application_end_date"), "application_end_date")
     if start and end and start > end:
         raise ValueError("application_start_date cannot be after application_end_date")
+    usage_start = _optional_date(arguments.get("usage_start_date"), "usage_start_date")
+    usage_end = _optional_date(arguments.get("usage_end_date"), "usage_end_date")
+    if usage_start and usage_end and usage_start > usage_end:
+        raise ValueError("usage_start_date cannot be after usage_end_date")
     audit_status = _optional_text(arguments.get("audit_status"), "audit_status", 20)
     if audit_status and audit_status not in _AUDIT_STATUS_TO_CODE:
         raise ValueError("audit_status must be pending, approved, or rejected")
@@ -520,6 +550,8 @@ def _normalize_my_applications_arguments(arguments: dict) -> dict:
         "room_name": _optional_text(arguments.get("room_name"), "room_name", 100),
         "application_start_date": start.isoformat() if start else "",
         "application_end_date": end.isoformat() if end else "",
+        "usage_start_date": usage_start.isoformat() if usage_start else "",
+        "usage_end_date": usage_end.isoformat() if usage_end else "",
         "audit_status": audit_status,
         "limit": _validated_int(arguments.get("limit"), "limit", default=50, minimum=1, maximum=500),
     }
@@ -594,7 +626,9 @@ def _public_application(item: dict) -> dict:
 
 
 def _application_matches(item: dict, query: dict) -> bool:
-    if query["room_name"] and query["room_name"].casefold() not in item["room_name"].casefold():
+    if query["room_name"] and not _meeting_room_name_matches(
+        query["room_name"], item["room_name"]
+    ):
         return False
     if query["audit_status"] and item["audit_status"] != query["audit_status"]:
         return False
@@ -607,7 +641,37 @@ def _application_matches(item: dict, query: dict) -> bool:
         not applied_date or applied_date > query["application_end_date"]
     ):
         return False
+    usage_start_date = str(item.get("start_time") or "")[:10]
+    usage_end_date = str(item.get("end_time") or "")[:10]
+    if query["usage_start_date"] and (
+        not usage_end_date or usage_end_date < query["usage_start_date"]
+    ):
+        return False
+    if query["usage_end_date"] and (
+        not usage_start_date or usage_start_date > query["usage_end_date"]
+    ):
+        return False
     return True
+
+
+def _meeting_room_name_matches(requested: str, actual: str) -> bool:
+    requested_casefold = str(requested or "").strip().casefold()
+    actual_casefold = str(actual or "").strip().casefold()
+    if not requested_casefold or not actual_casefold:
+        return False
+    if requested_casefold == actual_casefold:
+        return True
+    requested_norm = _normalize_room_name(requested_casefold)
+    actual_norm = _normalize_room_name(actual_casefold)
+    if requested_norm and requested_norm == actual_norm:
+        return True
+    requested_number = _room_number(requested_casefold, requested=True)
+    actual_number = _room_number(actual_casefold, requested=False)
+    if requested_number and requested_number == actual_number:
+        return True
+    return requested_casefold in actual_casefold or (
+        bool(requested_norm) and requested_norm in actual_norm
+    )
 
 
 def _audit_status_name(code: str) -> str | None:

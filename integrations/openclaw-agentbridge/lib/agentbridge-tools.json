@@ -4360,7 +4360,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List the authenticated user's applications from OA Meeting Room > My Applications. Optional room name, application-date range, and audit status are pushed to OA. This is distinct from sent meetings and does not revoke, end, remind, or otherwise change an application.",
+      "description": "List the authenticated user's applications from OA Meeting Room > My Applications. Room names accept the same conversational aliases as room availability, such as 五号会议室 for 4层5#会议室. application_start_date and application_end_date filter when the request was submitted; usage_start_date and usage_end_date filter when the room is reserved for use. For requests such as 'cancel Monday's booking', use the usage dates. This is distinct from sent meetings and does not revoke, end, remind, or otherwise change an application.",
       "inputSchema": {
         "properties": {
           "application_end_date": {
@@ -4374,6 +4374,7 @@
               }
             ],
             "default": null,
+            "description": "Application submission date through, YYYY-MM-DD",
             "title": "Application End Date"
           },
           "application_start_date": {
@@ -4387,6 +4388,7 @@
               }
             ],
             "default": null,
+            "description": "Application submission date from, YYYY-MM-DD",
             "title": "Application Start Date"
           },
           "audit_status": {
@@ -4438,6 +4440,34 @@
             ],
             "default": null,
             "title": "Room Name"
+          },
+          "usage_end_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Reserved room usage date through, YYYY-MM-DD",
+            "title": "Usage End Date"
+          },
+          "usage_start_date": {
+            "anyOf": [
+              {
+                "maxLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Reserved room usage date from, YYYY-MM-DD",
+            "title": "Usage Start Date"
           }
         },
         "title": "oa_meeting_room_my_applications_listArguments",

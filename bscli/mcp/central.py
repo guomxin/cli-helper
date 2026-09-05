@@ -2606,9 +2606,13 @@ def create_central_mcp_server(
         title="List My OA Meeting-Room Applications",
         description=(
             "List the authenticated user's applications from OA Meeting Room > My "
-            "Applications. Optional room name, application-date range, and audit status "
-            "are pushed to OA. This is distinct from sent meetings and does not revoke, "
-            "end, remind, or otherwise change an application."
+            "Applications. Room names accept the same conversational aliases as room "
+            "availability, such as 五号会议室 for 4层5#会议室. application_start_date and "
+            "application_end_date filter when the request was submitted; usage_start_date "
+            "and usage_end_date filter when the room is reserved for use. For requests "
+            "such as 'cancel Monday's booking', use the usage dates. This is distinct from "
+            "sent meetings and does not revoke, end, remind, or otherwise change an "
+            "application."
         ),
         annotations=read_annotations,
         structured_output=True,
@@ -2616,8 +2620,22 @@ def create_central_mcp_server(
     async def oa_meeting_room_my_applications_list(
         ctx: Context,
         room_name: Annotated[str | None, Field(max_length=100)] = None,
-        application_start_date: Annotated[str | None, Field(max_length=10)] = None,
-        application_end_date: Annotated[str | None, Field(max_length=10)] = None,
+        application_start_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Application submission date from, YYYY-MM-DD"),
+        ] = None,
+        application_end_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Application submission date through, YYYY-MM-DD"),
+        ] = None,
+        usage_start_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Reserved room usage date from, YYYY-MM-DD"),
+        ] = None,
+        usage_end_date: Annotated[
+            str | None,
+            Field(max_length=10, description="Reserved room usage date through, YYYY-MM-DD"),
+        ] = None,
         audit_status: Literal["pending", "approved", "rejected"] | None = None,
         limit: Annotated[int, Field(ge=1, le=500)] = 50,
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -2627,6 +2645,8 @@ def create_central_mcp_server(
             ("room_name", room_name),
             ("application_start_date", application_start_date),
             ("application_end_date", application_end_date),
+            ("usage_start_date", usage_start_date),
+            ("usage_end_date", usage_end_date),
             ("audit_status", audit_status),
         ):
             if value is not None:

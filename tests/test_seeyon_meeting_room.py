@@ -132,7 +132,7 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
                 {"only_available": True},
             )
 
-    def test_my_applications_pushes_filters_and_normalizes_status(self):
+    def test_my_applications_pushes_submission_filters_and_matches_room_alias_locally(self):
         worker = FakeMeetingRoomWorker()
 
         result = list_my_meeting_room_applications(
@@ -152,15 +152,37 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["audit_status_label"], "审核通过")
         self.assertEqual(result["items"][0]["applied_at"], "2026-07-18 09:30")
         self.assertEqual(result["coverage"]["status"], "complete")
+        self.assertEqual(result["coverage"]["local_filters"], ["room_name"])
         self.assertEqual(
             worker.arguments[0][1],
             {
-                "roomName": "3号",
                 "beginDate": "2026-07-01 00:00",
                 "endDate": "2026-07-31 23:59",
                 "status": "1",
             },
         )
+
+    def test_my_applications_filters_by_usage_date_and_formal_room_alias(self):
+        worker = FakeMeetingRoomWorker()
+
+        result = list_my_meeting_room_applications(
+            FakeAdapter(),
+            worker,
+            {
+                "room_name": "三号会议室",
+                "usage_start_date": "2026-07-20",
+                "usage_end_date": "2026-07-20",
+            },
+        )
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["room_name"], "4层3#会议室")
+        self.assertEqual(result["items"][0]["start_time"], "2026-07-20 14:00")
+        self.assertEqual(
+            result["coverage"]["local_filters"],
+            ["room_name", "usage_start_date", "usage_end_date"],
+        )
+        self.assertEqual(worker.arguments[0][1], {})
 
     def test_my_applications_rejects_invalid_date_range(self):
         with self.assertRaisesRegex(ValueError, "cannot be after"):
@@ -170,6 +192,15 @@ class SeeyonMeetingRoomTests(unittest.TestCase):
                 {
                     "application_start_date": "2026-08-01",
                     "application_end_date": "2026-07-01",
+                },
+            )
+        with self.assertRaisesRegex(ValueError, "usage_start_date"):
+            list_my_meeting_room_applications(
+                FakeAdapter(),
+                FakeMeetingRoomWorker(),
+                {
+                    "usage_start_date": "2026-08-01",
+                    "usage_end_date": "2026-07-01",
                 },
             )
 
@@ -240,7 +271,7 @@ class FakeMeetingRoomWorker:
                     {
                         "roomAppId": "app-1",
                         "roomId": "room-3",
-                        "roomName": "3号会议室",
+                        "roomName": "4层3#会议室",
                         "roomSeatCount": 18,
                         "adminNames": "管理员",
                         "meetingId": "meeting-1",
