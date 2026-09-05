@@ -528,6 +528,28 @@ class FieldSubmissionStore:
             self._verify_integrity(row, include_values=True)
         return _submission_from_row(row, include_values=False)
 
+    def supersede(self, submission_id: str, *, user_subject: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select(connection, submission_id)
+            if row["user_subject"] != user_subject:
+                raise FieldSubmissionAccessDenied("field submission belongs to another user")
+            if row["state"] not in {"pending", "submitted"}:
+                return
+            now = _format_time(_as_utc(self.clock()))
+            connection.execute(
+                "UPDATE field_submissions SET state = 'superseded', csrf_hash = NULL, updated_at = ? WHERE submission_id = ?",
+                (now, submission_id),
+            )
+            connection.execute(
+                "UPDATE field_submission_presentations SET state = 'expired', updated_at = ? WHERE submission_id = ? AND state = 'active'",
+                (now, submission_id),
+            )
+            connection.execute(
+                "UPDATE field_submission_card_sessions SET state = 'expired' WHERE submission_id = ? AND state = 'pending'",
+                (submission_id,),
+            )
+
     def consume(
         self,
         submission_id: str,

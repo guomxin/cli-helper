@@ -259,7 +259,7 @@ Gateway，工作站切换网络时无需修改服务器配置。完整说明见
 常用验证命令：
 
 ```powershell
-.\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Targeted
+.\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Targeted -PythonTests @('tests/test_plan_write_boundaries.py', 'tests/test_documentation.py')
 .\scripts\Invoke-AgentBridgeValidation.ps1 -Mode Full
 .\scripts\Test-AgentBridgeMcp.ps1 -Check Release
 .\scripts\Test-AgentBridgeReleaseAcceptance.ps1

@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 
@@ -29,6 +29,10 @@ class TaskPlanConflict(RuntimeError):
 
 
 class TaskPlanIntegrityError(RuntimeError):
+    pass
+
+
+class TaskPlanCommitInProgress(TaskPlanConflict):
     pass
 
 
@@ -139,6 +143,8 @@ class TaskPlanStore:
             "authority_snapshot_json": "TEXT",
             "result_projection_json": "TEXT",
             "effect_outcome": "TEXT",
+            "operation_key_prefix": "TEXT",
+            "commit_operation_id": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:
@@ -213,8 +219,8 @@ class TaskPlanStore:
                     current_step_key, risk_summary_json,
                     coordinator_lease_version, idempotency_key, schema_version,
                     temporal_context_json, authority_snapshot_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'validated', NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, operation_key_prefix
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'validated', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan_id,
@@ -242,6 +248,7 @@ class TaskPlanStore:
                     _canonical_json(compiled_plan.get("authoritySnapshot")),
                     now,
                     now,
+                    f"task-plan:{plan_id}:{revision}",
                 ),
             )
             for step in steps:
@@ -600,6 +607,10 @@ class TaskPlanStore:
             plan = self._select_owned_plan(connection, plan_id, user_subject)
             if plan["state"] in TERMINAL_PLAN_STATES:
                 return self._snapshot(connection, plan)
+            if plan["commit_operation_id"]:
+                raise TaskPlanCommitInProgress(
+                    "计划已进入提交边界，须等待权威核验，不能标记为已取消。"
+                )
             connection.execute(
                 """
                 UPDATE task_plan_steps
@@ -618,6 +629,48 @@ class TaskPlanStore:
                 (str(reason)[:120], now, now, plan_id),
             )
             return self._snapshot(connection, self._select_plan(connection, plan_id))
+
+    def guard_authorization_consumption(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        authorization_id: str,
+        user_subject: str,
+        operation_id: str,
+        validate: Callable[[dict], None],
+    ) -> None:
+        """Called inside the authorization's BEGIN IMMEDIATE transaction.
+
+        The marker and the one-shot authorization are committed together. Cancel
+        takes the same SQLite writer lock, including across service instances.
+        """
+        row = connection.execute(
+            """
+            SELECT plan.* FROM task_plans AS plan
+            JOIN task_plan_steps AS step ON step.plan_id = plan.plan_id
+            JOIN interactions AS interaction ON interaction.interaction_id = step.interaction_id
+            WHERE interaction.resource_id = ?
+              AND interaction.interaction_type = 'execution_authorization'
+              AND plan.user_subject = ?
+            """,
+            (authorization_id, user_subject),
+        ).fetchone()
+        if row is None:
+            return  # An atomic, non-plan write has no parent plan.
+        if row["state"] not in ACTIVE_PLAN_STATES:
+            raise TaskPlanIntegrityError("任务计划已结束，不能消费执行授权。")
+        if row["commit_operation_id"]:
+            raise TaskPlanCommitInProgress("任务计划已有提交在途，不能再次提交。")
+        validate(self._snapshot(connection, row))
+        now = _utc_now()
+        connection.execute(
+            "UPDATE task_plans SET commit_operation_id = ?, state = 'running', updated_at = ? WHERE plan_id = ?",
+            (operation_id, now, row["plan_id"]),
+        )
+        connection.execute(
+            "UPDATE task_plan_steps SET state = 'running', updated_at = ? WHERE plan_id = ? AND step_key = ?",
+            (now, row["plan_id"], row["current_step_key"]),
+        )
 
     def step_for_interaction(
         self, interaction_id: str, *, user_subject: str
@@ -775,10 +828,11 @@ class TaskPlanStore:
             connection.execute(
                 """
                 UPDATE task_plans
-                SET state = ?, current_step_key = ?, updated_at = ?
+                SET state = ?, current_step_key = ?, updated_at = ?,
+                    commit_operation_id = CASE WHEN ? = 'waiting_user' THEN NULL ELSE commit_operation_id END
                 WHERE plan_id = ?
                 """,
-                (plan_state, None if clear_current else step_key, now, plan_id),
+                (plan_state, None if clear_current else step_key, now, state, plan_id),
             )
             return self._snapshot(connection, self._select_plan(connection, plan_id))
 
@@ -907,6 +961,13 @@ def _json(value: str | None) -> Any:
 
 def json_hash(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def step_idempotency_key(plan: dict, step: dict) -> str:
+    # NULL identifies pre-migration plans: their in-flight Operations must keep
+    # the original lookup key. New plans always persist an instance-specific key.
+    prefix = plan.get("operation_key_prefix") or f"task-plan:{plan['plan_hash']}"
+    return f"{prefix}:{step['step_key']}:attempt:{step['attempt_count']}"
 
 
 def _required_text(value: Any, name: str, maximum: int) -> str:

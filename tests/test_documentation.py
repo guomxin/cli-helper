@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import re
 import unittest
 from urllib.parse import unquote, urlparse
@@ -9,6 +10,22 @@ MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
 class DocumentationTests(unittest.TestCase):
+    def test_current_inventory_matches_constructed_capability_and_mcp_registries(self):
+        from bscli.core.central_service import CentralCapabilityService
+        from bscli.core.mcp_identities import McpIdentityTokenStore
+        from bscli.mcp.central import create_central_mcp_server, validate_central_mcp_server_config
+
+        text = (ROOT / "docs" / "项目当前状态.md").read_text(encoding="utf-8")
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(home=Path(tmp), base_url="http://oa.example.test/seeyon/main.do?method=main")
+            config = validate_central_mcp_server_config(host="127.0.0.1", port=8790,
+                public_base_url="http://testserver", tls_cert=None, tls_key=None)
+            server = create_central_mcp_server(service=service, identity_store=McpIdentityTokenStore(service.db_path),
+                config=config, auth_card_base_url="http://127.0.0.1:8780")
+            self.assertEqual(re.findall(r"中央能力注册表共 (\d+) 个业务能力", text), [str(len(service.registry.list()))])
+            self.assertEqual(re.findall(r"本期中央目录共有 (\d+) 个 MCP 工具", text), [str(len(server._tool_manager.list_tools()))])
+            self.assertNotRegex(text, r"MCP 源码目录共有 \d+ 个工具")
+
     def test_relative_markdown_links_resolve(self):
         paths = [
             *ROOT.glob("*.md"),

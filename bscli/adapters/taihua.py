@@ -692,10 +692,23 @@ def commit_taihua_work_log_create(
     if inputs.get("project_id") is not None:
         payload["projectId"] = inputs["project_id"]
     enter_commit_boundary()
-    created = adapter.create_work_log(worker, payload)
-    created_id = str(created.get("id") or "") if isinstance(created, dict) else ""
-    readback = adapter.work_logs_for_date(worker, inputs["log_date"])
-    matched = _matching_work_log(readback, inputs, created_id=created_id)
+    submission_returned = False
+    try:
+        created = adapter.create_work_log(worker, payload)
+        submission_returned = True
+        created_id = str(created.get("id") or "") if isinstance(created, dict) else ""
+        readback = adapter.work_logs_for_date(worker, inputs["log_date"])
+        matched = _matching_work_log(readback, inputs, created_id=created_id)
+    except TaihuaBusinessRuleRejected as exc:
+        if submission_returned:
+            raise TaihuaWorkLogOutcomeUnknown("泰华日志提交后回读被拒绝，无法确认结果；请先对账。") from exc
+        raise
+    except TaihuaWorkLogOutcomeUnknown:
+        raise
+    except Exception as exc:
+        raise TaihuaWorkLogOutcomeUnknown(
+            f"泰华日志已进入提交边界，但提交应答或权威回读异常（{type(exc).__name__}）；请先对账。"
+        ) from exc
     if matched is None:
         raise TaihuaWorkLogOutcomeUnknown(
             "泰华接口已接受日志提交，但权威回读未找到对应记录。"

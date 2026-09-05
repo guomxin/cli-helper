@@ -526,6 +526,28 @@ class WriteAuthorizationStore:
             row = self._select(connection, authorization_id)
         return _authorization_from_row(row, include_plan=False)
 
+    def supersede(self, authorization_id: str, *, user_subject: str) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select(connection, authorization_id)
+            if row["user_subject"] != user_subject:
+                raise WriteAuthorizationAccessDenied("write authorization belongs to another user")
+            if row["state"] not in {"pending", "approved"}:
+                return
+            now = _format_time(_as_utc(self.clock()))
+            connection.execute(
+                "UPDATE write_authorizations SET state = 'superseded', csrf_hash = NULL, updated_at = ? WHERE authorization_id = ?",
+                (now, authorization_id),
+            )
+            connection.execute(
+                "UPDATE write_authorization_presentations SET state = 'expired', updated_at = ? WHERE authorization_id = ? AND state = 'active'",
+                (now, authorization_id),
+            )
+            connection.execute(
+                "UPDATE write_authorization_card_sessions SET state = 'expired' WHERE authorization_id = ? AND state = 'pending'",
+                (authorization_id,),
+            )
+
     def consume(
         self,
         authorization_id: str,
@@ -536,6 +558,7 @@ class WriteAuthorizationStore:
         capability_name: str,
         capability_version: str,
         commit_operation_id: str,
+        before_consume: Callable[[sqlite3.Connection], None] | None = None,
     ) -> dict:
         now = _as_utc(self.clock())
         with self._connect() as connection:
@@ -563,6 +586,8 @@ class WriteAuthorizationStore:
                 raise WriteAuthorizationIntegrityError(
                     "write authorization plan integrity check failed"
                 )
+            if before_consume is not None:
+                before_consume(connection)
             cursor = connection.execute(
                 """
                 UPDATE write_authorizations

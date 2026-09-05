@@ -3635,12 +3635,25 @@ def commit_smartlight_alarm_remark_update(
             "授权后目标告警备注已被其他操作修改，已停止覆盖。"
         )
     enter_commit_boundary()
-    downstream = adapter.save_alarm_remark(worker, payload)
-    readback = adapter.alarm_remark_snapshot(worker, inputs["alarm_id"])
-    if readback["remark"] != inputs["remark"]:
+    submission_returned = False
+    try:
+        downstream = adapter.save_alarm_remark(worker, payload)
+        submission_returned = True
+        readback = adapter.alarm_remark_snapshot(worker, inputs["alarm_id"])
+        if readback["remark"] != inputs["remark"]:
+            raise SmartlightAlarmRemarkOutcomeUnknown(
+                "照明系统接受了备注保存请求，但权威回读未得到预期内容。"
+            )
+    except SmartlightBusinessRuleRejected as exc:
+        if submission_returned:
+            raise SmartlightAlarmRemarkOutcomeUnknown("照明备注提交后回读被拒绝，无法确认结果；请先对账。") from exc
+        raise
+    except SmartlightAlarmRemarkOutcomeUnknown:
+        raise
+    except Exception as exc:
         raise SmartlightAlarmRemarkOutcomeUnknown(
-            "照明系统接受了备注保存请求，但权威回读未得到预期内容。"
-        )
+            f"照明告警备注已进入提交边界，但提交应答或权威回读异常（{type(exc).__name__}）；请先对账。"
+        ) from exc
     previous_remark = str(preconditions.get("previous_remark") or "")
     return {
         "status": "updated",

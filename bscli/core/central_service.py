@@ -928,11 +928,11 @@ class CentralCapabilityService:
             granted_scopes=granted_scopes,
             temporal_context=temporal_context,
         )
-        if compiled["proposalSchemaVersion"].endswith(".v2"):
+        if compiled["proposalSchemaVersion"].endswith(".v2") or authority_identity is not None:
             if not isinstance(authority_identity, dict):
                 raise PlanValidationError(
                     "PLAN_AUTHORITY_REQUIRED",
-                    "v2 计划必须绑定当前 MCP 执行授权。",
+                    "计划必须绑定当前 MCP 执行授权。",
                 )
             if authority_identity.get("user_subject") != user_subject:
                 raise PlanValidationError(
@@ -1014,6 +1014,24 @@ class CentralCapabilityService:
             raise PlanValidationError(
                 "PLAN_AUTHORITY_INVALID", "计划执行授权主体已不匹配。"
             )
+
+    def validate_task_plan_execution(self, plan: dict) -> None:
+        if plan["state"] not in ACTIVE_PLAN_STATES:
+            raise PlanValidationError("PLAN_NOT_ACTIVE", "任务计划已结束，不能继续执行。")
+        self.validate_task_plan_authority(plan)
+        self.task_plan_runtime.validate_versions(plan)
+
+    def retire_plan_interactions(self, plan: dict, *, extra: dict | None = None) -> None:
+        interaction_ids = {s["interaction_id"] for s in plan["steps"] if s.get("interaction_id")}
+        if isinstance(extra, dict) and extra.get("interactionId"):
+            interaction_ids.add(extra["interactionId"])
+        for interaction_id in interaction_ids:
+            record = self.interactions.get(interaction_id, user_subject=plan["user_subject"])
+            if record["interaction_type"] == "business_input":
+                self.field_submissions.supersede(record["resource_id"], user_subject=plan["user_subject"])
+            elif record["interaction_type"] == "execution_authorization":
+                self.write_authorizations.supersede(record["resource_id"], user_subject=plan["user_subject"])
+            # A login challenge may also serve other reads in the same session.
 
     def planning_gate_for_call(
         self,
@@ -3556,6 +3574,11 @@ class CentralCapabilityService:
                     "resumedFromInteractionId": interaction_id,
                     "taskId": bound_plan["parent_task_id"],
                 }
+            if not bound_plan.get("commit_operation_id"):
+                try:
+                    self.validate_task_plan_execution(bound_plan)
+                except PlanValidationError as exc:
+                    return self.task_plan_runtime.reject(bound_plan, exc)
         if interaction["state"] in {
             "declined",
             "expired",
@@ -4042,6 +4065,13 @@ class CentralCapabilityService:
         arguments: dict,
         task_id: str | None = None,
     ) -> dict:
+        if task_id and (capability_name in _TRUSTED_WRITE_DEFINITIONS or capability_name in _TRUSTED_WRITE_COMMITS):
+            parent_plan = self.task_plans.get_for_task(parent_task_id=task_id, user_subject=user_subject)
+            if parent_plan is not None:
+                try:
+                    self.validate_task_plan_execution(parent_plan)
+                except PlanValidationError as exc:
+                    raise CapabilityRejected(exc.code, exc.message) from exc
         self._assert_write_allowed(context=context, system_id=system_id)
         session = self.sessions.find(user_subject=user_subject, system_id=system_id)
         if session is None or session["state"] != "active":
@@ -5317,7 +5347,10 @@ class CentralCapabilityService:
 
         self._assert_write_allowed(context=context, system_id=session["system_id"])
 
+        boundary_entered = False
+
         def enter_commit_boundary() -> None:
+            nonlocal boundary_entered
             self.write_authorizations.consume(
                 authorization_id,
                 user_subject=session["user_subject"],
@@ -5326,7 +5359,13 @@ class CentralCapabilityService:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 commit_operation_id=context.operation_id,
+                before_consume=lambda connection: self.task_plans.guard_authorization_consumption(
+                    connection, authorization_id=authorization_id,
+                    user_subject=session["user_subject"], operation_id=context.operation_id,
+                    validate=self.validate_task_plan_execution,
+                ),
             )
+            boundary_entered = True
 
         commit_function = globals().get(str(definition["commit_function"]))
         if not callable(commit_function):
@@ -5435,9 +5474,20 @@ class CentralCapabilityService:
                 str(exc),
             ) from exc
         except definition["contract_error"] as exc:
+            if boundary_entered:
+                raise OutcomeUnknown("RESULT_UNKNOWN", "写入已进入提交边界，但结果契约不匹配；请先对账。") from exc
             raise ValueError(str(exc)) from exc
         except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:
             raise ValueError(str(exc)) from exc
+        except PlanValidationError as exc:
+            raise CapabilityRejected(exc.code, exc.message) from exc
+        except Exception as exc:
+            if boundary_entered:
+                raise OutcomeUnknown(
+                    "RESULT_UNKNOWN",
+                    f"写入已进入提交边界，但未取得权威结果（{type(exc).__name__}）；请先对账，不能自动重试。",
+                ) from exc
+            raise
 
     def _assert_write_allowed(self, *, context: CapabilityContext, system_id: str) -> None:
         if context.spec.effect == "read":

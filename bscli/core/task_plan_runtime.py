@@ -11,9 +11,11 @@ from bscli.core.task_plan_validation import (
 )
 from bscli.core.task_plans import (
     ACTIVE_PLAN_STATES,
+    TaskPlanCommitInProgress,
     TaskPlanIntegrityError,
     TaskPlanStore,
     json_hash,
+    step_idempotency_key,
     task_plan_response,
 )
 from bscli.core.transforms import TransformRegistry, TransformRejected
@@ -45,6 +47,14 @@ class TaskPlanRuntime:
                 plan = self.plans.get(plan_id, user_subject=user_subject)
                 if plan["state"] not in ACTIVE_PLAN_STATES:
                     return self._plan_result(plan)
+                if plan.get("commit_operation_id"):
+                    if all(s["state"] in {"succeeded", "skipped"} for s in plan["steps"]):
+                        return self._complete_plan(plan_id, user_subject=user_subject, reason="all_steps_succeeded")
+                    return {
+                        "protocolVersion": "0.1", "status": "running",
+                        "operationId": plan["commit_operation_id"], "plan": task_plan_response(plan),
+                        "nextAction": {"type": "wait_for_verification", "doNotRetry": True},
+                    }
                 step = self.plans.begin_next_step(
                     plan_id, user_subject=user_subject
                 )
@@ -68,6 +78,7 @@ class TaskPlanRuntime:
                     )
                     if callable(authority_validator):
                         authority_validator(plan)
+                    self.validate_versions(plan)
                     arguments = self._resolve_step_arguments(
                         plan=plan,
                         step=step,
@@ -76,6 +87,7 @@ class TaskPlanRuntime:
                         response = self._invoke_capability(plan, step, arguments)
                     else:
                         response = self._invoke_transform(plan, step, arguments)
+                    result = self._consume_step_response(plan, step, response)
                 except (PlanValidationError, TransformRejected) as exc:
                     return self._fail_plan(
                         plan,
@@ -94,7 +106,6 @@ class TaskPlanRuntime:
                         error_code="PLAN_STEP_EXECUTION_FAILED",
                         error_message=str(exc) or exc.__class__.__name__,
                     )
-                result = self._consume_step_response(plan, step, response)
                 if result is not None:
                     return result
 
@@ -111,6 +122,7 @@ class TaskPlanRuntime:
             return None
         plan, _step = bound
         with self._plan_lock(plan["plan_id"]):
+            plan = self.plans.get(plan["plan_id"], user_subject=user_subject)
             if plan["state"] not in ACTIVE_PLAN_STATES:
                 return self._plan_result(plan)
             self.plans.reset_step_after_session(
@@ -144,7 +156,9 @@ class TaskPlanRuntime:
             return None
         plan, step = bound
         with self._plan_lock(plan["plan_id"]):
+            plan = self.plans.get(plan["plan_id"], user_subject=user_subject)
             if plan["state"] not in ACTIVE_PLAN_STATES:
+                self._retire_interactions(plan, extra=response.get("interaction"))
                 return self._plan_result(plan)
             result = self._consume_step_response(plan, step, response)
             if result is not None:
@@ -201,11 +215,17 @@ class TaskPlanRuntime:
             current = self.plans.get(plan_id, user_subject=user_subject)
             if current["state"] not in ACTIVE_PLAN_STATES:
                 return self._plan_result(current)
-            plan = self.plans.cancel(
-                plan_id,
-                user_subject=user_subject,
-                reason=reason,
-            )
+            try:
+                plan = self.plans.cancel(
+                    plan_id, user_subject=user_subject, reason=reason,
+                )
+            except TaskPlanCommitInProgress as exc:
+                return {
+                    **self._plan_result(self.plans.get(plan_id, user_subject=user_subject)),
+                    "status": "running",
+                    "error": {"code": "PLAN_COMMIT_IN_PROGRESS", "message": str(exc)},
+                    "nextAction": {"type": "wait_for_verification", "doNotRetry": True},
+                }
             self._event(
                 plan,
                 "plan.canceled",
@@ -220,6 +240,7 @@ class TaskPlanRuntime:
                 )
             except Exception:
                 pass
+            self._retire_interactions(current)
             return self._plan_result(plan)
 
     def recover(self, *, limit: int = 100) -> dict[str, Any]:
@@ -242,6 +263,43 @@ class TaskPlanRuntime:
                     plan = self.plans.get(
                         plan_id, user_subject=candidate["user_subject"]
                     )
+                    if plan.get("commit_operation_id"):
+                        step = next(s for s in plan["steps"] if (
+                            s["step_key"] == plan["current_step_key"]
+                            or s.get("operation_id") == plan["commit_operation_id"]
+                        ))
+                        if step["state"] == "succeeded":
+                            self._complete_plan(plan_id, user_subject=plan["user_subject"], reason="all_steps_succeeded")
+                            summary["completed"] += 1
+                            continue
+                        operation = self.service.operations.get(plan["commit_operation_id"])
+                        if operation["status"] in {"pending", "running"}:
+                            if not self._belongs_to_previous_runtime({"updated_at": operation["updated_at"]}):
+                                summary["deferred"] += 1
+                                continue
+                            operation = self.service.operations.mark_unknown(
+                                operation["operation_id"], code="RESULT_UNKNOWN",
+                                message="提交边界已消费，但旧运行时未留下权威结果；须人工对账。",
+                            )
+                        response = self._consume_step_response(plan, step, {
+                            "operationId": operation["operation_id"],
+                            "status": operation["status"],
+                            "error": operation.get("error"),
+                            "interaction": (operation.get("next_action") or {}).get("interaction"),
+                        })
+                        if response is None:
+                            response = self.advance(plan_id, user_subject=plan["user_subject"])
+                        summary["completed" if response.get("status") == "succeeded" else "failed"] += 1
+                        continue
+                    try:
+                        self.validate_versions(plan)
+                        validator = getattr(self.service, "validate_task_plan_authority", None)
+                        if callable(validator):
+                            validator(plan)
+                    except PlanValidationError as exc:
+                        self.reject(plan, exc)
+                        summary["failed"] += 1
+                        continue
                     if plan["state"] == "waiting_user":
                         step = next(
                             (
@@ -353,10 +411,7 @@ class TaskPlanRuntime:
             user_subject=plan["user_subject"],
             capability_name=capability_name,
             arguments=arguments,
-            idempotency_key=(
-                f"task-plan:{plan['plan_hash']}:{step['step_key']}:"
-                f"attempt:{step['attempt_count']}"
-            ),
+            idempotency_key=step_idempotency_key(plan, step),
             task_id=plan["parent_task_id"],
             host_type="task_plan",
             host_run_id=plan["plan_id"],
@@ -388,10 +443,7 @@ class TaskPlanRuntime:
                 ),
             },
             input_identity=arguments,
-            idempotency_key=(
-                f"task-plan:{plan['plan_hash']}:{step['step_key']}:"
-                f"attempt:{step['attempt_count']}"
-            ),
+            idempotency_key=step_idempotency_key(plan, step),
         )
         if not reused:
             self.service.operations.mark_running(operation["operation_id"])
@@ -666,6 +718,9 @@ class TaskPlanRuntime:
         error_code: str,
         error_message: str,
     ) -> dict[str, Any]:
+        current = self.plans.get(plan["plan_id"], user_subject=plan["user_subject"])
+        if current["state"] not in ACTIVE_PLAN_STATES:
+            return self._plan_result(current)
         updated = self.plans.mark_step_failed(
             plan["plan_id"],
             user_subject=plan["user_subject"],
@@ -712,6 +767,7 @@ class TaskPlanRuntime:
                 )
             except Exception:
                 pass
+        self._retire_interactions(current)
         response = {
             "protocolVersion": "0.1",
             "status": state,
@@ -727,6 +783,36 @@ class TaskPlanRuntime:
                 "source": "plan.resultProjection.result.source_summaries",
             }
         return response
+
+    def validate_versions(self, plan: dict) -> None:
+        for step in plan["steps"]:
+            try:
+                target = (
+                    self.service.registry.get(step["capability_name"])
+                    if step["kind"] == "capability"
+                    else self.transforms.get(step["transform_name"])
+                )
+            except KeyError as exc:
+                raise PlanValidationError("PLAN_VERSION_MISMATCH", "计划绑定的能力或转换已不可用，须重新规划。") from exc
+            if target.version != step["target_version"]:
+                raise PlanValidationError(
+                    "PLAN_VERSION_MISMATCH",
+                    f"步骤 {step['step_key']} 的冻结版本 {step['target_version']} 与当前版本 {target.version} 不匹配，须重新规划。",
+                )
+
+    def reject(self, plan: dict, error: PlanValidationError) -> dict:
+        with self._plan_lock(plan["plan_id"]):
+            current = self.plans.get(plan["plan_id"], user_subject=plan["user_subject"])
+            if current["state"] not in ACTIVE_PLAN_STATES:
+                return self._plan_result(current)
+            step = next(s for s in current["steps"] if s["state"] in {"queued", "running", "waiting_user"})
+            return self._fail_plan(current, step, operation_id=step.get("operation_id"),
+                state="failed", error_code=error.code, error_message=error.message)
+
+    def _retire_interactions(self, plan: dict, *, extra: dict | None = None) -> None:
+        retire = getattr(self.service, "retire_plan_interactions", None)
+        if callable(retire):
+            retire(plan, extra=extra)
 
     def _has_write_sink(self, plan: dict[str, Any]) -> bool:
         for step in plan.get("steps") or []:
@@ -924,16 +1010,11 @@ class TaskPlanRuntime:
     ) -> dict[str, Any] | None:
         if step["kind"] == "capability":
             capability_name = step["capability_name"]
-            version = self.service.registry.get(capability_name).version
         else:
             capability_name = f"transform.{step['transform_name']}"
-            version = self.transforms.get(step["transform_name"]).version
         return self.service.operations.find_idempotent(
             user_subject=plan["user_subject"],
             capability_name=capability_name,
-            capability_version=version,
-            idempotency_key=(
-                f"task-plan:{plan['plan_hash']}:{step['step_key']}:"
-                f"attempt:{step['attempt_count']}"
-            ),
+            capability_version=step["target_version"],
+            idempotency_key=step_idempotency_key(plan, step),
         )
