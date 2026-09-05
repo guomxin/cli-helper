@@ -250,6 +250,88 @@ class SeeyonMeetingRoomApplicationTests(unittest.TestCase):
         )
         self.assertEqual(worker.mutations, ["cancelRoomApp"])
 
+    def test_cancel_retries_transient_my_applications_readback_without_replaying_write(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            cancel_readback_failures=1,
+        )
+
+        with patch(
+            "bscli.adapters.seeyon_meeting_room_application.time.sleep"
+        ) as sleep:
+            result = cancel_meeting_room_application(
+                FakeAdapter(),
+                worker,
+                _cancel_plan(),
+                enter_commit_boundary=lambda: None,
+            )
+
+        self.assertEqual(
+            result["verification"]["state"],
+            "absent_from_my_applications",
+        )
+        self.assertEqual(result["verification"]["readback_attempts"], 2)
+        self.assertEqual(result["verification"]["transient_read_errors"], 1)
+        self.assertEqual(
+            result["verification"]["readback_diagnostics"],
+            ["my_applications=RuntimeError"],
+        )
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
+    def test_cancel_uses_room_snapshot_when_application_readback_errors(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            stale_cancel_readback=True,
+            expose_apps_in_room_snapshot=True,
+            cancel_readback_failures=7,
+        )
+
+        result = cancel_meeting_room_application(
+            FakeAdapter(),
+            worker,
+            _cancel_plan(),
+            enter_commit_boundary=lambda: None,
+        )
+
+        self.assertEqual(
+            result["verification"]["state"],
+            "absent_from_room_snapshot",
+        )
+        self.assertEqual(result["verification"]["readback_attempts"], 1)
+        self.assertEqual(result["verification"]["transient_read_errors"], 1)
+        self.assertEqual(
+            result["verification"]["readback_diagnostics"],
+            ["my_applications=RuntimeError"],
+        )
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
+    def test_cancel_reports_readback_sources_after_bounded_transient_failures(self):
+        worker = FakeWorker(
+            initial_apps=[_application("cancel-me")],
+            stale_cancel_readback=True,
+            expose_apps_in_room_snapshot=True,
+            cancel_readback_failures=7,
+            cancel_room_snapshot_failures=7,
+        )
+
+        with patch(
+            "bscli.adapters.seeyon_meeting_room_application.time.sleep"
+        ) as sleep:
+            with self.assertRaisesRegex(
+                MeetingRoomApplicationOutcomeUnknown,
+                "my_applications=RuntimeError, room_snapshot=RuntimeError",
+            ):
+                cancel_meeting_room_application(
+                    FakeAdapter(),
+                    worker,
+                    _cancel_plan(),
+                    enter_commit_boundary=lambda: None,
+                )
+
+        self.assertEqual(sleep.call_count, 6)
+        self.assertEqual(worker.mutations, ["cancelRoomApp"])
+
     def test_cancel_detects_target_change_before_boundary(self):
         worker = FakeWorker(initial_apps=[_application("cancel-me", status=1)])
         boundary = []
@@ -278,6 +360,8 @@ class FakeWorker:
         stale_cancel_readback=False,
         expose_apps_in_room_snapshot=False,
         empty_cancel_response=False,
+        cancel_readback_failures=0,
+        cancel_room_snapshot_failures=0,
         events=None,
     ):
         self.rooms = list(rooms) if rooms is not None else [_room()]
@@ -287,6 +371,8 @@ class FakeWorker:
         self.stale_cancel_readback = stale_cancel_readback
         self.expose_apps_in_room_snapshot = expose_apps_in_room_snapshot
         self.empty_cancel_response = empty_cancel_response
+        self.cancel_readback_failures = cancel_readback_failures
+        self.cancel_room_snapshot_failures = cancel_room_snapshot_failures
         self.canceled_application_ids = set()
         self.events = events if events is not None else []
         self.manager_methods = []
@@ -299,6 +385,9 @@ class FakeWorker:
         arguments = json.loads(fields["arguments"][0])
         self.manager_methods.append(manager_method)
         if manager_method == "roomListInfo":
+            if self.canceled_application_ids and self.cancel_room_snapshot_failures:
+                self.cancel_room_snapshot_failures -= 1
+                raise RuntimeError("transient room snapshot readback failure")
             bookings = [
                 {
                     "appId": item["roomAppId"],
@@ -319,6 +408,9 @@ class FakeWorker:
         if manager_method == "validateRoomApps":
             return _response({"success": True, "data": []}, url)
         if manager_method == "getMyApps":
+            if self.canceled_application_ids and self.cancel_readback_failures:
+                self.cancel_readback_failures -= 1
+                raise RuntimeError("transient application readback failure")
             return _response(
                 {"data": list(self.apps), "total": len(self.apps), "pages": 1},
                 url,

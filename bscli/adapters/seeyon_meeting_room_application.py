@@ -431,7 +431,7 @@ def cancel_meeting_room_application(
             allow_empty_success=True,
         )
         _ensure_write_accepted(response, "meeting-room application cancellation")
-        state = _verify_cancellation(
+        verification = _verify_cancellation(
             worker,
             adapter,
             target,
@@ -446,15 +446,16 @@ def cancel_meeting_room_application(
             "verification": {
                 "confirmed": True,
                 "method": "my_application_terminal_readback",
-                "state": state,
+                **verification,
             },
             "transport": "central_http_session",
         }
     except MeetingRoomApplicationOutcomeUnknown:
         raise
-    except BaseException as exc:
+    except Exception as exc:
         raise MeetingRoomApplicationOutcomeUnknown(
-            "The OA meeting-room cancellation boundary was crossed, but verification failed."
+            "The OA meeting-room cancellation boundary was crossed, but an "
+            f"unexpected verification error occurred ({type(exc).__name__})."
         ) from exc
 
 
@@ -706,27 +707,83 @@ def _verify_cancellation(
     *,
     target_was_in_room_snapshot: bool,
     attempts: int = 7,
-) -> str:
+) -> dict:
     application_id = str(target.get("application_id") or "")
     delays = (0.5, 0.75, 1.0, 1.5, 2.0, 3.0)
+    read_error_count = 0
+    last_read_errors: dict[str, str] = {}
+    readback_diagnostics: set[str] = set()
+    saw_active_application = False
     for attempt in range(attempts):
-        rows = query_my_meeting_room_applications(worker, adapter)["items"]
-        matches = [item for item in rows if _raw_application_id(item) == application_id]
-        if not matches:
-            return "absent_from_my_applications"
-        if len(matches) == 1 and _status_code(matches[0]) == "4":
-            return "terminal_status_4"
-        if target_was_in_room_snapshot:
-            snapshot = _query_room_snapshot(
-                worker,
-                adapter,
-                start_ms=_datetime_ms(target["start_time"]),
-                end_ms=_datetime_ms(target["end_time"]),
+        try:
+            rows = query_my_meeting_room_applications(worker, adapter)["items"]
+        except Exception as exc:
+            read_error_count += 1
+            last_read_errors["my_applications"] = type(exc).__name__
+            readback_diagnostics.add(
+                f"my_applications={type(exc).__name__}"
             )
-            if not _snapshot_contains_application(snapshot, target):
-                return "absent_from_room_snapshot"
+        else:
+            last_read_errors.pop("my_applications", None)
+            matches = [
+                item
+                for item in rows
+                if _raw_application_id(item) == application_id
+            ]
+            if not matches:
+                return {
+                    "state": "absent_from_my_applications",
+                    "readback_attempts": attempt + 1,
+                    "transient_read_errors": read_error_count,
+                    "readback_diagnostics": sorted(readback_diagnostics),
+                }
+            if len(matches) == 1 and _status_code(matches[0]) == "4":
+                return {
+                    "state": "terminal_status_4",
+                    "readback_attempts": attempt + 1,
+                    "transient_read_errors": read_error_count,
+                    "readback_diagnostics": sorted(readback_diagnostics),
+                }
+            saw_active_application = True
+        if target_was_in_room_snapshot:
+            try:
+                snapshot = _query_room_snapshot(
+                    worker,
+                    adapter,
+                    start_ms=_datetime_ms(target["start_time"]),
+                    end_ms=_datetime_ms(target["end_time"]),
+                )
+            except Exception as exc:
+                read_error_count += 1
+                last_read_errors["room_snapshot"] = type(exc).__name__
+                readback_diagnostics.add(
+                    f"room_snapshot={type(exc).__name__}"
+                )
+            else:
+                last_read_errors.pop("room_snapshot", None)
+                if not _snapshot_contains_application(snapshot, target):
+                    return {
+                        "state": "absent_from_room_snapshot",
+                        "readback_attempts": attempt + 1,
+                        "transient_read_errors": read_error_count,
+                        "readback_diagnostics": sorted(readback_diagnostics),
+                    }
         if attempt + 1 < attempts:
             time.sleep(delays[min(attempt, len(delays) - 1)])
+    if last_read_errors:
+        read_errors = ", ".join(
+            f"{source}={error_code}"
+            for source, error_code in sorted(last_read_errors.items())
+        )
+        active_note = (
+            " The application listing still reported the target as active."
+            if saw_active_application
+            else ""
+        )
+        raise MeetingRoomApplicationOutcomeUnknown(
+            "Cancellation readback did not reach a confirmed state after "
+            f"{attempts} attempts.{active_note} Last read errors: {read_errors}."
+        )
     raise MeetingRoomApplicationOutcomeUnknown(
         "The canceled meeting-room application remained active in My Applications."
     )
