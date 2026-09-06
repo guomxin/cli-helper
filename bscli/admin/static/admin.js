@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { account: null, view: "overview", modalAction: null, coordinationTab: "tasks" };
+const state = { account: null, view: "overview", modalAction: null, coordinationTab: "tasks", governanceTab: "events", incidents: [], selectedIncident: null, detailRevision: 0, viewRevision: 0, readController: null };
 const titles = {
   overview: ["CONTROL PLANE", "运行总览"],
   users: ["IDENTITY", "用户与令牌"],
@@ -115,6 +115,14 @@ function applyFilter(control) {
   const count = scope.querySelector("[data-filter-count]");
   if (count) count.textContent = `${visible} 条`;
   scope.querySelector("[data-filter-empty]")?.classList.toggle("hidden", visible !== 0);
+  const selected = scope.querySelector('[data-incident-detail][aria-pressed="true"]');
+  if (selected?.closest("tr").classList.contains("hidden")) {
+    state.selectedIncident = null;
+    state.detailRevision++;
+    selected.setAttribute("aria-pressed", "false");
+    selected.closest("tr").classList.remove("selected");
+    $("#incident-detail").innerHTML = empty("选择筛选结果中的事件查看证据");
+  }
 }
 function scopeBadges(scopes) { return `<div class="scope-pills">${scopes.map(scope => `<span>${escapeHtml(scope)}</span>`).join("")}</div>`; }
 function csrfToken() {
@@ -129,8 +137,10 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
     headers["X-AgentBridge-CSRF"] = csrfToken();
   }
-  const response = await fetch(path, { ...options, method, headers, credentials: "same-origin" });
+  const signal = method === "GET" ? state.readController?.signal : undefined;
+  const response = await fetch(path, { signal, ...options, method, headers, credentials: "same-origin" });
   const data = await response.json().catch(() => ({}));
+  signal?.throwIfAborted();
   if (!response.ok) {
     const error = new Error(data.error?.message || `请求失败 (${response.status})`);
     error.code = data.error?.code || "REQUEST_FAILED";
@@ -148,6 +158,24 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => node.classList.add("hidden"), 3600);
 }
 function showLogin() {
+  state.readController?.abort();
+  state.viewRevision++;
+  state.detailRevision++;
+  state.incidents = [];
+  state.selectedIncident = null;
+  state.view = "overview";
+  state.governanceTab = "events";
+  state.coordinationTab = "tasks";
+  content.innerHTML = "";
+  $("#refresh-button").disabled = false;
+  content.setAttribute("aria-busy", "false");
+  closeModal();
+  $("#modal-body").replaceChildren();
+  $("#account-menu").classList.add("hidden");
+  $("#account-button").setAttribute("aria-expanded", "false");
+  clearTimeout(toast.timer);
+  $("#toast").textContent = "";
+  $("#toast").classList.add("hidden");
   $("#login-view").classList.remove("hidden");
   $("#app").classList.add("hidden");
   state.account = null;
@@ -172,8 +200,21 @@ async function initialize() {
 
 async function loadView(view) {
   if (!state.account || state.account.must_change_password) return;
+  if (!titles[view]) return;
+  state.readController?.abort();
+  state.readController = new AbortController();
+  const revision = ++state.viewRevision;
+  state.detailRevision++;
   state.view = view;
-  document.querySelectorAll("#nav button").forEach(button => button.classList.toggle("active", button.dataset.view === view));
+  setNavigation(false);
+  document.querySelectorAll("#nav button").forEach(button => {
+    button.classList.toggle("active", button.dataset.view === view);
+    if (button.dataset.view === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  content.setAttribute("aria-busy", "true");
+  $("#freshness").textContent = "正在刷新";
+  $("#refresh-button").disabled = true;
   $("#view-kicker").textContent = titles[view][0];
   $("#view-title").textContent = titles[view][1];
   content.innerHTML = '<div class="loading">正在读取中心状态</div>';
@@ -184,39 +225,74 @@ async function loadView(view) {
       incidents: renderIncidents, coordination: renderCoordination, runtime: renderRuntime, audit: renderAudit,
     };
     await renderers[view]();
+    if (revision !== state.viewRevision) return;
+    content.querySelectorAll(".table-shell").forEach(table => { table.tabIndex = 0; table.setAttribute("aria-label", "数据表格"); });
     $("#freshness").textContent = `刷新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
   } catch (error) {
+    if (revision !== state.viewRevision || error.name === "AbortError") return;
+    $("#freshness").textContent = "刷新失败";
     if (error.status === 401) { showLogin(); return; }
     if (error.code === "PASSWORD_CHANGE_REQUIRED") { openPasswordModal(true); return; }
-    content.innerHTML = empty(`读取失败：${error.message}`);
+    content.innerHTML = empty(`读取失败：${error.message}`) + '<button class="button secondary section-spaced" data-open-view="' + view + '">重新读取</button>';
+  } finally {
+    if (revision === state.viewRevision) {
+      content.setAttribute("aria-busy", "false");
+      $("#refresh-button").disabled = false;
+    }
   }
 }
 
-function metric(label, value, hint, extra = "") { return `<div class="metric ${extra}"><span class="label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span class="hint">${escapeHtml(hint)}</span></div>`; }
+function metric(label, value, hint, extra = "", iconName = "") { return `<div class="metric ${extra}">${iconName ? icon(iconName, "metric-icon") : ""}<span class="label">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span class="hint">${escapeHtml(hint)}</span></div>`; }
+function icon(name, extra = "") {
+  return `<img class="ui-icon ${extra}" src="/assets/icon-${name}.svg" width="20" height="20" alt="">`;
+}
+function attentionLink(view, label, count, hint, name = "triangle-alert") {
+  return `<button class="attention-link" data-open-view="${view}">${icon(name)}<span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(hint)}</small></span><b>${escapeHtml(count)}</b>${icon("chevron-right")}</button>`;
+}
 async function renderOverview() {
   const data = await api("/api/overview");
   $("#sidebar-release").textContent = data.runtime.release_id;
   const summary = data.summary;
-  const attention = summary.failed_operations_24h + summary.paused_policies + summary.isolation_violations + summary.critical_incidents;
+  const sessionAttention = data.systems.reduce((total, system) => total + system.attention_sessions, 0);
+  const attention = [
+    summary.open_incidents && attentionLink("incidents", "开放事件", summary.open_incidents, `P0/P1 · ${summary.critical_incidents}`, "shield-alert"),
+    sessionAttention && attentionLink("sessions", "会话需要关注", sessionAttention, "以会话记录为准，未做实时检查", "key-round"),
+    summary.outstanding_deliveries && attentionLink("coordination", "投递等待确认", summary.outstanding_deliveries, "查看端点与投递回执", "send"),
+    (summary.waiting_host_dispatches + summary.acceptance_unknown_dispatches) && attentionLink("coordination", "宿主受理等待", summary.active_host_dispatches, `连接恢复 ${summary.waiting_host_dispatches} / 受理不确定 ${summary.acceptance_unknown_dispatches}`, "bot"),
+    summary.failed_operations_24h && attentionLink("operations", "近 24 小时异常操作", summary.failed_operations_24h, "包含失败及结果未知", "activity"),
+    summary.paused_policies && attentionLink("capabilities", "生效中的写暂停", summary.paused_policies, "查看暂停范围和原因", "shield-check"),
+    summary.isolation_violations && attentionLink("coordination", "隔离异常", summary.isolation_violations, "检查用户、任务与端点关联", "users"),
+  ].filter(Boolean).join("");
   content.innerHTML = `
-    <div class="metric-grid">
-      ${metric("接入用户", summary.users, `${summary.active_tokens} 个有效令牌`)}
-      ${metric("活动会话", summary.active_sessions, "下游登录状态")}
-      ${metric("活动任务", summary.active_tasks, `${summary.waiting_tasks} 个等待用户`)}
-      ${metric("活动端点", summary.active_endpoints, "网页与聊天通道")}
-      ${metric("待投递", summary.outstanding_deliveries, "尚未确认送达", summary.outstanding_deliveries ? "alert" : "")}
-      ${metric("宿主受理等待", summary.active_host_dispatches, `连接恢复 ${summary.waiting_host_dispatches} / 受理不确定 ${summary.acceptance_unknown_dispatches}`, summary.waiting_host_dispatches || summary.acceptance_unknown_dispatches ? "alert" : "")}
-      ${metric("24h 异常", summary.failed_operations_24h, `${summary.operations_24h} 次操作`, summary.failed_operations_24h ? "alert" : "")}
-      ${metric("开放事件", summary.open_incidents, `${summary.critical_incidents} 个 P0/P1`, summary.critical_incidents ? "alert" : "")}
-      ${metric("治理约束", summary.paused_policies + summary.isolation_violations, `写暂停 ${summary.paused_policies} / 隔离异常 ${summary.isolation_violations}`, summary.paused_policies || summary.isolation_violations ? "alert" : "")}
+    <div class="metric-grid overview-metrics">
+      ${metric("活动任务", summary.active_tasks, `等待用户 ${summary.waiting_tasks}`, "", "list-checks")}
+      ${metric("24 小时操作", summary.operations_24h, `异常 ${summary.failed_operations_24h} · 最近最多 500 条记录`, "", "activity")}
+      ${metric("待投递", summary.outstanding_deliveries, "尚未确认送达", summary.outstanding_deliveries ? "alert" : "", "send")}
+      ${metric("开放事件", summary.open_incidents, `P0/P1 · ${summary.critical_incidents}`, summary.open_incidents ? "alert" : "", "shield-alert")}
     </div>
-    <div class="health-strip ${attention ? "attention" : "healthy"}"><div><strong>${attention ? "存在需要管理员关注的运行项" : "核心运行状态正常"}</strong><span>${attention ? "请查看事件治理、操作记录与隔离完整性。" : "任务隔离、写策略和近 24 小时执行未发现异常。"}</span></div><button class="button secondary small" data-open-view="incidents">查看事件治理</button></div>
+    <section class="architecture" aria-label="接入与执行路径">
+      <div class="architecture-head"><h2>接入与执行路径</h2><small>架构关系 · 非实时链路</small></div>
+      <div class="architecture-grid">
+        <div class="architecture-node"><h3>01 / 客户端</h3><ul><li>${icon("monitor")}Workspace</li><li>${icon("send")}Telegram</li><li>${icon("handshake")}微信</li></ul></div>
+        <span class="path-arrow" aria-hidden="true">→</span>
+        <div class="architecture-node"><h3>02 / 智能体宿主</h3><ul><li>${icon("bot")}OpenClaw</li><li>${icon("shield-check")}Reference Host</li></ul><small>Reference Host 用于协议验证</small></div>
+        <span class="path-arrow" aria-hidden="true">→</span>
+        <div class="architecture-node central"><h3>03 / AgentBridge 中心</h3><ul><li>${icon("users")}身份与权限</li><li>${icon("workflow")}Task Hub</li><li>${icon("handshake")}可信交互</li><li>${icon("shield-check")}受控执行</li></ul></div>
+        <span class="path-arrow" aria-hidden="true">→</span>
+        <div class="architecture-node"><h3>04 / 已配置业务系统</h3><ul>${data.systems.filter(system => system.configured).map(system => `<li>${icon("database")}${escapeHtml(system.label)}</li>`).join("") || "<li>未配置</li>"}</ul></div>
+      </div>
+      <div class="write-path"><span>业务写入边界</span>准备 <b>→</b> 用户授权 <b>→</b> 提交 <b>→</b> 权威回读</div>
+    </section>
+    <div class="governance-strip">
+      <span>接入用户<b>${summary.users}</b></span><span>有效令牌<b>${summary.active_tokens}</b></span><span>活动端点<b>${summary.active_endpoints}</b></span><span>写暂停<b>${summary.paused_policies}</b></span><span>隔离异常<b>${summary.isolation_violations}</b></span>
+    </div>
     <div class="split">
-      <section class="panel"><div class="panel-head"><h3>系统状态</h3><span>按中心会话注册表统计</span></div><div class="system-list">${data.systems.map(system => `
-        <div class="system-row"><div class="system-name"><strong>${escapeHtml(system.label)}</strong><span>${escapeHtml(system.system_id)}</span></div><div class="system-stat"><strong>${system.active_sessions}</strong><span>活动</span></div><div class="system-stat"><strong>${system.attention_sessions}</strong><span>需关注</span></div><div class="system-stat"><strong>${system.total_sessions}</strong><span>总计</span></div></div>`).join("")}</div></section>
-      <section class="panel"><div class="panel-head"><h3>生效中的写暂停</h3><span>${data.paused_policies.length} 条</span></div>${data.paused_policies.length ? `<div class="system-list">${data.paused_policies.map(policy => `<div class="system-row policy-row"><div class="system-name"><strong>${escapeHtml(policy.scope_type)} · ${escapeHtml(policy.scope_value)}</strong><span>${escapeHtml(policy.reason)}</span></div>${badge(policy.state)}</div>`).join("")}</div>` : empty("没有生效中的写暂停")}</section>
+      <section class="panel"><div class="panel-head"><h3>系统会话</h3><span>注册表快照，不代表实时在线</span></div><div class="system-list">${data.systems.map(system => `
+        <div class="system-row"><div class="system-name"><strong>${escapeHtml(system.label)}</strong><span>${escapeHtml(system.system_id)}</span></div><div class="system-stat"><strong>${system.active_sessions}</strong><span>上次有效</span></div><div class="system-stat ${system.attention_sessions ? "attention" : ""}"><strong>${system.attention_sessions}</strong><span>需关注</span></div><div class="system-stat"><strong>${system.total_sessions}</strong><span>总计</span></div></div>`).join("")}</div><button class="attention-link" data-open-view="sessions"><span>查看用户 × 系统会话</span>${icon("chevron-right")}</button></section>
+      <section class="panel"><div class="panel-head"><h3>需关注</h3><span>快照 ${fmtTime(data.generated_at)}</span></div><div class="attention-list">${attention || empty("当前统计未发现待关注项")}</div></section>
     </div>
-    <div class="view-head section-spaced-sm"><div><h2>最近操作</h2><p>只展示运行元数据，不展示业务字段和值。</p></div></div>${operationTable(data.recent_operations, false)}`;
+    ${data.paused_policies.length ? `<div class="view-head section-spaced"><h2>生效中的写暂停</h2></div>${table(["范围", "对象", "原因"], data.paused_policies.map(policy => `<tr><td>${escapeHtml(policy.scope_type)}</td><td>${escapeHtml(policy.scope_value)}</td><td>${escapeHtml(policy.reason)}</td></tr>`))}` : ""}
+    <div class="view-head section-spaced-sm"><div><h2>最近操作</h2><p>仅运行元数据，不展示业务字段和值。</p></div><button class="button secondary small" data-open-view="operations">全部操作</button></div>${operationTable(data.recent_operations, false)}`;
 }
 
 function principalBindingSummary(user) {
@@ -299,19 +375,85 @@ function severityBadge(value) {
   const cls = ["P0", "P1"].includes(value) ? "bad" : value === "P2" ? "warn" : "neutral";
   return `<span class="status ${cls}">${escapeHtml(value || "--")}</span>`;
 }
+
+function incidentActions(item) {
+  if (state.account.role !== "admin" || !["open", "acknowledged", "investigating"].includes(item.state)) return "";
+  const actions = [["acknowledge", "确认"], ["investigate", "调查"], ["resolve", "解决"], ["suppress", "抑制"]];
+  return `<div class="actions">${actions.filter(([action]) => !(action === "acknowledge" && item.state !== "open") && !(action === "investigate" && item.state === "investigating")).map(([action, label]) => `<button class="button secondary small" data-incident-action="${action}" data-incident-id="${escapeHtml(item.incident_id)}">${label}</button>`).join("")}</div>`;
+}
 async function renderIncidents(evaluate = false) {
   const [governance, incidents] = await Promise.all([api(`/api/governance${evaluate ? "?evaluate=true" : ""}`), api("/api/incidents?limit=500")]);
+  state.incidents = incidents.items;
   const summary = governance.summary;
-  const incidentRows = incidents.items.map(item => {
-    const open = ["open", "acknowledged", "investigating"].includes(item.state);
-    const actions = state.account.role === "admin" && open ? `<div class="actions">${item.state === "open" ? `<button class="button secondary small" data-incident-action="acknowledge" data-incident-id="${item.incident_id}">确认</button>` : ""}${item.state !== "investigating" ? `<button class="button secondary small" data-incident-action="investigate" data-incident-id="${item.incident_id}">调查</button>` : ""}<button class="button secondary small" data-incident-action="resolve" data-incident-id="${item.incident_id}">解决</button><button class="button secondary small" data-incident-action="suppress" data-incident-id="${item.incident_id}">抑制</button></div>` : "";
-    return filterRow(`${item.incident_id} ${item.rule_id} ${item.title} ${item.symptom_code} ${item.root_cause_code} ${item.user_subject} ${item.system_id} ${item.object_id}`, item.state, `<td>${severityBadge(item.severity)}</td><td>${incidentStateBadge(item.state)}</td><td class="truncate" title="${escapeHtml(item.title)}"><strong>${escapeHtml(item.title)}</strong><br><span class="muted code">${escapeHtml(item.rule_id)}</span></td><td>${escapeHtml(item.user_subject || "--")}</td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td><td class="code">${escapeHtml(item.symptom_code || "--")}</td><td>${item.occurrence_count}</td><td>${fmtTime(item.last_seen_at)}</td><td>${actions}</td>`);
-  });
-  const sloRows = governance.slo.metrics.map(metricItem => `<tr><td class="code">${escapeHtml(metricItem.metricKey)}</td><td>${metricItem.sampleCount}</td><td><strong>${escapeHtml(fmtMetric(metricItem))}</strong></td><td>${metricItem.target == null ? "--" : escapeHtml(fmtMetric({ ...metricItem, value: metricItem.target }))}</td><td>${badge(metricItem.status)}</td></tr>`);
+  const incidentRows = incidents.items.map(item => filterRow(
+    `${item.incident_id} ${item.rule_id} ${item.title} ${item.severity} ${item.symptom_code} ${item.root_cause_code} ${item.user_subject} ${item.system_id} ${item.object_id}`, item.state,
+    `<td>${severityBadge(item.severity)}</td><td><button class="incident-select" data-incident-detail="${escapeHtml(item.incident_id)}" aria-pressed="false">${escapeHtml(item.title)}</button><br><span class="muted code">${escapeHtml(item.rule_id)}</span></td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td><td>${incidentStateBadge(item.state)}</td><td>${fmtTime(item.last_seen_at)}</td>`
+  ));
+  const sloRows = governance.slo.metrics.map(item => `<tr><td class="code">${escapeHtml(item.metricKey)}</td><td>${item.sampleCount}</td><td><strong>${escapeHtml(fmtMetric(item))}</strong></td><td>${item.target == null ? "--" : escapeHtml(fmtMetric({ ...item, value: item.target }))}</td><td>${badge(item.status)}</td></tr>`);
   const signalRows = governance.recent_signals.map(item => `<tr><td>${fmtTime(item.observed_at)}</td><td class="code">${escapeHtml(item.signal_type)}</td><td>${escapeHtml(item.source)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.user_subject || "--")}</td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td></tr>`);
   const recoveryRows = governance.recent_recoveries.map(item => `<tr><td>${fmtTime(item.created_at)}</td><td class="code">${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.target_type)}</td><td class="code">${shortId(item.target_id)}</td><td>${escapeHtml(item.actor)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.error_code || "--")}</td></tr>`);
   const observationRows = (governance.observations || []).map(item => `<tr><td><strong>${escapeHtml(item.name)}</strong><br><span class="muted code">${shortId(item.observation_id)}</span></td><td>${badge(item.state)}</td><td>${fmtTime(item.started_at)}</td><td>${fmtTime(item.ends_at)}</td><td>${item.snapshot_count}</td><td>${fmtTime(item.last_snapshot_at)}</td><td>${escapeHtml(item.created_by)}</td></tr>`);
-  content.innerHTML = `<div class="metric-grid">${metric("开放事件", summary.open_incidents, "待处理、已确认或调查中", summary.open_incidents ? "alert" : "")}${metric("P0/P1", summary.critical_incidents, "需要优先处置", summary.critical_incidents ? "alert" : "")}${metric("活动链路", summary.active_traces, "执行中或等待用户")}${metric("影子观察", summary.active_observations || 0, `最近采样 ${fmtTime(summary.last_observation_at)}`)}</div><div class="toolbar section-spaced"><div><strong>异常事件</strong><div class="muted">检测结果可以确认、调查、解决或抑制；系统不会自动重试结果未知的业务写入。</div></div>${state.account.role === "admin" ? '<button class="button secondary" data-evaluate-runtime>立即评估</button>' : ""}</div>${filteredTable(["级别", "状态", "事件", "用户", "系统/宿主", "症状", "次数", "最近出现", ""], incidentRows, "搜索规则、事件、用户、系统或对象", ["open", "acknowledged", "investigating", "resolved", "suppressed"])}<div class="view-head section-spaced"><div><h2>影子观察</h2><p>按小时采集中央运行账本与 SLO，不调用业务系统，也不自动恢复业务写入。</p></div></div>${table(["观察批次", "状态", "开始", "计划结束", "快照", "最近采样", "发起人"], observationRows)}<div class="split"><section><div class="view-head section-spaced"><div><h2>24 小时 SLO</h2><p>零隔离异常、写后核验覆盖率与关键阶段延迟。</p></div></div>${table(["指标", "样本", "当前值", "目标", "状态"], sloRows)}</section><section><div class="view-head section-spaced"><div><h2>最近信号</h2><p>非敏感运行信号。</p></div></div>${table(["时间", "信号", "来源", "状态", "用户", "系统/宿主"], signalRows)}</section></div><div class="view-head section-spaced"><div><h2>受控恢复账本</h2><p>所有恢复动作带幂等键、操作者与结果，失败不会静默重复。</p></div></div>${table(["时间", "动作", "对象", "对象 ID", "操作者", "状态", "错误"], recoveryRows)}`;
+  const tabs = [["events", "事件"], ["observations", "影子观察"], ["slo", "SLO"], ["signals", "最近信号"], ["recoveries", "恢复账本"]];
+  content.innerHTML = `
+    <div class="metric-grid">${metric("开放事件", summary.open_incidents, "待处理、已确认或调查中", summary.open_incidents ? "alert" : "", "shield-alert")}${metric("P0/P1", summary.critical_incidents, "需要优先处置", summary.critical_incidents ? "alert" : "")}${metric("活动链路", summary.active_traces, "执行中或等待用户")}${metric("影子观察", summary.active_observations || 0, `最近采样 ${fmtTime(summary.last_observation_at)}`)}</div>
+    <div class="toolbar section-spaced"><div><strong>异常事件与可靠性</strong><div class="muted">只读运行证据；处置事件不会重试业务写入。</div></div>${state.account.role === "admin" ? '<button class="button secondary" data-evaluate-runtime>立即评估</button>' : ""}</div>
+    <div class="segmented" role="tablist" aria-label="事件治理视图">${tabs.map(([key, label]) => `<button role="tab" id="governance-tab-${key}" aria-controls="governance-panel-${key}" data-governance-tab="${key}">${label}</button>`).join("")}</div>
+    <section id="governance-panel-events" data-governance-panel="events" role="tabpanel" aria-labelledby="governance-tab-events"><div class="incident-layout">
+      ${filteredTable(["级别", "事件", "系统/宿主", "状态", "最近发生"], incidentRows, "搜索事件、级别、用户或系统", ["open", "acknowledged", "investigating", "resolved", "suppressed"])}
+      <aside id="incident-detail" class="incident-detail" aria-label="选中事件详情">${empty("选择事件查看证据")}</aside>
+    </div></section>
+    <section id="governance-panel-observations" data-governance-panel="observations" role="tabpanel" aria-labelledby="governance-tab-observations"><div class="view-head"><div><h2>影子观察</h2><p>按小时采集中央账本与 SLO，不调用业务系统。</p></div></div>${table(["观察批次", "状态", "开始", "计划结束", "快照", "最近采样", "发起人"], observationRows)}</section>
+    <section id="governance-panel-slo" data-governance-panel="slo" role="tabpanel" aria-labelledby="governance-tab-slo"><div class="view-head"><div><h2>24 小时 SLO</h2><p>零隔离异常、写后核验覆盖率与关键阶段延迟。</p></div></div>${table(["指标", "样本", "当前值", "目标", "状态"], sloRows)}</section>
+    <section id="governance-panel-signals" data-governance-panel="signals" role="tabpanel" aria-labelledby="governance-tab-signals"><div class="view-head"><h2>最近信号</h2></div>${table(["时间", "信号", "来源", "状态", "用户", "系统/宿主"], signalRows)}</section>
+    <section id="governance-panel-recoveries" data-governance-panel="recoveries" role="tabpanel" aria-labelledby="governance-tab-recoveries"><div class="view-head"><div><h2>受控恢复账本</h2><p>动作记录包含操作者与结果，失败不会静默重复。</p></div></div>${table(["时间", "动作", "对象", "对象 ID", "操作者", "状态", "错误"], recoveryRows)}</section>`;
+  selectGovernanceTab(state.governanceTab);
+  const selected = incidents.items.find(item => item.incident_id === state.selectedIncident) || incidents.items[0];
+  if (selected) await selectIncident(selected.incident_id);
+}
+function selectGovernanceTab(tab) {
+  state.governanceTab = tab;
+  content.querySelectorAll("[data-governance-tab]").forEach(button => {
+    const selected = button.dataset.governanceTab === tab;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  content.querySelectorAll("[data-governance-panel]").forEach(panel => panel.classList.toggle("hidden", panel.dataset.governancePanel !== tab));
+}
+async function selectIncident(id) {
+  const item = state.incidents.find(entry => entry.incident_id === id);
+  const panel = $("#incident-detail");
+  if (!item || !panel) return;
+  const revision = ++state.detailRevision;
+  state.selectedIncident = id;
+  content.querySelectorAll("[data-incident-detail]").forEach(button => {
+    const selected = button.dataset.incidentDetail === id;
+    button.setAttribute("aria-pressed", String(selected));
+    button.closest("tr").classList.toggle("selected", selected);
+  });
+  panel.innerHTML = `
+    <h3>${escapeHtml(item.title)}</h3>${severityBadge(item.severity)} ${incidentStateBadge(item.state)}
+    <dl class="detail-grid section-spaced-sm">
+      <div><dt>用户</dt><dd>${escapeHtml(item.user_subject || "--")}</dd></div><div><dt>系统 / 宿主</dt><dd>${escapeHtml(item.system_id || item.host_type || "--")}</dd></div>
+      <div><dt>首次发现</dt><dd>${fmtTime(item.first_seen_at)}</dd></div><div><dt>出现次数</dt><dd>${escapeHtml(item.occurrence_count)}</dd></div>
+      <div><dt>症状</dt><dd>${escapeHtml(item.symptom_code || "--")}</dd></div><div><dt>根因记录</dt><dd>${escapeHtml(item.root_cause_code || "尚未确定")}</dd></div>
+      <div><dt>事件 ID</dt><dd class="code">${escapeHtml(item.incident_id)}</dd></div><div><dt>关联对象 · ${escapeHtml(item.object_type || "--")}</dt><dd class="code">${escapeHtml(item.object_id || "--")}</dd></div>
+    </dl>
+    ${item.recommended_action ? `<p class="evidence-notice">${escapeHtml(item.recommended_action)}</p>` : ""}
+    <h4>执行证据</h4><div id="incident-evidence">${item.trace_id ? '<p class="muted">正在读取关联链路</p>' : '<p class="muted">没有关联链路，无法确认执行阶段。</p>'}</div>
+    ${item.trace_id ? `<button class="button secondary small" data-trace-detail="${escapeHtml(item.trace_id)}">查看完整链路</button>` : ""}
+    <h4>治理处置</h4><p class="muted">最近更新：${fmtTime(item.updated_at)}<br>解决治理事件不等于业务操作成功。结果未知的业务写入不会自动重试。</p>${incidentActions(item)}`;
+  if (!item.trace_id) return;
+  try {
+    const data = await api(`/api/traces/${encodeURIComponent(item.trace_id)}`);
+    if (revision !== state.detailRevision || !panel.isConnected) return;
+    const spans = data.spans || [];
+    $("#incident-evidence").innerHTML = `<p><span class="boundary">${escapeHtml(boundaryLabel(data.trace.side_effect_boundary))}</span></p>
+      ${spans.length ? `<ol class="evidence-timeline">${spans.slice(-12).map(span => `<li><strong>${escapeHtml(span.stage)}</strong><small>${fmtTime(span.started_at)} · ${fmtDuration(span.duration_ms)}</small>${badge(span.status)}<small>${escapeHtml(boundaryLabel(span.side_effect_boundary))}</small></li>`).join("")}</ol><p class="muted">展示最近 ${Math.min(spans.length, 12)} 个已记录阶段，共 ${spans.length} 个。</p>` : '<p class="muted">链路尚无阶段记录。</p>'}`;
+  } catch (error) {
+    if (revision !== state.detailRevision || !panel.isConnected || error.name === "AbortError") return;
+    $("#incident-evidence").innerHTML = `<p class="form-error">证据读取失败：${escapeHtml(error.message)}</p><button class="button secondary small" data-incident-detail="${escapeHtml(id)}">重新读取证据</button>`;
+  }
 }
 
 async function renderCoordination() {
@@ -462,7 +604,11 @@ $("#login-form").addEventListener("submit", async event => {
 });
 $("#nav").addEventListener("click", event => { const button = event.target.closest("button[data-view]"); if (button) loadView(button.dataset.view); });
 $("#refresh-button").addEventListener("click", () => loadView(state.view));
-$("#account-button").addEventListener("click", () => $("#account-menu").classList.toggle("hidden"));
+$("#account-button").addEventListener("click", () => {
+  const expanded = $("#account-menu").classList.contains("hidden");
+  $("#account-menu").classList.toggle("hidden", !expanded);
+  $("#account-button").setAttribute("aria-expanded", String(expanded));
+});
 $("#change-password-button").addEventListener("click", () => { $("#account-menu").classList.add("hidden"); openPasswordModal(false); });
 $("#banner-password-button").addEventListener("click", () => openPasswordModal(true));
 $("#logout-button").addEventListener("click", async () => { try { await api("/api/logout", { method: "POST", body: "{}" }); } finally { showLogin(); } });
@@ -471,9 +617,12 @@ $("#modal-form").addEventListener("submit", async event => { event.preventDefaul
 content.addEventListener("input", event => { if (event.target.matches("[data-filter-search]")) applyFilter(event.target); });
 content.addEventListener("change", event => { if (event.target.matches("[data-filter-status]")) applyFilter(event.target); });
 content.addEventListener("click", async event => {
+  try {
+  const governanceTab = event.target.closest("[data-governance-tab]"); if (governanceTab) { selectGovernanceTab(governanceTab.dataset.governanceTab); return; }
   const tab = event.target.closest("[data-coordination-tab]"); if (tab) { selectCoordinationTab(tab.dataset.coordinationTab); return; }
   const target = event.target.closest("button"); if (!target) return;
   if (target.dataset.openView) loadView(target.dataset.openView);
+  else if (target.dataset.incidentDetail) await selectIncident(target.dataset.incidentDetail);
   else if (target.dataset.traceDetail) await openTraceDetail(target.dataset.traceDetail);
   else if (target.dataset.incidentAction) openReasonAction({ title: `${target.textContent.trim()}运行事件`, submit: target.textContent.trim(), danger: target.dataset.incidentAction === "suppress", request: reason => api(`/api/incidents/${target.dataset.incidentId}/${target.dataset.incidentAction}`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.matches("[data-evaluate-runtime]")) openRuntimeRecovery({ actionType: "evaluate_runtime", targetId: "runtime", title: "立即评估运行状态", submit: "开始评估" });
@@ -490,6 +639,36 @@ content.addEventListener("click", async event => {
   else if (target.dataset.rebindSession) openRebindSession(target);
   else if (target.dataset.invalidateSession) openReasonAction({ title: "使会话失效", submit: "确认失效", danger: true, request: reason => api(`/api/sessions/${target.dataset.invalidateSession}/invalidate`, { method: "POST", body: JSON.stringify({ reason }) }) });
   else if (target.dataset.resumePolicy) openReasonAction({ title: "恢复写入", submit: "恢复", request: reason => api(`/api/policies/${target.dataset.resumePolicy}/resume`, { method: "POST", body: JSON.stringify({ reason }) }) });
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    if (error.status === 401) { showLogin(); return; }
+    toast(`操作未完成：${error.message}`, true);
+  }
 });
 modal.addEventListener("click", event => { if (event.target.matches("[data-copy-secret]")) navigator.clipboard.writeText($("#issued-secret").textContent).then(() => toast("密钥已复制"), () => toast("复制失败，请手动选择", true)); });
+function setNavigation(open) {
+  $("#app").classList.toggle("navigation-open", open);
+  $("#navigation-toggle").setAttribute("aria-expanded", String(open));
+  $("#navigation-toggle").setAttribute("aria-label", open ? "收起导航" : "展开导航");
+  $("#navigation-toggle").title = open ? "收起导航" : "展开导航";
+}
+$("#navigation-toggle").addEventListener("click", () => setNavigation(!$("#app").classList.contains("navigation-open")));
+document.addEventListener("click", event => {
+  if (!event.target.closest("#account-button, #account-menu")) {
+    $("#account-menu").classList.add("hidden");
+    $("#account-button").setAttribute("aria-expanded", "false");
+  }
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") { setNavigation(false); $("#account-menu").classList.add("hidden"); $("#account-button").setAttribute("aria-expanded", "false"); }
+  const tab = event.target.closest("[data-governance-tab]");
+  if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const tabs = [...content.querySelectorAll("[data-governance-tab]")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    selectGovernanceTab(tabs[next].dataset.governanceTab);
+    tabs[next].focus();
+  }
+});
 initialize();

@@ -1128,6 +1128,29 @@ class AdminFirstLoginHttpTests(unittest.TestCase):
 
 
 class AdminStaticAssetTests(unittest.TestCase):
+    def test_console_icons_are_local_and_packaged(self) -> None:
+        import re
+        import tomllib
+        import xml.etree.ElementTree as ET
+
+        root = Path(__file__).resolve().parents[1]
+        static = root / "bscli/admin/static"
+        page = (static / "index.html").read_text(encoding="utf-8")
+        script = (static / "admin.js").read_text(encoding="utf-8")
+        names = set(re.findall(r'/assets/(icon-[a-z-]+\.svg)', page))
+        names.update(f"icon-{name}.svg" for name in re.findall(r'icon\("([a-z-]+)"', script))
+        self.assertGreater(len(names), 10)
+        for name in names:
+            with self.subTest(icon=name):
+                self.assertTrue((static / name).is_file())
+                self.assertTrue(ET.parse(static / name).getroot().tag.endswith("svg"))
+        package = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertIn("static/*.svg", package["tool"]["setuptools"]["package-data"]["bscli.admin"])
+        self.assertTrue((static / "lucide-LICENSE.txt").is_file())
+        self.assertNotIn("https://", page)
+        self.assertIn('id="navigation-toggle"', page)
+        self.assertIn("signal?.throwIfAborted()", script)
+
     def test_login_form_survives_async_submit_and_assets_are_csp_clean(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "bscli/admin/static/admin.js").read_text(encoding="utf-8")

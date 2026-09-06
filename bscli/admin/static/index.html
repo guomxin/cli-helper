@@ -11,8 +11,8 @@
 <body>
   <main id="login-view" class="login-shell">
     <section class="login-brand" aria-label="AgentBridge">
-      <div class="brand-mark" aria-hidden="true">AB</div>
-      <p class="brand-kicker">AGENTBRIDGE</p>
+      <div class="brand-mark" aria-hidden="true"><img src="/assets/icon-network.svg" alt="" width="48" height="48"></div>
+      <p class="brand-kicker">AgentBridge</p>
       <h1>管理控制台</h1>
       <dl class="brand-meta">
         <div><dt>部署</dt><dd>内网中心</dd></div>
@@ -36,39 +36,43 @@
   </main>
 
   <div id="app" class="app-shell hidden">
-    <aside class="sidebar">
+    <aside id="sidebar" class="sidebar">
       <div class="sidebar-brand">
-        <div class="brand-mark small">AB</div>
+        <div class="brand-mark small" aria-hidden="true"><img src="/assets/icon-network.svg" alt="" width="32" height="32"></div>
         <div><strong>AgentBridge</strong><span>管理控制台</span></div>
       </div>
       <nav id="nav" class="nav" aria-label="主导航">
-        <button data-view="overview" class="active"><span class="nav-code">01</span>总览</button>
-        <button data-view="users"><span class="nav-code">02</span>用户与令牌</button>
-        <button data-view="sessions"><span class="nav-code">03</span>系统会话</button>
-        <button data-view="capabilities"><span class="nav-code">04</span>能力与策略</button>
-        <button data-view="operations"><span class="nav-code">05</span>操作记录</button>
-        <button data-view="interactions"><span class="nav-code">06</span>可信交互</button>
-        <button data-view="traces"><span class="nav-code">07</span>链路追踪</button>
-        <button data-view="incidents"><span class="nav-code">08</span>事件治理</button>
-        <button data-view="coordination"><span class="nav-code">09</span>多端任务</button>
-        <button data-view="runtime"><span class="nav-code">10</span>系统运行</button>
-        <button data-view="audit"><span class="nav-code">11</span>管理审计</button>
+        <p class="nav-group">运行观察</p>
+        <button data-view="overview" class="active" aria-current="page"><img class="ui-icon" src="/assets/icon-layout-dashboard.svg" alt="" width="20" height="20"><span>运行总览</span></button>
+        <button data-view="incidents"><img class="ui-icon" src="/assets/icon-shield-alert.svg" alt="" width="20" height="20"><span>事件治理</span></button>
+        <button data-view="traces"><img class="ui-icon" src="/assets/icon-route.svg" alt="" width="20" height="20"><span>链路追踪</span></button>
+        <button data-view="runtime"><img class="ui-icon" src="/assets/icon-server.svg" alt="" width="20" height="20"><span>系统运行</span></button>
+        <p class="nav-group">执行协作</p>
+        <button data-view="operations"><img class="ui-icon" src="/assets/icon-list-checks.svg" alt="" width="20" height="20"><span>操作记录</span></button>
+        <button data-view="interactions"><img class="ui-icon" src="/assets/icon-handshake.svg" alt="" width="20" height="20"><span>可信交互</span></button>
+        <button data-view="coordination"><img class="ui-icon" src="/assets/icon-workflow.svg" alt="" width="20" height="20"><span>多端任务</span></button>
+        <p class="nav-group">访问治理</p>
+        <button data-view="users"><img class="ui-icon" src="/assets/icon-users.svg" alt="" width="20" height="20"><span>用户与令牌</span></button>
+        <button data-view="sessions"><img class="ui-icon" src="/assets/icon-key-round.svg" alt="" width="20" height="20"><span>系统会话</span></button>
+        <button data-view="capabilities"><img class="ui-icon" src="/assets/icon-shield-check.svg" alt="" width="20" height="20"><span>能力与策略</span></button>
+        <button data-view="audit"><img class="ui-icon" src="/assets/icon-scroll-text.svg" alt="" width="20" height="20"><span>管理审计</span></button>
       </nav>
       <div class="sidebar-foot">
-        <span class="status-dot"></span><span>中心服务</span><strong id="sidebar-release">--</strong>
+        <img class="ui-icon" src="/assets/icon-server.svg" width="18" height="18" alt=""><span>中心服务 / 内网部署</span><strong id="sidebar-release">--</strong>
       </div>
     </aside>
 
     <main class="workspace">
       <header class="topbar">
-        <div>
+        <button id="navigation-toggle" class="icon-button navigation-toggle" type="button" title="展开导航" aria-label="展开导航" aria-controls="nav" aria-expanded="false"><img class="ui-icon" src="/assets/icon-menu.svg" width="20" height="20" alt=""></button>
+        <div class="view-heading">
           <p id="view-kicker" class="eyebrow">CONTROL PLANE</p>
           <h1 id="view-title">运行总览</h1>
         </div>
         <div class="top-actions">
           <span id="freshness" class="freshness">尚未刷新</span>
-          <button id="refresh-button" class="button secondary icon-text" type="button" title="刷新当前页面"><span aria-hidden="true">↻</span>刷新</button>
-          <button id="account-button" class="account-button" type="button" aria-haspopup="menu">
+          <button id="refresh-button" class="icon-button" type="button" title="刷新当前页面" aria-label="刷新当前页面"><img class="ui-icon" src="/assets/icon-refresh-cw.svg" width="20" height="20" alt=""></button>
+          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">
             <span id="account-initial">A</span><span id="account-name">admin</span>
           </button>
           <div id="account-menu" class="account-menu hidden" role="menu">
@@ -87,7 +91,7 @@
 
   <dialog id="modal" class="modal">
     <form id="modal-form" method="dialog">
-      <header><div><p id="modal-kicker" class="eyebrow">管理操作</p><h2 id="modal-title">确认</h2></div><button id="modal-close" class="icon-button" type="button" aria-label="关闭">×</button></header>
+      <header><div><p id="modal-kicker" class="eyebrow">管理操作</p><h2 id="modal-title">确认</h2></div><button id="modal-close" class="icon-button" type="button" aria-label="关闭" title="关闭"><img class="ui-icon" src="/assets/icon-x.svg" width="20" height="20" alt=""></button></header>
       <div id="modal-body" class="modal-body"></div>
       <p id="modal-error" class="form-error" role="alert"></p>
       <footer><button id="modal-cancel" class="button secondary" type="button">取消</button><button id="modal-submit" class="button primary" type="submit">确认</button></footer>
