@@ -57,6 +57,12 @@ def console(tmp_path):
         actionability="current", title="投递等待确认", user_subject="fixture-user",
         object_type="delivery", object_id="fixture-delivery",
     )
+    historical = service.runtime_governance.upsert_incident(
+        rule_id="historical_fixture", severity="P2", symptom_code="RESULT_UNKNOWN",
+        actionability="manual_reconciliation", title="历史开发测试事项", object_type="operation", object_id="fixture-old",
+    )
+    with service.runtime_governance._connect() as connection:
+        connection.execute("UPDATE runtime_incidents SET first_seen_at = '2026-01-01T00:00:00+00:00' WHERE incident_id = ?", (historical["incident_id"],))
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -118,6 +124,13 @@ def test_console_views_interactions_and_layout(console):
             page.screenshot(path=str(output / f"{view}-桌面.png"))
 
         navigate("incidents")
+        expect(page.locator('select[data-incident-category]')).to_have_value("current")
+        expect(page.get_by_role("button", name="历史开发测试事项")).not_to_be_visible()
+        page.locator('select[data-incident-category]').select_option("historical")
+        expect(page.get_by_role("button", name="历史开发测试事项")).to_be_visible()
+        page.get_by_role("button", name="历史开发测试事项").click()
+        expect(page.locator("#incident-detail")).to_contain_text("累计检测次数（非业务次数）")
+        page.locator('select[data-incident-category]').select_option("current")
         page.locator(f'[data-incident-detail="{first["incident_id"]}"]').click()
         expect(page.locator("#incident-evidence")).to_contain_text("B4")
         expect(page.locator("#incident-evidence")).not_to_contain_text("已核验")

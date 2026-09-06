@@ -916,6 +916,21 @@ class RuntimeGovernanceStore:
         )[:900]
         now = self._now()
         with self._connect() as connection:
+            # Serialize detection with manual closure; one immutable write attempt
+            # must not become a new incident merely because it is scanned again.
+            connection.execute("BEGIN IMMEDIATE")
+            if rule_id == "write_outcome_unknown" and object_type == "operation" and object_id:
+                settled = connection.execute(
+                    """
+                    SELECT * FROM runtime_incidents
+                    WHERE rule_id = ? AND object_type = 'operation' AND object_id = ?
+                      AND state IN ('resolved', 'suppressed')
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    (rule_id, object_id),
+                ).fetchone()
+                if settled is not None:
+                    return _incident_from_row(settled)
             current = connection.execute(
                 """
                 SELECT * FROM runtime_incidents
@@ -1065,7 +1080,7 @@ class RuntimeGovernanceStore:
         severity: str | None = None,
         limit: int = 300,
     ) -> list[dict[str, Any]]:
-        query = "SELECT * FROM runtime_incidents"
+        query = "SELECT incident.* FROM runtime_incidents AS incident"
         filters: list[str] = []
         parameters: list[Any] = []
         if state:
@@ -1080,6 +1095,21 @@ class RuntimeGovernanceStore:
         query += "WHEN 'P2' THEN 2 ELSE 3 END, last_seen_at DESC LIMIT ?"
         parameters.append(min(max(int(limit), 1), 1000))
         with self._connect() as connection:
+            operation_time = (
+                "(SELECT created_at FROM operations WHERE operation_id = incident.object_id)"
+                if _table_exists(connection, "operations") else "NULL"
+            )
+            projection = f"""SELECT incident.*,
+                CASE WHEN incident.object_type = 'operation' THEN {operation_time}
+                  ELSE NULL END AS operation_created_at,
+                (SELECT reason FROM runtime_incident_events WHERE incident_id = incident.incident_id
+                  AND after_state IN ('resolved', 'suppressed') ORDER BY created_at DESC LIMIT 1)
+                  AS disposition_reason,
+                (SELECT actor FROM runtime_incident_events WHERE incident_id = incident.incident_id
+                  AND after_state IN ('resolved', 'suppressed') ORDER BY created_at DESC LIMIT 1)
+                  AS disposition_actor
+                FROM runtime_incidents AS incident"""
+            query = query.replace("SELECT incident.* FROM runtime_incidents AS incident", projection)
             rows = connection.execute(query, parameters).fetchall()
         return [_incident_from_row(row) for row in rows]
 
@@ -1108,7 +1138,8 @@ class RuntimeGovernanceStore:
 
         def detect(**kwargs: Any) -> None:
             incident = self.upsert_incident(**kwargs)
-            observed.add(incident["fingerprint"])
+            if incident["state"] in _ACTIVE_INCIDENT_STATES:
+                observed.add(incident["fingerprint"])
 
         with self._connect() as connection:
             unknown_operations = (

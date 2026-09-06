@@ -106,9 +106,10 @@ function applyFilter(control) {
   if (!scope) return;
   const search = (scope.querySelector("[data-filter-search]")?.value || "").trim().toLowerCase();
   const status = scope.querySelector("[data-filter-status]")?.value || "";
+  const category = scope.querySelector("[data-incident-category]")?.value || "";
   let visible = 0;
   scope.querySelectorAll("tbody tr").forEach(row => {
-    const matches = (!search || row.dataset.filterText.includes(search)) && (!status || row.dataset.filterStatus === status);
+    const matches = (!search || row.dataset.filterText.includes(search)) && (!status || row.dataset.filterStatus === status) && (!category || row.dataset.incidentCategory === category);
     row.classList.toggle("hidden", !matches);
     if (matches) visible += 1;
   });
@@ -381,25 +382,30 @@ function incidentActions(item) {
   const actions = [["acknowledge", "确认"], ["investigate", "调查"], ["resolve", "解决"], ["suppress", "抑制"]];
   return `<div class="actions">${actions.filter(([action]) => !(action === "acknowledge" && item.state !== "open") && !(action === "investigate" && item.state === "investigating")).map(([action, label]) => `<button class="button secondary small" data-incident-action="${action}" data-incident-id="${escapeHtml(item.incident_id)}">${label}</button>`).join("")}</div>`;
 }
+function incidentCategory(item) {
+  if (["resolved", "suppressed"].includes(item.state)) return "closed";
+  const occurredAt = Date.parse(item.operation_created_at || item.first_seen_at);
+  return item.actionability === "manual_reconciliation" && Number.isFinite(occurredAt) && Date.now() - occurredAt > 86400000 ? "historical" : "current";
+}
 async function renderIncidents(evaluate = false) {
   const [governance, incidents] = await Promise.all([api(`/api/governance${evaluate ? "?evaluate=true" : ""}`), api("/api/incidents?limit=500")]);
   state.incidents = incidents.items;
   const summary = governance.summary;
   const incidentRows = incidents.items.map(item => filterRow(
     `${item.incident_id} ${item.rule_id} ${item.title} ${item.severity} ${item.symptom_code} ${item.root_cause_code} ${item.user_subject} ${item.system_id} ${item.object_id}`, item.state,
-    `<td>${severityBadge(item.severity)}</td><td><button class="incident-select" data-incident-detail="${escapeHtml(item.incident_id)}" aria-pressed="false">${escapeHtml(item.title)}</button><br><span class="muted code">${escapeHtml(item.rule_id)}</span></td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td><td>${incidentStateBadge(item.state)}</td><td>${fmtTime(item.last_seen_at)}</td>`
-  ));
+    `<td>${severityBadge(item.severity)}</td><td><button class="incident-select" data-incident-detail="${escapeHtml(item.incident_id)}" aria-pressed="false">${escapeHtml(item.title)}</button><br><span class="muted code">${escapeHtml(item.rule_id)}</span></td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td><td>${incidentStateBadge(item.state)}</td><td>${fmtTime(item.operation_created_at)}</td><td>${fmtTime(item.last_seen_at)}</td>`
+  ).replace("<tr ", `<tr data-incident-category="${incidentCategory(item)}" `));
   const sloRows = governance.slo.metrics.map(item => `<tr><td class="code">${escapeHtml(item.metricKey)}</td><td>${item.sampleCount}</td><td><strong>${escapeHtml(fmtMetric(item))}</strong></td><td>${item.target == null ? "--" : escapeHtml(fmtMetric({ ...item, value: item.target }))}</td><td>${badge(item.status)}</td></tr>`);
   const signalRows = governance.recent_signals.map(item => `<tr><td>${fmtTime(item.observed_at)}</td><td class="code">${escapeHtml(item.signal_type)}</td><td>${escapeHtml(item.source)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.user_subject || "--")}</td><td>${escapeHtml(item.system_id || item.host_type || "--")}</td></tr>`);
   const recoveryRows = governance.recent_recoveries.map(item => `<tr><td>${fmtTime(item.created_at)}</td><td class="code">${escapeHtml(item.action_type)}</td><td>${escapeHtml(item.target_type)}</td><td class="code">${shortId(item.target_id)}</td><td>${escapeHtml(item.actor)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.error_code || "--")}</td></tr>`);
   const observationRows = (governance.observations || []).map(item => `<tr><td><strong>${escapeHtml(item.name)}</strong><br><span class="muted code">${shortId(item.observation_id)}</span></td><td>${badge(item.state)}</td><td>${fmtTime(item.started_at)}</td><td>${fmtTime(item.ends_at)}</td><td>${item.snapshot_count}</td><td>${fmtTime(item.last_snapshot_at)}</td><td>${escapeHtml(item.created_by)}</td></tr>`);
   const tabs = [["events", "事件"], ["observations", "影子观察"], ["slo", "SLO"], ["signals", "最近信号"], ["recoveries", "恢复账本"]];
   content.innerHTML = `
-    <div class="metric-grid">${metric("开放事件", summary.open_incidents, "待处理、已确认或调查中", summary.open_incidents ? "alert" : "", "shield-alert")}${metric("P0/P1", summary.critical_incidents, "需要优先处置", summary.critical_incidents ? "alert" : "")}${metric("活动链路", summary.active_traces, "执行中或等待用户")}${metric("影子观察", summary.active_observations || 0, `最近采样 ${fmtTime(summary.last_observation_at)}`)}</div>
+    <div class="metric-grid">${metric("未结案事件", summary.open_incidents, "包含当前异常和历史待核对", summary.open_incidents ? "alert" : "", "shield-alert")}${metric("P0/P1", summary.critical_incidents, "未结案事件中的严重级别", summary.critical_incidents ? "alert" : "")}${metric("活动链路", summary.active_traces, "执行中或等待用户")}${metric("影子观察", summary.active_observations || 0, `最近采样 ${fmtTime(summary.last_observation_at)}`)}</div>
     <div class="toolbar section-spaced"><div><strong>异常事件与可靠性</strong><div class="muted">只读运行证据；处置事件不会重试业务写入。</div></div>${state.account.role === "admin" ? '<button class="button secondary" data-evaluate-runtime>立即评估</button>' : ""}</div>
     <div class="segmented" role="tablist" aria-label="事件治理视图">${tabs.map(([key, label]) => `<button role="tab" id="governance-tab-${key}" aria-controls="governance-panel-${key}" data-governance-tab="${key}">${label}</button>`).join("")}</div>
     <section id="governance-panel-events" data-governance-panel="events" role="tabpanel" aria-labelledby="governance-tab-events"><div class="incident-layout">
-      ${filteredTable(["级别", "事件", "系统/宿主", "状态", "最近发生"], incidentRows, "搜索事件、级别、用户或系统", ["open", "acknowledged", "investigating", "resolved", "suppressed"])}
+      ${filteredTable(["级别", "事件", "系统/宿主", "状态", "关联操作发起", "最近检测"], incidentRows, "搜索事件、级别、用户或系统", ["open", "acknowledged", "investigating", "resolved", "suppressed"])}
       <aside id="incident-detail" class="incident-detail" aria-label="选中事件详情">${empty("选择事件查看证据")}</aside>
     </div></section>
     <section id="governance-panel-observations" data-governance-panel="observations" role="tabpanel" aria-labelledby="governance-tab-observations"><div class="view-head"><div><h2>影子观察</h2><p>按小时采集中央账本与 SLO，不调用业务系统。</p></div></div>${table(["观察批次", "状态", "开始", "计划结束", "快照", "最近采样", "发起人"], observationRows)}</section>
@@ -407,7 +413,12 @@ async function renderIncidents(evaluate = false) {
     <section id="governance-panel-signals" data-governance-panel="signals" role="tabpanel" aria-labelledby="governance-tab-signals"><div class="view-head"><h2>最近信号</h2></div>${table(["时间", "信号", "来源", "状态", "用户", "系统/宿主"], signalRows)}</section>
     <section id="governance-panel-recoveries" data-governance-panel="recoveries" role="tabpanel" aria-labelledby="governance-tab-recoveries"><div class="view-head"><div><h2>受控恢复账本</h2><p>动作记录包含操作者与结果，失败不会静默重复。</p></div></div>${table(["时间", "动作", "对象", "对象 ID", "操作者", "状态", "错误"], recoveryRows)}</section>`;
   selectGovernanceTab(state.governanceTab);
-  const selected = incidents.items.find(item => item.incident_id === state.selectedIncident) || incidents.items[0];
+  const scope = content.querySelector(".incident-layout [data-filter-scope]");
+  const counts = incidents.items.reduce((result, item) => { result[incidentCategory(item)]++; return result; }, { current: 0, historical: 0, closed: 0 });
+  scope.querySelector(".filters").insertAdjacentHTML("afterbegin", `<label class="filter-field"><span>分类</span><select data-incident-category><option value="current">当前异常 (${counts.current})</option><option value="historical">历史待核对 (${counts.historical})</option><option value="closed">已结案 (${counts.closed})</option><option value="">全部 (${incidents.items.length})</option></select></label><p class="incident-scope-note muted">当前列表最多 500 条；历史待核对指超过 24 小时的未结案结果未知事项。后台检测不代表新业务发生。</p>`);
+  applyFilter(scope.querySelector("[data-incident-category]"));
+  const currentItems = incidents.items.filter(item => incidentCategory(item) === "current");
+  const selected = currentItems.find(item => item.incident_id === state.selectedIncident) || currentItems[0];
   if (selected) await selectIncident(selected.incident_id);
 }
 function selectGovernanceTab(tab) {
@@ -435,14 +446,15 @@ async function selectIncident(id) {
     <h3>${escapeHtml(item.title)}</h3>${severityBadge(item.severity)} ${incidentStateBadge(item.state)}
     <dl class="detail-grid section-spaced-sm">
       <div><dt>用户</dt><dd>${escapeHtml(item.user_subject || "--")}</dd></div><div><dt>系统 / 宿主</dt><dd>${escapeHtml(item.system_id || item.host_type || "--")}</dd></div>
-      <div><dt>首次发现</dt><dd>${fmtTime(item.first_seen_at)}</dd></div><div><dt>出现次数</dt><dd>${escapeHtml(item.occurrence_count)}</dd></div>
+      <div><dt>关联操作发起时间</dt><dd>${fmtTime(item.operation_created_at)}</dd></div><div><dt>首次检测到</dt><dd>${fmtTime(item.first_seen_at)}</dd></div>
+      <div><dt>最近检测到</dt><dd>${fmtTime(item.last_seen_at)}</dd></div><div><dt>累计检测次数（非业务次数）</dt><dd>${escapeHtml(item.occurrence_count)}</dd></div>
       <div><dt>症状</dt><dd>${escapeHtml(item.symptom_code || "--")}</dd></div><div><dt>根因记录</dt><dd>${escapeHtml(item.root_cause_code || "尚未确定")}</dd></div>
       <div><dt>事件 ID</dt><dd class="code">${escapeHtml(item.incident_id)}</dd></div><div><dt>关联对象 · ${escapeHtml(item.object_type || "--")}</dt><dd class="code">${escapeHtml(item.object_id || "--")}</dd></div>
     </dl>
     ${item.recommended_action ? `<p class="evidence-notice">${escapeHtml(item.recommended_action)}</p>` : ""}
     <h4>执行证据</h4><div id="incident-evidence">${item.trace_id ? '<p class="muted">正在读取关联链路</p>' : '<p class="muted">没有关联链路，无法确认执行阶段。</p>'}</div>
     ${item.trace_id ? `<button class="button secondary small" data-trace-detail="${escapeHtml(item.trace_id)}">查看完整链路</button>` : ""}
-    <h4>治理处置</h4><p class="muted">最近更新：${fmtTime(item.updated_at)}<br>解决治理事件不等于业务操作成功。结果未知的业务写入不会自动重试。</p>${incidentActions(item)}`;
+    <h4>治理处置</h4><p class="muted">最近更新：${fmtTime(item.updated_at)}<br>解决治理事件不等于业务操作成功。结果未知的业务写入不会自动重试。</p>${item.disposition_reason ? `<p class="evidence-notice">结案记录：${escapeHtml(item.disposition_reason)}<br>操作者：${escapeHtml(item.disposition_actor || "--")}</p>` : ""}${incidentActions(item)}`;
   if (!item.trace_id) return;
   try {
     const data = await api(`/api/traces/${encodeURIComponent(item.trace_id)}`);
@@ -615,7 +627,7 @@ $("#logout-button").addEventListener("click", async () => { try { await api("/ap
 $("#modal-close").addEventListener("click", closeModal); $("#modal-cancel").addEventListener("click", closeModal);
 $("#modal-form").addEventListener("submit", async event => { event.preventDefault(); if (!state.modalAction) return; $("#modal-error").textContent = ""; $("#modal-submit").disabled = true; try { await state.modalAction(new FormData(event.currentTarget)); } catch (error) { $("#modal-error").textContent = error.message; } finally { $("#modal-submit").disabled = false; } });
 content.addEventListener("input", event => { if (event.target.matches("[data-filter-search]")) applyFilter(event.target); });
-content.addEventListener("change", event => { if (event.target.matches("[data-filter-status]")) applyFilter(event.target); });
+content.addEventListener("change", event => { if (event.target.matches("[data-filter-status], [data-incident-category]")) applyFilter(event.target); });
 content.addEventListener("click", async event => {
   try {
   const governanceTab = event.target.closest("[data-governance-tab]"); if (governanceTab) { selectGovernanceTab(governanceTab.dataset.governanceTab); return; }

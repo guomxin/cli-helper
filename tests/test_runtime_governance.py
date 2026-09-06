@@ -119,6 +119,42 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
             self.assertEqual(incidents[0]["actionability"], "manual_reconciliation")
             self.assertEqual(incidents[0]["evidence"]["boundary"], "B4_COMMIT_ATTEMPTED")
 
+    def test_closed_unknown_attempt_is_not_reopened_but_new_attempt_alerts(self) -> None:
+        for disposition in ("resolved", "suppressed"):
+            with self.subTest(disposition=disposition), TemporaryDirectory() as tmp:
+                db_path = Path(tmp) / "agentbridge.db"
+                operations = OperationStore(db_path)
+                store = RuntimeGovernanceStore(db_path)
+                operation, _ = operations.create(
+                    user_subject="user-a", capability_name="oa.leave.submit",
+                    capability_version="1", input_summary={}, idempotency_key="old-attempt",
+                )
+                operations.mark_unknown(operation["operation_id"], code="RESULT_UNKNOWN", message="test")
+                store.evaluate_incidents()
+                incident = store.list_incidents()[0]
+                self.assertEqual(incident["operation_created_at"], operation["created_at"])
+                store.transition_incident(incident["incident_id"], state=disposition, actor="maintenance", reason="user approved historical closure")
+                for _ in range(2):
+                    result = store.evaluate_incidents()
+                    self.assertEqual(result["observed"], 0)
+                    self.assertEqual(result["open"], 0)
+                listed = store.list_incidents()
+                self.assertEqual(len(listed), 1)
+                self.assertEqual(listed[0]["state"], disposition)
+                self.assertEqual(listed[0]["occurrence_count"], incident["occurrence_count"])
+                self.assertEqual(listed[0]["last_seen_at"], incident["last_seen_at"])
+                self.assertEqual(listed[0]["disposition_actor"], "maintenance")
+                self.assertEqual(listed[0]["disposition_reason"], "user approved historical closure")
+                with closing(sqlite3.connect(db_path)) as connection:
+                    self.assertEqual(connection.execute("SELECT status FROM operations WHERE operation_id=?", (operation["operation_id"],)).fetchone()[0], "unknown")
+                other, _ = operations.create(
+                    user_subject="user-a", capability_name="oa.leave.submit",
+                    capability_version="1", input_summary={}, idempotency_key="new-attempt",
+                )
+                operations.mark_unknown(other["operation_id"], code="RESULT_UNKNOWN", message="test")
+                self.assertEqual(store.evaluate_incidents()["open"], 1)
+                self.assertEqual(len(store.list_incidents()), 2)
+
     def test_isolation_incident_auto_resolves_when_condition_clears(self) -> None:
         with TemporaryDirectory() as tmp:
             store = RuntimeGovernanceStore(Path(tmp) / "agentbridge.db")
