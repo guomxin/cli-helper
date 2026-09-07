@@ -309,7 +309,7 @@ if ($RestartOpenClaw) {
         }
     }
     $gatewayRestart = (
-        & $gatewayLifecycleScript -ReadyTimeoutSeconds 300
+        & $gatewayLifecycleScript -ReadyTimeoutSeconds 600
     ) | Out-String | ConvertFrom-Json
     if ($gatewayRestart.status -ne "succeeded" -or
         -not $gatewayRestart.visibleForeground) {

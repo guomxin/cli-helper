@@ -3,7 +3,7 @@ param(
     [string]$TunnelTaskName = "AgentBridge Workspace Tunnel",
     [ValidateRange(5, 300)][int]$IntervalSeconds = 15,
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
-    [ValidateRange(30, 600)][int]$GatewayStartupGraceSeconds = 180,
+    [ValidateRange(30, 900)][int]$GatewayStartupGraceSeconds = 600,
     [ValidateRange(30, 600)][int]$TunnelStatusMaxAgeSeconds = 60,
     [string]$GatewayLifecycleScript = "",
     [switch]$Once
@@ -185,7 +185,7 @@ function Invoke-GatewayLifecycle {
 
     $parameters = @{
         GatewayPort = $GatewayPort
-        ReadyTimeoutSeconds = 300
+        ReadyTimeoutSeconds = $GatewayStartupGraceSeconds
     }
     if ($StartOnly) { $parameters.StartOnly = $true }
     $result = & $resolvedLifecycleScript @parameters | Out-String | ConvertFrom-Json
@@ -259,8 +259,9 @@ try {
                         )
                     }
                 }
-                $ageSeconds = ([DateTime]::Now - [DateTime]$newest.CreationDate).TotalSeconds
-                if ($ageSeconds -lt $GatewayStartupGraceSeconds) {
+                if (Test-AgentBridgeGatewayStartupWindow `
+                    -StartedAt ([DateTimeOffset]$newest.CreationDate) `
+                    -BudgetSeconds $GatewayStartupGraceSeconds) {
                     $gatewayAction = "startup_in_progress"
                 }
                 else {

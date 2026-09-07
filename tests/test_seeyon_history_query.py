@@ -56,6 +56,20 @@ class HistoryQueryTests(unittest.TestCase):
         self.assertTrue(result["query_evidence"]["complete"])
         self.assertEqual(result["total"], 0)
 
+    def test_real_thousand_row_boundary_requires_complete_source(self):
+        for total in (1000, 1001):
+            with self.subTest(total=total):
+                responses = [payload(rows(50, start=i * 50), total=total, page=i + 1)
+                             for i in range(20)]
+                with patch("bscli.adapters.seeyon_history_query.time.monotonic", return_value=0):
+                    result = self.query(*responses)
+                self.assertEqual(len(result["items"]), 1000)
+                self.assertEqual(self.page.evaluate.call_count, 20)
+                self.assertEqual(result["query_evidence"]["complete"], total == 1000)
+                if total == 1001:
+                    self.assertEqual(result["query_evidence"]["completionReason"],
+                                     "server_query_scan_budget_reached")
+
     def test_source_changes_duplicates_and_page_failures_stay_partial(self):
         first = payload(rows(50), total=52)
         cases = [

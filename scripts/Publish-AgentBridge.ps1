@@ -12,6 +12,7 @@ param(
     [switch]$SkipOpenClawAcceptance,
     [switch]$RestartOpenClaw,
     [switch]$IncludeLoginReuseSmoke,
+    [switch]$ResumeAcceptance,
     [switch]$PlanOnly
 )
 
@@ -127,6 +128,7 @@ $plan = [ordered]@{
     openClawAcceptance = -not [bool]$SkipOpenClawAcceptance
     isolationIdentities = @($IdentityLabel)
     restartOpenClaw = [bool]$RestartOpenClaw
+    resumeAcceptance = [bool]$ResumeAcceptance
     push = "$RemoteName/$BranchName"
 }
 if ($PlanOnly) {
@@ -135,6 +137,9 @@ if ($PlanOnly) {
 }
 if ($isDirty) {
     throw "Tracked files are modified. Commit the tested candidate before publishing."
+}
+if ($ResumeAcceptance -and ($RestartOpenClaw -or $IncludeLoginReuseSmoke)) {
+    throw "ResumeAcceptance only rechecks the existing deployment; it cannot restart or initiate login smoke."
 }
 
 foreach ($knownHosts in @($GitHubKnownHostsFile, $AgentBridgeKnownHostsFile)) {
@@ -170,14 +175,17 @@ $deployParameters = @{
 if ($RestartOpenClaw) { $deployParameters["RestartOpenClaw"] = $true }
 if ($IncludeLoginReuseSmoke) { $deployParameters["IncludeLoginReuseSmoke"] = $true }
 
-& $deployScript @deployParameters
-if ($LASTEXITCODE -ne 0) {
-    throw "AgentBridge deployment failed; GitHub push was not attempted"
+if (-not $ResumeAcceptance) {
+    & $deployScript @deployParameters
+    if ($LASTEXITCODE -ne 0) {
+        throw "AgentBridge deployment failed; GitHub push was not attempted"
+    }
 }
 
 $acceptanceParameters = @{
     IdentityFile = (Resolve-Path $AgentBridgeIdentityFile).Path
     KnownHostsFile = (Resolve-Path $AgentBridgeKnownHostsFile).Path
+    ExpectedReleaseId = $commit.Substring(0, 12)
 }
 if ($SkipOpenClawAcceptance) {
     $acceptanceParameters["SkipOpenClaw"] = $true
@@ -223,6 +231,7 @@ if ($remoteCommit -ne $commit) {
     status = "succeeded"
     commit = $commit
     deployed = $true
+    deploymentPerformed = -not [bool]$ResumeAcceptance
     deployment = "root@10.10.50.213:/home/guomao/agentbridge"
     pushed = $true
     github = "$RemoteName/$BranchName"

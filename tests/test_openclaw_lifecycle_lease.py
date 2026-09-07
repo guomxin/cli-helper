@@ -155,6 +155,27 @@ Get-AgentBridgeOpenClawLifecycleLease `
             self.assertFalse(expired["active"])
             self.assertEqual("expired", expired["reason"])
 
+    def test_startup_adoption_uses_original_bounded_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._run(
+                """
+Import-Module $env:AGENTBRIDGE_TEST_MODULE -Force
+$started = [DateTimeOffset]'2026-09-07T00:00:00Z'
+$checks = @{}
+foreach ($age in @(-1, 179, 300, 599, 600, 900)) {
+    $checks[[string]$age] = Test-AgentBridgeGatewayStartupWindow `
+        -StartedAt $started -Now ($started.AddSeconds($age))
+}
+$checks['customExpired'] = Test-AgentBridgeGatewayStartupWindow `
+    -StartedAt $started -Now ($started.AddSeconds(60)) -BudgetSeconds 60
+$checks | ConvertTo-Json -Compress
+""",
+                lease_path=Path(directory) / "startup.json",
+            )
+            self.assertEqual(result, {"-1": False, "179": True, "300": True,
+                                      "599": True, "600": False, "900": False,
+                                      "customExpired": False})
+
 
 if __name__ == "__main__":
     unittest.main()

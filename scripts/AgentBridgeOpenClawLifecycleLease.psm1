@@ -124,7 +124,19 @@ function Get-AgentBridgeOpenClawLifecycleLease {
     }
 }
 
+function Test-AgentBridgeGatewayStartupWindow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][DateTimeOffset]$StartedAt,
+        [ValidateRange(30, 900)][int]$BudgetSeconds = 600,
+        [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
+    )
+    $age = ($Now - $StartedAt).TotalSeconds
+    return $age -ge 0 -and $age -lt $BudgetSeconds
+}
+
 Export-ModuleMember -Function @(
+    "Test-AgentBridgeGatewayStartupWindow",
     "Set-AgentBridgeOpenClawLifecycleLease",
     "Get-AgentBridgeOpenClawLifecycleLease"
 )

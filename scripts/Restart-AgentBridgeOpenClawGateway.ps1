@@ -5,7 +5,7 @@ param(
     ),
     [ValidateRange(1, 65535)][int]$GatewayPort = 18789,
     [ValidateRange(10, 120)][int]$StopTimeoutSeconds = 30,
-    [ValidateRange(30, 900)][int]$ReadyTimeoutSeconds = 300,
+    [ValidateRange(30, 900)][int]$ReadyTimeoutSeconds = 600,
     [switch]$StartOnly,
     [switch]$StopOnly
 )
@@ -258,11 +258,23 @@ function Test-GatewayReadyEndpoint {
 }
 
 function Wait-GatewayReady {
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($ReadyTimeoutSeconds)
+    param([DateTimeOffset]$StartedAt = [DateTimeOffset]::UtcNow)
+    $deadline = $StartedAt.AddSeconds($ReadyTimeoutSeconds)
+    $lastReported = [DateTimeOffset]::MinValue
     do {
-        Update-LifecycleLease -Phase "waiting_for_readiness"
         $gatewayProcesses = @(Get-GatewayProcesses)
         $listeners = @(Get-GatewayListener)
+        $phase = if ($gatewayProcesses.Count -eq 0) { "waiting_for_process" }
+            elseif ($listeners.Count -eq 0) { "waiting_for_listener" }
+            else { "waiting_for_readiness" }
+        Update-LifecycleLease -Phase $phase
+        $now = [DateTimeOffset]::UtcNow
+        if (($now - $lastReported).TotalSeconds -ge 30) {
+            $processIds = @($gatewayProcesses | ForEach-Object { $_.ProcessId }) -join ","
+            Write-LifecycleLog ("Startup phase={0}; elapsedSeconds={1}; processIds={2}; listeners={3}; budgetSeconds={4}." -f `
+                $phase, [int]($now - $StartedAt).TotalSeconds, $processIds, $listeners.Count, $ReadyTimeoutSeconds)
+            $lastReported = $now
+        }
         if ($listeners.Count -eq 1 -and $gatewayProcesses.Count -eq 1 -and
             [int]$listeners[0].OwningProcess -eq [int]$gatewayProcesses[0].ProcessId) {
             if (Test-GatewayReadyEndpoint) {
@@ -278,7 +290,7 @@ function Wait-GatewayReady {
         }
         Start-Sleep -Seconds 1
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw "Timed out waiting for the visible OpenClaw Gateway ready endpoint"
+    throw "Gateway startup exceeded ${ReadyTimeoutSeconds}s; last phase=$phase. Inspect lifecycle logs before retrying."
 }
 
 $mutex = [Threading.Mutex]::new(
@@ -311,6 +323,20 @@ try {
             -GatewayProcessId ([int]$existingProcesses[0].ProcessId))) {
         $ready = Wait-GatewayReady
         $action = "already_running"
+    }
+    elseif ($StartOnly -and $existingProcesses.Count -eq 1 -and
+        $existingListeners.Count -le 1 -and
+        ($existingListeners.Count -eq 0 -or
+            [int]$existingProcesses[0].ProcessId -eq [int]$existingListeners[0].OwningProcess) -and
+        ($foregroundHost = Get-VisibleGatewayForeground `
+            -GatewayProcessId ([int]$existingProcesses[0].ProcessId)) -and
+        (Test-AgentBridgeGatewayStartupWindow `
+            -StartedAt ([DateTimeOffset]$existingProcesses[0].CreationDate) `
+            -BudgetSeconds $ReadyTimeoutSeconds)) {
+        # Adopt the existing startup without resetting its bounded deadline.
+        Write-LifecycleLog "Adopting visible starting Gateway PID $($existingProcesses[0].ProcessId)."
+        $ready = Wait-GatewayReady -StartedAt ([DateTimeOffset]$existingProcesses[0].CreationDate)
+        $action = "startup_adopted"
     }
     else {
         if (-not $StartOnly -or $existingProcesses.Count -gt 0 -or $existingListeners.Count -gt 0) {

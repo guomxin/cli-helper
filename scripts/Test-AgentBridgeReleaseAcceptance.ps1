@@ -6,6 +6,7 @@ param(
     [string]$KnownHostsFile = "",
     [string]$RemoteRoot = "/home/guomao/agentbridge",
     [string]$ServiceName = "agentbridge",
+    [ValidatePattern('^$|^[0-9a-f]{12}$')][string]$ExpectedReleaseId = "",
     [string]$AgentBridgeBaseUrl = "https://10.10.50.213",
     [string]$CaCertificate = "",
     [string[]]$IdentityLabel = @(),
@@ -209,6 +210,9 @@ $remote = [ordered]@{
 }
 if ($remote.serviceState -ne "active" -or [int64]$remote.mainPid -le 0) {
     throw "AgentBridge service is not active"
+}
+if ($ExpectedReleaseId -and $remote.releaseId -ne $ExpectedReleaseId) {
+    throw "Deployed release mismatch: expected $ExpectedReleaseId, found $($remote.releaseId)"
 }
 if ($remote.backupTimerState -ne "active" -or $remote.backupServiceResult -ne "success") {
     throw "AgentBridge backup timer or latest consistent backup is not healthy"

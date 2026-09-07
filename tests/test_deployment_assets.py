@@ -6,6 +6,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentAssetTests(unittest.TestCase):
+    def test_release_resume_rechecks_version_before_pushing(self) -> None:
+        publish = (ROOT / "scripts/Publish-AgentBridge.ps1").read_text(encoding="utf-8")
+        acceptance = (ROOT / "scripts/Test-AgentBridgeReleaseAcceptance.ps1").read_text(encoding="utf-8")
+        lifecycle = (ROOT / "scripts/Restart-AgentBridgeOpenClawGateway.ps1").read_text(encoding="utf-8")
+        self.assertIn("if (-not $ResumeAcceptance)", publish)
+        self.assertIn("ExpectedReleaseId = $commit.Substring(0, 12)", publish)
+        self.assertIn("$ResumeAcceptance -and ($RestartOpenClaw -or $IncludeLoginReuseSmoke)", publish)
+        self.assertIn("$remote.releaseId -ne $ExpectedReleaseId", acceptance)
+        self.assertLess(publish.index("& $releaseAcceptanceScript @acceptanceParameters"),
+                        publish.index("push --porcelain"))
+        self.assertIn("$deadline = $StartedAt.AddSeconds($ReadyTimeoutSeconds)", lifecycle)
+        self.assertIn("$action = \"startup_adopted\"", lifecycle)
+        self.assertIn("-StartedAt ([DateTimeOffset]$existingProcesses[0].CreationDate)", lifecycle)
+        self.assertIn("Startup phase={0}; elapsedSeconds={1}", lifecycle)
+
     def test_systemd_service_cannot_import_legacy_app_source(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(encoding="utf-8")
 
@@ -154,7 +169,7 @@ class DeploymentAssetTests(unittest.TestCase):
             "Remove-StaleGatewayLocks",
             "AgentBridgeOpenClawLifecycle",
             "Set-AgentBridgeOpenClawLifecycleLease",
-            'Update-LifecycleLease -Phase "waiting_for_readiness"',
+            'Update-LifecycleLease -Phase $phase',
             'Update-LifecycleLease -State "completed" -Phase "completed"',
             "Start-VisibleGateway",
             "Get-VisibleGatewayForeground",
@@ -330,7 +345,7 @@ class DeploymentAssetTests(unittest.TestCase):
             ROOT / "scripts/Start-AgentBridgeOpenClawGuard.ps1"
         ).read_text(encoding="utf-8")
         for marker in (
-            "GatewayStartupGraceSeconds = 180",
+            "GatewayStartupGraceSeconds = 600",
             "startup_in_progress",
             "duplicates_removed",
             "stale_start_replaced",
