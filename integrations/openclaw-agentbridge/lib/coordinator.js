@@ -3479,17 +3479,15 @@ function safeCode(value) {
 }
 
 function safeSucceededMessage(response) {
+  const batch = response?.batch || response?.result?.batch;
+  if (batch?.state === "succeeded") {
+    const total = Number(batch.totalCount) || 0;
+    const kind = batch.capability === "oa.workflow.pending.batch.prepare" ? "待办事项" : "补签申请";
+    return `OA ${kind}已全部处理完成，共 ${total} 条。`;
+  }
   const result = response?.result;
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return "AgentBridge 已完成本次安全操作。";
-  }
-  if (
-    result.batch &&
-    typeof result.batch === "object" &&
-    result.batch.state === "succeeded"
-  ) {
-    const total = Number(result.batch.totalCount) || 0;
-    return `OA 补签申请已全部处理完成，共 ${total} 条。`;
   }
   if (result.meeting_created === true && result.meeting_sent === true) {
     return "OA 会议已创建并发送。";
@@ -3573,6 +3571,13 @@ function safeSucceededMessage(response) {
 
 function safeStatusMessage(status, errorCode, response = null) {
   const code = errorCode ? `（错误码：${safeCode(errorCode)}）` : "";
+  const batch = response?.batch || response?.result?.batch;
+  if (batch && ["failed", "outcome_unknown", "partially_succeeded", "canceled", "expired"].includes(batch.state)) {
+    const done = Number(batch.succeededCount) || 0;
+    const total = Number(batch.totalCount) || 0;
+    const unknown = batch.state === "outcome_unknown";
+    return `OA 批量处理已停止，已完成 ${done}/${total} 条。${unknown ? "当前条结果未知，请先到 OA 核对，不会自动重试。" : "后续事项未继续执行，请核对当前条的失败或取消原因。"}${code}`;
+  }
   switch (safeStatus({ status })) {
     case "succeeded":
       return safeSucceededMessage(response);

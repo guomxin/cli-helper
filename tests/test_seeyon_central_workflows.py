@@ -79,6 +79,7 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.workflow.detail.get",
                 "oa.workflow.done.list",
                 "oa.workflow.opinions.list",
+                "oa.workflow.pending.batch.prepare",
                 "oa.workflow.pending.list",
                 "oa.workflow.revoke",
                 "oa.workflow.revoke.prepare",

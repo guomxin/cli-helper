@@ -12,6 +12,12 @@ import threading
 from typing import Callable, Iterator
 from uuid import uuid4
 
+from bscli.adapters.seeyon_pending_batch import (
+    PENDING_BATCH_PREPARE_CAPABILITY,
+    PendingBatchSelectionError,
+    select_pending_batch_items,
+)
+
 from bscli.adapters.seeyon_central import (
     SeeyonCentralAdapter,
     build_central_capability_registry,
@@ -633,6 +639,10 @@ _TRUSTED_WRITE_DEFINITIONS.update(
     }
 )
 
+_TRUSTED_WRITE_DEFINITIONS[PENDING_BATCH_PREPARE_CAPABILITY] = {
+    **_TRUSTED_WRITE_DEFINITIONS[MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY],
+}
+
 _TRUSTED_WRITE_COMMITS = {
 
     definition["commit_capability"]: (prepare_capability, definition)
@@ -644,6 +654,7 @@ _TRUSTED_WRITE_COMMITS[MISSED_PUNCH_APPROVE_CAPABILITY] = (
 )
 
 _CAPABILITY_SCOPES = {
+    PENDING_BATCH_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     BUSINESS_TRIP_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
     BUSINESS_TRIP_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
     BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY: frozenset({"oa:write:submit"}),
@@ -1309,6 +1320,37 @@ class CentralCapabilityService:
         )
         if batch is None:
             return response
+        if (response.get("error") or {}).get("code") in {
+            "BATCH_CONTEXT_MISMATCH", "BATCH_TARGET_MISMATCH", "BATCH_CONTEXT_MISSING",
+            "BATCH_NOT_ACTIVE", "BATCH_SELECTION_MISMATCH",
+        }:
+            return {**response, "batch": batch_response(batch)}
+        generic = batch["capability_name"] == PENDING_BATCH_PREPARE_CAPABILITY
+        current = batch["items"][int(batch["current_ordinal"]) - 1]
+        prior_completed = next((item for item in batch["items"]
+                                if item.get("operation_id") == response.get("operationId")
+                                and item["state"] == "succeeded"), None)
+        if prior_completed is not None:
+            if batch["state"] == "succeeded":
+                return {**response, "batch": batch_response(batch)}
+            if batch["state"] in {"running", "waiting_user"}:
+                if current.get("operation_id"):
+                    latest = self.operations.get(current["operation_id"])
+                    return {**operation_response(latest), "reused": True, "batch": batch_response(batch)}
+                return self.invoke(
+                    user_subject=user_subject, capability_name=batch["capability_name"],
+                    arguments={"batch_id": batch["batch_id"], "affair_id": current["resource_ref"],
+                               **({} if generic else _batch_item_card_context(batch, current))},
+                    idempotency_key=f"batch:{batch['batch_id']}:item:{current['ordinal']}:prepare",
+                    task_id=task_id, host_type="batch_coordinator", host_run_id=f"batch:{batch['batch_id']}",
+                )
+            return {**response, "batch": batch_response(batch)}
+        commit_capability = (
+            current["display_summary"]["commit_capability"]
+            if generic else MISSED_PUNCH_APPROVE_CAPABILITY
+        )
+        if capability_name not in {batch["capability_name"], commit_capability}:
+            return response
         operation_id = str(response.get("operationId") or "").strip() or None
         interaction = response.get("interaction")
         interaction_id = (
@@ -1329,10 +1371,7 @@ class CentralCapabilityService:
             interaction_ids=[interaction_id] if interaction_id else [],
         )
         status = str(response.get("status") or "")
-        governed_batch_step = capability_name in {
-            MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
-            MISSED_PUNCH_APPROVE_CAPABILITY,
-        }
+        governed_batch_step = capability_name in {batch["capability_name"], commit_capability}
         if governed_batch_step and status in {"failed", "unknown"}:
             error_code = str(
                 (response.get("error") or {}).get("code")
@@ -1348,7 +1387,7 @@ class CentralCapabilityService:
             )
             return {**response, "batch": batch_response(batch)}
         if (
-            capability_name != MISSED_PUNCH_APPROVE_CAPABILITY
+            capability_name != commit_capability
             or status != "succeeded"
         ):
             return {**response, "batch": batch_response(batch)}
@@ -1383,11 +1422,11 @@ class CentralCapabilityService:
         next_arguments = {
             "batch_id": batch["batch_id"],
             "affair_id": next_item["resource_ref"],
-            **_batch_item_card_context(batch, next_item),
+            **({} if generic else _batch_item_card_context(batch, next_item)),
         }
         next_response = self.invoke(
             user_subject=user_subject,
-            capability_name=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
+            capability_name=batch["capability_name"],
             arguments=next_arguments,
             idempotency_key=(
                 f"batch:{batch['batch_id']}:item:{next_item['ordinal']}:prepare"
@@ -3613,6 +3652,14 @@ class CentralCapabilityService:
                 "commit_operation_id"
             )
             operation = self.operations.get(operation_id) if operation_id else None
+            if operation and resource.get("commit_operation_id") and operation["status"] == "succeeded":
+                batch_task_id = self.tasks.task_id_for_operation(operation_id, user_subject=user_subject)
+                if batch_task_id and self.tasks.get_batch_for_task(parent_task_id=batch_task_id, user_subject=user_subject):
+                    recovered = self._apply_batch_operation_response(
+                        user_subject=user_subject, task_id=batch_task_id,
+                        capability_name=operation["capability_name"], response=operation_response(operation),
+                    )
+                    return {**recovered, "taskId": batch_task_id, "resumedFromInteractionId": interaction_id}
             return {
                 "protocolVersion": "0.1",
                 "status": "already_resumed",
@@ -4103,11 +4150,11 @@ class CentralCapabilityService:
             field_submission = None
             effective_arguments = arguments
             try:
-                if capability_name == MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY:
+                if capability_name in {MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY, PENDING_BATCH_PREPARE_CAPABILITY}:
                     with worker_factory(session, adapter) as worker:
                         worker.restore_session_state(state)
                         arguments, empty_batch_result = (
-                            self._resolve_missed_punch_batch_context(
+                            self._resolve_approval_batch_context(
                                 context=context,
                                 session=session,
                                 adapter=adapter,
@@ -4121,6 +4168,10 @@ class CentralCapabilityService:
                     if empty_batch_result is not None:
                         return empty_batch_result
                     effective_arguments = arguments
+                    if capability_name == PENDING_BATCH_PREPARE_CAPABILITY:
+                        prepare_definition = self._pending_batch_definition(
+                            task_id=task_id, user_subject=user_subject, arguments=arguments,
+                        )
                 dynamic_field_schema = None
                 if (
                     prepare_definition is not None
@@ -4176,6 +4227,14 @@ class CentralCapabilityService:
                             session["session_id"],
                             state,
                         )
+                if capability_name == PENDING_BATCH_PREPARE_CAPABILITY:
+                    schema = deepcopy(dynamic_field_schema or prepare_definition["field_schema"])
+                    schema["title"] += f"（第 {arguments['batch_ordinal']}/{arguments['batch_total']} 条）"
+                    schema["notice"] = (
+                        f"当前事项：{arguments['target_title']} | {arguments['target_sender']} | {arguments['target_date']}。"
+                        "本条仍需独立授权；权威核验成功后自动进入下一条。拒绝或失败会停止整个批次。"
+                    )
+                    dynamic_field_schema = schema
                 if prepare_definition is not None:
                     if prepare_definition.get("field_schema") is None:
                         effective_arguments = dict(arguments)
@@ -4955,7 +5014,33 @@ class CentralCapabilityService:
         public_result["items"] = public_items
         return public_result
 
-    def _resolve_missed_punch_batch_context(
+    def _pending_batch_definition(self, *, task_id: str, user_subject: str, arguments: dict) -> dict:
+        batch = self.tasks.get_batch_for_task(parent_task_id=task_id, user_subject=user_subject, include_resource_refs=True)
+        if (batch is None or batch["capability_name"] != PENDING_BATCH_PREPARE_CAPABILITY
+                or batch["batch_id"] != arguments.get("batch_id")
+                or batch["state"] not in {"running", "waiting_user"}):
+            raise CapabilityRejected("BATCH_NOT_ACTIVE", "批次已停止或上下文不匹配，不能执行旧卡片。")
+        current = batch["items"][int(batch["current_ordinal"]) - 1]
+        if current["resource_ref"] != arguments.get("affair_id"):
+            raise CapabilityRejected("BATCH_TARGET_MISMATCH", "卡片事项不是当前批次条目。")
+        display = current["display_summary"]
+        for kind in ("prepare", "commit"):
+            spec = self.registry.get(display[f"{kind}_capability"])
+            if spec.version != display[f"{kind}_version"]:
+                raise CapabilityRejected("BATCH_VERSION_CHANGED", "事项能力版本已变化，批次已停止，请重新核对。")
+            try:
+                self.governance_policies.assert_write_allowed(
+                    system_id=batch["system_id"], user_subject=user_subject,
+                    capability_name=spec.name, capability_version=spec.version,
+                )
+            except GovernancePolicyDenied as exc:
+                raise CapabilityRejected("WRITE_PAUSED", "批次中当前事项的写能力已暂停。") from exc
+        return {
+            **_TRUSTED_WRITE_DEFINITIONS[display["prepare_capability"]],
+            "context_fields": ("batch_id", "affair_id"),
+        }
+
+    def _resolve_approval_batch_context(
         self,
         *,
         context: CapabilityContext,
@@ -4971,13 +5056,21 @@ class CentralCapabilityService:
                 "Batch approval requires a durable AgentBridge host task.",
             )
         supplied_batch_id = str(arguments.get("batch_id") or "").strip()
+        generic = context.spec.name == PENDING_BATCH_PREPARE_CAPABILITY
+        existing = self.tasks.get_batch_for_task(
+            parent_task_id=task_id, user_subject=session["user_subject"], include_resource_refs=True,
+        )
+        if generic and existing is not None and not supplied_batch_id:
+            if existing["selection_summary"].get("request") != arguments:
+                raise CapabilityRejected("BATCH_CONTEXT_MISMATCH", "当前任务已有不同的冻结清单，不能在续办时更换范围。")
+            supplied_batch_id = existing["batch_id"]
         if supplied_batch_id:
             batch = self.tasks.get_batch_for_task(
                 parent_task_id=task_id,
                 user_subject=session["user_subject"],
                 include_resource_refs=True,
             )
-            if batch is None or batch["batch_id"] != supplied_batch_id:
+            if batch is None or batch["batch_id"] != supplied_batch_id or batch["capability_name"] != context.spec.name:
                 raise CapabilityRejected(
                     "BATCH_CONTEXT_MISMATCH",
                     "The batch context does not match the current AgentBridge task.",
@@ -4985,7 +5078,7 @@ class CentralCapabilityService:
             if batch["state"] not in {"running", "waiting_user", "paused"}:
                 raise CapabilityRejected(
                     "BATCH_NOT_ACTIVE",
-                    "The missed-punch batch is already terminal.",
+                    "The approval batch is already terminal.",
                 )
             current = next(
                 (
@@ -4998,7 +5091,7 @@ class CentralCapabilityService:
             if current is None:
                 raise CapabilityRejected(
                     "BATCH_ITEM_MISSING",
-                    "The current missed-punch batch item is unavailable.",
+                    "The current approval batch item is unavailable.",
                 )
             supplied_affair_id = str(arguments.get("affair_id") or "").strip()
             if supplied_affair_id and supplied_affair_id != current["resource_ref"]:
@@ -5018,6 +5111,25 @@ class CentralCapabilityService:
                 "BATCH_CONTEXT_MISSING",
                 "The trusted field submission is missing its batch context.",
             )
+        if generic:
+            pending = adapter.list_workflows(worker, collection="pending", arguments={"limit": 1000})
+            try:
+                selected = select_pending_batch_items(pending, arguments, self.registry)
+            except PendingBatchSelectionError as exc:
+                raise CapabilityRejected(exc.code, str(exc)) from exc
+            if not selected:
+                return {}, {"status": "empty", "frozen_count": 0, "message": "当前待办没有符合指定范围的事项，未执行任何审批。"}
+            try:
+                batch, _reused = self.tasks.create_batch(
+                    parent_task_id=task_id, user_subject=session["user_subject"], system_id=session["system_id"],
+                    capability_name=PENDING_BATCH_PREPARE_CAPABILITY,
+                    selection_summary={"request": arguments, "collection": "pending"},
+                    failure_policy="stop_on_failure", items=selected,
+                )
+            except TaskIntegrityError as exc:
+                raise CapabilityRejected("BATCH_ALREADY_ACTIVE", str(exc)) from exc
+            current = batch["items"][int(batch["current_ordinal"]) - 1]
+            return {"batch_id": batch["batch_id"], "affair_id": current["resource_ref"], **_batch_item_card_context(batch, current)}, None
         limit = arguments.get("limit", 10)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
             raise ValueError("limit must be between 1 and 10")
@@ -5118,6 +5230,11 @@ class CentralCapabilityService:
             or session.get("expected_principal_ref")
             or session["user_subject"],
         }
+        if context.spec.name == PENDING_BATCH_PREPARE_CAPABILITY:
+            batch = self.tasks.get_batch_for_task(
+                parent_task_id=context.task_id, user_subject=session["user_subject"],
+            )
+            summary["title"] = f"{summary['title']}（第 {batch['current_ordinal']}/{batch['total_count']} 条）"
         commit_spec = self.registry.get(str(definition["commit_capability"]))
         authorization = self.write_authorizations.create(
             user_subject=session["user_subject"],
@@ -5330,6 +5447,16 @@ class CentralCapabilityService:
         trusted_prepare_capability = str(
             plan.get("prepare_capability") or prepare_capability
         )
+        if trusted_prepare_capability == PENDING_BATCH_PREPARE_CAPABILITY:
+            batch_task_id = self.tasks.task_id_for_operation(
+                authorization["prepare_operation_id"], user_subject=session["user_subject"],
+            )
+            checked = self._pending_batch_definition(
+                task_id=batch_task_id, user_subject=session["user_subject"],
+                arguments=plan.get("resume_arguments") or {},
+            )
+            if checked["commit_capability"] != context.spec.name:
+                raise CapabilityRejected("BATCH_CAPABILITY_MISMATCH", "授权能力与冻结批次条目不一致。")
         if authorization["state"] != "approved":
             raise RequiresUserAction(
                 "WRITE_AUTHORIZATION_UNAVAILABLE",

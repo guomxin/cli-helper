@@ -413,6 +413,7 @@ const REQUIRED_RELEASE_TOOLS = [
   "oa_missed_punch_save_draft",
   "oa_missed_punch_approval_prepare",
   "oa_missed_punch_approval_batch_prepare",
+  "oa_workflow_pending_batch_prepare",
   "oa_missed_punch_approve",
   "oa_efficiency_data_approval_prepare",
   "oa_efficiency_data_approve",

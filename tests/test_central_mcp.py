@@ -315,6 +315,7 @@ class CentralMcpTests(unittest.TestCase):
         self.assertIn("oa_missed_punch_save_draft", names)
         self.assertIn("oa_missed_punch_approval_prepare", names)
         self.assertIn("oa_missed_punch_approval_batch_prepare", names)
+        self.assertIn("oa_workflow_pending_batch_prepare", names)
         self.assertIn("oa_missed_punch_approve", names)
         self.assertIn("oa_meeting_room_availability_list", names)
         self.assertIn("oa_meeting_room_my_applications_list", names)
@@ -444,6 +445,12 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(approve["annotations"]["destructiveHint"])
         self.assertFalse(batch_prepare["annotations"]["destructiveHint"])
         self.assertNotIn("affair_id", batch_prepare["inputSchema"]["properties"])
+        generic_batch = next(tool for tool in tools if tool["name"] == "oa_workflow_pending_batch_prepare")
+        self.assertFalse(generic_batch["annotations"]["destructiveHint"])
+        properties = generic_batch["inputSchema"]["properties"]
+        self.assertEqual(properties["max_items"]["maximum"], 100)
+        for private in ("affair_id", "batch_id", "input_submission_id"):
+            self.assertNotIn(private, properties)
         self.assertTrue(create_meeting["annotations"]["destructiveHint"])
         self.assertTrue(room_availability["annotations"]["readOnlyHint"])
         self.assertTrue(room_applications["annotations"]["readOnlyHint"])
@@ -893,6 +900,15 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["capability_name"], "oa.business_trip.prepare")
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
         self.assertEqual(call["arguments"], {})
+
+    def test_generic_pending_batch_requires_approval_scope(self):
+        self.assertNotIn("oa_workflow_pending_batch_prepare", agent_facing_tools_for_scopes(["oa:read"]))
+        self.assertIn("oa_workflow_pending_batch_prepare", agent_facing_tools_for_scopes(["oa:read", "oa:write:approval"]))
+        with self._server() as (service, store, read_token, client):
+            denied = self._request(client, "tools/call", request_id=73, token=read_token,
+                params={"name": "oa_workflow_pending_batch_prepare", "arguments": {}})
+            self.assertTrue(denied.json()["result"]["isError"])
+            service.invoke.assert_not_called()
 
     def test_addressbook_tools_require_the_dedicated_read_scope(self):
         with self._server() as (service, store, read_token, client):

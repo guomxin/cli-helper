@@ -1048,6 +1048,18 @@ class TaskHubStore:
                 raise TaskIntegrityError(
                     "an active batch already exists for this user and capability"
                 )
+            for item in normalized_items:
+                overlap = connection.execute(
+                    """SELECT 1 FROM task_batch_items AS item
+                       JOIN task_batches AS batch ON batch.batch_id = item.batch_id
+                       WHERE batch.user_subject = ? AND batch.system_id = ?
+                         AND batch.state IN ('running', 'waiting_user', 'paused')
+                         AND item.resource_ref_hash = ?
+                         AND item.state NOT IN ('succeeded', 'skipped', 'canceled') LIMIT 1""",
+                    (user_subject, system_id, item["resource_ref_hash"]),
+                ).fetchone()
+                if overlap is not None:
+                    raise TaskIntegrityError("a selected target is already owned by another active batch")
             batch_id = str(uuid4())
             connection.execute(
                 """

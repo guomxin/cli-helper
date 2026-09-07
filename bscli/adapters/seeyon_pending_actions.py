@@ -1489,6 +1489,18 @@ def _validate_plan(plan: dict, profile_key: str, profile: dict) -> None:
         )
 
 
+def pending_action_profile_for_title(title: str) -> dict | None:
+    """Return a routing candidate; the existing node/form preflight remains mandatory."""
+    for key, profile in _PROFILES.items():
+        if _title_matches(profile["title_rule"], title):
+            return {
+                "profile": key,
+                "prepare_capability": profile["prepare_capability"],
+                "commit_capability": profile["commit_capability"],
+            }
+    return None
+
+
 def _title_matches(rule: dict, title: str) -> bool:
     kind = rule.get("kind")
     value = str(rule.get("value") or "")

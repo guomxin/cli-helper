@@ -13,6 +13,16 @@ const presentation = runInNewContext(
   `${source.slice(start, end)}\ncompletedInteractionPresentation;`,
 );
 
+const batchStart = source.indexOf("function taskCardStatusMessage(");
+const batchEnd = source.indexOf("function taskCardArtifactDeliveryMessage(", batchStart);
+const batchMessage = runInNewContext(`${source.slice(batchStart, batchEnd)}\ntaskCardStatusMessage;`);
+test("batch progress distinguishes a single completed item from the whole batch", () => {
+  const batch = { totalCount: 23, succeededCount: 4, currentOrdinal: 5, state: "waiting_user" };
+  assert.match(batchMessage("waiting_user", { batch }), /4\/23.*19.*第 5 条/);
+  assert.match(batchMessage("succeeded", { batch: { ...batch, state: "succeeded" } }), /全部完成.*23/);
+  assert.match(batchMessage("outcome_unknown", { batch: { ...batch, state: "outcome_unknown" } }), /批次已停止/);
+});
+
 test("completed input and credential cards describe the step, not business success", () => {
   const fields = presentation({ state: "completed", type: "business_input" });
   assert.equal(fields.label, "字段已提交");

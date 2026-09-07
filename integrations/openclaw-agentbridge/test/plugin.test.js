@@ -849,7 +849,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.85",
+      hostVersion: "0.4.86",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1267,7 +1267,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.85",
+        hostVersion: "0.4.86",
       },
     },
   });
@@ -2329,7 +2329,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.85",
+      hostVersion: "0.4.86",
     },
   });
   assert.equal(
@@ -6179,7 +6179,7 @@ test("reports a verified workflow revoke after authorization resumes", async () 
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);
 });
-test("reports a completed missed-punch batch once without waking the model", async () => {
+for (const generic of [false, true]) test(`reports a completed ${generic ? "generic" : "missed-punch"} batch once without waking the model`, async () => {
   const harness = fakeApi({
     autoPoll: true,
     pollIntervalSeconds: 1,
@@ -6205,6 +6205,7 @@ test("reports a completed missed-punch batch once without waking the model", asy
       }
       return {
         status: "succeeded",
+        ...(generic ? { batch: { capability: "oa.workflow.pending.batch.prepare", state: "succeeded", totalCount: 23, succeededCount: 23 } } : {}),
         result: {
           workflow_approved: true,
           batch: {
@@ -6229,7 +6230,7 @@ test("reports a completed missed-punch batch once without waking the model", asy
   harness.middleware(
     {
       toolCallId: "tool-missed-punch-batch-final",
-      toolName: "oa_missed_punch_approval_batch_prepare",
+      toolName: generic ? "oa_workflow_pending_batch_prepare" : "oa_missed_punch_approval_batch_prepare",
       result: toolResult(pending),
     },
     { runtime: "openclaw" },
@@ -6240,7 +6241,7 @@ test("reports a completed missed-punch batch once without waking the model", asy
   assert.equal(harness.sentPayloads.length, 1);
   assert.equal(
     harness.sentPayloads[0].payload.text,
-    "OA 补签申请已全部处理完成，共 3 条。",
+    generic ? "OA 待办事项已全部处理完成，共 23 条。" : "OA 补签申请已全部处理完成，共 3 条。",
   );
   assert.equal(harness.systemEvents.length, 0);
   assert.equal(harness.heartbeatRuns.length, 0);

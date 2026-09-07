@@ -50,6 +50,7 @@
       "oa_missed_punch_prepare",
       "oa_missed_punch_approval_prepare",
       "oa_missed_punch_approval_batch_prepare",
+      "oa_workflow_pending_batch_prepare",
       "oa_meeting_room_availability_list",
       "oa_meeting_room_my_applications_list",
       "oa_meeting_room_application_prepare",

@@ -4,7 +4,11 @@
 OpenClaw。它是宿主兼容层，不包含协同办公、泰华、语雀或照明系统的业务实现，也不修改
 OpenClaw 核心源码。
 
-当前版本：`0.4.85`
+当前版本：`0.4.86`
+
+多个或全部 OA 待办使用 `oa_workflow_pending_batch_prepare` 建立通用持久批次；“上面的”事项传入已读取的精确 ID，
+当前某类事项使用类型/关键词筛选。每项独立填写、授权和回读，中心自动返回下一张卡；不是模型循环单项工具。
+默认上限 20，可显式设置到 100；超限或来源不完整时不启动。现有 `oa:write:approval` 足够，不新增权限范围。
 
 可信卡片的只读状态查询遇到可重试网络错误时，在原有等待期限内退避重试；不会重放业务提交。
 宿主运行状态日志保留清洗后的传输错误码，用于区分证书、连接和响应故障。
@@ -88,7 +92,7 @@ openclaw gateway status --deep --require-rpc --json
 日志核对实际版本：
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.85, ...)
+AgentBridge interaction plugin registered (version=0.4.86, ...)
 ```
 
 Windows 托管的 Gateway 重启可能超过两分钟。命令调用方超时不代表后台重启失败：

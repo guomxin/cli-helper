@@ -1624,6 +1624,9 @@ function upsertTaskCardVariant(
   if (result.plan) {
     addDetail(facts, "计划进度", taskPlanProgress(result.plan));
   }
+  if (task.summary?.batch) {
+    addDetail(facts, "批量进度", taskCardStatusMessage(cardStatus, task.summary));
+  }
   if (facts.childElementCount) card.append(facts);
   if (showArtifacts) {
     appendArtifactList(card, result.artifacts, {
@@ -1693,6 +1696,16 @@ function taskCardStatusForInteraction(state, fallback) {
 }
 
 function taskCardStatusMessage(status, summary = null) {
+  const batch = summary?.batch;
+  if (batch && Number.isInteger(batch.totalCount) && batch.totalCount > 0) {
+    const done = Number(batch.succeededCount) || 0;
+    const failed = Number(batch.failedCount) || 0;
+    const remaining = Math.max(0, batch.totalCount - done - failed - (Number(batch.skippedCount) || 0));
+    const progress = `已完成 ${done}/${batch.totalCount} 条，剩余 ${remaining} 条。`;
+    if (batch.state === "succeeded") return `批量事项全部完成，共 ${batch.totalCount} 条。`;
+    if (["running", "waiting_user"].includes(batch.state)) return `${progress}正在处理第 ${batch.currentOrdinal} 条。`;
+    return `${progress}批次已停止，请核对当前事项的结果或失败原因。`;
+  }
   const deliveryMessage = taskCardArtifactDeliveryMessage(summary);
   if (deliveryMessage) return deliveryMessage;
   return (

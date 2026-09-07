@@ -12,6 +12,7 @@ from copy import deepcopy
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from bscli.adapters.seeyon_history_query import read_filtered_history
+from bscli.adapters.seeyon_pending_batch import PENDING_BATCH_PREPARE_CAPABILITY, PENDING_BATCH_INPUT_SCHEMA
 from bscli.core.query_contracts import HISTORY_QUERY_EVIDENCE_SCHEMA, oa_history_query_contract
 
 from bscli.adapters.base import (
@@ -756,6 +757,7 @@ def build_central_capability_registry() -> CapabilityRegistry:
             name=MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
             version="0.1.0",
             description=(
+                "Compatibility entry; use oa.workflow.pending.batch.prepare for new batches. "
                 "Freeze up to ten current pending missed-punch items and process "
                 "them sequentially with independent trusted input and authorization."
             ),
@@ -764,6 +766,21 @@ def build_central_capability_registry() -> CapabilityRegistry:
             effect="controlled_write",
             adapter="seeyon-central",
             workflow="missed-punch-approval-batch-prepare-v1",
+        ),
+        CapabilitySpec(
+            name=PENDING_BATCH_PREPARE_CAPABILITY,
+            version="0.1.0",
+            description=(
+                "Freeze a variable-length selection of current OA pending items, including mixed supported "
+                "workflow types. Process each with independent trusted input, authorization and verification. "
+                "Use this for multiple/all pending items instead of promising to continue singular prepares. "
+                "Incomplete sources, unsupported selections and overflow stop before any approval."
+            ),
+            input_schema=PENDING_BATCH_INPUT_SCHEMA,
+            output_schema={"type": "object"},
+            effect="controlled_write",
+            adapter="seeyon-central",
+            workflow="pending-batch-prepare-v1",
         ),
         CapabilitySpec(
             name=MISSED_PUNCH_APPROVE_CAPABILITY,

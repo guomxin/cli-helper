@@ -91,6 +91,7 @@ from bscli.adapters.taihua import (
     TAIHUA_WORK_LOG_CREATE_CAPABILITY,
     TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
 )
+from bscli.adapters.seeyon_pending_batch import PENDING_BATCH_PREPARE_CAPABILITY
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ALARM_ANALYSIS_CAPABILITY,
     SMARTLIGHT_ALARM_LIST_CAPABILITY,
@@ -250,6 +251,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_missed_punch_approval_batch_prepare": frozenset(
         {"oa:write:approval"}
     ),
+    "oa_workflow_pending_batch_prepare": frozenset({"oa:write:approval"}),
     "oa_meeting_room_availability_list": frozenset({"oa:read"}),
     "oa_meeting_room_my_applications_list": frozenset({"oa:read"}),
     "oa_meeting_room_application_prepare": frozenset({"oa:write:meeting"}),
@@ -875,9 +877,11 @@ def create_central_mcp_server(
             "answer a read request. For meeting preparation, forward scheduling values already "
             "supplied by the user and never invent missing values; AgentBridge reuses the same "
             "live room source before opening a prefilled card. Writes remain "
-            "prepare -> authorize -> commit -> verify. When the user asks to handle all "
-            "pending missed-punch requests, call oa_missed_punch_approval_batch_prepare "
-            "once; do not loop over the singular prepare tool or ask the user to say continue."
+            "prepare -> authorize -> commit -> verify. For multiple/all OA pending actions, "
+            "including missed-punch requests and mixed types, call "
+            "oa_workflow_pending_batch_prepare once. Pass exact affair_ids for previously "
+            "listed/selected items. Do not loop singular prepares or ask the user to say continue. "
+            "The old missed-punch batch entry is compatibility-only. Never promise a second item without a durable batch."
             " For a goal that combines capabilities from more than one downstream system, "
             "read agentbridge_task_plan_catalog and submit one durable plan through "
             "agentbridge_task_plan_prepare. Do not emulate a cross-system plan with a series "
@@ -2491,15 +2495,13 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="oa_missed_punch_approval_batch_prepare",
-        title="Prepare All Pending OA Missed-Punch Approvals",
+        title="Legacy OA Missed-Punch Batch Preparation",
         meta=interaction_tool_meta(),
         description=(
-            "Freeze the current authenticated user's pending missed-punch items and "
-            "process them sequentially. Call this once when the user asks to handle all "
-            "missed-punch requests. AgentBridge selects targets server-side, opens one "
-            "independently authorized card at a time, and advances automatically after "
-            "authoritative verification. Do not call the singular prepare tool for the "
-            "same items or ask the user to say continue between items."
+            "Compatibility entry with the original ten-item limit. For new requests to handle "
+            "multiple or all missed-punch items, use oa_workflow_pending_batch_prepare with "
+            "workflow_types=[missed_punch] or exact affair_ids. Existing batches retain independent "
+            "trusted input and authorization, with automatic sequential advancement."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -2525,6 +2527,40 @@ def create_central_mcp_server(
             idempotency_key,
             {"oa:write:approval"},
         )
+
+    @mcp.tool(
+        name="oa_workflow_pending_batch_prepare",
+        title="Prepare a Batch of OA Pending Actions",
+        meta=interaction_tool_meta(),
+        description=(
+            "处理多条或全部OA待办时调用一次本工具，不要仅调用单条prepare后口头承诺继续。"
+            "支持补签、效能、差旅费、劳动合同、知识产权、加班、离职、考勤、周报和普通协同。"
+            "用户说上面的/选中的事项时，传已读取清单中的精确affair_ids；不能扩大为所有待办。"
+            "也可用workflow_types和标题keyword选择当前待办，两者同时提供取交集。"
+            "冻结清单后逐项独立填写和授权，核验成功才自动推进；新待办不加入。"
+            "max_items是安全上限不是截取数量，超限、来源不完整或未支持类型都停止并解释。"
+            "不要为同批事项再调用单条工具，不要求用户在条目之间说继续。"
+        ),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+        structured_output=True,
+    )
+    async def oa_workflow_pending_batch_prepare(
+        ctx: Context,
+        affair_ids: Annotated[list[str] | None, Field(min_length=1, max_length=100)] = None,
+        workflow_types: list[Literal[
+            "missed_punch", "efficiency_data", "travel_expense", "labor_contract_renewal",
+            "intellectual_property_declaration", "overtime", "resignation", "attendance_confirmation",
+            "weekly_report", "standard_collaboration",
+        ]] | None = None,
+        keyword: Annotated[str | None, Field(max_length=200)] = None,
+        max_items: Annotated[int, Field(ge=1, le=100)] = 20,
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        arguments = {"max_items": max_items}
+        for key, value in (("affair_ids", affair_ids), ("workflow_types", workflow_types), ("keyword", keyword)):
+            if value is not None:
+                arguments[key] = value
+        return await invoke(ctx, PENDING_BATCH_PREPARE_CAPABILITY, arguments, idempotency_key, {"oa:write:approval"})
 
     @mcp.tool(
         name="oa_missed_punch_approve",

@@ -4165,7 +4165,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Freeze the current authenticated user's pending missed-punch items and process them sequentially. Call this once when the user asks to handle all missed-punch requests. AgentBridge selects targets server-side, opens one independently authorized card at a time, and advances automatically after authoritative verification. Do not call the singular prepare tool for the same items or ask the user to say continue between items.",
+      "description": "Compatibility entry with the original ten-item limit. For new requests to handle multiple or all missed-punch items, use oa_workflow_pending_batch_prepare with workflow_types=[missed_punch] or exact affair_ids. Existing batches retain independent trusted input and authorization, with automatic sequential advancement.",
       "inputSchema": {
         "properties": {
           "failure_policy": {
@@ -4204,7 +4204,116 @@
         "title": "oa_missed_punch_approval_batch_prepareDictOutput",
         "type": "object"
       },
-      "title": "Prepare All Pending OA Missed-Punch Approvals"
+      "title": "Legacy OA Missed-Punch Batch Preparation"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "处理多条或全部OA待办时调用一次本工具，不要仅调用单条prepare后口头承诺继续。支持补签、效能、差旅费、劳动合同、知识产权、加班、离职、考勤、周报和普通协同。用户说上面的/选中的事项时，传已读取清单中的精确affair_ids；不能扩大为所有待办。也可用workflow_types和标题keyword选择当前待办，两者同时提供取交集。冻结清单后逐项独立填写和授权，核验成功才自动推进；新待办不加入。max_items是安全上限不是截取数量，超限、来源不完整或未支持类型都停止并解释。不要为同批事项再调用单条工具，不要求用户在条目之间说继续。",
+      "inputSchema": {
+        "properties": {
+          "affair_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Affair Ids"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "keyword": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Keyword"
+          },
+          "max_items": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Items",
+            "type": "integer"
+          },
+          "workflow_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "missed_punch",
+                    "efficiency_data",
+                    "travel_expense",
+                    "labor_contract_renewal",
+                    "intellectual_property_declaration",
+                    "overtime",
+                    "resignation",
+                    "attendance_confirmation",
+                    "weekly_report",
+                    "standard_collaboration"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workflow Types"
+          }
+        },
+        "title": "oa_workflow_pending_batch_prepareArguments",
+        "type": "object"
+      },
+      "name": "oa_workflow_pending_batch_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "oa_workflow_pending_batch_prepareDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare a Batch of OA Pending Actions"
     },
     {
       "_meta": {
