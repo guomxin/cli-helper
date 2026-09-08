@@ -16,6 +16,14 @@ const presentation = runInNewContext(
 const batchStart = source.indexOf("function taskCardStatusMessage(");
 const batchEnd = source.indexOf("function taskCardArtifactDeliveryMessage(", batchStart);
 const batchMessage = runInNewContext(`${source.slice(batchStart, batchEnd)}\ntaskCardStatusMessage;`);
+const cardStatus = runInNewContext(`${source.slice(end, batchStart)}\ntaskCardStatusForInteraction;`);
+
+test("canceled task takes precedence over its retired interaction", () => {
+  for (const state of ["superseded", "pending", "completed", "expired"]) {
+    assert.equal(cardStatus(state, "canceled"), "canceled");
+  }
+  assert.equal(cardStatus("superseded", "waiting_user"), "superseded");
+});
 test("batch progress distinguishes a single completed item from the whole batch", () => {
   const batch = { totalCount: 23, succeededCount: 4, currentOrdinal: 5, state: "waiting_user" };
   assert.match(batchMessage("waiting_user", { batch }), /4\/23.*19.*第 5 条/);

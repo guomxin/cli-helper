@@ -3065,6 +3065,14 @@ class TaskHubStoreTests(unittest.TestCase):
         )
         self.assertTrue(follow_up["continuation"]["allowNewOperation"])
 
+        # A recent-task reference must not reuse an older selected task.
+        recent = service.resolve_host_task_continuation(
+            user_subject="user-a", agent_host="openclaw",
+            endpoint_key="telegram:*:1001", prefer_latest=True,
+        )
+        self.assertEqual(recent["task"]["taskId"], second["task"]["taskId"])
+        self.assertNotEqual(recent["continuation"]["reason"], "existing_selection")
+
         ambiguous = service.resolve_host_task_continuation(
             user_subject="user-a",
             agent_host="openclaw",

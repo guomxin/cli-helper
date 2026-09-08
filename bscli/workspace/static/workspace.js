@@ -1682,6 +1682,7 @@ function completedInteractionPresentation(interaction) {
 }
 
 function taskCardStatusForInteraction(state, fallback) {
+  if (fallback === "canceled") return "canceled";
   return (
     {
       pending: "waiting_user",

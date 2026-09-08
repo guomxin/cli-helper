@@ -4,7 +4,7 @@
 OpenClaw。它是宿主兼容层，不包含协同办公、泰华、语雀或照明系统的业务实现，也不修改
 OpenClaw 核心源码。
 
-当前版本：`0.4.89`
+当前版本：`0.4.90`
 
 本版将组合任务规划检查提前至任务协调之前；独立填写不能绕过本轮来源约束。
 新增未提交任务取消入口，自动区分普通卡片和持久计划，不撤销已提交的业务流程。
@@ -95,7 +95,7 @@ openclaw gateway status --deep --require-rpc --json
 日志核对实际版本：
 
 ```text
-AgentBridge interaction plugin registered (version=0.4.89, ...)
+AgentBridge interaction plugin registered (version=0.4.90, ...)
 ```
 
 Windows 托管的 Gateway 重启可能超过两分钟。命令调用方超时不代表后台重启失败：

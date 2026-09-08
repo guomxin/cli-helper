@@ -3166,6 +3166,7 @@ class CentralCapabilityService:
         if (
             selected_task_id is None
             and reuse_selected
+            and not prefer_latest
             and source_client_type is None
         ):
             current = self.tasks.get_continuation(

@@ -262,6 +262,22 @@ function createProxyTool({
         }
       }
       const continuation = taskContinuationResolver?.(context.sessionKey);
+      if (descriptor.name === "agentbridge_task_cancel" && continuation?.taskId &&
+          params.task_id !== continuation.taskId) {
+        return jsonToolResult({ status: "rejected", taskId: continuation.taskId,
+          error: { code: "TASK_CANCEL_TARGET_MISMATCH",
+            message: "The requested cancellation does not match the task selected for this turn. Cancel only the selected task; do not claim success or use a historical task ID." } });
+      }
+      if (descriptor.name === "agentbridge_task_plan_cancel" && continuation?.taskId) {
+        const response = await identity.client.callTool("agentbridge_task_plan_get",
+          { plan_id: params.plan_id }, { signal, meta: hostContextMeta() });
+        const plan = (response?.result || response)?.plan;
+        if (plan?.planId !== params.plan_id || plan?.taskId !== continuation.taskId) {
+          return jsonToolResult({ status: "rejected", taskId: continuation.taskId,
+            error: { code: "TASK_CANCEL_TARGET_MISMATCH",
+              message: "The plan does not belong to the selected task. Nothing was canceled; use the selected task ID with agentbridge_task_cancel." } });
+        }
+      }
       if (
         continuation &&
         continuation.allowNewOperation !== true &&
@@ -358,6 +374,22 @@ function createProxyTool({
           });
         }
         throw error;
+      }
+      if (["agentbridge_task_cancel", "agentbridge_task_plan_cancel"].includes(descriptor.name)) {
+        const payload = extractToolPayload(result);
+        if (!result.isError && !payload?.error && !["failed", "rejected", "not_found"].includes(payload?.status)) {
+          const target = payload.plan || payload.task;
+          const idMatches = descriptor.name === "agentbridge_task_cancel"
+            ? target?.taskId === params.task_id
+            : target?.planId === params.plan_id;
+          const selectionMatches = !continuation?.taskId || target?.taskId === continuation.taskId;
+          if (!idMatches || !selectionMatches || (target?.state || target?.status) !== "canceled") {
+            return jsonToolResult({ status: "unconfirmed", requestedTaskId: params.task_id || null,
+              requestedPlanId: params.plan_id || null,
+              error: { code: "TASK_CANCEL_RESULT_UNCONFIRMED",
+                message: "Cancellation response did not confirm the exact selected target in canceled state. Do not report success or retry automatically; inspect the authoritative task state." } });
+          }
+        }
       }
       if (taskId) {
         const hasReferences = descriptor.name === "agentbridge_task_plan_prepare"

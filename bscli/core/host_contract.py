@@ -430,6 +430,10 @@ class HostContractStore:
                 "openclaw", "0.4.89", "L3",
                 "shared-contract-h01-h29-shared-planning-policy-v1",
             ),
+            (
+                "openclaw", "0.4.90", "L3",
+                "shared-contract-h01-h29-cancel-target-verification-v1",
+            ),
         )
         for name, version, level, evidence in builtins:
             connection.execute(
