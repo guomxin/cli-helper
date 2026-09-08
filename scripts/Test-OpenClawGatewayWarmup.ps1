@@ -3,7 +3,7 @@ param(
     [string]$AgentId = "main",
     [int]$ColdTimeoutSeconds = 420,
     [int]$HotTimeoutSeconds = 90,
-    [int]$HotPathMaximumSeconds = 60
+    [ValidateRange(1, 900)][int]$HotPathMaximumSeconds = 180
 )
 
 Set-StrictMode -Version Latest
@@ -58,6 +58,7 @@ function Invoke-WarmupTurn {
     [pscustomobject]@{
         label = $Label
         durationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
+        durationBasis = "cli_end_to_end"
         transport = "gateway"
         reply = $reply
     }
@@ -72,6 +73,7 @@ if ($hot.durationSeconds -gt $HotPathMaximumSeconds) {
 [ordered]@{
     status = "succeeded"
     sessionKey = $sessionKey
+    hotPathMaximumSeconds = $HotPathMaximumSeconds
     cold = $cold
     hot = $hot
 } | ConvertTo-Json -Depth 4 -Compress

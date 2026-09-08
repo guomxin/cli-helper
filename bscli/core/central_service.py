@@ -1090,7 +1090,11 @@ class CentralCapabilityService:
             "status": "planning_control",
             "error": {
                 "code": "PLAN_REQUIRED",
-                "message": message,
+                "message": message + (
+                    " 只读持久计划只保存AgentBridge内部执行状态，不向OA或其他业务系统写入。"
+                    "用户要求不写入时，应创建无写入步骤、以结果投影结束的只读计划，"
+                    "不要因此停止读取；业务写入仍须单独授权。"
+                ),
             },
             "nextAction": {
                 "type": "tool_sequence",

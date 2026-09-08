@@ -371,6 +371,9 @@ class DeploymentAssetTests(unittest.TestCase):
             '$status -ne "ok"',
             '$reply -ne "READY"',
             "HotPathMaximumSeconds",
+            '[ValidateRange(1, 900)][int]$HotPathMaximumSeconds = 180',
+            'durationBasis = "cli_end_to_end"',
+            'hotPathMaximumSeconds = $HotPathMaximumSeconds',
         ):
             self.assertIn(marker, warmup)
 

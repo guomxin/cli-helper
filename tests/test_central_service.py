@@ -174,6 +174,9 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(blocked["error"]["code"], "PLAN_REQUIRED")
+            self.assertIn("不向OA或其他业务系统写入", second_source["error"]["message"])
+            self.assertIn("无写入步骤", second_source["error"]["message"])
+            self.assertIn("业务写入仍须单独授权", blocked["error"]["message"])
             self.assertEqual(
                 blocked["nextAction"],
                 {
