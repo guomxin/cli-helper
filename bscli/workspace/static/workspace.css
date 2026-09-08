@@ -523,6 +523,35 @@ code {
   margin-top: 10px;
 }
 
+.live-progress-details {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.live-progress-details summary {
+  width: fit-content;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.live-progress-details summary:focus-visible {
+  outline: 2px solid #0d7563;
+  outline-offset: 3px;
+}
+
+.live-progress-description {
+  max-height: 160px;
+  margin-top: 6px;
+  padding-left: 12px;
+  border-left: 2px solid #dcebe6;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
 .live-actions {
   display: flex;
   margin-top: 10px;

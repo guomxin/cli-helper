@@ -159,7 +159,8 @@ if ($Mode -eq "Full") {
         "tests\test_workspace_gateway_events.mjs",
         "tests\test_workspace_gateway_run_guard.mjs",
         "tests\test_workspace_gateway_client.mjs",
-        "tests\test_workspace_card_messages.mjs"
+        "tests\test_workspace_card_messages.mjs",
+        "tests\test_workspace_progress.mjs"
     ) -Label "Workspace Gateway Node tests" -WorkingDirectory $repoRoot
 }
 elseif ($PythonTests.Count -gt 0) {

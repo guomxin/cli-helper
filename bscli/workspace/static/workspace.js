@@ -1220,7 +1220,9 @@ function ensureLiveMessage(runId) {
     progress,
     text,
     actions,
-    rows: new Map(),
+    progressRow: null,
+    progressDetails: null,
+    progressDescription: null,
     requestMessage: null,
   };
   state.liveMessages.set(runId, live);
@@ -1243,7 +1245,28 @@ function adoptLiveMessage(previousRunId, runId, requestMessage) {
 function handleChatProgress(payload) {
   if (!payload.runId) return;
   if (payload.kind === "preamble" && payload.text) {
-    addLiveProgress(payload.runId, payload.text, "active");
+    const live = ensureLiveMessage(payload.runId);
+    if (!live.progressDetails) {
+      const details = document.createElement("details");
+      details.className = "live-progress-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "查看处理说明";
+      const description = document.createElement("div");
+      description.className = "live-progress-description";
+      details.append(summary, description);
+      live.progress.append(details);
+      live.progressDetails = details;
+      live.progressDescription = description;
+    }
+    // Preamble events carry cumulative text. Replace it in place; never add
+    // a progress step (or force a scroll) for every streamed fragment.
+    live.progressDescription.textContent = payload.text;
+    addLiveProgress(payload.runId, "正在梳理处理步骤", "active");
+    return;
+  }
+  if (payload.kind === "lifecycle" && payload.phase === "end") {
+    // The agent turn ending does not mean the business approval has completed.
+    addLiveProgress(payload.runId, "正在整理处理结果", "active");
     return;
   }
   if (payload.label) {
@@ -1265,26 +1288,24 @@ function handleChatProgress(payload) {
 
 function addLiveProgress(runId, label, status) {
   const live = ensureLiveMessage(runId);
-  const key = label.replace(/^(正在|已完成)/, "");
-  let row = live.rows.get(key);
+  let row = live.progressRow;
   if (!row) {
     row = document.createElement("div");
     row.className = "live-progress-row";
+    row.setAttribute("role", "status");
+    row.setAttribute("aria-live", "polite");
+    row.setAttribute("aria-atomic", "true");
     const dot = document.createElement("span");
     dot.className = "live-progress-dot";
     const copy = document.createElement("span");
     row.append(dot, copy);
-    live.progress.append(row);
-    live.rows.set(key, row);
+    live.progress.prepend(row);
+    live.progressRow = row;
   }
+  if (row.className === `live-progress-row ${status}` &&
+      row.lastElementChild.textContent === label) return;
   row.className = `live-progress-row ${status}`;
   row.lastElementChild.textContent = label;
-  while (live.progress.childElementCount > 8) {
-    const first = live.progress.firstElementChild;
-    const firstLabel = first?.lastElementChild?.textContent || "";
-    live.rows.delete(firstLabel.replace(/^(正在|已完成)/, ""));
-    first?.remove();
-  }
   scrollChat();
 }
 
