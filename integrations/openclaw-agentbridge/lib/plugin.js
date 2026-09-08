@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.87";
+export const PLUGIN_VERSION = "0.4.88";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -491,6 +491,15 @@ async function taskContinuityPromptContext({
   logger,
   syncTimeline = true,
 }) {
+  const sessionKey = safeText(context.sessionKey, 1_024);
+  // The host may pass quoted history together with the current request. Only
+  // the separately captured inbound text can select a task in that envelope.
+  if (typeof prompt === "string" && prompt.startsWith("OpenClaw assembled context for this turn:")) {
+    const inbound = coordinator.currentUserMessageForSession(sessionKey);
+    prompt = inbound && prompt.trimEnd().endsWith(`\n\nCurrent user request:\n${inbound}`)
+      ? inbound
+      : "";
+  }
   const contexts = [];
   const planningContext = await composedTaskPlanningContext({
     context,
@@ -515,7 +524,6 @@ async function taskContinuityPromptContext({
       contexts.push(crossEndpoint.prependContext);
     }
   }
-  const sessionKey = safeText(context.sessionKey, 1_024);
   const hasPendingHostChoice = Boolean(
     coordinator.taskContinuationChoiceForSession(sessionKey),
   );

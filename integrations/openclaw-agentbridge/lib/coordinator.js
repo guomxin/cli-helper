@@ -315,6 +315,7 @@ export class InteractionCoordinator {
     this.terminalPlanFailures.delete(sessionKey);
     this.recentUserMessages.set(sessionKey, {
       text,
+      intentText: rawText.trim().slice(0, 20_000),
       capturedAt: this.now(),
       taskRunRef: `turn:${randomUUID()}`,
     });
@@ -335,10 +336,17 @@ export class InteractionCoordinator {
     const normalizedMessage = safeMessageText(message, 1000);
     this.recentUserMessages.set(sessionKey, {
       text: normalizedMessage || null,
+      intentText: safeMessageText(message, 20_000) || null,
       capturedAt: this.now(),
       taskRunRef: `workspace:${normalizedTurnRef}`,
     });
     return true;
+  }
+
+  currentUserMessageForSession(sessionKey) {
+    this.prune();
+    const record = this.recentUserMessages.get(sessionKey);
+    return record?.intentText || record?.text || null;
   }
 
   normalizeBusinessToolArguments({ sessionKey, toolName, params }) {

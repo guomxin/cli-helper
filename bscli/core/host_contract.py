@@ -422,6 +422,10 @@ class HostContractStore:
                 "shared-contract-h01-h29-composed-task-preflight-cancel-v1",
             ),
             ("reference-host", "0.1.0", "L3", "shared-contract-h01-h25"),
+            (
+                "openclaw", "0.4.88", "L3",
+                "shared-contract-h01-h29-current-turn-continuation-v1",
+            ),
         )
         for name, version, level, evidence in builtins:
             connection.execute(
