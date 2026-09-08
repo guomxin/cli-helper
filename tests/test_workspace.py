@@ -1529,30 +1529,29 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 endpoint_key="telegram:*:alice",
             )
             gateway = RecoveringGateway()
-            app = WorkspaceApplication(service=service, gateway=gateway)
-
-            events = list(
-                app.send_chat_stream(
-                    account,
-                    message="recover this read request",
-                    idempotency_key="preaccept-recovery-1",
+            with closing(WorkspaceApplication(service=service, gateway=gateway)) as app:
+                events = list(
+                    app.send_chat_stream(
+                        account,
+                        message="recover this read request",
+                        idempotency_key="preaccept-recovery-1",
+                    )
                 )
-            )
 
-            accepted_events = [
-                item for item in events if item.get("type") == "accepted"
-            ]
-            self.assertEqual(len(accepted_events), 1)
-            self.assertTrue(
-                any(item.get("phase") == "waiting_host" for item in events)
-            )
-            self.assertEqual(gateway.send_attempts, 2)
-            completed = service.workspace.list_host_dispatches(
-                user_subject="user-a"
-            )[0]
-            self.assertEqual(completed["state"], "completed")
-            self.assertEqual(completed["attempt_count"], 2)
-            self.assertEqual(completed["retry_count"], 1)
+                accepted_events = [
+                    item for item in events if item.get("type") == "accepted"
+                ]
+                self.assertEqual(len(accepted_events), 1)
+                self.assertTrue(
+                    any(item.get("phase") == "waiting_host" for item in events)
+                )
+                self.assertEqual(gateway.send_attempts, 2)
+                completed = service.workspace.list_host_dispatches(
+                    user_subject="user-a"
+                )[0]
+                self.assertEqual(completed["state"], "completed")
+                self.assertEqual(completed["attempt_count"], 2)
+                self.assertEqual(completed["retry_count"], 1)
 
     def test_agentbridge_restart_resumes_waiting_dispatch(self) -> None:
         class OfflineGateway(FakeGateway):
