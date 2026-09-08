@@ -31,6 +31,7 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- PLAN_SOURCE_INCOMPLETE means safely stopped before the write sink. Report the incomplete sources and no business submission. Do not retry atomic source/sink tools in the same turn, ask to authorize a partial submission, or claim the business write failed.",
             "- When a plan succeeds, answer from plan.resultProjection.result. Do not query source operations again; the projection is the bounded authoritative result for the user.",
             "- Reuse an active plan's authoritative state instead of creating another plan or repeating successful source steps.",
+            "- To cancel an unsubmitted task/card, use agentbridge_task_cancel with the actual task_id. It routes durable plans and ordinary cards safely. agentbridge_task_plan_cancel requires a real plan_id, not a task ID. Closing or ignoring a card is not cancellation. This does not revoke any submitted business workflow.",
         )
     ),
     "repair": {
@@ -47,6 +48,7 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         "selectorContract": {"resourcePointer": "/items"},
     },
     "oa.workflow.done.list": {
+        "mcpToolName": "oa_workflow_done_list",
         "roles": ["business_source"],
         "sourceContract": {
             "itemsPointer": "/items",
@@ -57,6 +59,7 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         },
     },
     "oa.workflow.sent.list": {
+        "mcpToolName": "oa_workflow_sent_list",
         "roles": ["business_source"],
         "sourceContract": {
             "itemsPointer": "/items",
@@ -67,6 +70,7 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         },
     },
     "taihua.work_log.create.prepare": {
+        "mcpToolName": "taihua_work_log_create_prepare",
         "roles": ["write_sink"],
         "inputProvenance": {
             "content": "user_or_bound_transform",
@@ -76,6 +80,11 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+
+def planning_capability_for_tool(tool_name: str | None) -> str | None:
+    return next((name for name, descriptor in _DESCRIPTORS.items()
+                 if descriptor.get("mcpToolName") == tool_name and tool_name), None)
 
 
 def planning_descriptor(capability_name: str) -> dict[str, Any] | None:

@@ -199,6 +199,46 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self.assertIsNone(unrelated)
             self.assertIsNone(internal)
 
+    def test_host_preflight_checks_terminal_turn_before_task_or_lease_creation(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, MagicMock())
+            task_id = self._ensure_host_task(service)
+            spec = service.registry.get("oa.workflow.done.list")
+            operation, _ = service.operations.create(
+                user_subject="user-a", capability_name=spec.name,
+                capability_version=spec.version, input_summary={}, input_identity={},
+            )
+            service.operations.mark_running(operation["operation_id"])
+            operation = service.operations.mark_succeeded(operation["operation_id"], {"items": []})
+            service.tasks.link_operation(task_id=task_id, user_subject="user-a", operation=operation)
+            args = dict(user_subject="user-a", token_id="token-a", agent_host="test-host",
+                host_task_key="batch-test-run", endpoint_key="batch-test-endpoint", client_type="web",
+                external_subject="user-a", conversation_ref="batch-test-conversation", title="test")
+            for tool, scope in (("oa_workflow_sent_list", "user_turn"),
+                                ("taihua_work_log_create_prepare", "independent"),
+                                ("agentbridge_task_plan_prepare", "user_turn")):
+                with self.subTest(tool=tool):
+                    request = dict(args, tool_name=tool, task_scope=scope, planning_task_key="batch-test-run")
+                    if scope == "independent":
+                        request["host_task_key"] = "independent-write"
+                    with patch.object(service.tasks, "ensure_task", wraps=service.tasks.ensure_task) as ensure:
+                        result = service.ensure_host_task(**request)
+                    self.assertEqual(result["error"]["code"], "PLAN_REQUIRED")
+                    self.assertEqual(result["taskId"], task_id)
+                    ensure.assert_not_called()
+            self.assertEqual(service.tasks.get_task(task_id, user_subject="user-a")["status"], "succeeded")
+            repair = service.ensure_host_task(**dict(args, host_task_key="batch-test-run:plan-repair",
+                task_scope="independent", tool_name="agentbridge_task_plan_prepare",
+                planning_task_key="batch-test-run"))
+            self.assertNotEqual(repair["task"]["taskId"], task_id)
+            clean = service.ensure_host_task(**dict(args, host_task_key="next-turn",
+                tool_name="taihua_work_log_create_prepare", planning_task_key="next-turn"))
+            self.assertIn("task", clean)
+            foreign = service.ensure_host_task(**dict(args, user_subject="user-b", token_id="token-b",
+                endpoint_key="endpoint-b", external_subject="user-b", conversation_ref="conversation-b",
+                tool_name="taihua_work_log_create_prepare"))
+            self.assertIn("task", foreign)
+
     def test_parallel_business_sources_are_serialized_and_second_is_redirected(self):
         with TemporaryDirectory() as tmp:
             service = self._service(tmp, MagicMock())

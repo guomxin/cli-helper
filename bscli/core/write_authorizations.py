@@ -526,12 +526,14 @@ class WriteAuthorizationStore:
             row = self._select(connection, authorization_id)
         return _authorization_from_row(row, include_plan=False)
 
-    def supersede(self, authorization_id: str, *, user_subject: str) -> None:
+    def supersede(self, authorization_id: str, *, user_subject: str, pending_only: bool = False) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self._select(connection, authorization_id)
             if row["user_subject"] != user_subject:
                 raise WriteAuthorizationAccessDenied("write authorization belongs to another user")
+            if pending_only and row["state"] not in {"pending", "superseded"}:
+                raise WriteAuthorizationStateError("write authorization is no longer pending")
             if row["state"] not in {"pending", "approved"}:
                 return
             now = _format_time(_as_utc(self.clock()))

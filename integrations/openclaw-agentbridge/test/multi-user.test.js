@@ -699,7 +699,7 @@ test("agent-facing catalogs hide internal commit and continuation tools", () => 
       (tool) =>
         tool.name.endsWith("_prepare") ||
         tool.name.endsWith("_session_login") ||
-        tool.name === "agentbridge_task_plan_cancel",
+        ["agentbridge_task_plan_cancel", "agentbridge_task_cancel"].includes(tool.name),
     )
     .map((tool) => tool.name)
     .sort();
@@ -955,6 +955,11 @@ test("keeps large MCP payloads out of middleware details", async () => {
   const router = createRouter({
     requests,
     env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_task_ensure") {
+        return { structuredContent: { task: { taskId: "task-large-payload" } } };
+      }
+    },
     responseResult: {
       content: [{ type: "text", text: JSON.stringify({ items }) }],
       structuredContent: { status: "succeeded", result: { items } },
@@ -977,6 +982,7 @@ test("keeps large MCP payloads out of middleware details", async () => {
   assert.deepEqual(result.details, {
     mcpServer: "agentbridge",
     mcpTool: "smartlight_energy_record_list",
+    agentbridgeTaskId: "task-large-payload",
   });
 });
 
@@ -985,6 +991,11 @@ test("normalizes business arguments before the MCP request", async () => {
   const router = createRouter({
     requests,
     env: { TOKEN_A: "token-a", TOKEN_B: "token-b" },
+    responseForTool(name) {
+      if (name === "agentbridge_host_task_ensure") {
+        return { structuredContent: { task: { taskId: "task-normalized-args" } } };
+      }
+    },
     responseResult: {
       structuredContent: { status: "succeeded", result: { items: [] } },
     },
@@ -1086,7 +1097,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.86",
+      hostVersion: "0.4.87",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",
@@ -1109,7 +1120,7 @@ test("creates and observes one host-owned task without model task arguments", as
   );
 });
 
-test("preserves the business result when task coordination is unavailable", async () => {
+test("stops the business call when task context cannot be established", async () => {
   const requests = [];
   const warnings = [];
   const router = createRouter({
@@ -1144,12 +1155,12 @@ test("preserves the business result when task coordination is unavailable", asyn
 
   assert.deepEqual(
     requests.map((request) => request.body.params.name),
-    ["agentbridge_host_task_ensure", "oa_workflow_pending_list"],
+    ["agentbridge_host_task_ensure"],
   );
-  assert.equal(result.structuredContent.status, "succeeded");
-  assert.equal(result.details.agentbridgeTaskId, undefined);
+  assert.equal(result.details.structuredContent.error.code, "TASK_CONTEXT_UNAVAILABLE");
+  assert.equal(result.details.agentbridgeTaskId, null);
   assert.deepEqual(warnings, [
-    "AgentBridge task creation returned no task ID; business call continues",
+    "AgentBridge task creation returned no task ID; business call stopped",
   ]);
 });
 

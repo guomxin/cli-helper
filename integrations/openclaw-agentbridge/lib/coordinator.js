@@ -633,9 +633,16 @@ export class InteractionCoordinator {
     );
   }
 
-  terminalPlanFailureForCall({ sessionKey, runId, toolCallId }) {
+  terminalPlanFailureForCall({ sessionKey, runId, toolCallId, toolName }) {
     const failure = this.terminalPlanFailures.get(sessionKey);
-    if (!failure) return null;
+    if (!failure) {
+      this.prunePlanningRepairs();
+      if (this.planningRepairs.has(sessionKey) && toolName !== "agentbridge_task_plan_prepare") {
+        return { status: "planning_control", error: { code: "PLAN_REQUIRED",
+          message: "本轮已要求使用持久计划，不能改用独立查询或填写卡绕过；请使用计划目录和计划入口继续。" } };
+      }
+      return null;
+    }
     if (failure.expiresAt <= this.now()) {
       this.terminalPlanFailures.delete(sessionKey);
       return null;

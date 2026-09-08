@@ -198,6 +198,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "agentbridge_task_plan_prepare": frozenset(),
     "agentbridge_task_plan_get": frozenset(),
     "agentbridge_task_plan_cancel": frozenset(),
+    "agentbridge_task_cancel": frozenset(),
     "agentbridge_interaction_get": frozenset(),
     "agentbridge_operation_get": frozenset(),
     "agentbridge_operation_list": frozenset(),
@@ -1397,6 +1398,26 @@ def create_central_mcp_server(
             user_subject=identity["user_subject"],
             plan_id=plan_id,
         )
+
+    @mcp.tool(
+        name="agentbridge_task_cancel",
+        title="Cancel Unsubmitted AgentBridge Task",
+        description=("Cancel the current user's unsubmitted task/card by its actual task_id. "
+                     "Routes durable plans and ordinary input/authorization cards. "
+                     "Use this for canceling a task or card, not task_plan_cancel with a task ID. "
+                     "Never revokes a submitted business workflow or cancels a consumed authorization."),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                    idempotentHint=True, openWorldHint=False),
+        structured_output=True,
+    )
+    async def agentbridge_task_cancel(
+        ctx: Context,
+        task_id: Annotated[str, Field(min_length=16, max_length=128)],
+    ) -> dict[str, Any]:
+        identity = _request_identity(identity_store)
+        await _registered_host_context(ctx, service=service, identity=identity, minimum_level="L3")
+        return await asyncio.to_thread(service.cancel_unsubmitted_task,
+                                       user_subject=identity["user_subject"], task_id=task_id)
 
     @mcp.tool(
         name="oa_template_list",
@@ -5179,6 +5200,8 @@ def create_central_mcp_server(
             str,
             Field(pattern="^(host_run|user_turn|independent)$"),
         ] = "host_run",
+        tool_name: Annotated[str | None, Field(max_length=128)] = None,
+        planning_task_key: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         identity = _request_identity(identity_store)
         host_context, _registration = await _registered_host_context(
@@ -5205,6 +5228,8 @@ def create_central_mcp_server(
             route=route,
             capabilities=capabilities,
             task_scope=task_scope,
+            tool_name=tool_name,
+            planning_task_key=planning_task_key,
             host_instance_id=host_context["hostInstanceId"],
             host_version=host_context["hostVersion"],
         )

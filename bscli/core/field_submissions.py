@@ -528,12 +528,14 @@ class FieldSubmissionStore:
             self._verify_integrity(row, include_values=True)
         return _submission_from_row(row, include_values=False)
 
-    def supersede(self, submission_id: str, *, user_subject: str) -> None:
+    def supersede(self, submission_id: str, *, user_subject: str, pending_only: bool = False) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self._select(connection, submission_id)
             if row["user_subject"] != user_subject:
                 raise FieldSubmissionAccessDenied("field submission belongs to another user")
+            if pending_only and row["state"] not in {"pending", "superseded"}:
+                raise FieldSubmissionStateError("field submission is no longer pending")
             if row["state"] not in {"pending", "submitted"}:
                 return
             now = _format_time(_as_utc(self.clock()))

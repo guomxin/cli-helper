@@ -849,7 +849,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.86",
+      hostVersion: "0.4.87",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1267,7 +1267,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.86",
+        hostVersion: "0.4.87",
       },
     },
   });
@@ -1954,6 +1954,54 @@ test("uses one user-turn task reference when OpenClaw assigns per-tool run IDs",
   assert.equal(prepareRef, searchRef);
 });
 
+test("preflight PLAN_REQUIRED prevents leases and atomic writes while retaining the original turn", async () => {
+  const calls = [];
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const client = {
+    async callTool(name, args) {
+      calls.push({ name, args });
+      assert.equal(name, "agentbridge_host_task_ensure");
+      return { status: "planning_control", taskId: "terminal-source-task",
+        error: { code: "PLAN_REQUIRED", message: "prepare a plan" } };
+    },
+    async callToolResult() { assert.fail("must not invoke the business capability"); },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey, runId: "per-tool-run" }, serverName: "agentbridge",
+    identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+    taskRunRefResolver: () => "original-user-turn",
+  });
+  for (const name of ["oa_workflow_sent_list", "taihua_work_log_create_prepare", "agentbridge_task_plan_prepare"]) {
+    const result = await tools.find(tool => tool.name === name).execute("call", {});
+    assert.equal(result.details.structuredContent.error.code, "PLAN_REQUIRED");
+    assert.equal(result.details.agentbridgeTaskId, "terminal-source-task");
+    assert.equal(result.details.mcpTool, name);
+  }
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(call => call.args.planning_task_key === `${sessionKey}|original-user-turn`));
+  assert.equal(calls[1].args.task_scope, "independent");
+  assert.equal(calls[1].args.host_task_key, `${sessionKey}|per-tool-run`);
+});
+
+test("failed preflight never falls through to an untracked business call", async () => {
+  const client = {
+    async callTool() { throw new Error("transport unavailable"); },
+    async callToolResult() { assert.fail("business call must not run"); },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey: "agent:main:agentbridge-workspace:direct:account-a", runId: "run" },
+    serverName: "agentbridge", identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+  });
+  const response = await tools.find(tool => tool.name === "taihua_work_log_create_prepare").execute("call", {});
+  assert.equal(response.details.structuredContent.error.code, "TASK_CONTEXT_UNAVAILABLE");
+});
+
 test("uses a fresh stable independent task when PLAN_REQUIRED upgrades a Workspace turn", async () => {
   const harness = fakeApi({ autoPoll: false });
   const coordinator = registerAgentBridgeInteractions(harness.api, {
@@ -2027,6 +2075,12 @@ test("uses a fresh stable independent task when PLAN_REQUIRED upgrades a Workspa
     replacement.result.structuredContent.error.code,
     "PLAN_REQUIRED",
   );
+  assert.equal(coordinator.terminalPlanFailureForCall({ sessionKey,
+    toolName: "taihua_work_log_create_prepare" }).error.code, "PLAN_REQUIRED");
+  assert.equal(coordinator.terminalPlanFailureForCall({ sessionKey,
+    toolName: "agentbridge_task_plan_prepare" }), null);
+  assert.equal(coordinator.terminalPlanFailureForCall({ sessionKey: "other-user",
+    toolName: "taihua_work_log_create_prepare" }), null);
 
   const ensures = [];
   const client = {
@@ -2079,6 +2133,8 @@ test("uses a fresh stable independent task when PLAN_REQUIRED upgrades a Workspa
   assert.match(newTurnRef, /^turn:/);
   assert.doesNotMatch(newTurnRef, /:plan-repair$/);
   assert.equal(coordinator.taskScopeForBusinessCall(sessionKey, "agentbridge_task_plan_prepare"), null);
+  assert.equal(coordinator.terminalPlanFailureForCall({ sessionKey,
+    toolName: "taihua_work_log_create_prepare" }), null);
 });
 
 test("source-incomplete plan blocks same-turn atomic retries without blocking a new turn or another user", async () => {
@@ -2329,7 +2385,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.86",
+      hostVersion: "0.4.87",
     },
   });
   assert.equal(

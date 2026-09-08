@@ -944,6 +944,14 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row), False
 
+    def find_host_task(self, *, user_subject: str, agent_host: str, host_task_key: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_tasks WHERE user_subject = ? AND agent_host = ? AND host_task_key = ?",
+                (user_subject, agent_host, host_task_key),
+            ).fetchone()
+        return _task_from_row(row) if row is not None else None
+
     def get_task(self, task_id: str, *, user_subject: str) -> dict:
         with self._connect() as connection:
             row = self._select_task(connection, task_id)

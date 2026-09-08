@@ -2141,6 +2141,8 @@ class CentralMcpTests(unittest.TestCase):
             route={"channel": "telegram", "to": "1001"},
             capabilities=None,
             task_scope="user_turn",
+            tool_name=None,
+            planning_task_key=None,
             host_instance_id="openclaw-gateway",
             host_version="0.4.65",
         )

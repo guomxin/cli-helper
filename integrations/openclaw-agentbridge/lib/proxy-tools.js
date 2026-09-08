@@ -14,6 +14,7 @@ export const IDENTITY_STATUS_TOOL_NAME = "agentbridge_identity_status";
 export const AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES = Object.freeze([
   "agentbridge_task_plan_prepare",
   "agentbridge_task_plan_cancel",
+  "agentbridge_task_cancel",
   "oa_efficiency_data_approval_prepare",
   "oa_travel_expense_approval_prepare",
   "oa_labor_contract_renewal_approval_prepare",
@@ -227,7 +228,7 @@ function createProxyTool({
       }
       const normalizedParams = normalizeParams(rawParams);
       if (isTaskEligibleTool(descriptor.name)) {
-        const stopped = terminalPlanGuard?.({ sessionKey: context.sessionKey, runId: context.runId, toolCallId });
+        const stopped = terminalPlanGuard?.({ sessionKey: context.sessionKey, runId: context.runId, toolCallId, toolName: descriptor.name });
         if (stopped) return jsonToolResult(stopped);
       }
       const params =
@@ -278,7 +279,7 @@ function createProxyTool({
           },
         });
       }
-      const taskId = await resolveTaskId({
+      const resolution = await resolveTaskId({
         descriptor,
         identity,
         identityRouter,
@@ -290,6 +291,15 @@ function createProxyTool({
         taskScopeResolver,
         logger,
       });
+      if (resolution?.planningControl) {
+        return {
+          ...jsonToolResult(resolution.planningControl),
+          details: { mcpServer: serverName, mcpTool: descriptor.name,
+            agentbridgeTaskId: resolution.taskId,
+            structuredContent: resolution.planningControl },
+        };
+      }
+      const taskId = resolution?.taskId || null;
       const coordinatorLease = taskId
         ? await renewCoordinatorLease({
             client: identity.client,
@@ -533,17 +543,15 @@ async function resolveTaskId({
     128,
   );
   if (resumedTaskId) {
-    return resumedTaskId;
+    return { taskId: resumedTaskId };
   }
   const independentTaskEntry = isIndependentTaskEntryTool(descriptor.name);
-  const sharedTurnRef = independentTaskEntry
-    ? null
-    : boundedText(
-        taskRunRefResolver?.(toolCallId, sessionKey, descriptor.name),
+  const sharedTurnRef = boundedText(
+        taskRunRefResolver?.(toolCallId, sessionKey, independentTaskEntry ? null : descriptor.name),
         256,
       );
   const runRef =
-    sharedTurnRef ||
+    (!independentTaskEntry && sharedTurnRef) ||
     boundedText(context.runId, 256) ||
     boundedText(toolCallId, 256);
   if (!runRef) {
@@ -570,6 +578,8 @@ async function resolveTaskId({
       {
         agent_host: "openclaw",
         host_task_key: boundedText(`${sessionKey}|${runRef}`, 1024),
+        tool_name: descriptor.name,
+        planning_task_key: boundedText(`${sessionKey}|${sharedTurnRef || runRef}`, 1024),
         endpoint_key: endpointKey,
         client_type: workspaceSession ? "web" : binding.channel,
         external_subject: workspaceSession
@@ -606,21 +616,32 @@ async function resolveTaskId({
       },
       { meta: hostContextMeta() },
     );
+    if (response?.error?.code === "PLAN_REQUIRED") {
+      return { taskId: response.taskId || null, planningControl: response };
+    }
     const taskId = boundedText(response?.task?.taskId, 128);
     if (!taskId) {
       logger?.warn?.(
-        "AgentBridge task creation returned no task ID; business call continues",
+        "AgentBridge task creation returned no task ID; business call stopped",
       );
+      return taskContextUnavailable();
     } else {
       taskIdBinder?.(sessionKey, descriptor.name, taskId);
     }
-    return taskId;
+    return { taskId };
   } catch (error) {
     logger?.warn?.(
-      `AgentBridge task creation unavailable; business call continues (${safeErrorCode(error)})`,
+      `AgentBridge task creation unavailable; business call stopped (${safeErrorCode(error)})`,
     );
-    return null;
+    return taskContextUnavailable();
   }
+}
+
+function taskContextUnavailable() {
+  return { taskId: null, planningControl: { status: "failed", error: {
+    code: "TASK_CONTEXT_UNAVAILABLE",
+    message: "任务上下文暂不可用，本次请求未进入业务系统。请稍后重试。",
+  } } };
 }
 
 function workspaceSubject(endpointKey) {

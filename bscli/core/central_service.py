@@ -288,6 +288,7 @@ from bscli.core.planning_policy import (
     COMPOSED_TASK_POLICY_VERSION,
     authority_snapshot,
     compile_temporal_constraints,
+    planning_capability_for_tool,
     planning_descriptor,
 )
 from bscli.core.task_plan_runtime import TaskPlanRuntime
@@ -1062,17 +1063,7 @@ class CentralCapabilityService:
         if not descriptor:
             return None
         roles = set(descriptor.get("roles", []))
-        source_names: set[str] = set()
-        for spec in self.registry.list():
-            candidate = planning_descriptor(spec.name)
-            if candidate and "business_source" in candidate.get("roles", []):
-                source_names.add(spec.name)
-        has_business_source = self.tasks.task_has_succeeded_capability(
-            task_id=task_id,
-            user_subject=user_subject,
-            capability_names=source_names,
-        )
-        if not has_business_source:
+        if not self._task_has_business_source(user_subject=user_subject, task_id=task_id):
             return None
         if "business_source" in roles:
             message = (
@@ -1082,6 +1073,19 @@ class CentralCapabilityService:
             message = "该写入内容依赖本任务已读取的业务数据，必须进入持久计划。"
         else:
             return None
+        return self._planning_control(message)
+
+    def _task_has_business_source(self, *, user_subject: str, task_id: str) -> bool:
+        source_names = {
+            spec.name for spec in self.registry.list()
+            if "business_source" in (planning_descriptor(spec.name) or {}).get("roles", [])
+        }
+        return self.tasks.task_has_succeeded_capability(
+            task_id=task_id, user_subject=user_subject, capability_names=source_names,
+        )
+
+    @staticmethod
+    def _planning_control(message: str) -> dict:
         return {
             "status": "planning_control",
             "error": {
@@ -1113,6 +1117,42 @@ class CentralCapabilityService:
             "status": "succeeded",
             "plan": task_plan_response(plan),
         }
+
+    def cancel_unsubmitted_task(self, *, user_subject: str, task_id: str) -> dict:
+        task = self.tasks.get_task(task_id, user_subject=user_subject)
+        plan = self.task_plans.get_for_task(parent_task_id=task_id, user_subject=user_subject)
+        if plan:
+            return self.cancel_task_plan(user_subject=user_subject, plan_id=plan["plan_id"])
+        if task["status"] == "canceled":
+            return {"status": "succeeded", "task": task_response(task), "businessWriteOccurred": False}
+        interaction_id = task.get("current_interaction_id")
+        if task["status"] != "waiting_user" or not interaction_id:
+            return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
+                    "message": "只能取消尚未提交的填写或授权任务；已完成、执行中及结果未知的业务不能通过此入口撤销。"}}
+        interaction = self.interactions.get(interaction_id, user_subject=user_subject)
+        # Check and retire the pending resource in its own write transaction;
+        # approval/submission that wins this race must never be called canceled.
+        try:
+            if interaction["interaction_type"] == "business_input":
+                self.field_submissions.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
+            elif interaction["interaction_type"] == "execution_authorization":
+                self.write_authorizations.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
+            else:
+                return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
+                        "message": "该交互不是独立业务填写或授权卡，不能在此取消。"}}
+        except (FieldSubmissionStateError, WriteAuthorizationStateError):
+            return {"status": "rejected", "error": {"code": "TASK_ACTION_ALREADY_STARTED",
+                    "message": "卡片已提交或授权，不能再当作未提交任务取消；请先核对最新结果。"}}
+        try:
+            task = self.tasks.cancel_task(task_id=task_id, user_subject=user_subject,
+                                         reason="user_canceled_unsubmitted_task", causation_ref=interaction_id)
+        except TaskIntegrityError:
+            # A poll can observe the resource retired above before this task update.
+            # Keep that terminal state, but never swallow a different task outcome.
+            task = self.tasks.get_task(task_id, user_subject=user_subject)
+            if task["status"] != "superseded" or task.get("current_interaction_id") != interaction_id:
+                raise
+        return {"status": "succeeded", "task": task_response(task), "businessWriteOccurred": False}
 
     def cancel_task_plan(
         self,
@@ -2331,6 +2371,8 @@ class CentralCapabilityService:
         route: dict | None = None,
         capabilities: list[str] | None = None,
         task_scope: str = "host_run",
+        tool_name: str | None = None,
+        planning_task_key: str | None = None,
         host_instance_id: str | None = None,
         host_version: str | None = None,
     ) -> dict:
@@ -2381,7 +2423,7 @@ class CentralCapabilityService:
                     route=route,
                     capabilities=capabilities,
                 )
-        if endpoint["client_type"] == "web" and task_scope == "user_turn":
+        if endpoint["client_type"] == "web":
             turn = self.workspace.resolve_gateway_turn(
                 user_subject=user_subject,
                 endpoint_key=endpoint_key,
@@ -2396,7 +2438,26 @@ class CentralCapabilityService:
                         "workspace:"
                         + hashlib.sha256(canonical_key.encode("utf-8")).hexdigest()
                     )
-                host_task_key = canonical_key
+                planning_task_key = canonical_key
+                if task_scope == "user_turn":
+                    host_task_key = canonical_key
+        capability_name = planning_capability_for_tool(tool_name)
+        plan_upgrade = tool_name == "agentbridge_task_plan_prepare" and task_scope != "independent"
+        if capability_name or plan_upgrade:
+            source_task = self.tasks.find_host_task(
+                user_subject=user_subject, agent_host=agent_host,
+                host_task_key=planning_task_key or host_task_key,
+            )
+            control = self.planning_gate_for_call(
+                user_subject=user_subject,
+                task_id=source_task["task_id"] if source_task else None,
+                capability_name=capability_name, host_type=agent_host,
+            ) if capability_name else None
+            if (plan_upgrade and source_task and self._task_has_business_source(
+                    user_subject=user_subject, task_id=source_task["task_id"])):
+                control = self._planning_control("本轮已完成业务读取，请使用独立修复计划继续，不能复用已终结的原子任务。")
+            if control:
+                return {"protocolVersion": "0.1", "taskId": source_task["task_id"], **control}
         task, task_reused = self.tasks.ensure_task(
             user_subject=user_subject,
             agent_host=agent_host,

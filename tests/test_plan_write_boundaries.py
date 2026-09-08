@@ -15,6 +15,7 @@ from bscli.core.field_submissions import FieldSubmissionStateError
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.task_plan_runtime import TaskPlanRuntime
 from bscli.core.task_plans import step_idempotency_key
+from bscli.core.tasks import TaskNotFound
 from tests import test_central_service as central_fixtures
 from tests import test_taihua_adapter as taihua_fixtures
 from tests import test_task_plan_runtime as runtime_fixtures
@@ -119,6 +120,73 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         observed = self.service.get_interaction(user_subject="user-a", interaction_id=self.waiting["interaction"]["interactionId"])
         self.assertEqual(observed["interaction"]["state"], "superseded")
         self.assertEqual(self.service.tasks.get_task(self.task_id, user_subject="user-a")["status"], "canceled")
+
+    def start_atomic(self):
+        self.task_id = self.new_task("atomic")
+        self.waiting = self.service.invoke(user_subject="user-a", task_id=self.task_id,
+            capability_name="taihua.work_log.create.prepare", arguments={
+                "log_date": "2026-08-30", "hours": 1, "content": "独立日志", "project": ""})
+        self.assertEqual(self.waiting["status"], "requires_user_action", self.waiting)
+
+    def test_task_cancel_routes_plan_id_and_rejects_foreign_user(self):
+        self.start()
+        with self.assertRaises(TaskNotFound):
+            self.service.cancel_unsubmitted_task(user_subject="user-b", task_id=self.task_id)
+        result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+        self.assertEqual(result["status"], "canceled")
+        self.assertEqual(self.service.task_plans.get(self.plan_id, user_subject="user-a")["state"], "canceled")
+
+    def test_task_cancel_retires_atomic_field_card_and_is_idempotent(self):
+        self.start_atomic()
+        submission = self.waiting["nextAction"]["inputSubmissionId"]
+        for _ in range(2):
+            result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+            self.assertEqual(result["status"], "succeeded")
+            self.assertFalse(result["businessWriteOccurred"])
+        self.assertEqual(self.service.field_submissions.get(submission)["state"], "superseded")
+        with self.assertRaises(FieldSubmissionStateError):
+            self.fields()
+        self.service.get_interaction(user_subject="user-a", interaction_id=self.waiting["interaction"]["interactionId"])
+        self.assertEqual(self.service.tasks.get_task(self.task_id, user_subject="user-a")["status"], "canceled")
+        self.assertIsNone(self.write.created_payload)
+
+    def test_task_cancel_refuses_already_submitted_atomic_fields(self):
+        self.start_atomic()
+        self.fields()
+        result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+        self.assertEqual(result["error"]["code"], "TASK_ACTION_ALREADY_STARTED")
+        self.assertEqual(self.service.field_submissions.get(self.waiting["nextAction"]["inputSubmissionId"])["state"], "submitted")
+
+    def test_poll_between_resource_retirement_and_task_cancel_keeps_a_terminal_result(self):
+        self.start_atomic()
+        cancel = self.service.tasks.cancel_task
+        def observe_then_cancel(**kwargs):
+            self.service.get_interaction(user_subject="user-a",
+                interaction_id=self.waiting["interaction"]["interactionId"])
+            return cancel(**kwargs)
+        with patch.object(self.service.tasks, "cancel_task", side_effect=observe_then_cancel):
+            result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertFalse(result["businessWriteOccurred"])
+        self.assertEqual(self.service.tasks.get_task(self.task_id, user_subject="user-a")["status"], "superseded")
+        self.assertIsNone(self.write.created_payload)
+
+    def test_task_cancel_pending_atomic_authorization_but_not_approved(self):
+        self.start_atomic()
+        self.fields()
+        authorization = self.resume(self.waiting)
+        auth_id = authorization["nextAction"]["authorizationId"]
+        result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(self.service.write_authorizations.get(auth_id)["state"], "superseded")
+
+    def test_task_cancel_does_not_revoke_approved_atomic_authorization(self):
+        self.start_atomic()
+        self.authorize()
+        result = self.service.cancel_unsubmitted_task(user_subject="user-a", task_id=self.task_id)
+        self.assertEqual(result["error"]["code"], "TASK_ACTION_ALREADY_STARTED")
+        self.assertEqual(self.service.write_authorizations.get(self.auth_id)["state"], "approved")
+        self.assertIsNone(self.write.created_payload)
 
     def test_cancel_before_commit_wins_against_real_authorization_consumption(self):
         self.start()

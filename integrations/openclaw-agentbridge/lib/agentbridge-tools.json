@@ -1730,6 +1730,37 @@
       "annotations": {
         "destructiveHint": false,
         "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Cancel the current user's unsubmitted task/card by its actual task_id. Routes durable plans and ordinary input/authorization cards. Use this for canceling a task or card, not task_plan_cancel with a task ID. Never revokes a submitted business workflow or cancels a consumed authorization.",
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "agentbridge_task_cancelArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_task_cancel",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_task_cancelDictOutput",
+        "type": "object"
+      },
+      "title": "Cancel Unsubmitted AgentBridge Task"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true
       },
