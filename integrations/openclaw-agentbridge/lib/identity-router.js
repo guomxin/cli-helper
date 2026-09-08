@@ -15,6 +15,7 @@ export class AgentBridgeIdentityRouter {
     fetchImpl = globalThis.fetch,
     sessionBindings = new Map(),
     sessionEndpoints = new Map(),
+    planningPolicies = new Map(),
   }) {
     this.config = config;
     this.endpoint = resolveMcpEndpoint(config, hostConfig);
@@ -25,6 +26,7 @@ export class AgentBridgeIdentityRouter {
     );
     this.clients = new Map();
     this.identityProfiles = new Map();
+    this.planningPolicies = planningPolicies;
     this.sessionBindings = sessionBindings;
     this.sessionEndpoints = sessionEndpoints;
   }
@@ -196,6 +198,12 @@ export class AgentBridgeIdentityRouter {
           planningPolicy: normalizePlanningPolicy(serverProfile?.planning),
         });
         this.identityProfiles.set(binding.key, profile);
+        const policyKey = JSON.stringify([this.endpoint?.url, binding.key]);
+        if (profile.planningPolicy) {
+          this.planningPolicies.set(policyKey, profile.planningPolicy);
+        } else {
+          this.planningPolicies.delete(policyKey);
+        }
         profiles.push({
           bindingKey: binding.key,
           userSubject: profile.userSubject,
@@ -217,7 +225,7 @@ export class AgentBridgeIdentityRouter {
 
   planningPolicyForBinding(binding) {
     return binding
-      ? this.identityProfiles.get(binding.key)?.planningPolicy || null
+      ? this.planningPolicies.get(JSON.stringify([this.endpoint?.url, binding.key])) || null
       : null;
   }
 

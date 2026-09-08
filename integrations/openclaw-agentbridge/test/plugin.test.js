@@ -6,6 +6,8 @@ import {
   notificationPumpDelay,
 } from "../lib/coordinator.js";
 import { normalizeInteraction } from "../lib/interaction.js";
+import { AgentBridgeIdentityRouter } from "../lib/identity-router.js";
+import { resolvePluginConfig } from "../lib/config.js";
 import { registerAgentBridgeInteractions } from "../lib/plugin.js";
 import {
   AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
@@ -31,6 +33,47 @@ function coordinatorLease() {
     },
   };
 }
+
+test("planning policy survives agent runtime registration without sharing authority profiles", async () => {
+  const sharedState = createInteractionSharedState();
+  const pluginConfig = { autoPoll: false, syncTimeline: false,
+    mcpUrl: "https://bridge.test/mcp",
+    identityBindings: [{ channel: "telegram", senderId: "1001", tokenEnv: "TOKEN_A" }] };
+  const env = { TOKEN_A: "token-a", TOKEN_B: "token-b" };
+  const first = registerAgentBridgeInteractions(fakeApi(pluginConfig).api, { sharedState, env });
+  let planning = { schemaVersion: "agentbridge.composed-task-planning-policy.v1",
+    modelContext: "AgentBridge durable composed-task policy: read-only plans do not write business data." };
+  const loader = new AgentBridgeIdentityRouter({ config: resolvePluginConfig(pluginConfig),
+    hostConfig: {}, env, planningPolicies: sharedState.identityPlanningPolicies,
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {
+        structuredContent: { status: "succeeded", negotiation: { acceptedLevel: "L3" },
+          planning, identity: { userSubject: "user-a", scopes: ["oa:read"] },
+          agentToolAccess: { allowedToolNames: ["oa_session_status"] } } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    } });
+  await loader.refreshIdentityProfiles();
+  const secondConfig = { ...pluginConfig, identityBindings: [...pluginConfig.identityBindings,
+    { channel: "telegram", senderId: "1002", tokenEnv: "TOKEN_B" }] };
+  const harness = fakeApi(secondConfig);
+  const second = registerAgentBridgeInteractions(harness.api, { sharedState, env });
+  const context = { sessionKey: "agent:main:telegram:direct:1001" };
+  const result = await harness.hooks.before_prompt_build({ prompt: "Summarize two sources without writes." }, context);
+  assert.equal(result.prependContext, planning.modelContext);
+  assert.equal(await harness.hooks.before_prompt_build({ prompt: "Read my data." },
+    { sessionKey: "agent:main:telegram:direct:1002" }), undefined);
+  const anotherServer = new AgentBridgeIdentityRouter({
+    config: resolvePluginConfig({ ...pluginConfig, mcpUrl: "https://other.test/mcp" }),
+    hostConfig: {}, env, planningPolicies: sharedState.identityPlanningPolicies });
+  assert.equal(anotherServer.planningPolicyForBinding(loader.config.identityBindings[0]), null);
+  assert.equal(anotherServer.allowedToolNamesForBinding(loader.config.identityBindings[0]), null);
+  planning = null;
+  await loader.refreshIdentityProfiles();
+  assert.equal(await harness.hooks.before_prompt_build({ prompt: "Read my data." }, context), undefined);
+  first.stopAll();
+  second.stopAll();
+});
 
 test("quoted host history cannot select a task for a fresh current request", async () => {
   const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
@@ -898,7 +941,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.88",
+      hostVersion: "0.4.89",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1316,7 +1359,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.88",
+        hostVersion: "0.4.89",
       },
     },
   });
@@ -2434,7 +2477,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.88",
+      hostVersion: "0.4.89",
     },
   });
   assert.equal(

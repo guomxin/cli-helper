@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.88";
+export const PLUGIN_VERSION = "0.4.89";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -53,6 +53,11 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
   const identitySessionEndpoints =
     sharedState.identitySessionEndpoints ||
     (sharedState.identitySessionEndpoints = new Map());
+  // OpenClaw can register another plugin instance for an agent run without
+  // replaying gateway_start. Share policy metadata, never token/scope profiles.
+  const identityPlanningPolicies =
+    sharedState.identityPlanningPolicies ||
+    (sharedState.identityPlanningPolicies = new Map());
   const identityRouter =
     dependencies.identityRouter ||
     new AgentBridgeIdentityRouter({
@@ -62,6 +67,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
       fetchImpl: dependencies.fetchImpl,
       sessionBindings: identitySessionBindings,
       sessionEndpoints: identitySessionEndpoints,
+      planningPolicies: identityPlanningPolicies,
     });
   const mcpClient = identityRouter.enabled
     ? null
