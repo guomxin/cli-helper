@@ -828,6 +828,141 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
+      "description": "Prepare approval of one 工作交接单 (work handover), including an automatically started 离职 handover. Validates the dedicated template and read-only approval node; freezes transferor, department, supervisor, selected category, every work and finance handover row, attachments, recipients and confirmations. Does not fill handover business fields. Pass any opinion already supplied by the user.",
+      "inputSchema": {
+        "properties": {
+          "affair_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Affair Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "input_submission_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Submission Id"
+          },
+          "opinion": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opinion"
+          }
+        },
+        "required": [
+          "affair_id"
+        ],
+        "title": "prepare_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_work_handover_approval_prepare",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "prepare_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Prepare OA Work Handover Approval"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "description": "Consume one approved authorization and verify that the exact work-handover request leaves the complete pending collection.",
+      "inputSchema": {
+        "properties": {
+          "authorization_id": {
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "authorization_id"
+        ],
+        "title": "commit_pending_actionArguments",
+        "type": "object"
+      },
+      "name": "oa_work_handover_approve",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "commit_pending_actionDictOutput",
+        "type": "object"
+      },
+      "title": "Approve Authorized OA Work Handover Request"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://agentbridge/trusted-interaction.html",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        },
+        "ui/resourceUri": "ui://agentbridge/trusted-interaction.html"
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
       "description": "Bind one exact pending monthly attendance confirmation. AgentBridge validates the HR template before opening a card and freezes employee, attendance totals, and the OA-selected objection decision.",
       "inputSchema": {
         "properties": {
@@ -4319,6 +4454,7 @@
                     "intellectual_property_declaration",
                     "overtime",
                     "resignation",
+                    "work_handover",
                     "attendance_confirmation",
                     "weekly_report",
                     "standard_collaboration"

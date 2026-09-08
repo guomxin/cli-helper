@@ -13,7 +13,7 @@ from bscli.adapters.seeyon_pending_actions import pending_action_profile_for_tit
 PENDING_BATCH_PREPARE_CAPABILITY = "oa.workflow.pending.batch.prepare"
 PENDING_BATCH_TYPES = (
     "missed_punch", "efficiency_data", "travel_expense", "labor_contract_renewal",
-    "intellectual_property_declaration", "overtime", "resignation",
+    "intellectual_property_declaration", "overtime", "resignation", "work_handover",
     "attendance_confirmation", "weekly_report", "standard_collaboration",
 )
 PENDING_BATCH_INPUT_SCHEMA = {

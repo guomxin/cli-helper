@@ -76,6 +76,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.travel_expense.approve",
                 "oa.weekly_report.acknowledge",
                 "oa.weekly_report.acknowledgement.prepare",
+                "oa.work_handover.approval.prepare",
+                "oa.work_handover.approve",
                 "oa.workflow.detail.get",
                 "oa.workflow.done.list",
                 "oa.workflow.opinions.list",

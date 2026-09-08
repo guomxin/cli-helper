@@ -941,7 +941,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.90",
+      hostVersion: "0.4.91",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1360,7 +1360,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.90",
+        hostVersion: "0.4.91",
       },
     },
   });
@@ -2478,7 +2478,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.90",
+      hostVersion: "0.4.91",
     },
   });
   assert.equal(
@@ -6113,6 +6113,74 @@ test("reports a verified resignation approval after authorization resumes", asyn
   assert.equal(
     harness.sentPayloads[0].payload.text,
     "OA \u79bb\u804c\u7533\u8bf7\u5355\u5df2\u5ba1\u6279\u901a\u8fc7\u3002",
+  );
+});
+
+
+test("reports a verified work_handover approval after authorization resumes", async () => {
+  const harness = fakeApi({
+    autoPoll: true,
+    pollIntervalSeconds: 1,
+    wakeAgentOnComplete: true,
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  const pending = interaction({
+    interactionId: "interaction-work_handover-approval-123456",
+    type: "execution_authorization",
+    title: "Approve work_handover request",
+  });
+  const completed = structuredClone(pending);
+  completed.state = "completed";
+  completed.resume = {
+    tool: "agentbridge_interaction_resume",
+    ready: true,
+    completed: false,
+  };
+  const client = {
+    async callTool(name) {
+      if (name === "agentbridge_interaction_get") {
+        return { status: "succeeded", interaction: completed };
+      }
+      return {
+        status: "succeeded",
+        result: {
+          pending_action_processed: true,
+          action_kind: "approval",
+          workflow_profile: "work_handover",
+          workflow_approved: true,
+          verification: { confirmed: true },
+        },
+      };
+    },
+  };
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: client,
+    sleep: async () => {},
+  });
+  bindDeliveryRoute(harness, {
+    sessionKey,
+    to: "7052061588",
+  });
+  bindToolCall(harness, {
+    toolCallId: "tool-work_handover-approval",
+    runId: "run-work_handover-approval",
+    sessionKey,
+  });
+  harness.middleware(
+    {
+      toolCallId: "tool-work_handover-approval",
+      toolName: "oa_work_handover_approval_prepare",
+      result: toolResult(pending),
+    },
+    { runtime: "openclaw" },
+  );
+
+  await coordinator.waitForIdle();
+
+  assert.equal(harness.sentPayloads.length, 1);
+  assert.equal(
+    harness.sentPayloads[0].payload.text,
+    "OA 工作交接单\u5df2\u5ba1\u6279\u901a\u8fc7\u3002",
   );
 });
 

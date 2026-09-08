@@ -167,8 +167,11 @@ from bscli.adapters.seeyon_pending_actions import (
     OVERTIME_APPROVAL_PREPARE_CAPABILITY,
     OVERTIME_APPROVE_CAPABILITY,
     RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA,
+    WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA,
     RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
+    WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
     RESIGNATION_APPROVE_CAPABILITY,
+    WORK_HANDOVER_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_FIELD_CARD_SCHEMA,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
@@ -187,6 +190,7 @@ from bscli.adapters.seeyon_pending_actions import (
     approve_labor_contract_renewal,
     approve_overtime,
     approve_resignation,
+    approve_work_handover,
     approve_standard_collaboration,
     approve_travel_expense,
     prepare_efficiency_data_approval,
@@ -195,6 +199,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_labor_contract_renewal_approval,
     prepare_overtime_approval,
     prepare_resignation_approval,
+    prepare_work_handover_approval,
     prepare_standard_collaboration_approval,
     prepare_travel_expense_approval,
     prepare_weekly_report_acknowledgement,
@@ -526,6 +531,21 @@ _TRUSTED_WRITE_DEFINITIONS.update(
                 "The resignation approval requires trusted confirmation."
             ),
         },
+        WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY: {
+            "commit_capability": WORK_HANDOVER_APPROVE_CAPABILITY,
+            "field_schema": WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA,
+            "context_fields": ("affair_id",),
+            "prepare_function": "prepare_work_handover_approval",
+            "commit_function": "approve_work_handover",
+            "contract_error": PendingActionContractMismatch,
+            "outcome_error": PendingActionOutcomeUnknown,
+            "field_message": (
+                "The work-handover approval opinion must be entered in the trusted field card."
+            ),
+            "authorization_message": (
+                "The work-handover approval requires trusted confirmation."
+            ),
+        },
         ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: {
             "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
             "field_schema": ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
@@ -572,6 +592,7 @@ for _pending_profile, _pending_prepare_capability in (
     ),
     ("overtime", OVERTIME_APPROVAL_PREPARE_CAPABILITY),
     ("resignation", RESIGNATION_APPROVAL_PREPARE_CAPABILITY),
+    ("work_handover", WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY),
     ("attendance_confirmation", ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY),
     ("weekly_report", WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY),
     ("standard_collaboration", STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY),
@@ -694,7 +715,9 @@ _CAPABILITY_SCOPES = {
     OVERTIME_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     OVERTIME_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     RESIGNATION_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
+    WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     RESIGNATION_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
+    WORK_HANDOVER_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
     ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
     ATTENDANCE_CONFIRM_CAPABILITY: frozenset({"oa:write:approval"}),
     WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
@@ -5178,7 +5201,7 @@ class CentralCapabilityService:
                 "The trusted field submission is missing its batch context.",
             )
         if generic:
-            pending = adapter.list_workflows(worker, collection="pending", arguments={"limit": 1000})
+            pending = adapter.list_workflows(worker, collection="pending", arguments={"limit": 100})
             try:
                 selected = select_pending_batch_items(pending, arguments, self.registry)
             except PendingBatchSelectionError as exc:

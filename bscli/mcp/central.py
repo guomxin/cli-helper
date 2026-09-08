@@ -72,7 +72,9 @@ from bscli.adapters.seeyon_pending_actions import (
     OVERTIME_APPROVAL_PREPARE_CAPABILITY,
     OVERTIME_APPROVE_CAPABILITY,
     RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
+    WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
     RESIGNATION_APPROVE_CAPABILITY,
+    WORK_HANDOVER_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
     TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
@@ -233,6 +235,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     ),
     "oa_overtime_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_resignation_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_work_handover_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_attendance_confirmation_prepare": frozenset(
         {"oa:write:approval"}
     ),
@@ -1128,6 +1131,25 @@ def create_central_mcp_server(
                 "resignation request leaves the pending collection."
             ),
             "commit_capability": RESIGNATION_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_work_handover_approval_prepare",
+            "prepare_title": "Prepare OA Work Handover Approval",
+            "prepare_description": (
+                "Prepare approval of one 工作交接单 (work handover), including an automatically "
+                "started 离职 handover. Validates the dedicated template and read-only approval node; "
+                "freezes transferor, department, supervisor, selected category, every work and finance "
+                "handover row, attachments, recipients and confirmations. Does not fill handover "
+                "business fields. Pass any opinion already supplied by the user."
+            ),
+            "prepare_capability": WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_work_handover_approve",
+            "commit_title": "Approve Authorized OA Work Handover Request",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "work-handover request leaves the complete pending collection."
+            ),
+            "commit_capability": WORK_HANDOVER_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_attendance_confirmation_prepare",
@@ -2570,7 +2592,7 @@ def create_central_mcp_server(
         affair_ids: Annotated[list[str] | None, Field(min_length=1, max_length=100)] = None,
         workflow_types: list[Literal[
             "missed_punch", "efficiency_data", "travel_expense", "labor_contract_renewal",
-            "intellectual_property_declaration", "overtime", "resignation", "attendance_confirmation",
+            "intellectual_property_declaration", "overtime", "resignation", "work_handover", "attendance_confirmation",
             "weekly_report", "standard_collaboration",
         ]] | None = None,
         keyword: Annotated[str | None, Field(max_length=200)] = None,

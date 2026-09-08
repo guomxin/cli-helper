@@ -7,6 +7,10 @@ import time
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from bscli.adapters.seeyon_work_handover import (
+    work_handover_business_snapshot, work_handover_summary_fields,
+)
+
 
 EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY = (
     "oa.efficiency_data.approval.prepare"
@@ -30,6 +34,8 @@ OVERTIME_APPROVAL_PREPARE_CAPABILITY = "oa.overtime.approval.prepare"
 OVERTIME_APPROVE_CAPABILITY = "oa.overtime.approve"
 RESIGNATION_APPROVAL_PREPARE_CAPABILITY = "oa.resignation.approval.prepare"
 RESIGNATION_APPROVE_CAPABILITY = "oa.resignation.approve"
+WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY = "oa.work_handover.approval.prepare"
+WORK_HANDOVER_APPROVE_CAPABILITY = "oa.work_handover.approve"
 ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
     "oa.attendance_confirmation.prepare"
 )
@@ -128,6 +134,12 @@ RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_resignation_approval_fields.v1",
     title="填写离职申请审批意见",
     effect="审批通过一条离职申请单",
+    submit_label="提交审批意见",
+)
+WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_work_handover_approval_fields.v1",
+    title="填写工作交接审批意见",
+    effect="审批通过一条工作交接单",
     submit_label="提交审批意见",
 )
 ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
@@ -333,6 +345,31 @@ _PROFILES = {
         "summary_effect": "审批通过后该离职申请将离开待办列表",
         "authorize_label": "授权审批通过",
         "business_snapshot_policy": "resignation_v1",
+    },
+    "work_handover": {
+        "prepare_capability": WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": WORK_HANDOVER_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-work-handover-approval-v1",
+        "plan_schema": "agentbridge.oa_work_handover_approval_plan.v1",
+        "result_schema": "agentbridge.oa_work_handover_approval_result.v1",
+        "business_intent": "approve_work_handover_request",
+        "title_rule": {
+            "kind": "optional_auto_prefix",
+            "value": "【HR】工作交接单-",
+        },
+        "required_fields": {"移交人", "交接类别", "工作事项", "交接内容"},
+        "allowed_fields": None,
+        "template_id": "-1377138047593329703",
+        "form_app_id": "5247761788960957082",
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批工作交接单",
+        "summary_effect": "审批通过后该工作交接将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "work_handover_v1",
     },
     "attendance_confirmation": {
         "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
@@ -568,6 +605,26 @@ def approve_resignation(
     )
 
 
+def prepare_work_handover_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "work_handover")
+
+
+def approve_work_handover(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="work_handover",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
 def prepare_weekly_report_acknowledgement(adapter, worker, arguments: dict) -> dict:
     return _prepare_pending_action(adapter, worker, arguments, "weekly_report")
 
@@ -795,6 +852,12 @@ def _commit_pending_action(
                     collection="pending",
                     arguments={"limit": 100},
                 )
+                if profile_key == "work_handover" and (
+                    pending.get("coverage") or {}
+                ).get("status") != "complete":
+                    raise PendingActionOutcomeUnknown(
+                        "The work-handover pending readback is incomplete; disappearance is not proven."
+                    )
                 if not any(
                     str(item.get("affair_id") or "") == affair_id
                     for item in pending.get("items") or []
@@ -955,6 +1018,16 @@ def _validate_target(
     elif profile.get("business_snapshot_policy") == "resignation_v1":
         signals = dict(signals)
         signals["business_snapshot"] = _resignation_business_snapshot(page)
+    elif profile.get("business_snapshot_policy") == "work_handover_v1":
+        if node_policy not in profile["node_policies"] or node_policy_name not in profile["node_policy_names"]:
+            raise PendingActionContractMismatch("The OA work-handover approval node identity is inconsistent.")
+        if not str(identity.get("form_record_id") or ""):
+            raise PendingActionContractMismatch("The OA work-handover form record identity is unavailable.")
+        try:
+            signals = dict(signals)
+            signals["business_snapshot"] = work_handover_business_snapshot(page)
+        except ValueError as exc:
+            raise PendingActionContractMismatch(str(exc)) from exc
     return signals
 
 
@@ -1425,6 +1498,8 @@ def _summary(
         ):
             if snapshot.get(name):
                 fields.append({"label": label, "value": snapshot[name]})
+    elif profile_key == "work_handover":
+        fields.extend(work_handover_summary_fields(target["business_snapshot"]))
     elif profile_key == "weekly_report":
         for name in ("周报名称", "年度", "本周说明"):
             if values.get(name):
@@ -1506,6 +1581,8 @@ def _title_matches(rule: dict, title: str) -> bool:
     value = str(rule.get("value") or "")
     if kind == "contains":
         return value in title
+    if kind == "optional_auto_prefix":
+        return title.startswith(value) or title.startswith("(自动发起)" + value)
     if kind == "prefix":
         return title.startswith(value)
     if kind == "standard_collaboration":

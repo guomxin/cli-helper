@@ -154,7 +154,7 @@ def test_selection_limits_filters_and_fail_closed(tmp_path):
     cases = [
         (pending(rows), {}, "BATCH_LIMIT_EXCEEDED"),
         ({"items": rows, "coverage": {"status": "partial"}}, {}, "BATCH_SOURCE_INCOMPLETE"),
-        (pending([row(1, "【HR】工作交接单")]), {}, "BATCH_UNSUPPORTED_ITEMS"),
+        (pending([row(1, "【HR】未知专用表单")]), {}, "BATCH_UNSUPPORTED_ITEMS"),
         (pending(rows), {"affair_ids": ["missing"]}, "BATCH_TARGET_UNAVAILABLE"),
         (pending([row(1), row(1)]), {}, "BATCH_SOURCE_INVALID"),
         (pending(rows), {"affair_ids": ["affair-1"], "workflow_types": ["weekly_report"]}, "BATCH_SELECTION_MISMATCH"),
@@ -163,6 +163,41 @@ def test_selection_limits_filters_and_fail_closed(tmp_path):
         with pytest.raises(PendingBatchSelectionError) as error:
             select_pending_batch_items(source, arguments, registry)
         assert error.value.code == code
+
+
+def test_handover_batch_uses_real_pending_limit_and_trusted_authorization(run, monkeypatch):
+    from bscli.adapters.seeyon_central import SeeyonCentralAdapter
+
+    service, tid, rows, prepared, committed = run
+    rows[:] = [row(1, "(自动发起)【HR】工作交接单-测试移交人-离职")]
+    monkeypatch.setattr(service.adapter, "list_workflows", SeeyonCentralAdapter.list_workflows.__get__(service.adapter))
+    monkeypatch.setattr(service.adapter, "_fetch_workflow_collection",
+                        lambda *_a, **_kw: {"items": rows, "total": 1, "page": 1})
+    field = start(service, tid, {"workflow_types": ["work_handover"]})
+    assert field["error"]["code"] == "FIELD_INPUT_REQUIRED"
+    assert not committed
+    schema = service.field_submissions.get(field["nextAction"]["inputSubmissionId"])["form_schema"]
+    assert "工作交接" in schema["title"]
+    auth = authorize(service, field)
+    assert not committed
+    result = finish(service, auth)
+    assert result["batch"]["state"] == "succeeded"
+    assert committed == ["affair-1"]
+    service.resume_interaction(user_subject="user-a", interaction_id=auth["interaction"]["interactionId"])
+    assert committed == ["affair-1"]
+
+
+def test_real_pending_source_over_100_is_not_silently_batched(run, monkeypatch):
+    from bscli.adapters.seeyon_central import SeeyonCentralAdapter
+
+    service, tid, rows, prepared, committed = run
+    rows[:] = [row(i) for i in range(101)]
+    monkeypatch.setattr(service.adapter, "list_workflows", SeeyonCentralAdapter.list_workflows.__get__(service.adapter))
+    monkeypatch.setattr(service.adapter, "_fetch_workflow_collection",
+                        lambda *_a, **_kw: {"items": rows, "total": 101, "page": 1})
+    result = start(service, tid, {"max_items": 100})
+    assert result["error"]["code"] == "BATCH_SOURCE_INCOMPLETE"
+    assert not prepared and not committed
 
 
 def test_overlapping_legacy_and_generic_batches_are_rejected(run):
