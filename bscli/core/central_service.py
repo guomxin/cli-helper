@@ -769,7 +769,8 @@ def _prefill_trusted_field_schema(schema: dict, arguments: dict) -> dict:
 
 def capability_required_scopes(capability_name: str) -> frozenset[str]:
     if capability_name in ANALYTICS_CAPABILITIES:
-        return ANALYTICS_SCOPES
+        return (frozenset({*ANALYTICS_SCOPES, "taihua:analytics:export"})
+                if capability_name in {"taihua.analytics.report.export", "taihua.analytics.report.download"} else ANALYTICS_SCOPES)
     try:
         return _CAPABILITY_SCOPES[capability_name]
     except KeyError as exc:
@@ -911,7 +912,8 @@ class CentralCapabilityService:
 
     def planning_required_scopes(self, capability_name: str) -> frozenset[str]:
         if capability_name in ANALYTICS_CAPABILITIES:
-            return ANALYTICS_SCOPES
+            return (frozenset({*ANALYTICS_SCOPES, "taihua:analytics:export"})
+                if capability_name in {"taihua.analytics.report.export", "taihua.analytics.report.download"} else ANALYTICS_SCOPES)
         if capability_name in _CAPABILITY_SCOPES:
             return _CAPABILITY_SCOPES[capability_name]
         spec = self.registry.get(capability_name)

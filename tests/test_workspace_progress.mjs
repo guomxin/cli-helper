@@ -89,3 +89,20 @@ test("dispatch adoption, concurrent runs and final cleanup keep separate ownersh
   assert.equal(f.state.liveMessages.has("run"), false);
   assert.equal(f.state.liveMessages.get("other").progressDescription.textContent, "另一条说明");
 });
+
+
+test("protected CSV cards accept only the exact authenticated same-origin route", () => {
+  const start = source.indexOf("function appendArtifactList(");
+  const end = source.indexOf("async function reissueArtifact(", start);
+  const render = runInNewContext(`${source.slice(start, end)}; appendArtifactList`, {
+    document: {createElement: () => new Element()}, formatBytes: String, formatTime: String,
+  });
+  for (const [url, allowed] of [["/api/analytics/reports/" + "a".repeat(32) + "/download", true],
+                               ["//attacker.test/file", false], ["/api/other/file", false]]) {
+    const root = new Element();
+    render(root, [{state: "ready", filename: "daily.csv", artifact_type: "taihua_personal_csv",
+                   download_url: url, byte_size: 10, expires_at: "2099"}]);
+    const row = root.children[0].children[1];
+    assert.equal(row.children.some(child => child.className === "secondary task-artifact-download"), allowed);
+  }
+});

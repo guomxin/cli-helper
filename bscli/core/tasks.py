@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -2058,7 +2059,13 @@ class TaskHubStore:
         byte_size = int(artifact.get("byte_size") or 0)
         if byte_size <= 0 or byte_size > 32 * 1024 * 1024:
             raise ValueError("artifact byte_size is invalid")
-        download_url = _artifact_download_url(artifact.get("download_url"))
+        if artifact_type == "taihua_personal_csv":
+            report_id = source_ref.split(":", 1)[0]
+            download_url = artifact.get("download_url")
+            if not re.fullmatch(r"[0-9a-f]{32}", report_id) or download_url != f"/api/analytics/reports/{report_id}/download":
+                raise ValueError("protected CSV download reference is invalid")
+        else:
+            download_url = _artifact_download_url(artifact.get("download_url"))
         expires_at = _required_future_time(
             artifact.get("expires_at"),
             "expires_at",

@@ -200,7 +200,7 @@ def _matches_json_type(value: Any, expected: str | list[str]) -> bool:
 
 def _operation_input_summary(arguments: dict, *, effect: str, capability_name: str = "") -> dict:
     if capability_name.startswith("taihua.analytics."):
-        allowed = {"start_date", "end_date_exclusive", "log_type", "group_by", "result_id"}
+        allowed = {"start_date", "end_date_exclusive", "log_type", "group_by", "result_id", "report_id"}
         return {key: value for key, value in arguments.items() if key in allowed}
     if effect == "read":
         return arguments

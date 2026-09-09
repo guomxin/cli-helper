@@ -2623,6 +2623,20 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertTrue(completed["authenticated"])
                 cookies.update(_cookies(headers))
 
+                csv_path = "/api/analytics/reports/" + "a" * 32 + "/download"
+                with patch.object(application, "analytics_report", return_value={
+                    "body": b"date,hours\r\n2026-09-01,1.5\r\n",
+                    "filename": "taihua-personal-daily.csv", "content_type": "text/csv; charset=utf-8",
+                }) as csv_download:
+                    denied, _, _ = _raw_request(port, "GET", csv_path)
+                    self.assertEqual(denied, 401)
+                    csv_download.assert_not_called()
+                    status, csv_headers, body = _raw_request(port, "GET", csv_path, cookies=cookies)
+                    self.assertEqual(status, 200)
+                    self.assertIn("no-store", csv_headers["Cache-Control"])
+                    self.assertIn("1.5", body)
+                    self.assertEqual(csv_download.call_args.args[0]["user_subject"], "user-a")
+
                 status, response_headers, session = _request(
                     port,
                     "GET",

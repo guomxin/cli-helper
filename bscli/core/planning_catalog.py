@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from bscli.core.capability import CapabilityRegistry
+from bscli.analytics.comparison import REFERENCE_SCHEMA
 from bscli.core.planning_policy import (
     COMPOSED_TASK_POLICY_VERSION,
     planning_descriptor,
@@ -29,8 +30,8 @@ def build_planning_catalog(
     hidden = frozenset(hidden_commit_capabilities)
     capabilities: list[dict[str, Any]] = []
     for spec in registry.list():
-        # Phase A analytics returns protected references. Plan hydration is a phase B contract.
-        if spec.name.startswith("taihua.analytics."):
+        # Only summary sources can enter a protected comparison plan.
+        if spec.name.startswith("taihua.analytics.") and spec.name != "taihua.analytics.personal.summary":
             continue
         if spec.name in hidden:
             continue
@@ -52,7 +53,8 @@ def build_planning_catalog(
                 "effect": spec.effect,
                 "requiredScopes": sorted(required),
                 "inputSchema": spec.input_schema,
-                "outputSchema": spec.output_schema,
+                "outputSchema": (REFERENCE_SCHEMA
+                                 if spec.name == "taihua.analytics.personal.summary" else spec.output_schema),
                 "planningRole": roles[0],
                 "planningRoles": roles,
                 "planningDescriptor": descriptor,
@@ -63,6 +65,14 @@ def build_planning_catalog(
     capability_names = {item["name"] for item in capabilities}
     transform_names = {item["name"] for item in transforms_catalog}
     examples: list[dict[str, Any]] = []
+    if "taihua.analytics.personal.summary" in capability_names:
+        examples.append({"schemaVersion": "agentbridge.task-plan.proposal.v2", "goal": "比较本人两个完整日报周期", "constraints": {},
+            "steps": [{"stepKey": key, "kind": "capability", "capabilityName": "taihua.analytics.personal.summary",
+                       "arguments": {"start_date": start, "end_date_exclusive": end, "log_type": "DAILY", "group_by": "day"}}
+                      for key, start, end in (("baseline", "2026-08-24", "2026-08-31"), ("current", "2026-08-31", "2026-09-07"))]
+                     + [{"stepKey": "compare", "kind": "transform", "transformName": "taihua_personal_compare.v1",
+                         "dependsOn": ["baseline", "current"], "arguments": {"allow_unequal_windows": False},
+                         "bindings": {key: {"mode": "single", "step": key, "pointer": ""} for key in ("baseline", "current")}}]})
     if all(
         name in capability_names
         for name in ("oa.workflow.done.list", "oa.workflow.sent.list")

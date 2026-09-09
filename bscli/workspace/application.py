@@ -284,6 +284,24 @@ class WorkspaceApplication:
             )
         return items
 
+    def analytics_report(self, account: dict, report_id: str) -> dict:
+        from bscli.analytics.reports import DOWNLOAD
+        from bscli.core.capability_runtime import CapabilityRejected
+        runtime = self.service.analytics_runtime()
+        try:
+            report = runtime.results.load(report_id, owner=account["user_subject"])
+            if report.get("kind") != "csv":
+                raise WorkspaceArtifactError("DATA_ACCESS_DENIED", "无权下载此文件。")
+            response = runtime.invoke(user_subject=account["user_subject"], capability_name=DOWNLOAD,
+                arguments={"report_id": report_id}, authority_id=report.get("authority_id"), host_type="workspace")
+        except CapabilityRejected as exc:
+            raise WorkspaceArtifactError(exc.code, exc.message) from exc
+        if response["status"] != "succeeded":
+            error = response.get("error") or {}
+            raise WorkspaceArtifactError(error.get("code", "DATA_ACCESS_DENIED"), error.get("message", "下载未完成。"))
+        file = response["result"]["file"]
+        return {"body": base64.b64decode(file["content_base64"]), "filename": file["filename"], "content_type": file["content_type"]}
+
     def reissue_artifact(
         self,
         account: dict,

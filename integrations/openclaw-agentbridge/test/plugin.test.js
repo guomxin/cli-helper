@@ -7454,3 +7454,44 @@ function fakeApi(pluginConfig) {
     },
   };
 }
+
+
+test("delivers authenticated Taihua CSV bytes without an anonymous fetch", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  let savedBytes;
+  registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null, sleep: async () => undefined,
+    documentFetchImpl: async () => { throw new Error("anonymous fetch forbidden"); },
+    saveMediaBufferImpl: async (body) => { savedBytes = body; return { path: "C:/media/taihua.csv" }; },
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
+  bindToolCall(harness, { toolCallId: "taihua-csv", runId: "taihua-csv", sessionKey, toolName: "taihua_analytics_report_download" });
+  const structuredContent = {status: "succeeded", result: {
+    schemaVersion: "agentbridge.protected_csv_delivery.v1", report_id: "a".repeat(32),
+    file: {filename: "taihua-personal-daily.csv", content_type: "text/csv; charset=utf-8",
+           content_base64: Buffer.from("日期,登记工时\r\n2026-09-01,1.5\r\n").toString("base64")},
+  }};
+  const result = {content: [{type: "text", text: JSON.stringify(structuredContent)}],
+    details: {mcpServer: "agentbridge", mcpTool: "taihua_analytics_report_download", structuredContent}};
+  const replacement = await harness.middleware({toolCallId: "taihua-csv", toolName: "taihua_analytics_report_download", result},
+    {runtime: "openclaw", sessionKey});
+  assert.equal(replacement.result.details.structuredContent.hostDelivery.state, "delivered");
+  assert.match(savedBytes.toString("utf8"), /1.5/);
+  assert.equal(harness.sentPayloads[0].payload.mediaUrl, "C:/media/taihua.csv");
+});
+
+test("does not fall back to a public link for protected CSV", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    mcpClient: null, sleep: async () => undefined,
+    saveMediaBufferImpl: async () => { throw new Error("store unavailable"); },
+  });
+  const sessionKey = "agent:main:telegram:direct:7052061588";
+  bindDeliveryRoute(harness, {sessionKey, to: "7052061588"});
+  const receipt = await coordinator.performPreparedDocumentDelivery(sessionKey, {
+    protectedCsv: true, contentBase64: "YQ==", filename: "taihua-personal-daily.csv", contentType: "text/csv",
+  });
+  assert.equal(receipt.state, "failed");
+  assert.equal(harness.sentPayloads.length, 0);
+});

@@ -36,8 +36,11 @@ def projection(row: dict, query: Query, *, owner: str | None = None) -> dict:
         kind = row["typeCode"]
         if kind not in ("DAILY", "WEEKLY"):
             reject("DATA_CONTRACT_CHANGED")
-        if owner is not None and bigint(row.get("userId")) != owner:
-            reject("COVERAGE_UNVERIFIABLE")
+        if owner is not None:
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            ids = [value for value in (row.get("userId"), user.get("id")) if value is not None]
+            if not ids or any(bigint(value) != owner for value in ids):
+                reject("COVERAGE_UNVERIFIABLE")
         created = row.get("createdAt")
         if created is not None:
             created = datetime.fromisoformat(created).replace(microsecond=0).isoformat()

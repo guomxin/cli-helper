@@ -5619,6 +5619,94 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "从 group_by=day 的本人分析结果生成受保护 CSV；不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "result_id": {
+            "maxLength": 32,
+            "minLength": 32,
+            "title": "Result Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_id"
+        ],
+        "title": "taihua_analytics_report_exportArguments",
+        "type": "object"
+      },
+      "name": "taihua_analytics_report_export",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_analytics_report_exportDictOutput",
+        "type": "object"
+      },
+      "title": "导出本人日报汇总"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "通过当前 MCP 身份及导出 Scope 重新核验源结果后下载 CSV 文件；返回 UTF-8 BOM CSV 的 base64 内容供宿主保存附件。不可从操作历史提取内容。",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "report_id": {
+            "maxLength": 32,
+            "minLength": 32,
+            "title": "Report Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_id"
+        ],
+        "title": "taihua_analytics_report_downloadArguments",
+        "type": "object"
+      },
+      "name": "taihua_analytics_report_download",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_analytics_report_downloadDictOutput",
+        "type": "object"
+      },
+      "title": "下载本人日报 CSV"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。",
       "inputSchema": {
         "properties": {

@@ -2471,7 +2471,9 @@ function appendArtifactList(
     if (
       artifact.state === "ready" &&
       typeof artifact.download_url === "string" &&
-      /^https:\/\//.test(artifact.download_url)
+      (/^https:\/\//.test(artifact.download_url) ||
+       (artifact.artifact_type === "taihua_personal_csv" &&
+        /^\/api\/analytics\/reports\/[0-9a-f]{32}\/download$/.test(artifact.download_url)))
     ) {
       const download = document.createElement("a");
       download.className = "secondary task-artifact-download";

@@ -329,6 +329,10 @@ def create_workspace_http_server(
                         ),
                     )
                     return
+                report_match = re.fullmatch(r"/api/analytics/reports/([0-9a-f]{32})/download", route.path)
+                if report_match:
+                    self._download(application.analytics_report(account, report_match.group(1)))
+                    return
                 attachment_match = re.fullmatch(
                     r"/api/timeline/attachments/([A-Za-z0-9_-]{32,128})/download",
                     route.path,

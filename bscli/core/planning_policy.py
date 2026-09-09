@@ -30,7 +30,7 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- If AgentBridge returns PLAN_REQUIRED, read the catalog and repair the route once. Do not ask the user to rephrase or loop between direct prepare and planning.",
             "- If plan preparation or execution fails, report that authoritative plan failure. Do not query operation history to reconstruct and present a business result outside the plan.",
             "- PLAN_SOURCE_INCOMPLETE means safely stopped before the write sink. Report the incomplete sources and no business submission. Do not retry atomic source/sink tools in the same turn, ask to authorize a partial submission, or claim the business write failed.",
-            "- When a plan succeeds, answer from plan.resultProjection.result. Do not query source operations again; the projection is the bounded authoritative result for the user.",
+            "- For protected_analytics plan projections, use taihua_analytics_result_get with the projected result_id; the plan contains references only. Never infer metrics from references. For other successful plans, answer from plan.resultProjection.result. Do not query source operations again; the projection is the bounded authoritative result for the user.",
             "- Reuse an active plan's authoritative state instead of creating another plan or repeating successful source steps.",
             "- To cancel an unsubmitted task/card, use agentbridge_task_cancel with the actual task_id. It routes durable plans and ordinary cards safely. agentbridge_task_plan_cancel requires a real plan_id, not a task ID. Closing or ignoring a card is not cancellation. This does not revoke any submitted business workflow.",
         )
@@ -44,6 +44,11 @@ COMPOSED_TASK_PLANNING_POLICY = {
 
 
 _DESCRIPTORS: dict[str, dict[str, Any]] = {
+    "taihua.analytics.personal.summary": {
+        "mcpToolName": "taihua_analytics_personal_summary", "roles": ["business_source"],
+        "sourceContract": {"protectedReference": True, "windowArguments": ["start_date", "end_date_exclusive"],
+                           "dateBasis": "log_date", "maximumDays": 7},
+    },
     "oa.workflow.pending.list": {
         "roles": ["selector"],
         "selectorContract": {"resourcePointer": "/items"},

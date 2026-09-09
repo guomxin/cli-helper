@@ -28,7 +28,7 @@ MCP_SCOPES = (
     "oa:write:submit",
     "oa:write:revoke",
     "taihua:read",
-    "taihua:analytics:read",
+    "taihua:analytics:read", "taihua:analytics:export",
     "taihua:write:worklog",
     "yuque:read",
     "smartlight:read",

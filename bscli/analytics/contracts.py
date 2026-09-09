@@ -14,7 +14,7 @@ from bscli.core.capability_runtime import CapabilityRejected
 
 SUMMARY = "taihua.analytics.personal.summary"
 RESULT_GET = "taihua.analytics.result.get"
-CAPABILITIES = frozenset({SUMMARY, RESULT_GET})
+CAPABILITIES = frozenset({SUMMARY, RESULT_GET, "taihua.analytics.report.export", "taihua.analytics.report.download"})
 SCOPES = frozenset({"taihua:read", "taihua:analytics:read"})
 POLICY = "taihua.personal.api-visible.v1"
 BUSINESS_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")

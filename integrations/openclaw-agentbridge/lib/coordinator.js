@@ -2022,6 +2022,12 @@ export class InteractionCoordinator {
   }
 
   async materializePreparedDocument(file) {
+    if (file.protectedCsv) {
+      const body = Buffer.from(file.contentBase64, "base64");
+      const saved = await this.saveMediaBufferImpl(body, "text/csv", "inbound", 65536, file.filename, file.filename);
+      if (!saved?.path) throw new Error("protected CSV was not saved to the media store");
+      return saved.path;
+    }
     if (typeof this.fetchImpl !== "function") {
       throw new Error("prepared document fetch is unavailable");
     }
@@ -2112,7 +2118,7 @@ export class InteractionCoordinator {
       );
       return preparedDocumentReceipt(file, "failed", 0, "ROUTE_MISSING");
     }
-    if (this.isPullBasedSession(sessionKey)) {
+    if (this.isPullBasedSession(sessionKey) && (!file.protectedCsv || file.artifactId)) {
       this.api.logger.info(
         `AgentBridge prepared document exposed through the pull-based task card (channel=${route.channel}, filename=${safeCode(file.filename)})`,
       );
@@ -2170,6 +2176,9 @@ export class InteractionCoordinator {
         }
         await this.sleep(PREPARED_DOCUMENT_RETRY_DELAY_MS);
       }
+    }
+    if (file.protectedCsv) {
+      return preparedDocumentReceipt(file, "failed", attemptCount, errorCode);
     }
     const fallback = [
       `OA 证书“${file.filename}”已准备好，但附件上传失败。`,
@@ -2972,6 +2981,18 @@ function normalizeTimelineAttachment(value, allowedOrigins) {
 }
 
 function normalizePreparedDocuments(payload, allowedOrigins) {
+  const csv = payload?.status === "succeeded" ? payload.result : null;
+  if (csv?.schemaVersion === "agentbridge.protected_csv_delivery.v1") {
+    const file = csv.file;
+    if (!/^[0-9a-f]{32}$/.test(csv.report_id || "") || file?.filename !== "taihua-personal-daily.csv"
+        || file.content_type !== "text/csv; charset=utf-8"
+        || typeof file.content_base64 !== "string" || file.content_base64.length > 87384
+        || !/^[A-Za-z0-9+/]+={0,2}$/.test(file.content_base64)) return [];
+    const bytes = Buffer.from(file.content_base64, "base64");
+    if (!bytes.length || bytes.length > 65536 || bytes.toString("base64") !== file.content_base64) return [];
+    return [{filename: file.filename, contentType: "text/csv", protectedCsv: true,
+             contentBase64: file.content_base64, downloadId: csv.report_id, artifactId: normalizeOpaqueId(csv.artifact_id)}];
+  }
   if (payload?.schemaVersion === "agentbridge.document_delivery.v1") {
     const file = normalizePreparedDocumentFile(payload.file, allowedOrigins);
     return payload.status === "succeeded" && file ? [file] : [];

@@ -26,7 +26,7 @@ class AnalysisResultStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def save(self, *, owner, operation_id, payload):
+    def save(self, *, owner, operation_id, payload, expires_at=None):
         result_id = uuid4().hex
         now = datetime.now(timezone.utc)
         # Encrypt first. A failed index insert cannot expose an unowned result.
@@ -34,11 +34,19 @@ class AnalysisResultStore:
         try:
             with closing(self._connect()) as conn, conn:
                 conn.execute("INSERT INTO analysis_results VALUES (?,?,?,?,?)",
-                             (result_id, owner, operation_id, now.isoformat(), (now + timedelta(days=7)).isoformat()))
+                             (result_id, owner, operation_id, now.isoformat(), min(expires_at or now + timedelta(days=7), now + timedelta(days=7)).isoformat()))
         except Exception:
             self.payloads.delete(result_id)
             raise
         return {"result_id": result_id, "protected": True, "schema_version": "taihua.analytics.reference.v1"}
+
+    def expires_at(self, result_id, *, owner):
+        self.load(result_id, owner=owner)
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT expires_at FROM analysis_results WHERE result_id=? AND owner=?", (result_id, owner)).fetchone()
+        if row is None:
+            reject("RESULT_EXPIRED")
+        return datetime.fromisoformat(row["expires_at"])
 
     def load(self, result_id, *, owner):
         if not isinstance(result_id, str) or len(result_id) != 32:

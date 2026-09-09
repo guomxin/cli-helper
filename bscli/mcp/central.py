@@ -23,6 +23,8 @@ from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 import uvicorn
 
+from bscli.analytics.reports import EXPORT as ANALYTICS_EXPORT, DOWNLOAD as ANALYTICS_DOWNLOAD, EXPORT_SCOPES
+
 from bscli.analytics.contracts import (
     CAPABILITIES as ANALYTICS_CAPABILITIES,
     SCOPES as ANALYTICS_SCOPES,
@@ -269,6 +271,8 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_meeting_room_application_cancel_prepare": frozenset({"oa:write:meeting"}),
     "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
     "taihua_work_log_my_list": frozenset({"taihua:read"}),
+    "taihua_analytics_report_export": EXPORT_SCOPES,
+    "taihua_analytics_report_download": EXPORT_SCOPES,
     "taihua_analytics_personal_summary": ANALYTICS_SCOPES,
     "taihua_analytics_result_get": ANALYTICS_SCOPES,
     "taihua_work_log_team_list": frozenset({"taihua:read"}),
@@ -3190,6 +3194,22 @@ def create_central_mcp_server(
             system_id="yuque",
         )
         return package_interaction_result(response)
+
+    @mcp.tool(name="taihua_analytics_report_export", title="导出本人日报汇总",
+              description="从 group_by=day 的本人分析结果生成受保护 CSV；不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
+              annotations=read_annotations, structured_output=True)
+    async def taihua_analytics_report_export(ctx: Context, result_id: Annotated[str, Field(min_length=32, max_length=32)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(ctx, ANALYTICS_EXPORT, {"result_id": result_id}, idempotency_key, set(EXPORT_SCOPES))
+
+    @mcp.tool(name="taihua_analytics_report_download", title="下载本人日报 CSV",
+              description="通过当前 MCP 身份及导出 Scope 重新核验源结果后下载 CSV 文件；返回 UTF-8 BOM CSV 的 base64 内容供宿主保存附件。不可从操作历史提取内容。",
+              annotations=read_annotations, structured_output=True)
+    async def taihua_analytics_report_download(ctx: Context, report_id: Annotated[str, Field(min_length=32, max_length=32)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(ctx, ANALYTICS_DOWNLOAD, {"report_id": report_id}, idempotency_key, set(EXPORT_SCOPES))
 
     @mcp.tool(name="taihua_analytics_personal_summary", title="分析本人日报",
               description="统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。", annotations=read_annotations, structured_output=True)

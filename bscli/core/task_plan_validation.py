@@ -462,6 +462,21 @@ def validate_and_compile_task_plan(
                         step_key=step_key,
                     )
 
+    analytics_steps = [step for step in normalized.values()
+                       if str(step.get("capabilityName", "")).startswith("taihua.analytics.")
+                       or step.get("transformName") == "taihua_personal_compare.v1"]
+    if analytics_steps:
+        sources = {key for key, step in normalized.items() if step.get("capabilityName") == "taihua.analytics.personal.summary"}
+        terminal = normalized[ordered_keys[-1]]
+        bindings = terminal.get("bindings", {})
+        valid = (proposal_version.endswith(".v2") and len(normalized) == 3 and len(sources) == 2
+                 and terminal.get("transformName") == "taihua_personal_compare.v1"
+                 and set(bindings) == {"baseline", "current"}
+                 and all(b.get("mode", "single") == "single" and b.get("pointer") == "" for b in bindings.values())
+                 and {b.get("step") for b in bindings.values()} == sources)
+        if not valid:
+            raise PlanValidationError("PLAN_ANALYTICS_REFERENCE_REQUIRED", "分析比较仅允许两个本人 summary 和一个比较转换；完整引用必须分别绑定，禁止业务写入或明文派生。")
+
     if write_steps and ordered_keys[-1] != write_steps[0]:
         raise PlanValidationError(
             "PLAN_WRITE_SINK_NOT_FINAL",

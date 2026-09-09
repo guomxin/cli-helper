@@ -6,6 +6,8 @@ from pathlib import Path
 import threading
 import re
 from uuid import uuid4
+from datetime import datetime, timezone
+from bscli.analytics.reports import EXPORT, DOWNLOAD, EXPORT_SCOPES, issue
 
 from bscli.analytics.contracts import CAPABILITIES, RESULT_GET, SCOPES, SUMMARY, Budget, Query, reject
 from bscli.analytics.results import AnalysisResultStore
@@ -58,7 +60,7 @@ class CentralAnalytics:
         self.instance_lock = stream
         # Only the exclusive source owner can recover abandoned reads.
         with self.service.operations._connect() as conn:
-            pending = conn.execute("SELECT operation_id FROM operations WHERE capability_name IN (?,?) AND status IN ('pending','running')", (SUMMARY, RESULT_GET)).fetchall()
+            pending = conn.execute("SELECT operation_id FROM operations WHERE capability_name IN (?,?,?,?) AND status IN ('pending','running')", (SUMMARY, RESULT_GET, EXPORT, DOWNLOAD)).fetchall()
         for row in pending:
             self.service.operations.mark_failed(row["operation_id"], code="INTERRUPTED", message="分析服务已重启，请重新查询。")
 
@@ -103,9 +105,10 @@ class CentralAnalytics:
                 if task_id:
                     from bscli.core.tasks import ACTIVE_TASK_STATUSES
                     task = service.tasks.get_task(task_id, user_subject=user_subject)
-                    if task["status"] not in ACTIVE_TASK_STATUSES:
+                    if task["status"] not in ACTIVE_TASK_STATUSES and not (
+                            task["status"] == "succeeded" and capability_name in {RESULT_GET, EXPORT, DOWNLOAD}):
                         return False
-                resolved = service._task_plan_authority_resolver(authority_id, SCOPES)
+                resolved = service._task_plan_authority_resolver(authority_id, EXPORT_SCOPES if capability_name in {EXPORT, DOWNLOAD} else SCOPES)
                 return resolved["user_subject"] == user_subject
             except Exception:
                 return False
@@ -113,7 +116,9 @@ class CentralAnalytics:
             service.runtime_governance.record_stage_once(trace_id=trace["trace_id"],
                 stage="analytics." + name, status="succeeded", system_id="taihua", capability_name=capability_name)
             if task_id:
-                service.tasks.record_analysis_phase(task_id=task_id, user_subject=user_subject, phase=name, request_id=request_id)
+                from bscli.core.tasks import ACTIVE_TASK_STATUSES
+                if service.tasks.get_task(task_id, user_subject=user_subject)["status"] in ACTIVE_TASK_STATUSES:
+                    service.tasks.record_analysis_phase(task_id=task_id, user_subject=user_subject, phase=name, request_id=request_id)
         budget = Budget(canceled=event, authority=authority, phase=phase)
 
         def execute(context, inputs):
@@ -140,12 +145,11 @@ class CentralAnalytics:
             self.config().authorize(user_subject)
             if capability_name == SUMMARY:
                 Query.parse(arguments)
-            elif (not isinstance(arguments, dict) or set(arguments) != {"result_id"}
-                  or not isinstance(arguments["result_id"], str)
-                  or not re.fullmatch(r"[0-9a-f]{32}", arguments["result_id"])):
+            elif (not isinstance(arguments, dict) or set(arguments) != {"report_id" if capability_name == DOWNLOAD else "result_id"}
+                  or not isinstance(next(iter(arguments.values())), str)
+                  or not re.fullmatch(r"[0-9a-f]{32}", next(iter(arguments.values())))):
                 reject("INVALID_ANALYSIS_INPUT")
-            # Phase B will provide protected plan bindings; phase A cannot persist hydrated plan outputs.
-            if _kwargs.get("host_type") == "task_plan":
+            if _kwargs.get("host_type") == "task_plan" and capability_name != SUMMARY:
                 reject("DATA_ACCESS_DENIED")
             with self.lease(user_subject, request_id, task_id, event):
                 response = engine.invoke(user_subject=user_subject, capability_name=capability_name,
@@ -153,14 +157,30 @@ class CentralAnalytics:
                     trace_id=trace["trace_id"], task_id=task_id)
                 if response["status"] == "succeeded":
                     reference = response["result"]
-                    if response["reused"] or not captured:
+                    if capability_name in {EXPORT, DOWNLOAD} and (response["reused"] or not captured):
+                        value = self._with_session(user_subject, budget, lambda session, provider, config:
+                            self._report_value(reference["result_id"], user_subject, session, provider, budget,
+                                               download=capability_name == DOWNLOAD))
+                    elif response["reused"] or not captured:
                         value = self._with_session(user_subject, budget, lambda session, provider, config:
                             TaihuaAnalyticsService(self.executor, self.results).get(
                                 result_id=reference["result_id"], owner=user_subject, session=session, provider=provider, budget=budget))
                     else:
                         value = captured["value"]
                     budget.check()
-                    response = {**response, "result": value}
+                    if capability_name in {EXPORT, DOWNLOAD} and task_id:
+                        report_id = reference["result_id"]
+                        report = self.results.load(report_id, owner=user_subject)
+                        import base64
+                        artifact, _ = service.tasks.link_artifact(task_id=task_id, user_subject=user_subject,
+                            artifact={"artifact_type": "taihua_personal_csv", "source_ref": report_id + ":" + task_id,
+                                "filename": report["filename"], "content_type": "text/csv",
+                                "byte_size": len(base64.b64decode(report["content_base64"])),
+                                "download_url": f"/api/analytics/reports/{report_id}/download",
+                                "expires_at": report["download_expires_at"]})
+                        value = {**value, "artifact_id": artifact["artifact_id"]}
+                    budget.check()
+                    response = {**response, "result": reference if _kwargs.get("host_type") == "task_plan" else value}
         except RequiresUserAction as exc:
             response = {"protocolVersion": "0.1", "requestId": request_id, "status": "requires_user_action",
                         "result": None, "error": {"code": exc.code, "message": exc.message}, "nextAction": exc.next_action}
@@ -180,7 +200,7 @@ class CentralAnalytics:
             if service.tasks.get_task(task_id, user_subject=user_subject)["status"] in ACTIVE_TASK_STATUSES:
                 service.tasks.cancel_task(task_id=task_id, user_subject=user_subject,
                                          reason="analysis_execution_stopped", causation_ref=request_id)
-        if task_id and response.get("operationId") and not event.is_set() and _kwargs.get("host_type") != "interaction_resume":
+        if task_id and response.get("operationId") and not event.is_set() and _kwargs.get("host_type") not in {"interaction_resume", "task_plan"}:
             service.observe_host_task(user_subject=user_subject, task_id=task_id,
                                      operation_ids=[response["operationId"]], interaction_ids=[])
         return {**response, "runtimeTraceId": trace["trace_id"]}
@@ -191,6 +211,16 @@ class CentralAnalytics:
             reference, value = analytics.run(config=config, owner=context.user_subject,
                 operation_id=context.operation_id, session=session, provider=provider, query=query, budget=budget)
             captured["new_result_id"] = reference["result_id"]
+        elif context.spec.name == EXPORT:
+            summary = analytics.get(result_id=inputs["result_id"], owner=context.user_subject,
+                                    session=session, provider=provider, budget=budget)
+            reference, value = issue(self.results, owner=context.user_subject, operation_id=context.operation_id,
+                                     result_id=inputs["result_id"], summary=summary,
+                                     authority_id=self.authorities.load(context.operation_id)["authority_id"])
+            captured["new_result_id"] = reference["result_id"]
+        elif context.spec.name == DOWNLOAD:
+            value = self._report_value(inputs["report_id"], context.user_subject, session, provider, budget, download=True)
+            reference = {"result_id": inputs["report_id"], "protected": True, "schema_version": "taihua.analytics.reference.v1"}
         else:
             value = analytics.get(result_id=inputs["result_id"], owner=context.user_subject,
                                   session=session, provider=provider, budget=budget)
@@ -198,6 +228,57 @@ class CentralAnalytics:
                          "schema_version": "taihua.analytics.reference.v1"}
         captured["value"] = value
         return reference
+
+    def _report_value(self, report_id, owner, session, provider, budget, *, download):
+        payload = self.results.load(report_id, owner=owner)
+        if payload.get("kind") != "csv":
+            reject("INVALID_ANALYSIS_INPUT")
+        TaihuaAnalyticsService(self.executor, self.results).get(result_id=payload["source_result_id"],
+            owner=owner, session=session, provider=provider, budget=budget)
+        self.results.load(report_id, owner=owner)
+        if payload["download_expires_at"] <= datetime.now(timezone.utc).isoformat():
+            reject("RESULT_EXPIRED")
+        budget.check()
+        if download:
+            return {"schemaVersion": "agentbridge.protected_csv_delivery.v1", "report_id": report_id,
+                    "file": {k: payload[k] for k in ("filename", "content_type", "content_base64")}}
+        return {"report_id": report_id, "artifact_type": "taihua_personal_csv", "filename": payload["filename"],
+                "download_expires_at": payload["download_expires_at"],
+                "expires_at": self.results.expires_at(report_id, owner=owner).isoformat(),
+                "download_tool": "taihua_analytics_report_download", "authentication_required": True}
+
+    def compare_plan(self, plan, arguments, operation_id):
+        from bscli.analytics.comparison import compare
+        owner = plan["user_subject"]
+        def authority():
+            try:
+                current = self.service.task_plans.get(plan["plan_id"], user_subject=owner)
+                self.service.validate_task_plan_execution(current)
+                return True
+            except Exception:
+                return False
+        budget = Budget(authority=authority)
+        def action(session, provider, config):
+            analytics = TaihuaAnalyticsService(self.executor, self.results)
+            ids = [arguments[key]["result_id"] for key in ("baseline", "current")]
+            values = [analytics.get(result_id=rid, owner=owner, session=session, provider=provider, budget=budget) for rid in ids]
+            output = compare(*values, allow_unequal_windows=arguments["allow_unequal_windows"])
+            budget.check()
+            return self.results.save(owner=owner, operation_id=operation_id,
+                payload={"kind": "comparison", "source_result_ids": ids, "output": output},
+                expires_at=min(self.results.expires_at(rid, owner=owner) for rid in ids))
+        captured = {}
+        def execute(session, provider, config):
+            reference = action(session, provider, config)
+            captured["result_id"] = reference["result_id"]
+            return reference
+        try:
+            with self.lease(owner, operation_id, plan["parent_task_id"], budget.canceled):
+                return self._with_session(owner, budget, execute)
+        except Exception:
+            if captured:
+                self.results.discard(captured["result_id"], owner=owner)
+            raise
 
     def _with_session(self, owner, budget, action):
         from bscli.adapters.taihua import TaihuaLoginRequired

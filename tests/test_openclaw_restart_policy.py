@@ -60,6 +60,7 @@ function Decide($snapshot) {
             [self.shell, "-NoProfile", "-NonInteractive", "-Command", preamble + script],
             env={**os.environ, "POLICY_ROOT": str(self.root),
                  "POLICY_MODULE": str(ROOT / "scripts/AgentBridgeOpenClawRestartPolicy.psm1")},
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", timeout=40,
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)

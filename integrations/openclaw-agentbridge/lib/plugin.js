@@ -446,9 +446,9 @@ function withPreparedDocumentDeliveryReport(result, report) {
     !structuredContent ||
     typeof structuredContent !== "object" ||
     Array.isArray(structuredContent) ||
-    !String(structuredContent.schemaVersion || "").startsWith(
+    !(structuredContent.result?.schemaVersion === "agentbridge.protected_csv_delivery.v1" || String(structuredContent.schemaVersion || "").startsWith(
       "agentbridge.document_delivery",
-    )
+    ))
   ) {
     return result;
   }
@@ -456,6 +456,10 @@ function withPreparedDocumentDeliveryReport(result, report) {
     ...structuredContent,
     hostDelivery: report,
   };
+  if (structuredContent.result?.schemaVersion === "agentbridge.protected_csv_delivery.v1") {
+    const {content_base64, ...file} = structuredContent.result.file;
+    updatedStructuredContent.result = {...structuredContent.result, file};
+  }
   const content = Array.isArray(result.content)
     ? result.content.map((item) => {
         if (item?.type !== "text" || typeof item.text !== "string") {
@@ -464,7 +468,7 @@ function withPreparedDocumentDeliveryReport(result, report) {
         try {
           const parsed = JSON.parse(item.text);
           if (
-            String(parsed?.schemaVersion || "").startsWith(
+            parsed?.result?.schemaVersion === "agentbridge.protected_csv_delivery.v1" || String(parsed?.schemaVersion || "").startsWith(
               "agentbridge.document_delivery",
             )
           ) {

@@ -362,6 +362,8 @@ class TaskPlanValidationTests(unittest.TestCase):
 
     def test_planning_catalog_returns_scope_safe_prepare_examples(self):
         def resolve(name):
+            if name.startswith("taihua.analytics."):
+                return frozenset({"taihua:read", "taihua:analytics:read"})
             if name.startswith("taihua."):
                 return frozenset({"taihua:write:worklog"})
             return frozenset({"oa:read"})

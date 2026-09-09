@@ -242,6 +242,11 @@ def build_transform_registry() -> TransformRegistry:
         ),
         _work_items_to_log_draft_v2,
     )
+    from bscli.analytics.comparison import COMPARE, COMPARE_SCHEMA, REFERENCE_SCHEMA, protected_only
+    registry.register(TransformSpec(name=COMPARE, description="比较两个本人日报窗口；只绑定受保护引用，由中央核验后确定性计算。非等长需显式允许，比较日均值。",
+        input_schema=COMPARE_SCHEMA, output_schema=REFERENCE_SCHEMA, maximum_input_items=2,
+        maximum_output_chars=1000, result_projection="protected_analytics",
+        required_bound_inputs=("baseline", "current")), protected_only)
     return registry
 
 

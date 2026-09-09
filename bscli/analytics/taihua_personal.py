@@ -47,6 +47,17 @@ class TaihuaAnalyticsService:
 
     def get(self, *, result_id, owner, session, provider, budget: Budget):
         payload = self.results.load(result_id, owner=owner)
+        if payload.get("kind") == "comparison":
+            for source_id in payload["source_result_ids"]:
+                source = self.results.load(source_id, owner=owner)
+                if source.get("kind"):
+                    reject("DATA_CONTRACT_CHANGED")
+                self.get(result_id=source_id, owner=owner, session=session, provider=provider, budget=budget)
+            self.results.load(result_id, owner=owner)
+            budget.check()
+            return {**payload["output"], "result_id": result_id}
+        if payload.get("kind"):
+            reject("INVALID_ANALYSIS_INPUT")
         if (payload["session_id"] != session["session_id"]
                 or payload["authority_generation"] != session["authority_generation"]
                 or payload["policy_version"] != POLICY):
