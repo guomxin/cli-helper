@@ -168,6 +168,20 @@ class ContractTests(Assertions):
         worker.total = "0"
         self.error("COVERAGE_UNVERIFIABLE", lambda: self.provider(worker).capture(Query.parse(ARGS), Budget()))
 
+    def test_username_only_rows_require_exact_trusted_mapping(self):
+        row = {k:v for k,v in ROW.items() if k != "userId"}
+        worker = Worker([{**row, "username":"self"}])
+        result = self.provider(worker).capture(Query.parse(ARGS), Budget())
+        self.assertEqual(result["principal_id"], "7")
+        self.assertEqual(result["principal_username"], "self")
+        for bad in ({**row,"username":"other"}, row,
+                    {**row,"username":"self","userId":99},
+                    {**ROW,"username":"other"},
+                    {**row,"username":"self","user":{"username":"other"}}):
+            self.error("COVERAGE_UNVERIFIABLE", lambda: self.provider(Worker([bad])).capture(Query.parse(ARGS),Budget()))
+        worker.principal["username"] = "other"
+        self.error("IDENTITY_UNVERIFIED", lambda: self.provider(worker).capture(Query.parse(ARGS),Budget()))
+
     def test_denied_team_does_not_trigger_login(self):
         worker = Worker(); worker.denied = True
         self.error("COVERAGE_UNVERIFIABLE", lambda: self.provider(worker).capture(Query.parse(ARGS), Budget()))

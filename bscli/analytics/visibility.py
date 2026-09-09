@@ -26,7 +26,7 @@ class BoundedWorker:
         return response
 
 
-def projection(row: dict, query: Query, *, owner: str | None = None) -> dict:
+def projection(row: dict, query: Query, *, owner: str | None = None, owner_username: str | None = None) -> dict:
     if not isinstance(row, dict):
         reject("DATA_CONTRACT_CHANGED")
     try:
@@ -39,7 +39,10 @@ def projection(row: dict, query: Query, *, owner: str | None = None) -> dict:
         if owner is not None:
             user = row.get("user") if isinstance(row.get("user"), dict) else {}
             ids = [value for value in (row.get("userId"), user.get("id")) if value is not None]
-            if not ids or any(bigint(value) != owner for value in ids):
+            usernames = [v for v in (row.get("username"), user.get("username")) if v is not None]
+            if (any(bigint(value) != owner for value in ids)
+                    or (owner_username and any(v != owner_username for v in usernames))
+                    or (not ids and (not owner_username or not usernames))):
                 reject("COVERAGE_UNVERIFIABLE")
         created = row.get("createdAt")
         if created is not None:
@@ -52,12 +55,12 @@ def projection(row: dict, query: Query, *, owner: str | None = None) -> dict:
         reject("DATA_CONTRACT_CHANGED")
 
 
-def unique_rows(rows, query, *, owner=None):
+def unique_rows(rows, query, *, owner=None, owner_username=None):
     if not isinstance(rows, list):
         reject("COVERAGE_UNVERIFIABLE")
     if len(rows) >= 500:
         reject("RESULT_INCOMPLETE")
-    projected = [projection(row, query, owner=owner) for row in rows]
+    projected = [projection(row, query, owner=owner, owner_username=owner_username) for row in rows]
     if len({row["id"] for row in projected}) != len(projected):
         reject("RESULT_INCOMPLETE")
     return sorted(projected, key=lambda row: int(row["id"]))
@@ -94,6 +97,9 @@ class PersonalVisibilityProvider:
         member = self.adapter._resolve_team_member(worker, {"member_id": user_id})
         if not member or bigint(member.get("id")) != user_id:
             reject("IDENTITY_UNVERIFIED")
+        username = principal.get("username")
+        if not isinstance(username, str) or not username or member.get("username") != username:
+            reject("IDENTITY_UNVERIFIED")
         dept_id = bigint(member.get("deptId"))
         principal_dept = principal.get("dept")
         if not isinstance(principal_dept, dict) or bigint(principal_dept.get("id")) != dept_id:
@@ -120,8 +126,8 @@ class PersonalVisibilityProvider:
             team.extend(content)
             if len(team) == total:
                 break
-        normalized_team = unique_rows(team, query, owner=user_id)
+        normalized_team = unique_rows(team, query, owner=user_id, owner_username=username)
         if len(normalized_team) != expected_total or normalized_team != personal:
             reject("COVERAGE_UNVERIFIABLE")
-        snapshot = {"principal_id": user_id, "dept_id": dept_id, "rows": personal}
+        snapshot = {"principal_id": user_id, "principal_username": username, "dept_id": dept_id, "rows": personal}
         return {**snapshot, "fingerprint": fingerprint(snapshot)}
