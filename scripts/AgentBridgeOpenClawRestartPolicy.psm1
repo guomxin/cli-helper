@@ -145,7 +145,7 @@ function Save-AgentBridgeOpenClawBaseline {
         [Parameter(Mandatory = $true)]$Before,
         [Parameter(Mandatory = $true)]$After,
         [Parameter(Mandatory = $true)][int]$GatewayProcessId,
-        [Parameter(Mandatory = $true)][string]$GatewayStartedAt,
+        [Parameter(Mandatory = $true)][DateTimeOffset]$GatewayStartedAt,
         [string]$Path = "$env:LOCALAPPDATA\AgentBridge\openclaw-runtime-inputs.json"
     )
     if ($Before.fingerprint -ne $After.fingerprint) {
@@ -155,7 +155,7 @@ function Save-AgentBridgeOpenClawBaseline {
         schemaVersion = "agentbridge.openclaw-inputs.v1"
         observedAt = [DateTimeOffset]::UtcNow.ToString("o")
         gatewayProcessId = $GatewayProcessId
-        gatewayStartedAt = $GatewayStartedAt
+        gatewayStartedAt = $GatewayStartedAt.ToString("o")
         inputs = $After
     }
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"

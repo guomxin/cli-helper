@@ -66,6 +66,17 @@ function Decide($snapshot) {
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
+    def test_baseline_preserves_typed_datetime_fractional_seconds(self):
+        result = self.run_policy("""
+$precise = [DateTimeOffset]::Parse('2026-09-09T20:01:23.1234567+08:00')
+$path = Join-Path $env:POLICY_ROOT 'typed-baseline.json'
+Save-AgentBridgeOpenClawBaseline -Before $before -After (Snapshot) `
+    -GatewayProcessId 123 -GatewayStartedAt $precise.LocalDateTime -Path $path
+$loaded = Get-Content $path -Raw | ConvertFrom-Json
+[pscustomobject]@{exact=([DateTimeOffset]::Parse($loaded.gatewayStartedAt) -eq $precise)} | ConvertTo-Json -Compress
+""")
+        self.assertTrue(result["exact"])
+
     def test_central_workspace_docs_and_tests_do_not_invalidate(self):
         result = self.run_policy("""
 foreach ($name in @('bscli/workspace/index.html', 'bscli/service.py',
