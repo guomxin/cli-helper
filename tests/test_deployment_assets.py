@@ -316,9 +316,16 @@ class DeploymentAssetTests(unittest.TestCase):
             "Test-AgentBridgeOpenClawRuntime.ps1",
             "OpenClaw Gateway runtime or AgentBridge plugin is not healthy",
             "$gatewayWarmupScript",
-            'if ($warmup.status -ne "succeeded")',
+            "Complete-AgentBridgeOpenClawWarmup",
         ):
             self.assertIn(marker, deploy)
+        policy = (ROOT / "scripts/AgentBridgeOpenClawRestartPolicy.psm1").read_text(encoding="utf-8")
+        self.assertIn('if ($result.status -ne "succeeded")', policy)
+        self.assertLess(deploy.index("[IO.File]::WriteAllText($gatewayWarmupPendingPath"),
+                        deploy.index("& $gatewayLifecycleScript -ReadyTimeoutSeconds"))
+        publish = (ROOT / "scripts/Publish-AgentBridge.ps1").read_text(encoding="utf-8")
+        self.assertLess(publish.index("Test-AgentBridgePendingOpenClawWarmup.ps1"),
+                        publish.index("& $releaseAcceptanceScript @acceptanceParameters"))
         self.assertNotIn("gateway status --deep --require-rpc --json", deploy)
         self.assertNotIn("plugins inspect agentbridge-interactions --json", deploy)
 

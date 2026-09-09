@@ -1,0 +1,208 @@
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class OpenClawRestartPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.shell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if not cls.shell:
+            raise unittest.SkipTest("PowerShell is required")
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        plugin = self.root / "integrations/openclaw-agentbridge"
+        (plugin / "lib").mkdir(parents=True)
+        for name, text in {
+            "index.js": "export default {};",
+            "package.json": '{"version":"1.0.0"}',
+            "openclaw.plugin.json": '{"id":"test"}',
+            "lib/tools.json": '{"tools":[]}',
+            "lib/module.js": "export const value=1;",
+        }.items():
+            (plugin / name).write_text(text, encoding="utf-8")
+        (self.root / "config.json").write_text("{}", encoding="utf-8")
+        (self.root / "gateway.cmd").write_text("node gateway", encoding="utf-8")
+
+    def run_policy(self, script):
+        preamble = """
+$ErrorActionPreference = 'Stop'
+Import-Module $env:POLICY_MODULE -Force
+function Snapshot {
+    Get-AgentBridgeOpenClawInputs -RepoRoot $env:POLICY_ROOT `
+        -GatewayLauncher (Join-Path $env:POLICY_ROOT 'gateway.cmd') `
+        -ConfigPath (Join-Path $env:POLICY_ROOT 'config.json')
+}
+$before = Snapshot
+$started = '2026-09-09T01:00:00Z'
+$baseline = [pscustomobject]@{
+    schemaVersion = 'agentbridge.openclaw-inputs.v1'
+    gatewayProcessId = 123
+    gatewayStartedAt = $started
+    inputs = $before
+}
+function Decide($snapshot) {
+    Get-AgentBridgeOpenClawRestartDecision -Inputs $snapshot -Baseline $baseline `
+        -GatewayProcessId 123 -GatewayStartedAt $started -Ready $true
+}
+"""
+        result = subprocess.run(
+            [self.shell, "-NoProfile", "-NonInteractive", "-Command", preamble + script],
+            env={**os.environ, "POLICY_ROOT": str(self.root),
+                 "POLICY_MODULE": str(ROOT / "scripts/AgentBridgeOpenClawRestartPolicy.psm1")},
+            capture_output=True, text=True, encoding="utf-8", timeout=40,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    def test_central_workspace_docs_and_tests_do_not_invalidate(self):
+        result = self.run_policy("""
+foreach ($name in @('bscli/workspace/index.html', 'bscli/service.py',
+    'docs/release.md', 'integrations/openclaw-agentbridge/README.md',
+    'integrations/openclaw-agentbridge/test/plugin.test.js')) {
+    $p = Join-Path $env:POLICY_ROOT $name
+    New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force | Out-Null
+    Set-Content -LiteralPath $p -Value 'changed'
+}
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertFalse(result["required"])
+        self.assertEqual(result["reason"], "inputs_unchanged")
+
+    def test_same_version_source_and_catalogue_change_require_restart(self):
+        result = self.run_policy("""
+Set-Content (Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/index.js') 'changed'
+Set-Content (Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/lib/tools.json') '{"tools":[1]}'
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertTrue(result["required"])
+        self.assertEqual(result["changedInputs"], ["plugin/index.js", "plugin/lib/tools.json"])
+
+    def test_deletion_addition_and_dependency_lock_are_detected(self):
+        result = self.run_policy("""
+$p = Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge'
+Remove-Item -LiteralPath (Join-Path $p 'lib/module.js')
+Set-Content (Join-Path $p 'lib/new.js') 'new'
+Set-Content (Join-Path $p 'package-lock.json') '{}'
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertEqual(result["changedInputs"], [
+            "plugin/lib/module.js", "plugin/lib/new.js", "plugin/package-lock.json"])
+
+    def test_config_launcher_and_environment_changes_are_detected(self):
+        result = self.run_policy("""
+Set-Content (Join-Path $env:POLICY_ROOT 'config.json') '{"changed":true}'
+Set-Content (Join-Path $env:POLICY_ROOT 'gateway.cmd') 'changed'
+Set-Content (Join-Path $env:POLICY_ROOT '.env') 'TEST_SECRET=never_emit_value'
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertTrue(result["required"])
+        self.assertIn("host/config", result["changedInputs"])
+        self.assertIn("host/launcher", result["changedInputs"])
+        self.assertIn("workspace/env", result["changedInputs"])
+        self.assertNotIn("never_emit_value", json.dumps(result))
+
+    def test_missing_invalid_or_stale_baseline_never_certifies_current_process(self):
+        result = self.run_policy("""
+$common = @{Inputs=$before; GatewayProcessId=123; GatewayStartedAt=$started; Ready=$true}
+$missing = Get-AgentBridgeOpenClawRestartDecision @common
+$invalid = Get-AgentBridgeOpenClawRestartDecision @common -Baseline @{}
+$baseline.gatewayStartedAt = '2026-09-08T01:00:00Z'
+$reusedPid = Get-AgentBridgeOpenClawRestartDecision @common -Baseline $baseline
+@($missing, $invalid, $reusedPid) | ConvertTo-Json -Compress
+""")
+        self.assertEqual([x["reason"] for x in result], [
+            "baseline_missing", "baseline_invalid", "gateway_process_changed"])
+        self.assertTrue(all(x["required"] for x in result))
+
+    def test_force_and_unhealthy_runtime_require_restart(self):
+        result = self.run_policy("""
+$common = @{Inputs=$before; Baseline=$baseline; GatewayProcessId=123; GatewayStartedAt=$started}
+@((Get-AgentBridgeOpenClawRestartDecision @common -Ready $true -Force),
+  (Get-AgentBridgeOpenClawRestartDecision @common -Ready $false)) | ConvertTo-Json -Compress
+""")
+        self.assertEqual([x["reason"] for x in result], ["forced", "gateway_not_ready"])
+
+    def test_baseline_roundtrip_and_startup_mutation_rejection(self):
+        result = self.run_policy("""
+$path = Join-Path $env:POLICY_ROOT 'baseline.json'
+Save-AgentBridgeOpenClawBaseline -Before $before -After (Snapshot) `
+    -GatewayProcessId 123 -GatewayStartedAt $started -Path $path
+$baseline = Get-Content $path -Raw | ConvertFrom-Json
+$unchanged = Decide (Snapshot)
+$original = Get-Content $path -Raw
+Set-Content (Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/lib/module.js') 'changed'
+$rejected = $false
+try {
+    Save-AgentBridgeOpenClawBaseline -Before $before -After (Snapshot) `
+        -GatewayProcessId 124 -GatewayStartedAt $started -Path $path
+} catch { $rejected = $true }
+[pscustomobject]@{unchanged=$unchanged; rejected=$rejected;
+    preserved=($original -eq (Get-Content $path -Raw))} | ConvertTo-Json -Compress
+""")
+        self.assertFalse(result["unchanged"]["required"])
+        self.assertTrue(result["rejected"])
+        self.assertTrue(result["preserved"])
+
+    def test_manifest_changes_are_runtime_changes(self):
+        result = self.run_policy("""
+Set-Content (Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/package.json') '{"version":"2"}'
+Set-Content (Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/openclaw.plugin.json') '{}'
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertEqual(result["changedInputs"], ["plugin/openclaw.plugin.json", "plugin/package.json"])
+
+    def test_failed_warmup_retries_without_losing_acceptance(self):
+        result = self.run_policy("""
+$pending = Join-Path $env:POLICY_ROOT 'warmup.pending'
+Set-Content $pending 'pending'
+$plan = { [pscustomobject]@{required=$false; gatewayProcessId=123; fingerprint='abc'} }
+$failed = $false
+try {
+    Complete-AgentBridgeOpenClawWarmup -PendingPath $pending -GetPlan $plan -Warmup {
+        throw 'model timeout'
+    }
+} catch { $failed = $true }
+$retained = Test-Path $pending
+$retried = Complete-AgentBridgeOpenClawWarmup -PendingPath $pending -GetPlan $plan -Warmup {
+    [pscustomobject]@{status='succeeded'}
+}
+$skipped = Complete-AgentBridgeOpenClawWarmup -PendingPath $pending -GetPlan { throw 'unexpected probe' } `
+    -Warmup { throw 'unexpected model call' }
+[pscustomobject]@{failed=$failed; retained=$retained; retried=$retried.status;
+    skipped=$skipped.status; cleared=(-not (Test-Path $pending))} | ConvertTo-Json -Compress
+""")
+        self.assertEqual(result, {"failed": True, "retained": True, "retried": "succeeded",
+                                  "skipped": "skipped", "cleared": True})
+
+    def test_gateway_change_during_warmup_keeps_acceptance_pending(self):
+        result = self.run_policy("""
+$pending = Join-Path $env:POLICY_ROOT 'warmup.pending'
+Set-Content $pending 'pending'
+$state = @{pid=123}
+$failed = $false
+try {
+    Complete-AgentBridgeOpenClawWarmup -PendingPath $pending -GetPlan {
+        [pscustomobject]@{required=$false; gatewayProcessId=$state.pid; fingerprint='abc'}
+    } -Warmup {
+        $state.pid = 124
+        [pscustomobject]@{status='succeeded'}
+    }
+} catch { $failed = $true }
+[pscustomobject]@{failed=$failed; retained=(Test-Path $pending)} | ConvertTo-Json -Compress
+""")
+        self.assertEqual(result, {"failed": True, "retained": True})
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,6 +7,8 @@ param(
     [ValidateRange(10, 120)][int]$StopTimeoutSeconds = 30,
     [ValidateRange(30, 900)][int]$ReadyTimeoutSeconds = 600,
     [switch]$StartOnly,
+    [switch]$IfInputsChanged,
+    [string]$ExpectedInputFingerprint = "",
     [switch]$StopOnly
 )
 
@@ -31,6 +33,8 @@ if (-not (Test-Path -LiteralPath $lifecycleStateModule -PathType Leaf)) {
     throw "OpenClaw lifecycle lease module was not found: $lifecycleStateModule"
 }
 Import-Module $lifecycleStateModule -Force
+Import-Module (Join-Path $PSScriptRoot "AgentBridgeOpenClawRestartPolicy.psm1") -Force
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 $stateRoot = Join-Path $env:LOCALAPPDATA "AgentBridge"
 $logRoot = Join-Path $stateRoot "logs"
@@ -304,6 +308,21 @@ try {
         throw "Another AgentBridge OpenClaw lifecycle operation is already running"
     }
 
+    $inputSnapshot = $null
+    $startedNewGateway = $false
+    if (-not $StopOnly) {
+        $inputSnapshot = Get-AgentBridgeOpenClawInputs -RepoRoot $repoRoot -GatewayLauncher $GatewayLauncher
+        if ($ExpectedInputFingerprint -and $ExpectedInputFingerprint -ne $inputSnapshot.fingerprint) {
+            throw "OpenClaw inputs changed after deployment planning; inspect changes before retrying"
+        }
+        if ($IfInputsChanged) {
+            $decision = Get-AgentBridgeOpenClawRestartPlan -RepoRoot $repoRoot `
+                -GatewayLauncher $GatewayLauncher -GatewayPort $GatewayPort
+            if (-not $decision.required) { $StartOnly = $true }
+            Write-LifecycleLog "Restart decision=$($decision.reason); required=$($decision.required)."
+        }
+    }
+
     $action = if ($StopOnly) { "stop" } elseif ($StartOnly) { "start" } else { "restart" }
     $script:operationAction = $action
     $script:operationInitialized = $true
@@ -349,6 +368,7 @@ try {
         if (-not $StopOnly) {
             Update-LifecycleLease -Phase "starting_gateway"
             $foregroundHost = Start-VisibleGateway
+            $startedNewGateway = $true
             $ready = Wait-GatewayReady
         }
         else {
@@ -366,6 +386,17 @@ try {
         }
         $foregroundHost = $actualForeground
         $visibleForeground = $true
+    }
+
+    if ($startedNewGateway) {
+        # Only certify inputs bracketed by this startup, never adopt an unknown
+        # running process from a matching version string or file timestamps.
+        $runtime = & (Join-Path $PSScriptRoot "Test-AgentBridgeOpenClawRuntime.ps1") -GatewayPort $GatewayPort |
+            Out-String | ConvertFrom-Json
+        if ($runtime.status -ne "succeeded") { throw "Gateway plugin verification failed" }
+        $after = Get-AgentBridgeOpenClawInputs -RepoRoot $repoRoot -GatewayLauncher $GatewayLauncher
+        Save-AgentBridgeOpenClawBaseline -Before $inputSnapshot -After $after `
+            -GatewayProcessId $runtime.gatewayProcessId -GatewayStartedAt $runtime.gatewayStartedAt
     }
 
     $status = [ordered]@{

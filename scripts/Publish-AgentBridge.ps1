@@ -11,6 +11,7 @@ param(
     [switch]$SkipValidation,
     [switch]$SkipOpenClawAcceptance,
     [switch]$RestartOpenClaw,
+    [switch]$ForceRestartOpenClaw,
     [switch]$IncludeLoginReuseSmoke,
     [switch]$ResumeAcceptance,
     [switch]$PlanOnly
@@ -115,6 +116,12 @@ if (-not $AgentBridgeKnownHostsFile) {
     $AgentBridgeKnownHostsFile = Join-Path $repoRoot "deploy\ssh\agentbridge_known_hosts"
 }
 
+Import-Module (Join-Path $PSScriptRoot "AgentBridgeOpenClawRestartPolicy.psm1") -Force
+$restartPlan = if ($ResumeAcceptance) {
+    [pscustomobject]@{ required = $false; reason = "acceptance_only"; changedInputs = @() }
+} else {
+    Get-AgentBridgeOpenClawRestartPlan -RepoRoot $repoRoot -Force:$ForceRestartOpenClaw
+}
 $plan = [ordered]@{
     status = "planned"
     commit = $commit
@@ -127,7 +134,9 @@ $plan = [ordered]@{
     governanceAcceptance = $true
     openClawAcceptance = -not [bool]$SkipOpenClawAcceptance
     isolationIdentities = @($IdentityLabel)
-    restartOpenClaw = [bool]$RestartOpenClaw
+    restartOpenClaw = [bool]$restartPlan.required
+    openClawRestartReason = $restartPlan.reason
+    openClawChangedInputs = @($restartPlan.changedInputs)
     resumeAcceptance = [bool]$ResumeAcceptance
     push = "$RemoteName/$BranchName"
 }
@@ -140,6 +149,9 @@ if ($isDirty) {
 }
 if ($ResumeAcceptance -and ($RestartOpenClaw -or $IncludeLoginReuseSmoke)) {
     throw "ResumeAcceptance only rechecks the existing deployment; it cannot restart or initiate login smoke."
+}
+if ($ResumeAcceptance -and $ForceRestartOpenClaw) {
+    throw "ResumeAcceptance cannot force a Gateway restart."
 }
 
 foreach ($knownHosts in @($GitHubKnownHostsFile, $AgentBridgeKnownHostsFile)) {
@@ -173,6 +185,7 @@ $deployParameters = @{
     SkipValidation = $true
 }
 if ($RestartOpenClaw) { $deployParameters["RestartOpenClaw"] = $true }
+if ($ForceRestartOpenClaw) { $deployParameters["ForceRestartOpenClaw"] = $true }
 if ($IncludeLoginReuseSmoke) { $deployParameters["IncludeLoginReuseSmoke"] = $true }
 
 if (-not $ResumeAcceptance) {
@@ -193,6 +206,7 @@ if ($SkipOpenClawAcceptance) {
 if ($IdentityLabel.Count -gt 0) {
     $acceptanceParameters["IdentityLabel"] = $IdentityLabel
 }
+& (Join-Path $PSScriptRoot "Test-AgentBridgePendingOpenClawWarmup.ps1") | Out-Host
 & $releaseAcceptanceScript @acceptanceParameters
 if ($LASTEXITCODE -ne 0) {
     throw "AgentBridge governance and release acceptance failed; GitHub push was not attempted"

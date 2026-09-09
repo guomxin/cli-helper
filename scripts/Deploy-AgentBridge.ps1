@@ -11,6 +11,7 @@ param(
     [switch]$SkipSmoke,
     [switch]$IncludeLoginReuseSmoke,
     [switch]$RestartOpenClaw,
+    [switch]$ForceRestartOpenClaw,
     [switch]$InstallSystemDependencies,
     [switch]$AllowDirty,
     [switch]$PlanOnly
@@ -25,6 +26,7 @@ $smokeScript = Join-Path $PSScriptRoot "Test-AgentBridgeMcp.ps1"
 $gatewayWarmupScript = Join-Path $PSScriptRoot "Test-OpenClawGatewayWarmup.ps1"
 $gatewayLifecycleScript = Join-Path $PSScriptRoot "Restart-AgentBridgeOpenClawGateway.ps1"
 $gatewayRuntimeScript = Join-Path $PSScriptRoot "Test-AgentBridgeOpenClawRuntime.ps1"
+$gatewayWarmupPendingPath = Join-Path $env:LOCALAPPDATA "AgentBridge\openclaw-release-warmup.pending"
 
 if ($HostName -notmatch '^[A-Za-z0-9.-]+$') {
     throw "HostName contains unsupported characters"
@@ -84,6 +86,12 @@ if ($isDirty -and -not $AllowDirty -and -not $PlanOnly) {
 }
 $releaseId = if ($isDirty) { "$commit-dirty" } else { $commit }
 
+Import-Module (Join-Path $PSScriptRoot "AgentBridgeOpenClawRestartPolicy.psm1") -Force
+# RestartOpenClaw is retained as a compatible request for conditional restart.
+# The input baseline, not a carried-over command-line flag, decides necessity.
+$restartPlan = Get-AgentBridgeOpenClawRestartPlan -RepoRoot $repoRoot -Force:$ForceRestartOpenClaw
+$RestartOpenClaw = [bool]$restartPlan.required
+$gatewayRestartPerformed = $false
 $plan = [ordered]@{
     status = "planned"
     releaseId = $releaseId
@@ -93,8 +101,10 @@ $plan = [ordered]@{
     smoke = -not $SkipSmoke
     loginReuseSmoke = [bool]$IncludeLoginReuseSmoke
     restartOpenClaw = [bool]$RestartOpenClaw
+    openClawRestartReason = $restartPlan.reason
+    openClawChangedInputs = @($restartPlan.changedInputs)
     openClawGuardrails = [bool]$RestartOpenClaw
-    openClawWarmup = [bool]$RestartOpenClaw
+    openClawWarmup = [bool]$RestartOpenClaw -or (Test-Path -LiteralPath $gatewayWarmupPendingPath)
     installSystemDependencies = [bool]$InstallSystemDependencies
     systemdUnits = @($systemdUnit, $backupSystemdUnit, $backupSystemdTimer)
 }
@@ -253,6 +263,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"
 }
 
+if ((Get-AgentBridgeOpenClawInputs -RepoRoot $repoRoot).fingerprint -ne $restartPlan.fingerprint) {
+    throw "OpenClaw inputs changed during deployment; refusing to restart unplanned inputs."
+}
 if ($RestartOpenClaw) {
     $openClawConfigPath = if ($env:OPENCLAW_CONFIG_PATH) {
         $env:OPENCLAW_CONFIG_PATH
@@ -308,8 +321,16 @@ if ($RestartOpenClaw) {
             throw "Configuring OpenClaw stuck-session recovery failed"
         }
     }
+    # Guardrail writes above are intentional input changes. Freeze the final
+    # inputs immediately before handing off to the serialized lifecycle.
+    $gatewayInputs = Get-AgentBridgeOpenClawInputs -RepoRoot $repoRoot
+    # Persist the outstanding acceptance BEFORE restart. If warm-up fails or
+    # this publisher exits, the next attempt must retry acceptance, not reboot.
+    [IO.File]::WriteAllText($gatewayWarmupPendingPath, $gatewayInputs.fingerprint)
     $gatewayRestart = (
-        & $gatewayLifecycleScript -ReadyTimeoutSeconds 600
+        & $gatewayLifecycleScript -ReadyTimeoutSeconds 600 `
+            -IfInputsChanged:(-not $ForceRestartOpenClaw) `
+            -ExpectedInputFingerprint $gatewayInputs.fingerprint
     ) | Out-String | ConvertFrom-Json
     if ($gatewayRestart.status -ne "succeeded" -or
         -not $gatewayRestart.visibleForeground) {
@@ -323,11 +344,22 @@ if ($RestartOpenClaw) {
         $gatewayRuntime.pluginStatus -ne "loaded") {
         throw "OpenClaw Gateway runtime or AgentBridge plugin is not healthy"
     }
-    $warmup = (& $gatewayWarmupScript) | Out-String | ConvertFrom-Json
-    if ($warmup.status -ne "succeeded") {
-        throw "OpenClaw Gateway cold/hot warm-up failed"
-    }
+    $gatewayRestartPerformed = $gatewayRestart.action -eq "restart"
 }
+else {
+    Write-Host "OpenClaw inputs unchanged; retaining the running Gateway."
+    $currentPlan = Get-AgentBridgeOpenClawRestartPlan -RepoRoot $repoRoot
+    if ($currentPlan.required) {
+        throw "OpenClaw runtime changed during deployment; inspect it before resuming acceptance."
+    }
+    & $gatewayRuntimeScript | Out-Host
+}
+
+Complete-AgentBridgeOpenClawWarmup -PendingPath $gatewayWarmupPendingPath -GetPlan {
+    Get-AgentBridgeOpenClawRestartPlan -RepoRoot $repoRoot
+} -Warmup {
+    (& $gatewayWarmupScript) | Out-String | ConvertFrom-Json
+} | Out-Host
 
 if (-not $SkipSmoke) {
     $releaseSmokeAttempts = 6
@@ -354,6 +386,7 @@ if (-not $SkipSmoke) {
     wheel = $wheel.FullName
     service = $ServiceName
     smoke = -not $SkipSmoke
-    restartOpenClaw = [bool]$RestartOpenClaw
+    restartOpenClaw = $gatewayRestartPerformed
+    openClawRestartReason = $restartPlan.reason
     installSystemDependencies = [bool]$InstallSystemDependencies
 } | ConvertTo-Json -Compress
