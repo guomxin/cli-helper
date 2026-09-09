@@ -66,6 +66,16 @@ function Decide($snapshot) {
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
+    def test_typed_json_baseline_keeps_precision_in_restart_decision(self):
+        result = self.run_policy("""
+$precise = [DateTimeOffset]::Parse('2026-09-09T20:01:23.1234567+08:00')
+$typed = [pscustomobject]@{schemaVersion='agentbridge.openclaw-inputs.v1'; gatewayProcessId=123;
+    gatewayStartedAt=$precise.LocalDateTime; inputs=$before}
+Get-AgentBridgeOpenClawRestartDecision -Inputs (Snapshot) -Baseline $typed `
+    -GatewayProcessId 123 -GatewayStartedAt $precise.ToString('o') -Ready $true | ConvertTo-Json -Compress
+""")
+        self.assertFalse(result["required"])
+
     def test_baseline_preserves_typed_datetime_fractional_seconds(self):
         result = self.run_policy("""
 $precise = [DateTimeOffset]::Parse('2026-09-09T20:01:23.1234567+08:00')
@@ -73,7 +83,7 @@ $path = Join-Path $env:POLICY_ROOT 'typed-baseline.json'
 Save-AgentBridgeOpenClawBaseline -Before $before -After (Snapshot) `
     -GatewayProcessId 123 -GatewayStartedAt $precise.LocalDateTime -Path $path
 $loaded = Get-Content $path -Raw | ConvertFrom-Json
-[pscustomobject]@{exact=([DateTimeOffset]::Parse($loaded.gatewayStartedAt) -eq $precise)} | ConvertTo-Json -Compress
+[pscustomobject]@{exact=([DateTimeOffset]$loaded.gatewayStartedAt -eq $precise)} | ConvertTo-Json -Compress
 """)
         self.assertTrue(result["exact"])
 

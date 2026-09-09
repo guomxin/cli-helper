@@ -75,8 +75,8 @@ function Get-AgentBridgeOpenClawRestartDecision {
             if ($Baseline.schemaVersion -ne "agentbridge.openclaw-inputs.v1") {
                 $reason = "baseline_invalid"
             } elseif ($Baseline.gatewayProcessId -ne $GatewayProcessId -or
-                [DateTimeOffset]::Parse($Baseline.gatewayStartedAt) -ne
-                [DateTimeOffset]::Parse($GatewayStartedAt)) {
+                [DateTimeOffset]$Baseline.gatewayStartedAt -ne
+                [DateTimeOffset]$GatewayStartedAt) {
                 $reason = "gateway_process_changed"
             } elseif ($Baseline.inputs.fingerprint -ne $Inputs.fingerprint) {
                 $reason = "inputs_changed"
