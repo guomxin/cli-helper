@@ -29,6 +29,9 @@ ROLE_SQL = """SELECT current_setting('transaction_read_only')='on' AS readonly,
  WHERE CASE WHEN n.nspname='public' AND c.relkind='S'
  THEN has_sequence_privilege(c.oid,'USAGE') ELSE false END) AS sequence_usage,
  EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE CASE WHEN n.nspname='public' AND c.relkind='S'
+ THEN has_sequence_privilege(c.oid,'UPDATE') ELSE false END) AS sequence_update,
+ EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
  WHERE CASE WHEN n.nspname='public' AND c.relkind IN ('r','p') THEN
  (has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE') OR
  has_any_column_privilege(c.oid,'INSERT,UPDATE')) ELSE false END) AS writable,
@@ -102,7 +105,10 @@ class PostgresReadExecutor:
             role = connection.execute(ROLE_SQL).fetchone()
             if not role or not all(role.get(k) for k in ("readonly", "repeatable", "default_readonly", "primary_key")):
                 reject("DATA_CONTRACT_CHANGED")
-            if any(role.get(k) for k in ("privileged", "temp", "sequence_usage", "writable")):
+            if any(role.get(k) for k in ("privileged", "sequence_update", "writable")):
+                reject("DATASOURCE_POLICY_REJECTED")
+            warnings = [name for name in ("temp", "sequence_usage") if role.get(name)]
+            if warnings and config.privilege_policy == "strict":
                 reject("DATASOURCE_POLICY_REJECTED")
             columns = connection.execute(CONTRACT_SQL).fetchall()
             actual = {r["attname"]: r["type"] for r in columns if r["readable"]}
@@ -133,7 +139,8 @@ class PostgresReadExecutor:
                     reject("SOURCE_CHANGED")
             budget.check()
             return {"rows": projected, "evidence_rows": db_rows, "metrics": expected,
-                    "database_read_at": datetime.now(timezone.utc).isoformat()}
+                    "database_read_at": datetime.now(timezone.utc).isoformat(),
+                    "privilege_policy": config.privilege_policy, "privilege_warnings": warnings}
         except CapabilityRejected:
             raise
         except Exception as exc:

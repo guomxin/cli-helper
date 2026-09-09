@@ -48,11 +48,13 @@ def main():
     query = Query(today-timedelta(days=1), today, "none")
     try:
         # Empty ID set cannot select business rows. This is a metadata/contract check.
-        PostgresReadExecutor(store).summarize(config, {"principal_id": "1", "rows": []}, query, Budget())
+        result = PostgresReadExecutor(store).summarize(config, {"principal_id": "1", "rows": []}, query, Budget())
     except CapabilityRejected as exc:
         print(json.dumps({"status": "failed", "code": exc.code, "message": exc.message}, ensure_ascii=False))
         raise SystemExit(1)
-    print("数据库最小契约检查通过；业务权限和真实用户验收仍需独立完成。")
+    print(json.dumps({"status": "passed", "privilege_policy": result["privilege_policy"],
+                      "privilege_warnings": result["privilege_warnings"],
+                      "business_acceptance": "required"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

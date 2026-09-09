@@ -21,6 +21,7 @@ class DataSourceConfig:
     admitted_subjects: tuple[str, ...] = field(default_factory=tuple)
     single_instance: bool = True
     privileges_reviewed: bool = False
+    privilege_policy: str = "strict"
 
     @classmethod
     def load(cls, path: Path) -> "DataSourceConfig":
@@ -41,6 +42,8 @@ class DataSourceConfig:
             reject("DATA_ACCESS_DENIED")
 
     def validate(self) -> None:
+        if self.privilege_policy not in ("strict", "controlled_readonly_pilot"):
+            reject("SOURCE_UNAVAILABLE")
         if any(type(value) is not bool for value in (self.enabled, self.single_instance, self.privileges_reviewed)):
             reject("SOURCE_UNAVAILABLE")
         if (self.source_id != "taihua_primary" or self.policy_version != POLICY

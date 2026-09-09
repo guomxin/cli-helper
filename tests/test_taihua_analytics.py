@@ -90,12 +90,13 @@ class Connection:
         self.running = threading.Event()
         self.canceled = threading.Event()
         self.block = False
+        self.role_flags = {}
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
         if sql == ROLE_SQL:
             return Cursor({"readonly": True, "repeatable": True, "default_readonly": True,
-                           "primary_key": True, "temp": self.unsafe})
+                           "primary_key": True, "temp": self.unsafe, **self.role_flags})
         if sql == CONTRACT_SQL:
             return Cursor([{"attname": n, "type": "text" if self.bad_schema else t, "readable": True}
                            for n, t in REQUIRED_COLUMNS.items()])
@@ -312,6 +313,32 @@ class CentralTests(Assertions):
         response = self.invoke()
         self.assertEqual(response["error"]["code"], "SOURCE_UNAVAILABLE")
         self.assertNotIn("SYNTHETIC",json.dumps(response))
+
+    def test_pilot_allows_only_temp_and_sequence_usage_with_evidence(self):
+        self.config = replace(self.config, privilege_policy="controlled_readonly_pilot")
+        self.connection.role_flags = {"temp": True, "sequence_usage": True}
+        result = self.invoke()
+        self.assertEqual(result["status"], "succeeded", result)
+        evidence = result["result"]["provenance"]
+        self.assertEqual(evidence["privilege_warnings"], ["temp", "sequence_usage"])
+        self.assertEqual(evidence["privilege_policy"], "controlled_readonly_pilot")
+        self.assertTrue(self.connection.closed and self.connection.rolled_back)
+
+    def test_pilot_keeps_write_privilege_and_transaction_gates(self):
+        self.config = replace(self.config, privilege_policy="controlled_readonly_pilot")
+        for flag in ("privileged", "writable", "sequence_update", "readonly", "repeatable"):
+            with self.subTest(flag=flag):
+                self.connection.calls.clear()
+                self.connection.role_flags = {flag: flag not in ("readonly", "repeatable")}
+                result = self.invoke()
+                self.assertEqual(result["status"], "failed", result)
+                self.assertFalse(any(sql == ROWS_SQL for sql, _ in self.connection.calls))
+
+    def test_strict_still_rejects_sequence_usage_and_unknown_policy(self):
+        self.connection.role_flags = {"sequence_usage": True}
+        self.assertEqual(self.invoke()["error"]["code"], "DATASOURCE_POLICY_REJECTED")
+        self.config = replace(self.config, privilege_policy="allow_all")
+        self.assertEqual(self.invoke()["error"]["code"], "SOURCE_UNAVAILABLE")
 
     def test_cancellation_cancels_statement_and_closes(self):
         self.connection.block = True

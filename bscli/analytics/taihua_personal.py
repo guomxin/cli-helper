@@ -35,6 +35,8 @@ class TaihuaAnalyticsService:
             "quality": {"nonpositive_hours_count": sum(1 for r in rows if float(r["hours"]) <= 0)},
             "provenance": {"source_id": config.source_id, "policy_version": POLICY, "dataset_version": "1.0.0",
                            "api_checked_at": checked_at, "database_read_at": numeric["database_read_at"],
+                           "privilege_policy": config.privilege_policy,
+                           "privilege_warnings": numeric.get("privilege_warnings", []),
                            "consistency": "api_bracketed_database_snapshot"},
         }
         budget.phase("deliver")
