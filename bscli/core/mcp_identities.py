@@ -21,6 +21,7 @@ _ALLOWED_SCOPES = frozenset(
         "oa:write:submit",
         "oa:write:revoke",
         "taihua:read",
+        "taihua:analytics:read",
         "taihua:write:worklog",
         "yuque:read",
         "smartlight:read",

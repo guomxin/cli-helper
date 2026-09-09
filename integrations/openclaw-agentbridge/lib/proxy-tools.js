@@ -384,7 +384,10 @@ function createProxyTool({
             ? target?.taskId === params.task_id
             : target?.planId === params.plan_id;
           const selectionMatches = !continuation?.taskId || target?.taskId === continuation.taskId;
-          if (!idMatches || !selectionMatches || (target?.state || target?.status) !== "canceled") {
+          const cancellationPending = descriptor.name === "agentbridge_task_cancel"
+            && payload.status === "running" && payload.cancellation_pending === true
+            && ["active", "running"].includes(target?.status);
+          if (!idMatches || !selectionMatches || (!cancellationPending && (target?.state || target?.status) !== "canceled")) {
             return jsonToolResult({ status: "unconfirmed", requestedTaskId: params.task_id || null,
               requestedPlanId: params.plan_id || null,
               error: { code: "TASK_CANCEL_RESULT_UNCONFIRMED",

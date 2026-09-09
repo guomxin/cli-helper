@@ -14,6 +14,8 @@ def read_continuation_message(system_name: str, capability: str, response: dict)
         return f"{prefix}但原查询未完成（错误码：{code}）。本次查询已停止，请重新发起；没有执行业务写入。"
     result = response.get("result")
     result = result if isinstance(result, dict) else {}
+    if capability.startswith("taihua.analytics."):
+        return f"{prefix}本人日报分析已完成。请通过历史分析读取工具获取结果，读取时会再次核验当前权限。"
     labels = {"pending": "OA 待办", "done": "OA 已办", "sent": "OA 已发", "tracked": "OA 跟踪事项"}
     label = labels.get(result.get("collection"), "原查询")
     items = result.get("items")

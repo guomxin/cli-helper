@@ -1916,6 +1916,17 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def record_analysis_phase(self, *, task_id: str, user_subject: str, phase: str, request_id: str) -> None:
+        if phase not in {"identity", "visibility", "query", "verify", "deliver"}:
+            raise ValueError("unknown analysis phase")
+        with self._connect() as connection:
+            task = self._select_owned_task(connection, task_id, user_subject)
+            if task["status"] not in ACTIVE_TASK_STATUSES:
+                raise TaskIntegrityError("analysis task is no longer active")
+            self._append_event(connection, task_id=task_id, user_subject=user_subject,
+                event_type="task.analysis.progress", payload={"phase": phase},
+                causation_ref=request_id + ":" + phase, created_at=_utc_now())
+
     def link_interaction(
         self,
         *,

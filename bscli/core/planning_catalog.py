@@ -29,6 +29,9 @@ def build_planning_catalog(
     hidden = frozenset(hidden_commit_capabilities)
     capabilities: list[dict[str, Any]] = []
     for spec in registry.list():
+        # Phase A analytics returns protected references. Plan hydration is a phase B contract.
+        if spec.name.startswith("taihua.analytics."):
+            continue
         if spec.name in hidden:
             continue
         if spec.effect != "read" and spec.name not in prepares:

@@ -4,6 +4,7 @@ from copy import deepcopy
 from http.cookiejar import Cookie, CookieJar
 import json
 import time
+import zlib
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -36,6 +37,9 @@ class CentralHttpWorker:
         headers: dict[str, str] | None = None,
         body: Any = None,
         timeout_seconds: float = 30,
+        max_response_bytes: int | None = None,
+        deadline: float | None = None,
+        cancellation=None,
     ) -> dict:
         return self._request(
             method,
@@ -44,6 +48,9 @@ class CentralHttpWorker:
             body=body,
             timeout_seconds=timeout_seconds,
             raw=False,
+            max_response_bytes=max_response_bytes,
+            deadline=deadline,
+            cancellation=cancellation,
         )
 
     def request_bytes(
@@ -73,6 +80,9 @@ class CentralHttpWorker:
         body: Any,
         timeout_seconds: float,
         raw: bool,
+        max_response_bytes: int | None = None,
+        deadline: float | None = None,
+        cancellation=None,
     ) -> dict:
         self._validate_url(url)
         request_headers = dict(headers or {})
@@ -96,17 +106,63 @@ class CentralHttpWorker:
             headers=request_headers,
             method=method.upper(),
         )
+        if max_response_bytes is not None:
+            request_headers.setdefault("Accept-Encoding", "identity")
+            request.add_header("Accept-Encoding", "identity")
+            from bscli.analytics.contracts import reject
+            if cancellation is not None and cancellation.is_set():
+                reject("INTERRUPTED")
+            if deadline is not None and time.monotonic() >= deadline:
+                reject("BUDGET_EXCEEDED")
+        effective_deadline = min(deadline or float("inf"), started_at + timeout_seconds)
+        def read_content(response):
+            if max_response_bytes is None:
+                return response.read()
+            from bscli.analytics.contracts import reject
+            content = bytearray()
+            while True:
+                if cancellation is not None and cancellation.is_set():
+                    reject("INTERRUPTED")
+                if time.monotonic() >= effective_deadline:
+                    reject("BUDGET_EXCEEDED")
+                sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+                if sock is not None:
+                    sock.settimeout(max(0.001, effective_deadline - time.monotonic()))
+                # read1 avoids waiting to fill a large buffer on slow streams.
+                reader = getattr(response, "read1", response.read)
+                chunk = reader(min(65536, max_response_bytes + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+                if len(content) > max_response_bytes:
+                    reject("RESULT_INCOMPLETE")
+            encoding = str(response.headers.get("Content-Encoding") or "identity").lower()
+            if encoding == "identity":
+                return bytes(content)
+            if encoding not in {"gzip", "deflate"}:
+                reject("DATA_CONTRACT_CHANGED")
+            try:
+                decoder = zlib.decompressobj(31 if encoding == "gzip" else zlib.MAX_WBITS)
+                decoded = decoder.decompress(bytes(content), max_response_bytes + 1)
+                if len(decoded) > max_response_bytes or decoder.unconsumed_tail:
+                    reject("RESULT_INCOMPLETE")
+                if not decoder.eof or decoder.unused_data:
+                    reject("DATA_CONTRACT_CHANGED")
+                return decoded
+            except zlib.error:
+                reject("DATA_CONTRACT_CHANGED")
         try:
             response = self._open(request, timeout=max(timeout_seconds, 0.1))
         except HTTPError as exc:
-            return self._response(
-                status=exc.code,
-                url=exc.geturl(),
-                headers=exc.headers,
-                content=exc.read(),
-                started_at=started_at,
-                raw=raw,
-            )
+            with exc:
+                return self._response(
+                    status=exc.code,
+                    url=exc.geturl(),
+                    headers=exc.headers,
+                    content=read_content(exc),
+                    started_at=started_at,
+                    raw=raw,
+                )
         except (TimeoutError, URLError) as exc:
             raise ConnectionError(f"downstream HTTP request failed: {exc}") from exc
         with response:
@@ -114,7 +170,7 @@ class CentralHttpWorker:
                 status=response.status,
                 url=response.geturl(),
                 headers=response.headers,
-                content=response.read(),
+                content=read_content(response),
                 started_at=started_at,
                 raw=raw,
             )

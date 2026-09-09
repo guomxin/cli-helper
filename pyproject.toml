@@ -16,6 +16,9 @@ dependencies = [
 [project.scripts]
 bscli = "bscli.cli.main:main"
 
+[project.optional-dependencies]
+postgresql = ["psycopg[binary]==3.3.5"]
+
 [tool.setuptools.packages.find]
 include = ["bscli*"]
 

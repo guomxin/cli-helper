@@ -71,7 +71,7 @@ class CapabilityEngine:
             user_subject=user_subject,
             capability_name=spec.name,
             capability_version=spec.version,
-            input_summary=_operation_input_summary(arguments, effect=spec.effect),
+            input_summary=_operation_input_summary(arguments, effect=spec.effect, capability_name=spec.name),
             input_identity=arguments,
             idempotency_key=idempotency_key,
             request_id=effective_request_id,
@@ -198,7 +198,10 @@ def _matches_json_type(value: Any, expected: str | list[str]) -> bool:
     return isinstance(value, expected_type)
 
 
-def _operation_input_summary(arguments: dict, *, effect: str) -> dict:
+def _operation_input_summary(arguments: dict, *, effect: str, capability_name: str = "") -> dict:
+    if capability_name.startswith("taihua.analytics."):
+        allowed = {"start_date", "end_date_exclusive", "log_type", "group_by", "result_id"}
+        return {key: value for key, value in arguments.items() if key in allowed}
     if effect == "read":
         return arguments
     summary = {}

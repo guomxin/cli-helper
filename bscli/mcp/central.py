@@ -23,6 +23,13 @@ from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 import uvicorn
 
+from bscli.analytics.contracts import (
+    CAPABILITIES as ANALYTICS_CAPABILITIES,
+    SCOPES as ANALYTICS_SCOPES,
+    SUMMARY as ANALYTICS_SUMMARY,
+    RESULT_GET as ANALYTICS_RESULT_GET,
+)
+
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
     BUSINESS_TRIP_SAVE_CAPABILITY,
@@ -262,6 +269,8 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_meeting_room_application_cancel_prepare": frozenset({"oa:write:meeting"}),
     "oa_meeting_create_prepare": frozenset({"oa:write:meeting"}),
     "taihua_work_log_my_list": frozenset({"taihua:read"}),
+    "taihua_analytics_personal_summary": ANALYTICS_SCOPES,
+    "taihua_analytics_result_get": ANALYTICS_SCOPES,
     "taihua_work_log_team_list": frozenset({"taihua:read"}),
     "taihua_project_search": frozenset({"taihua:read"}),
     "taihua_work_log_create_prepare": frozenset({"taihua:write:worklog"}),
@@ -575,6 +584,10 @@ class CentralRuntimeGovernanceWorker:
             self._thread.join(timeout=10)
 
     def run_cycle(self) -> dict[str, Any]:
+        if self.service._analytics is None and (self.service.home / "analytics" / "results").exists():
+            self.service.analytics_runtime()
+        if self.service._analytics is not None:
+            self.service._analytics.results.cleanup()
         task_plans = self.service.recover_task_plans(limit=100)
         task_diagnostics = self.service.tasks.runtime_diagnostics()
         evaluation = self.service.runtime_governance.evaluate_incidents(
@@ -939,6 +952,10 @@ def create_central_mcp_server(
                 operation_ids=[],
                 interaction_ids=[],
             )
+        analytics_options = {}
+        if capability_name in ANALYTICS_CAPABILITIES:
+            analytics_options = {"analytics_authority_id": identity["token_id"],
+                                 "analytics_cancellation": threading.Event()}
         try:
             response = await asyncio.to_thread(
                 service.invoke,
@@ -952,7 +969,12 @@ def create_central_mcp_server(
                 host_instance_id=runtime_context.get("hostInstanceId"),
                 host_run_id=runtime_context.get("hostRunId"),
                 origin_endpoint_id=runtime_context.get("endpointId"),
+                **analytics_options,
             )
+        except asyncio.CancelledError:
+            if analytics_options:
+                analytics_options["analytics_cancellation"].set()
+            raise
         except Exception as exc:
             trace = service.runtime_governance.trace_for_request(
                 request_id,
@@ -3168,6 +3190,26 @@ def create_central_mcp_server(
             system_id="yuque",
         )
         return package_interaction_result(response)
+
+    @mcp.tool(name="taihua_analytics_personal_summary", title="分析本人日报",
+              description="统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。", annotations=read_annotations, structured_output=True)
+    async def taihua_analytics_personal_summary(
+        ctx: Context, start_date: Annotated[str, Field(max_length=10)],
+        end_date_exclusive: Annotated[str, Field(max_length=10)],
+        log_type: Literal["DAILY"], group_by: Literal["none", "day"],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(ctx, ANALYTICS_SUMMARY,
+            {"start_date": start_date, "end_date_exclusive": end_date_exclusive,
+             "log_type": log_type, "group_by": group_by}, idempotency_key, set(ANALYTICS_SCOPES))
+
+    @mcp.tool(name="taihua_analytics_result_get", title="读取本人历史分析",
+              description="重新核验当前身份和可见范围后读取历史分析结果；结果默认保留7天。", annotations=read_annotations, structured_output=True)
+    async def taihua_analytics_result_get(ctx: Context, result_id: Annotated[str, Field(min_length=32, max_length=32)],
+        idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
+    ) -> dict[str, Any]:
+        return await invoke(ctx, ANALYTICS_RESULT_GET, {"result_id": result_id}, idempotency_key, set(ANALYTICS_SCOPES))
+
     @mcp.tool(
         name="taihua_work_log_my_list",
         title="List My Taihua Work Logs",
@@ -6067,6 +6109,8 @@ def serve_central_mcp(
         )
     finally:
         governance.stop()
+        if service._analytics is not None and service._analytics.instance_lock is not None:
+            service._analytics.instance_lock.close()
         keepalive.stop()
         interactive_broker.shutdown()
         if admin_server is not None:

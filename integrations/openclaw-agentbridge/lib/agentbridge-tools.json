@@ -5619,6 +5619,114 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
+      "description": "统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。",
+      "inputSchema": {
+        "properties": {
+          "end_date_exclusive": {
+            "maxLength": 10,
+            "title": "End Date Exclusive",
+            "type": "string"
+          },
+          "group_by": {
+            "enum": [
+              "none",
+              "day"
+            ],
+            "title": "Group By",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "log_type": {
+            "const": "DAILY",
+            "title": "Log Type",
+            "type": "string"
+          },
+          "start_date": {
+            "maxLength": 10,
+            "title": "Start Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_date",
+          "end_date_exclusive",
+          "log_type",
+          "group_by"
+        ],
+        "title": "taihua_analytics_personal_summaryArguments",
+        "type": "object"
+      },
+      "name": "taihua_analytics_personal_summary",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_analytics_personal_summaryDictOutput",
+        "type": "object"
+      },
+      "title": "分析本人日报"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "重新核验当前身份和可见范围后读取历史分析结果；结果默认保留7天。",
+      "inputSchema": {
+        "properties": {
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          },
+          "result_id": {
+            "maxLength": 32,
+            "minLength": 32,
+            "title": "Result Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_id"
+        ],
+        "title": "taihua_analytics_result_getArguments",
+        "type": "object"
+      },
+      "name": "taihua_analytics_result_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "taihua_analytics_result_getDictOutput",
+        "type": "object"
+      },
+      "title": "读取本人历史分析"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
       "description": "List the authenticated user's Taihua work logs in one date range.",
       "inputSchema": {
         "properties": {

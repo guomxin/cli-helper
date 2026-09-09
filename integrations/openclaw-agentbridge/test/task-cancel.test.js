@@ -69,6 +69,19 @@ test("central write-in-progress rejection is preserved without retry", async () 
   assert.equal(h.calls.length, 1);
 });
 
+test("analysis cancellation pending is progress only for the exact active task", async () => {
+  const payload = { status: "running", cancellation_pending: true,
+    task: { taskId: "current-task", status: "running" } };
+  const h = harness(payload);
+  const response = resultPayload(await h.cancel.execute("call", { task_id: "current-task" }));
+  assert.equal(response.status, "running");
+  assert.equal(response.cancellation_pending, true);
+  assert.equal(h.calls.length, 1);
+  const wrong = harness({ ...payload, task: { taskId: "historical-task", status: "running" } });
+  assert.equal(resultPayload(await wrong.cancel.execute("call", { task_id: "current-task" })).error.code,
+    "TASK_CANCEL_RESULT_UNCONFIRMED");
+});
+
 test("plan cancellation checks ownership of the selected task before mutation", async () => {
   const h = harness({ status: "succeeded" }, "current-task", "historical-task");
   const response = await h.cancelPlan.execute("call", { plan_id: "historical-plan" });

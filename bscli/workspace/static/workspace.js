@@ -2312,6 +2312,7 @@ function eventLabel(type) {
       "task.interaction.failed": "可信交互失败",
       "task.interaction.superseded": "可信交互已更新",
       "task.operation.running": "操作执行中",
+      "task.analysis.progress": "正在核验并分析本人日报",
       "task.operation.succeeded": "操作成功",
       "task.operation.failed": "操作失败",
       "task.failed": "任务失败",
