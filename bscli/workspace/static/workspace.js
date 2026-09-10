@@ -403,7 +403,9 @@ function restoreActiveDispatches(items) {
     live.requestMessage = dispatch.requestMessage || null;
     addLiveProgress(
       key,
-      labels[dispatch.state] || "正在继续原请求",
+      dispatch.state === "accepted" && dispatch.lastErrorCode === "HOST_RUN_RESULT_PENDING"
+        ? "请求已接收，正在恢复结果；不会重复执行"
+        : labels[dispatch.state] || "正在继续原请求",
       "active",
     );
     if (["queued", "waiting_host"].includes(dispatch.state)) {
@@ -961,8 +963,9 @@ async function consumeChatStream({ message, idempotencyKey, attachments = [] }) 
       const effectiveToolActivity =
         hadToolActivity || terminalFailure.hadToolActivity === true;
       const safeToRetry =
-        terminalFailure.safeToRetry === true ||
-        (terminalFailure.state === "error" && !effectiveToolActivity);
+        typeof terminalFailure.safeToRetry === "boolean"
+          ? terminalFailure.safeToRetry
+          : terminalFailure.state === "error" && !effectiveToolActivity;
       const text = agentFailureMessage(
         terminalFailure.text,
         safeToRetry,

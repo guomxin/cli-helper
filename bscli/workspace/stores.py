@@ -34,6 +34,7 @@ _HOST_DISPATCH_TERMINAL_STATES = {
     "expired",
     "failed_before_accept",
     "acceptance_unknown",
+    "result_unknown",
     "canceled",
 }
 
@@ -1153,7 +1154,7 @@ class WorkspaceStore:
             ):
                 return None
             if (
-                row["state"] in {"waiting_host", "reconciling_acceptance"}
+                row["state"] in {"waiting_host", "reconciling_acceptance", "accepted"}
                 and _parse_time(row["next_attempt_at"]) > now_value
             ):
                 return None
@@ -1532,6 +1533,46 @@ class WorkspaceStore:
                 (dispatch_id,),
             ).fetchone()
         return _host_dispatch_from_row(updated)
+
+    def defer_host_dispatch_result(
+        self, dispatch_id: str, *, claim_token: str,
+        had_tool_activity: bool = False, delay_seconds: float = 10,
+    ) -> dict:
+        """Release the observation lease without making an accepted run resendable."""
+        now_value = self._now()
+        now = _format_time(now_value)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._select_claimed_host_dispatch(connection, dispatch_id, claim_token)
+            if row["state"] != "accepted":
+                raise WorkspaceConflictError("HOST_DISPATCH_NOT_ACCEPTED")
+            connection.execute(
+                """UPDATE agent_host_dispatches
+                   SET next_attempt_at = ?, claim_owner = NULL, claim_token = NULL,
+                       claim_expires_at = NULL, updated_at = ?,
+                       last_error_code = 'HOST_RUN_RESULT_PENDING',
+                       had_tool_activity = MAX(had_tool_activity, ?)
+                   WHERE dispatch_id = ? AND claim_token = ?""",
+                (_format_time(now_value + timedelta(seconds=max(delay_seconds, 0.1))),
+                 now, int(had_tool_activity), dispatch_id, claim_token),
+            )
+            if row["last_error_code"] != "HOST_RUN_RESULT_PENDING":
+                self._append_host_dispatch_event(
+                    connection, dispatch_id=dispatch_id, event_name="host_result_reconciling",
+                    payload={"type": "progress", "runId": row["accepted_run_id"],
+                             "kind": "system", "phase": "reconciling_result",
+                             "label": "请求已接收，正在恢复结果；不会重复执行"},
+                    created_at=now,
+                )
+            updated = connection.execute(
+                "SELECT * FROM agent_host_dispatches WHERE dispatch_id = ?", (dispatch_id,)
+            ).fetchone()
+        return _host_dispatch_from_row(updated)
+
+    def host_dispatch_result_deadline_passed(self, dispatch: dict) -> bool:
+        # The pre-accept deadline must not truncate a running host request.
+        accepted = _parse_time(dispatch["accepted_at"] or dispatch["created_at"])
+        return self._now() >= accepted + timedelta(minutes=30)
 
     def finish_host_dispatch(
         self,

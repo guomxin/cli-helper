@@ -106,3 +106,44 @@ test("protected CSV cards accept only the exact authenticated same-origin route"
     assert.equal(row.children.some(child => child.className === "secondary task-artifact-download"), allowed);
   }
 });
+
+
+test("an explicit no-retry terminal event stays non-retryable without tool progress", async () => {
+  const begin = source.indexOf("async function consumeChatStream(");
+  const end = source.indexOf("async function fetchChatStreamResponse(", begin);
+  for (const safe of [false, true]) {
+    let renderedRetry;
+    const consume = runInNewContext(`${source.slice(begin, end)}; consumeChatStream`, {
+      AbortController, TextDecoder, Uint8Array,
+      registerActiveStream: () => {}, unregisterActiveStream: () => {},
+      fetchChatStreamResponse: async () => ({ok: true, body: {getReader: () => ({
+        read: async () => ({value: new TextEncoder().encode("event\n\n"), done: false}),
+        cancel: async () => {},
+      })}}),
+      parseSseBlock: () => ({name: "chat", data: {state: "error", text: "结果未确认", safeToRetry: safe}}),
+      agentFailureMessage: text => text,
+      renderRunFailure: (_id, _text, retry) => { renderedRetry = retry; },
+    });
+    await assert.rejects(consume({message: "do not replay", idempotencyKey: "run"}));
+    assert.equal(renderedRetry, safe);
+  }
+});
+
+test("refresh restores accepted result recovery without offering resend or cancel", () => {
+  const f = fixture();
+  const begin = source.indexOf("function restoreActiveDispatches(");
+  const end = source.indexOf("function messageElement(", begin);
+  let label;
+  const restore = runInNewContext(`${source.slice(begin, end)}; restoreActiveDispatches`, {
+    state: f.state,
+    ensureLiveMessage: key => {
+      f.addLiveProgress(key, "initial", "active");
+      return f.state.liveMessages.get(key);
+    },
+    addLiveProgress: (_key, text) => { label = text; },
+    attachDispatchCancel: () => { throw Error("accepted dispatch must not be canceled as unsent"); },
+  });
+  restore([{dispatchId: "d", runId: "r", state: "accepted", lastErrorCode: "HOST_RUN_RESULT_PENDING"}]);
+  assert.equal(label, "请求已接收，正在恢复结果；不会重复执行");
+  assert.equal(f.state.liveMessages.get("r").actions.children.length, 0);
+});

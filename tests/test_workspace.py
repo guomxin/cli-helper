@@ -1669,6 +1669,91 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 self.assertEqual(events[-1]["text"], "recovered final result")
                 self.assertEqual(app.list_timeline(account)[-1]["text"], "recovered final result")
 
+    def test_delayed_result_survives_old_timeout_and_restart_without_resend(self) -> None:
+        class DelayedGateway(FakeGateway):
+            ready = False
+            def send_stream(self, **kwargs):
+                self.calls.append(("send_stream", kwargs))
+                yield {"type": "accepted", "runId": kwargs["idempotency_key"]}
+                raise GatewayRequestError("GATEWAY_CONNECTION_CLOSED", "disconnected")
+            def run_history_evidence(self, **kwargs):
+                self.calls.append(("run_history_evidence", kwargs))
+                return {"prompt_observed": True, "had_tool_activity": True,
+                        "final_text": "late final" if self.ready else ""}
+
+        with TemporaryDirectory() as tmp, patch.object(WorkspaceApplication, "_ensure_dispatch_worker"):
+            service = _service(tmp)
+            clock = MutableClock()
+            service.workspace.clock = clock
+            account = _create_account(service, user_subject="user-a", username="alice", endpoint_key="telegram:*:alice")
+            gateway = DelayedGateway()
+            app = WorkspaceApplication(service=service, gateway=gateway)
+            app.send_chat_stream(account, message="only once", idempotency_key="late-run")
+            claim = lambda: service.workspace.claim_next_host_dispatch(account_id=account["account_id"], claim_owner="test")
+            dispatch = claim()
+            app._process_host_dispatch(dispatch)
+            for _ in range(18):
+                self.assertIsNone(claim())  # Backoff survives independent worker ticks.
+                clock.value += timedelta(seconds=10)
+                app._process_host_dispatch(claim())
+            current = service.workspace.get_host_dispatch(dispatch["dispatch_id"])
+            self.assertEqual(current["state"], "accepted")
+            self.assertEqual(current["attempt_count"], 1)
+            self.assertTrue(current["had_tool_activity"])
+            self.assertEqual(app.list_chat_dispatches(account)[0]["lastErrorCode"], "HOST_RUN_RESULT_PENDING")
+            events = service.workspace.list_host_dispatch_events(dispatch["dispatch_id"])
+            self.assertEqual(sum(e["event_name"] == "host_result_reconciling" for e in events), 1)
+            self.assertFalse(any(e["payload"].get("state") == "error" for e in events))
+            with self.assertRaises(WorkspaceConflictError):
+                service.workspace.cancel_host_dispatch(dispatch["dispatch_id"], user_subject="user-a")
+            app.close()
+            recovered = WorkspaceApplication(service=service, gateway=gateway)
+            try:
+                gateway.ready = True
+                clock.value += timedelta(seconds=10)
+                recovered._process_host_dispatch(claim())
+                self.assertEqual(service.workspace.get_host_dispatch(dispatch["dispatch_id"])["state"], "completed")
+                replay = list(recovered.send_chat_stream(account, message="only once", idempotency_key="late-run"))
+                self.assertEqual(replay[-1]["text"], "late final")
+                self.assertEqual(sum(m == "send_stream" for m, _ in gateway.calls), 1)
+                self.assertEqual(sum(m["text"] == "late final" for m in recovered.list_timeline(account)), 1)
+            finally:
+                recovered.close()
+
+    def test_result_observation_timeout_is_unknown_not_failed_or_retryable(self) -> None:
+        class UnavailableGateway(FakeGateway):
+            def run_history_evidence(self, **kwargs):
+                raise GatewayRequestError("GATEWAY_TIMEOUT", "offline")
+        with TemporaryDirectory() as tmp, patch.object(WorkspaceApplication, "_ensure_dispatch_worker"):
+            service = _service(tmp)
+            clock = MutableClock()
+            service.workspace.clock = clock
+            account = _create_account(service, user_subject="user-a", username="alice", endpoint_key="telegram:*:alice")
+            with closing(WorkspaceApplication(service=service, gateway=UnavailableGateway())) as app:
+                app.send_chat_stream(account, message="observe only", idempotency_key="unknown-run")
+                d = service.workspace.claim_next_host_dispatch(account_id=account["account_id"], claim_owner="test")
+                d = service.workspace.mark_host_dispatch_accepted(d["dispatch_id"], claim_token=d["claim_token"], run_id="unknown-run")
+                clock.value += timedelta(minutes=31)
+                app._process_host_dispatch(d)
+                self.assertEqual(service.workspace.get_host_dispatch(d["dispatch_id"])["state"], "result_unknown")
+                events = list(app.send_chat_stream(account, message="observe only", idempotency_key="unknown-run"))
+                self.assertFalse(events[-1]["safeToRetry"])
+                self.assertIn("不代表后台任务失败", events[-1]["text"])
+                self.assertEqual(app.list_chat_dispatches(account), [])
+                self.assertFalse(any(m == "send_stream" for m, _ in app.gateway.calls))
+
+    def test_internal_error_after_acceptance_never_becomes_preaccept_failure(self) -> None:
+        with TemporaryDirectory() as tmp, patch.object(WorkspaceApplication, "_ensure_dispatch_worker"):
+            service = _service(tmp)
+            account = _create_account(service, user_subject="user-a", username="alice", endpoint_key="telegram:*:alice")
+            with closing(WorkspaceApplication(service=service, gateway=FakeGateway())) as app:
+                app.send_chat_stream(account, message="keep accepted", idempotency_key="internal-run")
+                d = service.workspace.claim_next_host_dispatch(account_id=account["account_id"], claim_owner="test")
+                d = service.workspace.mark_host_dispatch_accepted(d["dispatch_id"], claim_token=d["claim_token"], run_id="internal-run")
+                app._finish_dispatch_internal_error(d, RuntimeError("synthetic"))
+                self.assertEqual(service.workspace.get_host_dispatch(d["dispatch_id"])["state"], "accepted")
+                self.assertFalse(any(m == "send_stream" for m, _ in app.gateway.calls))
+
     def test_terminal_dispatch_drains_events_committed_between_reads(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)

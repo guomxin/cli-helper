@@ -48,6 +48,7 @@ _HOST_DISPATCH_TERMINAL_STATES = {
     "expired",
     "failed_before_accept",
     "acceptance_unknown",
+    "result_unknown",
     "canceled",
 }
 
@@ -1008,35 +1009,30 @@ class WorkspaceApplication:
         account = self.store.get_account(dispatch["account_id"])
         run_id = dispatch["accepted_run_id"] or dispatch["idempotency_key"]
         evidence = None
-        for delay in (0.0, 2.0, 5.0, 10.0, 20.0):
-            if self._dispatch_stop.is_set():
-                return
-            if delay:
-                self._dispatch_stop.wait(delay)
-            try:
-                evidence = self._gateway().run_history_evidence(
-                    session_key=dispatch["conversation_ref"],
-                    run_ref=run_id,
-                    timeout_seconds=8,
-                )
-            except (AttributeError, GatewayRequestError):
-                continue
-            if evidence.get("final_text"):
-                self._finish_accepted_dispatch(
-                    dispatch,
-                    account,
-                    {
-                        "type": "chat",
-                        "runId": run_id,
-                        "state": "final",
-                        "text": evidence["final_text"],
-                        "recovered": True,
-                    },
-                )
-                return
+        if self._dispatch_stop.is_set():
+            return
+        try:
+            evidence = self._gateway().run_history_evidence(
+                session_key=dispatch["conversation_ref"], run_ref=run_id, timeout_seconds=8,
+            )
+        except (AttributeError, GatewayRequestError):
+            pass
+        if evidence and evidence.get("final_text"):
+            self._finish_accepted_dispatch(
+                dispatch, account,
+                {"type": "chat", "runId": run_id, "state": "final",
+                 "text": evidence["final_text"], "recovered": True},
+            )
+            return
+        if not self.store.host_dispatch_result_deadline_passed(dispatch):
+            self.store.defer_host_dispatch_result(
+                dispatch["dispatch_id"], claim_token=dispatch["claim_token"],
+                had_tool_activity=bool(evidence and evidence.get("had_tool_activity")),
+            )
+            return
         text = (
-            "智能体已经接收请求，但结果连接中断；系统没有重新投递，"
-            "请稍后查看任务状态。"
+            "请求已接收，但在结果恢复时限内未能确认最终结果。"
+            "这不代表后台任务失败；请核对任务状态，系统不会自动重发。"
         )
         self._append_workspace_message(
             account,
@@ -1047,7 +1043,7 @@ class WorkspaceApplication:
         self.store.finish_host_dispatch(
             dispatch["dispatch_id"],
             claim_token=dispatch["claim_token"],
-            state="failed",
+            state="result_unknown",
             error_code="HOST_RUN_RESULT_UNAVAILABLE",
             event={
                 "type": "chat",
@@ -1056,7 +1052,7 @@ class WorkspaceApplication:
                 "text": text,
                 "safeToRetry": False,
                 "hadToolActivity": bool(
-                    evidence and evidence.get("had_tool_activity")
+                    dispatch.get("had_tool_activity") or (evidence and evidence.get("had_tool_activity"))
                 ),
             },
         )
@@ -1163,9 +1159,17 @@ class WorkspaceApplication:
             current = self.store.get_host_dispatch(dispatch["dispatch_id"])
             if current["state"] in _HOST_DISPATCH_TERMINAL_STATES:
                 return
-            if not current.get("claim_token"):
+            if not current.get("claim_token") or current["claim_token"] != dispatch.get("claim_token"):
+                return
+            if current["state"] == "accepted":
+                self.store.defer_host_dispatch_result(
+                    current["dispatch_id"], claim_token=current["claim_token"],
+                )
                 return
             account = self.store.get_account(current["account_id"])
+            if current.get("request_sent_at"):
+                self._finish_acceptance_unknown(current, account)
+                return
             self._fail_dispatch_before_accept(
                 current,
                 account,
