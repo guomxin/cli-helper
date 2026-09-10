@@ -151,7 +151,7 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
           argumentNormalizer: (request) =>
             coordinator.normalizeBusinessToolArguments(request),
           trustedResultHandler: (event, toolContext) =>
-            coordinator.captureNativeToolResult(event, toolContext),
+            captureNativeAgentBridgeResult(coordinator, event, toolContext),
           logger: api.logger,
         }),
       { names: AGENTBRIDGE_PROXY_TOOL_NAMES },
@@ -436,6 +436,14 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     `AgentBridge interaction plugin registered (version=${PLUGIN_VERSION}, state=${coordinator.sharedStateId}, agentTools=${AGENTBRIDGE_AGENT_FACING_TOOL_NAMES.length}, origins=${config.allowedCardOrigins.length}, identities=${config.identityBindings.length}, autoPoll=${config.autoPoll}, wakeAgent=${config.wakeAgentOnComplete})`,
   );
   return coordinator;
+}
+
+export async function captureNativeAgentBridgeResult(coordinator, event, context) {
+  // Some harnesses bypass the legacy result middleware. Deliver and redact
+  // while the authenticated native result still carries its full metadata.
+  const delivery = coordinator.deliverPreparedDocumentResult(event, context);
+  const result = await coordinator.captureNativeToolResult(event, context);
+  return delivery ? withPreparedDocumentDeliveryReport(result, await delivery) : result;
 }
 
 function withPreparedDocumentDeliveryReport(result, report) {

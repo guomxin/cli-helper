@@ -8,7 +8,7 @@ import {
 import { normalizeInteraction } from "../lib/interaction.js";
 import { AgentBridgeIdentityRouter } from "../lib/identity-router.js";
 import { resolvePluginConfig } from "../lib/config.js";
-import { registerAgentBridgeInteractions } from "../lib/plugin.js";
+import { registerAgentBridgeInteractions, captureNativeAgentBridgeResult } from "../lib/plugin.js";
 import {
   AGENTBRIDGE_GOVERNED_ENTRY_TOOL_NAMES,
   AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES,
@@ -7494,4 +7494,34 @@ test("does not fall back to a public link for protected CSV", async () => {
   });
   assert.equal(receipt.state, "failed");
   assert.equal(harness.sentPayloads.length, 0);
+});
+
+test("native CSV delivery survives missing middleware and strips bytes on success or failure", async () => {
+  for (const fail of [false, true]) {
+    const harness = fakeApi({autoPoll: false});
+    const coordinator = registerAgentBridgeInteractions(harness.api, {
+      mcpClient: null, sleep: async () => undefined,
+      saveMediaBufferImpl: async () => {
+        if (fail) throw new Error("media store failed");
+        return {path: "C:/media/native.csv"};
+      },
+    });
+    const sessionKey = "agent:main:telegram:direct:7052061588";
+    bindDeliveryRoute(harness, {sessionKey, to: "7052061588"});
+    const structuredContent = {status: "succeeded", result: {
+      schemaVersion: "agentbridge.protected_csv_delivery.v1", report_id: "b".repeat(32),
+      file: {filename: "taihua-personal-daily.csv", content_type: "text/csv; charset=utf-8",
+        content_base64: Buffer.from("date,hours\r\n2026-09-01,1.5\r\n").toString("base64")},
+    }};
+    const event = {toolCallId: "native-csv", toolName: "taihua_analytics_report_download", result: {
+      structuredContent, content: [{type: "text", text: JSON.stringify(structuredContent)}],
+      details: {mcpServer: "agentbridge", mcpTool: "taihua_analytics_report_download"},
+    }};
+    const result = await captureNativeAgentBridgeResult(coordinator, event, {sessionKey});
+    assert.equal(result.structuredContent.hostDelivery.state, fail ? "failed" : "delivered");
+    assert.equal(JSON.stringify(result).includes("content_base64"), false);
+    assert.equal(harness.sentPayloads.length, fail ? 0 : 1);
+    await harness.middleware({...event, result}, {runtime:"openclaw",sessionKey});
+    assert.equal(harness.sentPayloads.length, fail ? 0 : 1);
+  }
 });
