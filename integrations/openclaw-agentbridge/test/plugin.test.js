@@ -2079,6 +2079,45 @@ test("preflight PLAN_REQUIRED prevents leases and atomic writes while retaining 
   assert.equal(calls[1].args.host_task_key, `${sessionKey}|per-tool-run`);
 });
 
+test("Workspace protected analytics result chain gets fresh leases after summary completes", async () => {
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const terminal = new Set();
+  const ensures = [];
+  const client = {
+    async callTool(name, args) {
+      if (name === "agentbridge_host_task_ensure") {
+        ensures.push(args);
+        return { task: { taskId: args.task_scope === "user_turn" ? "summary-task" : args.host_task_key } };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return terminal.has(args.task_id) ? { status: "ignored", reason: "task_terminal" }
+          : { coordinatorLease: { hostInstanceId: "openclaw-gateway", version: 1 } };
+      }
+      if (name === "agentbridge_host_task_observe") terminal.add(args.task_id);
+      return {};
+    },
+    async callToolResult(name) {
+      return { structuredContent: { status: "succeeded", operationId: `operation-${name}`, result: {} }, content: [] };
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey, runId: "same-model-run" }, serverName: "agentbridge",
+    identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+    taskRunRefResolver: () => "same-user-turn",
+  });
+  for (const name of ["taihua_analytics_personal_summary", "taihua_analytics_result_get", "taihua_analytics_report_export", "taihua_analytics_report_download"]) {
+    const result = await tools.find(tool => tool.name === name).execute(`call-${name}`, {});
+    assert.equal(result.structuredContent.status, "succeeded");
+  }
+  assert.deepEqual(ensures.map(x => x.task_scope), ["user_turn", "independent", "independent", "independent"]);
+  assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 4);
+  assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
+  assert.equal(terminal.size, 4);
+});
+
 test("failed preflight never falls through to an untracked business call", async () => {
   const client = {
     async callTool() { throw new Error("transport unavailable"); },

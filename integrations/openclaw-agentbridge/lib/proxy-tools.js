@@ -59,6 +59,11 @@ const AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOLS = new Set(
   AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES,
 );
 const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
+const PROTECTED_ANALYTICS_RESULT_TOOLS = new Set([
+  "taihua_analytics_result_get",
+  "taihua_analytics_report_export",
+  "taihua_analytics_report_download",
+]);
 const SAFE_MCP_RETRY_DELAYS_MS = Object.freeze([500, 2_000]);
 const UNREFERENCED_FAILURE_STATUSES = new Set([
   "canceled",
@@ -574,7 +579,10 @@ async function resolveTaskId({
   if (!sessionKey) {
     return null;
   }
-  const resumedTaskId = boundedText(
+  // Protected-result operations follow a completed summary/plan. Workspace
+  // must not fold them into that terminal task and then request its lease.
+  const protectedResultCall = PROTECTED_ANALYTICS_RESULT_TOOLS.has(descriptor.name);
+  const resumedTaskId = protectedResultCall ? null : boundedText(
     taskIdResolver?.(sessionKey, descriptor.name),
     128,
   );
@@ -586,7 +594,7 @@ async function resolveTaskId({
         taskRunRefResolver?.(toolCallId, sessionKey, independentTaskEntry ? null : descriptor.name),
         256,
       );
-  const runRef =
+  const runRef = protectedResultCall ? boundedText(toolCallId, 256) :
     (!independentTaskEntry && sharedTurnRef) ||
     boundedText(context.runId, 256) ||
     boundedText(toolCallId, 256);
@@ -644,7 +652,7 @@ async function resolveTaskId({
             ]
           : ["direct_status", "trusted_interaction"],
         task_scope: workspaceSession
-          ? independentTaskEntry ||
+          ? protectedResultCall || independentTaskEntry ||
             taskScopeResolver?.(sessionKey, descriptor.name) === "independent"
             ? "independent"
             : "user_turn"
@@ -662,7 +670,7 @@ async function resolveTaskId({
       );
       return taskContextUnavailable();
     } else {
-      taskIdBinder?.(sessionKey, descriptor.name, taskId);
+      if (!protectedResultCall) taskIdBinder?.(sessionKey, descriptor.name, taskId);
     }
     return { taskId };
   } catch (error) {
