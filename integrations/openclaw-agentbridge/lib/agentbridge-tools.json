@@ -5619,7 +5619,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "从 group_by=day 的本人分析结果生成受保护 CSV；不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
+      "description": "直接使用 taihua_analytics_personal_summary(group_by=day) 返回的 result_id 生成受保护 CSV，再调用 taihua_analytics_report_download 交付附件。此链路不建立持久计划，不使用转换；不接受比较结果。不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -5707,7 +5707,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。",
+      "description": "统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。单窗口直接调用，不建立计划；需要CSV时选group_by=day，随后用返回result_id调用taihua_analytics_report_export和report_download。只有两窗口比较使用持久计划。",
       "inputSchema": {
         "properties": {
           "end_date_exclusive": {

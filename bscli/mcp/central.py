@@ -3196,7 +3196,7 @@ def create_central_mcp_server(
         return package_interaction_result(response)
 
     @mcp.tool(name="taihua_analytics_report_export", title="导出本人日报汇总",
-              description="从 group_by=day 的本人分析结果生成受保护 CSV；不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
+              description="直接使用 taihua_analytics_personal_summary(group_by=day) 返回的 result_id 生成受保护 CSV，再调用 taihua_analytics_report_download 交付附件。此链路不建立持久计划，不使用转换；不接受比较结果。不含正文，需导出权限，下载引用有效10分钟。重新签发请使用新幂等键。",
               annotations=read_annotations, structured_output=True)
     async def taihua_analytics_report_export(ctx: Context, result_id: Annotated[str, Field(min_length=32, max_length=32)],
         idempotency_key: Annotated[str | None, Field(max_length=256)] = None,
@@ -3212,7 +3212,7 @@ def create_central_mcp_server(
         return await invoke(ctx, ANALYTICS_DOWNLOAD, {"report_id": report_id}, idempotency_key, set(EXPORT_SCOPES))
 
     @mcp.tool(name="taihua_analytics_personal_summary", title="分析本人日报",
-              description="统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。", annotations=read_annotations, structured_output=True)
+              description="统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。单窗口直接调用，不建立计划；需要CSV时选group_by=day，随后用返回result_id调用taihua_analytics_report_export和report_download。只有两窗口比较使用持久计划。", annotations=read_annotations, structured_output=True)
     async def taihua_analytics_personal_summary(
         ctx: Context, start_date: Annotated[str, Field(max_length=10)],
         end_date_exclusive: Annotated[str, Field(max_length=10)],

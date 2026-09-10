@@ -220,6 +220,8 @@ def build_planning_catalog(
                 "arguments 只能使用所选能力或转换 inputSchema.properties 中明确声明的字段",
                 "目录不支持的用户要求应保留在 goal 或最终说明中，不得臆造为步骤参数",
                 "只使用本目录实际返回的能力与转换名称",
+                "本人单窗口查询及 CSV 导出不建立计划：直接调用 taihua_analytics_personal_summary(group_by=day)，用返回的 result_id 调用 taihua_analytics_report_export，再以 report_id 调用 taihua_analytics_report_download；禁止编造 CSV 附件转换。",
+                "本人两窗口比较才使用两个 summary 加 taihua_personal_compare.v1 的三步 v2 计划；CSV 导出只接受每日汇总来源，不接受比较结果。",
                 "日期约束由中央服务按原请求时间和上海时区编译；前天使用 day_before_yesterday，昨天使用 previous_day，上周使用 previous_calendar_week",
                 "已办按本人处理日期、已发按发起日期下推；按 sourceContract.queryContract 选择参数，不在模型文本中筛选无条件首页",
                 "完整汇总使用能力声明的最大 limit；coverage 非 complete 时不得继续派生写入",

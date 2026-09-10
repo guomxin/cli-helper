@@ -40,6 +40,9 @@ class McpPresentationTests(unittest.TestCase):
             "agentbridge.composed-task-planning-policy.v1",
         )
         self.assertIn("later action", profile["planning"]["modelContext"])
+        self.assertIn("ONE date window", profile["planning"]["modelContext"])
+        self.assertIn("taihua_analytics_report_export", profile["planning"]["modelContext"])
+        self.assertIn("Do not put these calls in a durable plan", profile["planning"]["modelContext"])
         self.assertNotIn("OA 转泰华", profile["planning"]["modelContext"])
 
     def test_interaction_tool_metadata_supports_modern_and_legacy_hosts(self):
