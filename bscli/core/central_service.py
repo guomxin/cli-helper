@@ -2195,8 +2195,12 @@ class CentralCapabilityService:
             if task["origin_endpoint_id"] == endpoint["endpoint_id"]:
                 item["deliveryMode"] = "origin_handled"
             elif event.get("eventType") == "task.artifact.ready":
-                item["deliveryMode"] = "artifact"
-                item["artifact"] = _artifact_notification(event)
+                # Protected CSV URLs require a Workspace session. Companion
+                # notifications cannot fetch them as anonymous media or send
+                # them through the generic certificate-link fallback.
+                if (event.get("payload") or {}).get("artifactType") != "taihua_personal_csv":
+                    item["deliveryMode"] = "artifact"
+                    item["artifact"] = _artifact_notification(event)
             elif event.get("eventType") == "task.interaction.waiting":
                 interaction_id = (event.get("payload") or {}).get(
                     "interactionId"

@@ -2543,6 +2543,22 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual(notification["artifact"]["filename"], "certificate.pdf")
         self.assertTrue(notification["artifact"]["mediaUrl"].endswith("/file"))
 
+        report_id = "a" * 32
+        protected, _ = service.tasks.link_artifact(
+            task_id=origin["task"]["taskId"], user_subject="user-a",
+            artifact={"artifact_type": "taihua_personal_csv", "source_ref": report_id,
+                      "filename": "taihua-personal-daily.csv", "content_type": "text/csv",
+                      "byte_size": 100, "expires_at": "2099-07-30T00:30:00+00:00",
+                      "download_url": f"/api/analytics/reports/{report_id}/download"},
+        )
+        claimed = service.claim_host_notifications(
+            user_subject="user-a", agent_host="openclaw", endpoint_key="telegram:*:1001",
+        )
+        self.assertEqual(claimed["count"], 1)
+        self.assertEqual(claimed["notifications"][0]["deliveryMode"], "no_op")
+        self.assertIsNone(claimed["notifications"][0]["artifact"])
+        self.assertEqual(protected["state"], "ready")
+
     def test_central_service_delivers_private_plan_result_to_companion_only(self):
         service = CentralCapabilityService(
             home=Path(self.temp.name),
