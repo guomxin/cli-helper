@@ -9,35 +9,40 @@ from bscli.analytics.contracts import Budget, Query, bigint, decimal_hours, metr
 from bscli.core.capability_runtime import CapabilityRejected
 
 WHERE = "user_id = %s AND id = ANY(%s::bigint[]) AND log_date >= %s AND log_date < %s AND type_code = %s"
-ROWS_SQL = "SELECT id,user_id,log_date,hours,type_code,project_id,created_at,updated_at FROM public.work_log WHERE " + WHERE + " ORDER BY id LIMIT 500"
+ROWS_SQL = "SELECT id,user_id,log_date,hours,type_code,project_id,created_at,updated_at FROM analysis.work_logs WHERE " + WHERE + " ORDER BY id LIMIT 500"
 AGGREGATE_SQL = """SELECT count(*) AS log_count, COALESCE(sum(hours),0) AS registered_hours,
  count(DISTINCT user_id) AS logged_people, count(DISTINCT log_date) AS logged_person_days,
  count(*) FILTER (WHERE project_id IS NULL) AS unassigned_project_log_count,
  COALESCE(sum(hours) FILTER (WHERE project_id IS NULL),0) AS unassigned_project_hours
- FROM public.work_log WHERE """ + WHERE
+ FROM analysis.work_logs WHERE """ + WHERE
 CONTRACT_SQL = """SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod) AS type,
  has_column_privilege(c.oid,a.attname,'SELECT') AS readable
  FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
- WHERE n.nspname='public' AND c.relname='work_log' AND a.attnum>0 AND NOT a.attisdropped"""
+ WHERE n.nspname='analysis' AND c.relname='work_logs' AND c.relkind='v'
+ AND a.attnum>0 AND NOT a.attisdropped"""
 ROLE_SQL = """SELECT current_setting('transaction_read_only')='on' AS readonly,
  current_setting('transaction_isolation')='repeatable read' AS repeatable,
  current_setting('default_transaction_read_only')='on' AS default_readonly,
  (rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole) AS privileged,
  has_database_privilege(current_database(),'TEMP') AS temp,
+ has_schema_privilege('analysis','USAGE') AS analysis_access,
  EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
- WHERE CASE WHEN n.nspname='public' AND c.relkind='S'
+ WHERE CASE WHEN n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind='S'
  THEN has_sequence_privilege(c.oid,'USAGE') ELSE false END) AS sequence_usage,
  EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
- WHERE CASE WHEN n.nspname='public' AND c.relkind='S'
+ WHERE CASE WHEN n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind='S'
  THEN has_sequence_privilege(c.oid,'UPDATE') ELSE false END) AS sequence_update,
  EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
- WHERE CASE WHEN n.nspname='public' AND c.relkind IN ('r','p') THEN
+ WHERE CASE WHEN n.nspname NOT IN ('pg_catalog','information_schema') AND c.relkind IN ('r','p','v','f') THEN
  (has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE') OR
  has_any_column_privilege(c.oid,'INSERT,UPDATE')) ELSE false END) AS writable,
- EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='public.work_log'::regclass
- AND contype='p' AND convalidated AND conkey=ARRAY[(SELECT attnum FROM pg_catalog.pg_attribute
- WHERE attrelid='public.work_log'::regclass AND attname='id')]) AS primary_key
+ EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k
+ JOIN pg_catalog.pg_class c ON c.oid=k.conrelid
+ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attname='id'
+ WHERE n.nspname='public' AND c.relname='work_log'
+ AND k.contype='p' AND k.convalidated AND k.conkey=ARRAY[a.attnum]) AS primary_key
  FROM pg_catalog.pg_roles WHERE rolname=current_user"""
 REQUIRED_COLUMNS = {"id": "bigint", "user_id": "bigint", "log_date": "date", "hours": "numeric(4,1)",
                     "type_code": "character varying(64)", "project_id": "bigint",
@@ -103,7 +108,7 @@ class PostgresReadExecutor:
             connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             budget.check()
             role = connection.execute(ROLE_SQL).fetchone()
-            if not role or not all(role.get(k) for k in ("readonly", "repeatable", "default_readonly", "primary_key")):
+            if not role or not all(role.get(k) for k in ("readonly", "repeatable", "default_readonly", "primary_key", "analysis_access")):
                 reject("DATA_CONTRACT_CHANGED")
             if any(role.get(k) for k in ("privileged", "sequence_update", "writable")):
                 reject("DATASOURCE_POLICY_REJECTED")

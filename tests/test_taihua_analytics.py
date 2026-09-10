@@ -96,7 +96,7 @@ class Connection:
         self.calls.append((sql, params))
         if sql == ROLE_SQL:
             return Cursor({"readonly": True, "repeatable": True, "default_readonly": True,
-                           "primary_key": True, "temp": self.unsafe, **self.role_flags})
+                           "primary_key": True, "analysis_access": True, "temp": self.unsafe, **self.role_flags})
         if sql == CONTRACT_SQL:
             return Cursor([{"attname": n, "type": "text" if self.bad_schema else t, "readable": True}
                            for n, t in REQUIRED_COLUMNS.items()])
@@ -327,6 +327,14 @@ class CentralTests(Assertions):
         response = self.invoke()
         self.assertEqual(response["error"]["code"], "SOURCE_UNAVAILABLE")
         self.assertNotIn("SYNTHETIC",json.dumps(response))
+
+    def test_analysis_view_access_and_source_key_fail_closed(self):
+        for flag in ("analysis_access", "primary_key"):
+            with self.subTest(flag=flag):
+                self.connection.calls.clear()
+                self.connection.role_flags = {flag: False}
+                self.assertEqual(self.invoke()["error"]["code"], "DATA_CONTRACT_CHANGED")
+                self.assertFalse(any(sql == ROWS_SQL for sql, _ in self.connection.calls))
 
     def test_pilot_allows_only_temp_and_sequence_usage_with_evidence(self):
         self.config = replace(self.config, privilege_policy="controlled_readonly_pilot")
