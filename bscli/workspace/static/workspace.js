@@ -421,13 +421,60 @@ function restoreActiveDispatches(items) {
   });
 }
 
+function renderMarkdown(element, value) {
+  const source = String(value ?? "");
+  // Keep content readable if a static dependency failed to load.
+  element.textContent = source;
+  element.classList.remove("markdown-body");
+  if (!globalThis.marked?.parse || !globalThis.DOMPurify?.sanitize) return;
+  try {
+    const html = globalThis.marked.parse(source, { gfm: true, breaks: true, async: false });
+    element.innerHTML = globalThis.DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: ["p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6",
+        "strong", "em", "del", "blockquote", "ul", "ol", "li", "pre", "code",
+        "a", "table", "thead", "tbody", "tr", "th", "td", "input"],
+      ALLOWED_ATTR: ["href", "title", "start", "align", "type", "checked", "disabled"],
+      ALLOW_DATA_ATTR: false,
+      ALLOW_ARIA_ATTR: false,
+    });
+    element.classList.add("markdown-body");
+    element.querySelectorAll("a").forEach((link) => {
+      const href = link.getAttribute("href");
+      // Do not turn generated links into local API actions or custom protocols.
+      if (!href || !/^(https?:\/\/|mailto:)/i.test(href)) {
+        link.removeAttribute("href");
+      } else {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+    });
+    element.querySelectorAll("input").forEach((input) => {
+      if (input.type !== "checkbox") input.remove();
+      else input.disabled = true;
+    });
+    element.querySelectorAll("table").forEach((table) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = "markdown-table-scroll";
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute("role", "region");
+      wrapper.setAttribute("aria-label", "结果表格，可横向滚动");
+      table.replaceWith(wrapper);
+      wrapper.append(table);
+    });
+  } catch {
+    element.classList.remove("markdown-body");
+    element.textContent = source;
+  }
+}
+
 function messageElement(message) {
   const item = document.createElement("article");
   item.className = `message ${message.role}`;
   item.dataset.messageRole = String(message.role || "");
   item.dataset.messageTextHash = textHash(message.text);
   const text = document.createElement("div");
-  text.textContent = message.text;
+  if (message.role === "assistant") renderMarkdown(text, message.text);
+  else text.textContent = message.text;
   item.append(text);
   if (Array.isArray(message.images) && message.images.length > 0) {
     const images = document.createElement("div");
@@ -1263,7 +1310,7 @@ function handleChatProgress(payload) {
     }
     // Preamble events carry cumulative text. Replace it in place; never add
     // a progress step (or force a scroll) for every streamed fragment.
-    live.progressDescription.textContent = payload.text;
+    renderMarkdown(live.progressDescription, payload.text);
     addLiveProgress(payload.runId, "正在梳理处理步骤", "active");
     return;
   }
@@ -1316,7 +1363,7 @@ function handleChatDelta(payload) {
   if (!payload.runId) return;
   const live = ensureLiveMessage(payload.runId);
   if (typeof payload.text === "string") {
-    live.text.textContent = payload.text;
+    renderMarkdown(live.text, payload.text);
   }
   if (payload.state === "final") {
     live.progress.replaceChildren();
@@ -2430,8 +2477,8 @@ function renderTaskPlanResult(projection) {
     : "来源核对结果";
   panel.append(heading);
   if (typeof result.draft === "string" && result.draft.trim()) {
-    const draft = document.createElement("pre");
-    draft.textContent = result.draft.trim();
+    const draft = document.createElement("div");
+    renderMarkdown(draft, result.draft.trim());
     panel.append(draft);
   }
   const summary = document.createElement("p");

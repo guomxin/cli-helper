@@ -6,6 +6,7 @@ import { runInNewContext } from "node:vm";
 const source = readFileSync(new URL("../bscli/workspace/static/workspace.js", import.meta.url), "utf8");
 const start = source.indexOf("function ensureLiveMessage(");
 const end = source.indexOf("function renderRunFailure(", start);
+const markdownSource = source.slice(source.indexOf("function renderMarkdown("), source.indexOf("function messageElement("));
 assert.ok(start >= 0 && end > start);
 
 class Element {
@@ -27,7 +28,7 @@ function fixture() {
   const root = new Element();
   const state = { liveMessages: new Map() };
   let scrolls = 0;
-  const api = runInNewContext(`${source.slice(start, end)}\n({handleChatProgress, handleChatDelta, addLiveProgress, adoptLiveMessage});`, {
+  const api = runInNewContext(`${markdownSource}\n${source.slice(start, end)}\n({handleChatProgress, handleChatDelta, addLiveProgress, adoptLiveMessage});`, {
     state, document: { createElement: () => new Element() },
     $: () => root, scrollChat: () => scrolls++, scheduleChatRefresh: () => {},
   });

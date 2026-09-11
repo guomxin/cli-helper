@@ -44,7 +44,10 @@ _CLIENT_DISCONNECT_ERRORS = (
 
 def _workspace_asset_version() -> str:
     digest = hashlib.sha256()
-    for name in ("index.html", "workspace.css", "workspace.js"):
+    for name in (
+        "index.html", "workspace.css", "workspace.js",
+        "vendor/marked.umd.js", "vendor/purify.min.js",
+    ):
         digest.update(name.encode("ascii"))
         digest.update((STATIC_ROOT / name).read_bytes())
     return digest.hexdigest()[:16]
