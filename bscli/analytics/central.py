@@ -237,7 +237,7 @@ class CentralAnalytics:
             owner=owner, session=session, provider=provider, budget=budget)
         self.results.load(report_id, owner=owner)
         if payload["download_expires_at"] <= datetime.now(timezone.utc).isoformat():
-            reject("RESULT_EXPIRED")
+            reject("REPORT_DOWNLOAD_EXPIRED")
         budget.check()
         if download:
             return {"schemaVersion": "agentbridge.protected_csv_delivery.v1", "report_id": report_id,

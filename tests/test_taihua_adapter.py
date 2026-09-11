@@ -14,6 +14,7 @@ from bscli.adapters.taihua import (
     TaihuaCentralAdapter,
     TaihuaLoginRequired,
     TaihuaSessionCheckUnavailable,
+    TaihuaQueryFilterUnverified,
     TaihuaWorkLogOutcomeUnknown,
     commit_taihua_work_log_create,
     prepare_taihua_work_log_create,
@@ -597,10 +598,21 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(
-            TaihuaSessionCheckUnavailable,
+            TaihuaQueryFilterUnverified,
             "未按成员条件筛选",
         ):
             adapter.list_team_logs(worker, {"member": "刘大扬"})
+
+    def test_unverified_date_and_department_filters_are_not_login_actions(self):
+        from bscli.adapters.taihua import _verify_team_log_filters
+        for filters, department in (({"logDate": "2026-09-06"}, None),
+                                    ({"startDate": "2026-09-01", "endDate": "2026-09-06"}, None),
+                                    ({}, {"id": 10, "name": "测试部门"})):
+            with self.subTest(filters=filters, department=department):
+                with self.assertRaises(TaihuaQueryFilterUnverified) as caught:
+                    _verify_team_log_filters([{"logDate": "2026-08-01", "deptId": 20}],
+                                             date_filters=filters, member=None, department=department)
+                self.assertEqual(caught.exception.error_code, "QUERY_FILTER_UNVERIFIED")
 
     def test_write_errors_distinguish_business_rejection_and_unknown_outcome(self):
         business_worker = FakeHttpWorker(

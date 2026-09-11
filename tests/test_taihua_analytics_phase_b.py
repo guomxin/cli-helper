@@ -118,7 +118,14 @@ class PhaseBTests(Assertions):
         payload = self.runtime.results.load(rid, owner="self")
         payload["download_expires_at"] = (datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
         self.runtime.results.payloads.save(rid, payload)
-        self.assertEqual(self.invoke(DOWNLOAD, {"report_id": rid})["error"]["code"], "RESULT_EXPIRED")
+        denied = self.invoke(DOWNLOAD, {"report_id": rid})
+        self.assertEqual(denied["error"]["code"], "REPORT_DOWNLOAD_EXPIRED")
+        self.assertIn("无需重新汇总", denied["error"]["message"])
+        self.assertEqual(self.invoke(RESULT_GET, {"result_id": source["result_id"]})["status"], "succeeded")
+        renewed = self.invoke(EXPORT, {"result_id": source["result_id"]})
+        self.assertEqual(renewed["status"], "succeeded", renewed)
+        self.assertNotEqual(renewed["result"]["report_id"], rid)
+        self.assertEqual(self.invoke(DOWNLOAD, {"report_id": renewed["result"]["report_id"]})["status"], "succeeded")
 
     def test_aggregate_only_result_cannot_be_exported(self):
         self.permit_export()

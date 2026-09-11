@@ -162,6 +162,10 @@ class TaihuaBusinessRuleRejected(AdapterBusinessRuleRejected):
     error_code = "TAIHUA_BUSINESS_RULE_REJECTED"
 
 
+class TaihuaQueryFilterUnverified(AdapterBusinessRuleRejected):
+    error_code = "QUERY_FILTER_UNVERIFIED"
+
+
 class TaihuaCentralAdapter:
     def __init__(self, *, base_url: str) -> None:
         parsed = urlparse(str(base_url or ""))
@@ -938,7 +942,7 @@ def _verify_team_log_filters(
 ) -> None:
     if member is not None:
         if any(not _team_log_matches_member(item, member) for item in content):
-            raise TaihuaSessionCheckUnavailable(
+            raise TaihuaQueryFilterUnverified(
                 "团队日志接口未按成员条件筛选，已停止返回可能的全量结果。"
             )
     if department is not None:
@@ -955,19 +959,19 @@ def _verify_team_log_filters(
             else:
                 matched = bool(expected_name) and actual_name == expected_name
             if not matched:
-                raise TaihuaSessionCheckUnavailable(
+                raise TaihuaQueryFilterUnverified(
                     "团队日志接口未按部门条件筛选，已停止返回可能的全量结果。"
                 )
     for item in content:
         actual_date = str(item.get("logDate") or "")[:10]
         if "logDate" in date_filters and actual_date != date_filters["logDate"]:
-            raise TaihuaSessionCheckUnavailable(
+            raise TaihuaQueryFilterUnverified(
                 "团队日志接口未按日志日期筛选，已停止返回可能的全量结果。"
             )
         if "startDate" in date_filters and not (
             date_filters["startDate"] <= actual_date <= date_filters["endDate"]
         ):
-            raise TaihuaSessionCheckUnavailable(
+            raise TaihuaQueryFilterUnverified(
                 "团队日志接口未按日期范围筛选，已停止返回可能的全量结果。"
             )
 

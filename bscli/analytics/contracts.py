@@ -34,7 +34,7 @@ def reject(code: str) -> None:
     messages = {
         "INVALID_ANALYSIS_INPUT": "日期、分组或输入字段不符合本人日报分析契约。",
         "LOG_TYPE_UNSUPPORTED": "一期仅支持 DAILY 日报。",
-        "DATA_ACCESS_DENIED": "当前身份没有本人数据分析权限。",
+        "DATA_ACCESS_DENIED": "当前身份无权执行此分析操作或访问所指定的结果／报告。",
         "IDENTITY_UNVERIFIED": "无法核验日志系统本人身份。",
         "IDENTITY_CHANGED": "日志系统身份已变化，请重新建立正确会话。",
         "COVERAGE_UNVERIFIABLE": "无法核验本人可见日志的完整性，未生成统计。",
@@ -48,6 +48,7 @@ def reject(code: str) -> None:
         "BUDGET_EXCEEDED": "分析超过时间或请求预算，已停止。",
         "INTERRUPTED": "分析已中断，未交付结果。",
         "RESULT_EXPIRED": "分析结果已过期，请重新查询。",
+        "REPORT_DOWNLOAD_EXPIRED": "下载入口已过期；可用仍有效的原分析结果重新导出 CSV，无需重新汇总。",
         "RESULT_ACCESS_REVOKED": "当前权限或可见数据已变化，不能读取此历史结果。",
     }
     raise CapabilityRejected(code, messages.get(code, "分析未完成。"))

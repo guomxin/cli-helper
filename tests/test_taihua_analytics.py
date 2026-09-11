@@ -212,6 +212,19 @@ class ContractTests(Assertions):
 
 
 class CentralTests(Assertions):
+    def test_team_filter_failure_finishes_task_without_requesting_user_action(self):
+        from unittest.mock import patch
+        from bscli.adapters.taihua import TaihuaQueryFilterUnverified
+        task_id = self.task()
+        with patch("bscli.adapters.taihua.TaihuaCentralAdapter.invoke_capability",
+                   side_effect=TaihuaQueryFilterUnverified("团队日志接口未按日志日期筛选，查询已停止。")):
+            response = self.invoke("taihua.work_log.team.list", {"log_date": "2026-09-01"}, task_id=task_id)
+        self.assertEqual(response["status"], "failed", response)
+        self.assertEqual(response["error"]["code"], "QUERY_FILTER_UNVERIFIED")
+        self.assertFalse(response.get("nextAction"))
+        task = self.service.tasks.get_task(task_id, user_subject="self")
+        self.assertEqual(task["status"], "failed")
+
     def setUp(self):
         self.temp = TemporaryDirectory(); self.root = Path(self.temp.name)
         states = SessionStateStore(self.root/"sessions", protector=PROTECTOR)

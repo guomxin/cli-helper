@@ -3212,7 +3212,7 @@ def create_central_mcp_server(
         return await invoke(ctx, ANALYTICS_DOWNLOAD, {"report_id": report_id}, idempotency_key, set(EXPORT_SCOPES))
 
     @mcp.tool(name="taihua_analytics_personal_summary", title="分析本人日报",
-              description="统计本人可见 DAILY 日报的登记工时、日志数和每日分布；半开日期窗口最多7天，需独立分析权限。单窗口直接调用，不建立计划；需要CSV时选group_by=day，随后用返回result_id调用taihua_analytics_report_export和report_download。只有两窗口比较使用持久计划。", annotations=read_annotations, structured_output=True)
+              description="仅统计本人可见 DAILY 日报的登记工时、日志数和每日分布。周报含义不明须先澄清；明确 WEEKLY 不支持。指定数据库查询他人或正文时说明限制，不得转团队 API；半开日期窗口最多7天，需独立分析权限。单窗口直接调用，不建立计划；需要CSV时选group_by=day，随后用返回result_id调用taihua_analytics_report_export和report_download。只有两窗口比较使用持久计划。", annotations=read_annotations, structured_output=True)
     async def taihua_analytics_personal_summary(
         ctx: Context, start_date: Annotated[str, Field(max_length=10)],
         end_date_exclusive: Annotated[str, Field(max_length=10)],
@@ -3267,7 +3267,7 @@ def create_central_mcp_server(
         description=(
             "List team work logs within the authenticated Taihua user's data scope. "
             "Filter by member, department, watch group, keyword, one log date, or a "
-            "closed date range. Date filters automatically use logDate view mode."
+            "closed date range. Date filters automatically use logDate view mode. This is the ordinary log-system API, not database analytics. Do not use it as a fallback for an explicit database-analysis request."
         ),
         annotations=read_annotations,
         structured_output=True,
