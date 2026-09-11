@@ -72,6 +72,7 @@ else
     systemctl reload sshd.service
 fi
 '@
+$remoteScript = $remoteScript.Replace("`r`n", "`n")
 $encodedScript = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
 $remoteCommand = (
     "printf '%s' '{0}' | base64 -d | sh -s -- '{1}' '{2}'" -f `
@@ -86,7 +87,10 @@ $verifyCommand = (
     "grep -q '^    ClientAliveInterval 5$' '{0}'; " +
     "grep -q '^    ClientAliveCountMax 2$' '{0}'; " +
     "grep -q '^Match all$' '{0}'; " +
-    "sshd -t"
+    "sshd -t; " +
+    "effective_config=`$(sshd -T -C user=root,host=localhost,addr=127.0.0.1); " +
+    "printf '%s\n' `"`$effective_config`" | grep -qx 'clientaliveinterval 5'; " +
+    "printf '%s\n' `"`$effective_config`" | grep -qx 'clientalivecountmax 2'"
 ) -f $RemoteConfigPath
 & $ssh @common -- $target $verifyCommand
 if ($LASTEXITCODE -ne 0) { throw "SSH keepalive configuration verification failed" }
@@ -97,6 +101,8 @@ if ($LASTEXITCODE -ne 0) { throw "SSH keepalive configuration verification faile
     remoteConfigPath = $RemoteConfigPath
     clientAliveIntervalSeconds = 5
     clientAliveCountMax = 2
+    effectiveConfigurationVerified = $true
+    existingSessionsRequireReconnect = $true
     businessCalls = 0
     businessListReads = 0
     businessWrites = 0
