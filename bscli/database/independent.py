@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import closing
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -13,13 +13,16 @@ from uuid import uuid4
 
 from bscli.core.data_sources import DataSourceConfig
 from bscli.core.data_source_secrets import DataSourceSecretStore
+from bscli.database.content import INPUT_SCHEMAS, compile_query, add_evidence
 
 RELATIONS = frozenset({'work_logs', 'users', 'departments', 'projects', 'work_log_comments'})
 CAPABILITIES = {
     'database.schema': '数据库结构与口径',
     'database.directory': '人员、部门和项目检索（用于消歧及选择查询条件）',
-    'database.logs.query': '日志明细查询（人员、项目和日期筛选，含正文）',
+    'database.logs.query': '日志正文检索（日期、人员、当前部门、项目、字面关键词，支持分页与来源）',
     'database.logs.analyze': '日志统计分析（按日、月、人员、部门或项目）',
+    'database.logs.content_analyze': '日志内容分析（总结、主题、进展、问题、经验、协作、变化；返回证据，由当前智能体归纳）',
+    'database.comments.analyze': '日志评论分析（评论及关联日志正文；反馈、问答与跟进证据）',
     'database.free.read': '高级：自由只读查询分析（五个开放视图）',
 }
 NOTES = ['不依赖日志系统 API 或登录，不自动识别本人；人员 ID 仅为查询条件。',
@@ -131,45 +134,11 @@ def validate_sql(statement):
 
 
 def log_query(arguments, *, aggregate):
-    allowed = {'start_date','end_date_exclusive','user_id','project_id','group_by','log_type'}
-    if not isinstance(arguments, dict) or set(arguments) - allowed:
-        raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
     try:
-        start, end = (date.fromisoformat(arguments[k]) for k in ('start_date','end_date_exclusive'))
-        if not 1 <= (end-start).days <= 3660:
-            raise ValueError()
-        kind = arguments.get('log_type', 'DAILY')
-        if kind not in {'DAILY','WEEKLY'}:
-            raise ValueError()
-        params = [start, end, kind]
-        where = 'l.log_date >= %s AND l.log_date < %s AND l.type_code = %s'
-        for name in ('user_id','project_id'):
-            if arguments.get(name) is not None:
-                raw = arguments[name]
-                if isinstance(raw, bool) or not str(raw).isdigit() or not 0 < int(raw) < 2**63:
-                    raise ValueError()
-                where += f' AND l.{name} = %s'
-                params.append(int(raw))
-    except (ValueError, KeyError, TypeError):
+        plan = compile_query('database.logs.analyze' if aggregate else 'database.logs.query', arguments)
+    except ValueError:
         raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS') from None
-    base = ''' FROM analysis.work_logs l LEFT JOIN analysis.users u ON u.id=l.user_id
-      LEFT JOIN analysis.departments d ON d.id=u.dept_id LEFT JOIN analysis.projects p ON p.id=l.project_id WHERE ''' + where
-    if not aggregate:
-        if 'group_by' in arguments:
-            raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
-        return '''SELECT l.id,l.log_date,l.type_code,l.user_id,u.username,u.fullname,d.name AS current_department,
-          l.project_id,p.name AS project,l.hours,l.content,l.status''' + base + ' ORDER BY l.log_date DESC,l.id DESC', params
-    group = arguments.get('group_by','day')
-    groups = {'day': ('l.log_date', 'l.log_date'), 'month': ("date_trunc('month',l.log_date)::date", "date_trunc('month',l.log_date)::date"),
-              'person': ('l.user_id', 'u.fullname'), 'department': ('u.dept_id','d.name'), 'project': ('l.project_id','p.name'),
-              'none': ('NULL::text','NULL::text')}
-    if group not in groups:
-        raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
-    key, label = groups[group]
-    return f'''SELECT {key} AS group_id,{label} AS group_label,count(*) AS log_count,
-      COALESCE(sum(l.hours),0) AS registered_hours,count(DISTINCT (l.user_id,l.log_date)) AS logged_person_days,
-      count(DISTINCT l.user_id) AS people,count(*) FILTER(WHERE l.project_id IS NULL) AS unassigned_project_logs,
-      COALESCE(sum(l.hours) FILTER(WHERE l.project_id IS NULL),0) AS unassigned_project_hours''' + base + (' GROUP BY 1,2 ORDER BY 1 NULLS LAST' if group != 'none' else ''), params
+    return plan.statement, plan.params
 
 
 class IndependentDatabase:
@@ -179,7 +148,8 @@ class IndependentDatabase:
 
     def catalog(self, subject):
         grant = self.grants.get(subject)
-        return {'source_id':'taihua_primary','capabilities':[{ 'name':n,'description':CAPABILITIES[n]} for n in grant['capabilities']],
+        return {'source_id':'taihua_primary','capabilities':[{ 'name':n,'description':CAPABILITIES[n],
+                'input_schema':INPUT_SCHEMAS[n]} for n in grant['capabilities'] if n in CAPABILITIES],
                 'notes': NOTES, 'requires_business_session':False}
 
     def execute(self, subject, capability, arguments):
@@ -204,12 +174,17 @@ class IndependentDatabase:
         config.validate()
         if not config.enabled or not config.privileges_reviewed or not config.single_instance:
             raise DatabaseRejected('DATABASE_UNAVAILABLE')
+        plan = None
         if capability == 'database.schema':
             if arguments != {}:
                 raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             statement, params = "SELECT table_name,column_name,data_type FROM information_schema.columns WHERE table_schema='analysis' ORDER BY table_name,ordinal_position", []
-        elif capability in {'database.logs.query','database.logs.analyze'}:
-            statement, params = log_query(arguments, aggregate=capability.endswith('analyze'))
+        elif capability in {'database.logs.query','database.logs.analyze','database.logs.content_analyze','database.comments.analyze'}:
+            try:
+                plan = compile_query(capability, arguments)
+            except ValueError:
+                raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS') from None
+            statement, params = plan.statement, plan.params
         elif capability == 'database.directory':
             if (not isinstance(arguments,dict) or set(arguments)-{'entity','keyword'}
                     or arguments.get('entity') not in {'users','departments','projects'}
@@ -222,10 +197,14 @@ class IndependentDatabase:
             else:
                 statement = f'SELECT id,name,status FROM analysis.{entity} WHERE strpos(name,%s)>0 ORDER BY id'
                 params = [keyword]
-        else:
+        elif capability == 'database.free.read':
             if not isinstance(arguments,dict) or set(arguments) != {'sql'}:
                 raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             statement, params = validate_sql(arguments['sql']), []
+        else:
+            raise DatabaseRejected('DATABASE_CAPABILITY_DENIED')
+        row_limit = plan.limit if plan else 200
+        total_matching = None
         secret = DataSourceSecretStore(self.home / 'analytics' / 'credentials').load(f'{config.source_id}:{config.credential_version}')
         try:
             with psycopg.connect(host=config.host,port=config.port,dbname=config.dbname,user=config.username,
@@ -239,9 +218,11 @@ class IndependentDatabase:
                 if (not role or not all(role[k] for k in ('readonly','repeatable','default_readonly','analysis_access'))
                         or any(role[k] for k in ('privileged','writable','sequence_update','sequence_usage','temp'))):
                     raise DatabaseRejected('DATABASE_ROLE_REJECTED')
+                if plan and plan.count_statement:
+                    total_matching = conn.execute(plan.count_statement, plan.count_params).fetchone()['total_matching']
                 with conn.cursor(name='database_read') as cursor:
                     cursor.execute(statement, params or None)
-                    rows = cursor.fetchmany(201)
+                    rows = cursor.fetchmany(row_limit + 1)
                     columns = [c.name for c in cursor.description]
                 conn.rollback()
         except DatabaseRejected:
@@ -251,9 +232,13 @@ class IndependentDatabase:
         if self.grants.get(subject) != grant or DataSourceConfig.load(source_path) != config:
             raise DatabaseRejected('DATABASE_AUTHORIZATION_CHANGED')
         result = {'query_id':uuid4().hex,'capability':capability,'source_id':config.source_id,
-                  'queried_at':datetime.now(timezone.utc).isoformat(),'columns':columns,'rows':rows[:200],
-                  'truncated':len(rows)>200,'row_limit':200,'notes':NOTES,
+                  'queried_at':datetime.now(timezone.utc).isoformat(),'columns':columns,'rows':rows[:row_limit],
+                  'truncated':len(rows)>row_limit,'row_limit':row_limit,'notes':NOTES,
                   'sql_sha256':hashlib.sha256(statement.encode()).hexdigest(), 'executed_sql':statement}
+        if plan and plan.count_statement:
+            add_evidence(result, plan, total_matching)
+            result['query_scope'] = {k:v for k,v in arguments.items() if k not in {'after','page_size'}}
+            result['columns'] = list(result['rows'][0]) if result['rows'] else columns
         if len(json.dumps(result,default=str).encode()) > 1024*1024:
             raise DatabaseRejected('DATABASE_RESULT_TOO_LARGE')
         return json.loads(json.dumps(result,default=str))

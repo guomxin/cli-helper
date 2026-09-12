@@ -32,6 +32,13 @@ class IndependentDatabaseTests(unittest.TestCase):
                     runtime.grants.set('central-a',[])
                     self.assertEqual(call('database_execute',{'capability':'database.logs.analyze','arguments':{}})['code'],'DATABASE_CAPABILITY_DENIED')
                     self.assertEqual(execute.call_count,1)
+                    runtime.grants.set('central-a',['database.logs.content_analyze','database.comments.analyze'])
+                    discovered = call('database_capabilities',{})['capabilities']
+                    self.assertEqual({item['name'] for item in discovered}, {'database.logs.content_analyze','database.comments.analyze'})
+                    self.assertTrue(all('input_schema' in item for item in discovered))
+                    for capability in ('database.logs.content_analyze','database.comments.analyze'):
+                        self.assertEqual(call('database_execute',{'capability':capability,'arguments':{}})['status'],'succeeded')
+                        self.assertEqual(execute.call_args.args[0],'central-a')
             service.start_login.assert_not_called()
             service.invoke.assert_not_called()
     def test_grant_is_subject_scoped_and_revocable_without_tokens(self):
