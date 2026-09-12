@@ -210,6 +210,7 @@ $remoteTemplate = @(
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
     'install -d -m 0700 -o agentbridge -g agentbridge "$root/backups"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
+    '"$python" -m pip install --disable-pip-version-check "${release_wheel}[database-analysis]"',
     '"$python" -m pip install --disable-pip-version-check --no-deps --force-reinstall "$release_wheel"',
     'site_dir="$(cd / && "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).parent.resolve())'')"',
     'case "$site_dir" in "$root"/venv/lib/python*/site-packages/bscli) ;; *) printf ''unexpected installed bscli path: %s\n'' "$site_dir" >&2; exit 1 ;; esac',

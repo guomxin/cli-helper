@@ -72,6 +72,8 @@
       "taihua_work_log_team_list",
       "taihua_project_search",
       "taihua_work_log_create_prepare",
+      "database_capabilities",
+      "database_execute",
       "taihua_session_status",
       "taihua_session_login",
       "smartlight_system_overview",
