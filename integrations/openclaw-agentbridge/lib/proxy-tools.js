@@ -60,6 +60,8 @@ const AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOLS = new Set(
 );
 const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
 const PROTECTED_ANALYTICS_RESULT_TOOLS = new Set([
+  "database_capabilities",
+  "database_execute",
   "taihua_analytics_result_get",
   "taihua_analytics_report_export",
   "taihua_analytics_report_download",
@@ -579,7 +581,7 @@ async function resolveTaskId({
   if (!sessionKey) {
     return null;
   }
-  // Protected-result operations follow a completed summary/plan. Workspace
+  // Independent database reads and protected-result operations can follow a completed task. Workspace
   // must not fold them into that terminal task and then request its lease.
   const protectedResultCall = PROTECTED_ANALYTICS_RESULT_TOOLS.has(descriptor.name);
   const resumedTaskId = protectedResultCall ? null : boundedText(

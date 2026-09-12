@@ -2079,7 +2079,7 @@ test("preflight PLAN_REQUIRED prevents leases and atomic writes while retaining 
   assert.equal(calls[1].args.host_task_key, `${sessionKey}|per-tool-run`);
 });
 
-test("Workspace protected analytics result chain gets fresh leases after summary completes", async () => {
+test("Workspace database exploration and protected analytics get fresh leases after each result", async () => {
   const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
   const terminal = new Set();
   const ensures = [];
@@ -2108,14 +2108,14 @@ test("Workspace protected analytics result chain gets fresh leases after summary
     },
     taskRunRefResolver: () => "same-user-turn",
   });
-  for (const name of ["taihua_analytics_personal_summary", "taihua_analytics_result_get", "taihua_analytics_report_export", "taihua_analytics_report_download"]) {
-    const result = await tools.find(tool => tool.name === name).execute(`call-${name}`, {});
+  for (const [index, name] of ["taihua_analytics_personal_summary", "taihua_analytics_result_get", "taihua_analytics_report_export", "taihua_analytics_report_download", "database_capabilities", "database_execute", "database_execute"].entries()) {
+    const result = await tools.find(tool => tool.name === name).execute(`call-${index}-${name}`, {});
     assert.equal(result.structuredContent.status, "succeeded");
   }
-  assert.deepEqual(ensures.map(x => x.task_scope), ["user_turn", "independent", "independent", "independent"]);
-  assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 4);
+  assert.deepEqual(ensures.map(x => x.task_scope), ["user_turn", "independent", "independent", "independent", "independent", "independent", "independent"]);
+  assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 7);
   assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
-  assert.equal(terminal.size, 4);
+  assert.equal(terminal.size, 7);
 });
 
 test("failed preflight never falls through to an untracked business call", async () => {
