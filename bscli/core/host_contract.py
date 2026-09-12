@@ -438,6 +438,10 @@ class HostContractStore:
                 "openclaw", "0.4.91", "L3",
                 "shared-contract-h01-h29-work-handover-approval-v1",
             ),
+            (
+                "openclaw", "0.4.92", "L3",
+                "shared-contract-h01-h29-independent-database-v1",
+            ),
         )
         for name, version, level, evidence in builtins:
             connection.execute(
