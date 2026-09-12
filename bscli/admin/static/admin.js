@@ -301,10 +301,11 @@ function principalBindingSummary(user) {
 }
 async function renderUsers() {
   const [users, tokens] = await Promise.all([api("/api/users"), api("/api/tokens")]);
-  const userRows = users.items.map(user => filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td>`));
+  const userRows = users.items.map(user => filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><span class="muted">已授权 ${user.database_grants?.capabilities?.length || 0} 项</span><div class="actions"><button class="button secondary small" data-database-grants="${escapeHtml(user.user_subject)}">${state.account.role === "admin" ? "配置数据库能力" : "查看数据库能力"}</button></div></td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td>`));
   const tokenRows = tokens.items.map(token => filterRow(`${token.token_id} ${token.label} ${token.user_subject} ${token.scopes.join(" ")}`, token.state, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${scopeBadges(token.scopes)}</td><td>${badge(token.state)}</td><td>${fmtTime(token.expires_at)}</td><td><div class="actions">${state.account.role === "admin" && token.state === "active" ? `<button class="button secondary small" data-revoke-token="${token.token_id}">撤销</button>` : ""}</div></td>`));
   content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
-    ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", ""], userRows, "搜索用户或下游主体")}
+    <p class="muted">数据库能力按中央账号配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
+    ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", ""], userRows, "搜索用户或下游主体")}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>一个 Token 可以承载多个系统的能力范围；管理员看不到已签发密钥。</p></div></div>
     ${filteredTable(["Token ID", "标签", "用户", "权限范围", "状态", "到期时间", ""], tokenRows, "搜索 Token、用户或权限", ["active", "expired", "revoked"])} `;
 }
@@ -565,6 +566,25 @@ async function renderAudit() {
   content.innerHTML = `<div class="view-head"><div><h2>独立管理审计</h2><p>管理事件仅追加写入，包含操作人、来源、原因和前后状态。</p></div></div>${filteredTable(["时间", "管理员", "动作", "对象类型", "对象 ID", "原因", "结果", "来源 IP"], rows, "搜索管理员、动作、对象或原因", ["succeeded", "failed"])}`;
 }
 
+async function openDatabaseGrants(userSubject) {
+  const request = state.databaseGrantRequest = (state.databaseGrantRequest || 0) + 1;
+  const config = await api(`/api/database-grants?user=${encodeURIComponent(userSubject)}`);
+  if (request !== state.databaseGrantRequest || state.view !== "users" || !state.account) return;
+  const editable = state.account.role === "admin";
+  const selected = new Set(config.capabilities);
+  const labels = { "database.schema": "数据库结构", "database.directory": "人员、部门与项目目录", "database.logs.query": "日志正文查询", "database.logs.analyze": "日志统计分析", "database.logs.content_analyze": "日志内容分析", "database.comments.analyze": "日志评论分析", "database.free.read": "自由只读 SQL" };
+  const choices = advanced => config.available.filter(item => item.advanced === advanced).map(item => `<label class="check database-capability"><input type="checkbox" name="database_capability" value="${escapeHtml(item.name)}" ${selected.has(item.name) ? "checked" : ""} ${editable ? "" : "disabled"}><span><strong>${escapeHtml(labels[item.name] || item.name)}</strong><small>${escapeHtml(item.description)}</small></span></label>`).join("");
+  openModal({ title: `${userSubject} · 数据库能力`, submit: editable ? "保存授权" : "关闭",
+    body: `<div class="database-grant-note"><strong>保存即生效</strong><p>继续使用原 Token，无需重启 OpenClaw。只影响此中央账号的独立数据库能力。</p></div><fieldset class="scope-group"><legend>常规只读能力</legend><div class="checkbox-grid">${choices(false)}</div></fieldset><fieldset class="scope-group database-advanced"><legend>高级能力</legend>${choices(true)}<p class="muted">可自由查询五个开放视图，包括评论。请独立选择此项。</p></fieldset><p class="muted">全部取消表示撤销全部独立数据库能力。当前配置版本：${config.revision}</p>${editable ? reasonField() : '<p class="muted">审计员仅可查看。</p>'}`,
+    action: async form => {
+      if (!editable) { closeModal(); return; }
+      await api("/api/database-grants", { method: "POST", body: JSON.stringify({ user_subject: config.user_subject,
+        capabilities: form.getAll("database_capability"), expected_revision: config.revision, reason: form.get("reason") }) });
+      closeModal(); toast("数据库授权已生效；原 Token 继续使用，无需重启"); await loadView("users");
+    }
+  });
+}
+
 function openModal({ kicker = "管理操作", title, body, submit = "确认", danger = false, action, locked = false }) {
   $("#modal-kicker").textContent = kicker; $("#modal-title").textContent = title; $("#modal-body").innerHTML = body;
   $("#modal-submit").textContent = submit; $("#modal-submit").className = `button ${danger ? "danger" : "primary"}`;
@@ -641,6 +661,7 @@ content.addEventListener("click", async event => {
   else if (target.dataset.recoveryAction) openRuntimeRecovery({ actionType: target.dataset.recoveryAction, targetId: target.dataset.recoveryTarget, title: target.dataset.recoveryAction === "retry_delivery" ? "重新投递通知" : "归档投递记录", submit: target.dataset.recoveryAction === "retry_delivery" ? "重新投递" : "归档", danger: target.dataset.recoveryAction === "archive_delivery" });
   else if (target.matches("[data-issue-token]")) openIssueToken();
   else if (target.matches("[data-create-admin]")) openAdminAccount();
+  else if (target.dataset.databaseGrants) await openDatabaseGrants(target.dataset.databaseGrants);
   else if (target.dataset.pauseUser) openPause({ scopeType: "user", scopeValue: target.dataset.pauseUser, title: `暂停 ${target.dataset.pauseUser} 的写入` });
   else if (target.dataset.pauseCapability) openPause({ scopeType: "capability", scopeValue: target.dataset.pauseCapability, version: target.dataset.version, title: "暂停具体能力" });
   else if (target.dataset.pauseSystem) openPause({ scopeType: "system", scopeValue: target.dataset.pauseSystem, title: "暂停系统写入" });

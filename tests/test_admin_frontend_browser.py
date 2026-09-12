@@ -77,6 +77,55 @@ def console(tmp_path):
     thread.join(timeout=5)
 
 
+def test_database_grant_editor_persists_and_auditor_cannot_edit(console):
+    browser_api = pytest.importorskip("playwright.sync_api")
+    expect = browser_api.expect
+    origin, _, _ = console
+    output = Path("output/admin-database-grants-20260912")
+    output.mkdir(parents=True, exist_ok=True)
+    with browser_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            for role in ("admin", "auditor"):
+                context = browser.new_context(viewport={"width": 1280, "height": 900})
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(origin)
+                page.locator('[name="username"]').fill(role)
+                page.locator('[name="password"]').fill(PASSWORD)
+                page.locator('#login-form button[type="submit"]').click()
+                page.locator('#nav [data-view="users"]').click()
+                page.locator('[data-database-grants="fixture-user"]').click()
+                expect(page.locator("#modal-title")).to_have_text("fixture-user · 数据库能力")
+                choices = page.locator('#modal input[name="database_capability"]')
+                expect(choices).to_have_count(7)
+                if role == "admin":
+                    expect(page.locator('#modal input:checked')).to_have_count(0)
+                    for choice in choices.all():
+                        choice.check()
+                    page.locator('#modal [name="reason"]').fill("isolated fixture: all seven capabilities")
+                    page.locator('#modal-submit').click()
+                    expect(page.locator("#modal")).not_to_be_visible()
+                    expect(page.locator("#content")).to_contain_text("已授权 7 项")
+                    page.locator('[data-database-grants="fixture-user"]').click()
+                else:
+                    expect(page.locator('#modal input:disabled')).to_have_count(7)
+                    expect(page.locator('#modal-submit')).to_have_text("关闭")
+                expect(page.locator('#modal input:checked')).to_have_count(7)
+                page.screenshot(path=str(output / f"{role}-desktop.png"))
+                page.set_viewport_size({"width": 390, "height": 844})
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert page.locator("#modal").evaluate("e => e.scrollWidth <= e.clientWidth")
+                expect(page.locator("#modal-submit")).to_be_in_viewport()
+                expect(page.locator("#modal-title")).to_be_in_viewport()
+                page.screenshot(path=str(output / f"{role}-mobile.png"))
+                assert errors == []
+                context.close()
+        finally:
+            browser.close()
+
+
 def test_console_views_interactions_and_layout(console):
     browser_api = pytest.importorskip("playwright.sync_api")
     expect = browser_api.expect

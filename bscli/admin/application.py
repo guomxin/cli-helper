@@ -17,6 +17,7 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
 from bscli.workspace.gateway import OpenClawGatewayClient
+from bscli.database.independent import DatabaseGrants, CAPABILITIES as DATABASE_CAPABILITIES
 
 
 MCP_SCOPES = (
@@ -64,6 +65,7 @@ class AdminControlPlane:
         self.workspace_gateway = workspace_gateway
         self.started_at = started_at or _utc_now()
         self.release_id = os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development"
+        self.database_grants = DatabaseGrants(service.home / 'database' / 'grants.sqlite3')
 
     def list_admin_accounts(self) -> list[dict]:
         return self.accounts.list()
@@ -573,10 +575,36 @@ class AdminControlPlane:
         }
 
     def users(self) -> list[dict]:
-        return self._users(
+        users = self._users(
             tokens=self.identity_store.list(limit=1000),
             sessions=self.service.sessions.list(limit=1000),
         )
+        return [{**user, 'database_grants': self.database_grants.get(user['user_subject'])} for user in users]
+
+    def database_grant_config(self, user_subject: str) -> dict:
+        if not isinstance(user_subject, str) or not any(user['user_subject'] == user_subject for user in self.users()):
+            raise KeyError('中央账号不存在')
+        return {'user_subject': user_subject, **self.database_grants.get(user_subject),
+                'available': [{'name':name,'description':description,'advanced':name == 'database.free.read'}
+                              for name,description in DATABASE_CAPABILITIES.items()],
+                'effective': 'next_call', 'token_reissue_required': False, 'gateway_restart_required': False}
+
+    def save_database_grants(self, *, actor: dict, request_ip: str, user_subject: str,
+                             capabilities: list[str], expected_revision: int, reason: str) -> dict:
+        _require_admin(actor)
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError('授权版本无效')
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise ValueError('请填写不超过 1000 字的变更原因')
+        before = self.database_grant_config(user_subject)
+        change_actor = {k:actor.get(k) for k in ('account_id','username','role')}
+        after = self.database_grants.set(user_subject, capabilities, expected_revision=expected_revision,
+                                        change_actor=change_actor, reason=reason.strip())
+        self.audit.append(actor=actor, action='database.grants.update', target_type='central_user',
+                          target_id=user_subject, request_ip=request_ip, reason=reason.strip(), result='succeeded',
+                          before={k:before[k] for k in ('capabilities','revision')}, after=after)
+        return {'user_subject':user_subject, **after, 'effective':'next_call',
+                'token_reissue_required':False, 'gateway_restart_required':False}
 
     def _users(self, *, tokens: list[dict], sessions: list[dict]) -> list[dict]:
         records: dict[str, dict] = {}

@@ -869,6 +869,100 @@ class AdminControlPlaneTests(unittest.TestCase):
 
 
 class AdminHttpServerTests(unittest.TestCase):
+    def test_database_grants_http_change_existing_mcp_tokens_immediately(self) -> None:
+        from starlette.testclient import TestClient
+        from bscli.database.independent import CAPABILITIES, IndependentDatabase
+        from bscli.mcp.central import create_central_mcp_server, validate_central_mcp_server_config
+
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(home=tmp, base_url="http://127.0.0.1:1/seeyon")
+            identities = McpIdentityTokenStore(service.db_path)
+            tokens = {name: identities.issue(user_subject=name, expected_principal_ref="unused")
+                      for name in ("guomao", "lishiyu")}
+            control = AdminControlPlane(service=service, identity_store=identities)
+            for role in ("admin", "auditor"):
+                control.accounts.create(username=role, password=PASSWORD, role=role, must_change_password=False)
+            port = _free_port()
+            origin = f"http://127.0.0.1:{port}"
+            server = create_admin_http_server(control_plane=control, config=validate_admin_server_config(
+                host="127.0.0.1", port=port, public_base_url=origin, tls_cert=None, tls_key=None))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                cookies = {}
+                for role in ("admin", "auditor"):
+                    status, headers, _ = _request(port, "POST", "/api/login", origin=origin,
+                        body={"username": role, "password": PASSWORD})
+                    self.assertEqual(status, 200)
+                    cookies[role] = _cookies(headers)
+
+                def save(subject, caps, revision, *, role="admin", **overrides):
+                    args = {"origin": origin, "cookies": cookies[role],
+                            "csrf": cookies[role]["agentbridge_admin_csrf"]}
+                    args.update(overrides)
+                    return _request(port, "POST", "/api/database-grants", body={
+                        "user_subject": subject, "capabilities": caps,
+                        "expected_revision": revision, "reason": "dynamic grant acceptance"}, **args)
+
+                self.assertEqual(_request(port, "GET", "/api/database-grants?user=guomao")[0], 401)
+                status, _, config = _request(port, "GET", "/api/database-grants?user=guomao", cookies=cookies["auditor"])
+                self.assertEqual(status, 200)
+                self.assertEqual(config["capabilities"], [])
+                self.assertEqual(len(config["available"]), 7)
+                self.assertEqual(sum(item["advanced"] for item in config["available"]), 1)
+                for kwargs, expected in (({"role": "auditor"}, 403), ({"csrf": "wrong"}, 401), ({"csrf": None}, 401), ({"origin": "https://untrusted.example"}, 403)):
+                    self.assertEqual(save("guomao", list(CAPABILITIES), 0, **kwargs)[0], expected)
+                self.assertEqual(save("unknown-user", [], 0)[0], 404)
+                for caps, revision in ((["unknown"], 0), ([{}], 0), ("database.schema", 0), ([], True), ([], -1)):
+                    self.assertEqual(save("guomao", caps, revision)[0], 400)
+                self.assertEqual(control.database_grants.get("guomao")["revision"], 0)
+
+                mcp = create_central_mcp_server(service=service, identity_store=identities,
+                    config=validate_central_mcp_server_config(host="127.0.0.1", port=8790,
+                        public_base_url="http://testserver", tls_cert=None, tls_key=None),
+                    auth_card_base_url="http://127.0.0.1:8780")
+                with TestClient(mcp.streamable_http_app()) as client, \
+                        patch.object(identities, "issue", side_effect=AssertionError("must reuse token")), \
+                        patch.object(identities, "revoke", side_effect=AssertionError("must keep token")), \
+                        patch.object(IndependentDatabase, "_execute", return_value={
+                            "query_id": "fixture", "sql_sha256": "fixture", "truncated": False}) as execute:
+                    def call(subject, name, arguments):
+                        return client.post("/mcp", headers={"Accept": "application/json, text/event-stream",
+                            "Authorization": "Bearer " + tokens[subject]["token"],
+                            "MCP-Protocol-Version": "2025-06-18"}, json={"jsonrpc": "2.0", "id": "1",
+                            "method": "tools/call", "params": {"name": name, "arguments": arguments}}).json()["result"]["structuredContent"]
+
+                    self.assertEqual(call("guomao", "database_capabilities", {})["capabilities"], [])
+                    for subject in tokens:
+                        status, _, saved = save(subject, list(CAPABILITIES), 0)
+                        self.assertEqual(status, 200)
+                        self.assertFalse(saved["token_reissue_required"])
+                        self.assertFalse(saved["gateway_restart_required"])
+                        self.assertEqual({item["name"] for item in call(subject, "database_capabilities", {})["capabilities"]}, set(CAPABILITIES))
+                        for capability in CAPABILITIES:
+                            self.assertEqual(call(subject, "database_execute", {"capability": capability, "arguments": {}})["status"], "succeeded")
+                    self.assertEqual(save("guomao", [], 0)[0], 409)
+                    self.assertEqual(save("guomao", [], 1)[0], 200)
+                    count = execute.call_count
+                    self.assertEqual(call("guomao", "database_execute", {
+                        "capability": "database.free.read", "arguments": {"sql": "select 1"}})["code"], "DATABASE_CAPABILITY_DENIED")
+                    self.assertEqual(execute.call_count, count)
+                    self.assertEqual(len(call("lishiyu", "database_capabilities", {})["capabilities"]), 7)
+                    self.assertEqual(save("guomao", list(CAPABILITIES), 2)[0], 200)
+                    self.assertEqual(len(call("guomao", "database_capabilities", {})["capabilities"]), 7)
+
+                audit = [item for item in control.audit.list() if item["action"] == "database.grants.update"]
+                self.assertEqual(len(audit), 4)
+                revoked = next(item for item in audit if item["after"]["capabilities"] == [])
+                self.assertEqual(len(revoked["before"]["capabilities"]), 7)
+                self.assertEqual(revoked["after"]["revision"], 2)
+                with closing(sqlite3.connect(control.database_grants.path)) as connection:
+                    self.assertEqual(connection.execute("SELECT count(*) FROM database_audit WHERE capability='database.grants'").fetchone()[0], 4)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_login_cookies_csrf_and_no_secret_retrieval(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(

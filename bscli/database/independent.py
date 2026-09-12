@@ -37,6 +37,10 @@ class DatabaseRejected(ValueError):
     pass
 
 
+class DatabaseGrantConflict(ValueError):
+    pass
+
+
 class DatabaseGrants:
     def __init__(self, path):
         self.path = Path(path)
@@ -55,15 +59,28 @@ class DatabaseGrants:
             row = c.execute('SELECT capabilities,revision FROM database_grants WHERE subject=?', (subject,)).fetchone()
         return {'capabilities': json.loads(row[0]) if row else [], 'revision': row[1] if row else 0}
 
-    def set(self, subject, capabilities):
+    def set(self, subject, capabilities, *, expected_revision=None, change_actor=None, reason=None):
         if not isinstance(subject, str) or not subject.strip() or len(subject) > 256:
             raise ValueError('中央账号无效')
-        if not isinstance(capabilities, list) or any(c not in CAPABILITIES for c in capabilities):
+        if not isinstance(capabilities, list) or any(not isinstance(c, str) or c not in CAPABILITIES for c in capabilities):
             raise ValueError('数据库能力无效')
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
+            raise ValueError('授权版本无效')
+        normalized = sorted(set(capabilities))
         with closing(sqlite3.connect(self.path)) as c, c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT capabilities,revision FROM database_grants WHERE subject=?', (subject,)).fetchone()
+            before = {'capabilities': json.loads(row[0]) if row else [], 'revision': row[1] if row else 0}
+            if expected_revision is not None and before['revision'] != expected_revision:
+                raise DatabaseGrantConflict('授权已被其他管理员修改，请重新打开配置后保存。')
+            after = {'capabilities': normalized, 'revision': before['revision'] + 1}
             c.execute('INSERT INTO database_grants VALUES (?,?,1) ON CONFLICT(subject) DO UPDATE SET capabilities=excluded.capabilities,revision=database_grants.revision+1',
-                      (subject, json.dumps(sorted(set(capabilities)))))
-        return self.get(subject)
+                      (subject, json.dumps(normalized)))
+            if change_actor is not None:
+                c.execute('INSERT INTO database_audit VALUES (?,?,?,?,?,?)',
+                          (uuid4().hex,subject,'database.grants','changed',datetime.now(timezone.utc).isoformat(),
+                           json.dumps({'actor':change_actor,'reason':reason,'before':before,'after':after},ensure_ascii=False)))
+        return after
 
     def authorize(self, subject, capability):
         grant = self.get(subject)

@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from bscli.admin.application import AdminControlPlane, MCP_SCOPES
 from bscli.auth.server import validate_auth_server_config
 from bscli.core.tls_http import ThreadedTLSHTTPServer
+from bscli.database.independent import DatabaseGrantConflict
 
 
 MAX_ADMIN_BODY_BYTES = 64 * 1024
@@ -212,6 +213,8 @@ def create_admin_http_server(
                     )
                 elif route.path == "/api/users":
                     self._json(200, {"items": control_plane.users()})
+                elif route.path == "/api/database-grants":
+                    self._json(200, control_plane.database_grant_config(_query_value(query, "user")))
                 elif route.path == "/api/tokens":
                     self._json(
                         200,
@@ -327,6 +330,15 @@ def create_admin_http_server(
                         reason=_required_string(body, "reason"),
                     )
                     self._json(201, account)
+                    return
+                if route.path == "/api/database-grants":
+                    if set(body) != {'user_subject','capabilities','expected_revision','reason'}:
+                        raise ValueError('数据库授权请求字段无效')
+                    result = control_plane.save_database_grants(
+                        actor=actor, request_ip=self.client_address[0],
+                        user_subject=_required_string(body, 'user_subject'), capabilities=body['capabilities'],
+                        expected_revision=body['expected_revision'], reason=_required_string(body, 'reason'))
+                    self._json(200, result)
                     return
                 if route.path == "/api/tokens":
                     issued = control_plane.issue_token(
@@ -509,7 +521,7 @@ def create_admin_http_server(
 
         def _authenticate(self, *, require_csrf: bool = False) -> dict | None:
             token = self._session_token()
-            csrf = self.headers.get("X-AgentBridge-CSRF") if require_csrf else None
+            csrf = (self.headers.get("X-AgentBridge-CSRF") or "") if require_csrf else None
             actor = control_plane.admin_sessions.verify(token, csrf_token=csrf)
             if actor is None:
                 self._json(
@@ -625,7 +637,9 @@ def create_admin_http_server(
                 self.send_header("Strict-Transport-Security", "max-age=31536000")
 
         def _handle_error(self, exc: Exception) -> None:
-            if isinstance(exc, PermissionError):
+            if isinstance(exc, DatabaseGrantConflict):
+                status, code = 409, 'DATABASE_GRANT_CONFLICT'
+            elif isinstance(exc, PermissionError):
                 status, code = 403, "ADMIN_FORBIDDEN"
             elif isinstance(exc, KeyError):
                 status, code = 404, "NOT_FOUND"
