@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -127,6 +128,14 @@ class HostContractStoreTests(unittest.TestCase):
                 / "package.json"
             ).read_text(encoding="utf-8")
         )
+        for filename, constant in (
+            ("host-contract.js", "OPENCLAW_HOST_VERSION"),
+            ("plugin.js", "PLUGIN_VERSION"),
+        ):
+            source = (ROOT / "integrations" / "openclaw-agentbridge" / "lib" / filename).read_text(encoding="utf-8")
+            match = re.search(rf'{constant} = "([^"]+)"', source)
+            self.assertIsNotNone(match)
+            self.assertEqual(package["version"], match.group(1))
         profile = deepcopy(self.profile)
         profile["hostInstanceId"] = "openclaw-gateway"
         profile["implementation"] = {
