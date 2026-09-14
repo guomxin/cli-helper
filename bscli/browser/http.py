@@ -109,7 +109,9 @@ class CentralHttpWorker:
         if max_response_bytes is not None:
             request_headers.setdefault("Accept-Encoding", "identity")
             request.add_header("Accept-Encoding", "identity")
-            from bscli.analytics.contracts import reject
+            from bscli.core.capability_runtime import CapabilityRejected
+            def reject(code):
+                raise CapabilityRejected(code, "HTTP 读取超出预算、已中断或响应格式无效。")
             if cancellation is not None and cancellation.is_set():
                 reject("INTERRUPTED")
             if deadline is not None and time.monotonic() >= deadline:
@@ -118,7 +120,9 @@ class CentralHttpWorker:
         def read_content(response):
             if max_response_bytes is None:
                 return response.read()
-            from bscli.analytics.contracts import reject
+            from bscli.core.capability_runtime import CapabilityRejected
+            def reject(code):
+                raise CapabilityRejected(code, "HTTP 读取超出预算、已中断或响应格式无效。")
             content = bytearray()
             while True:
                 if cancellation is not None and cancellation.is_set():

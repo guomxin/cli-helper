@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from bscli.core.capability import CapabilityRegistry
-from bscli.analytics.comparison import REFERENCE_SCHEMA
 from bscli.core.planning_policy import (
     COMPOSED_TASK_POLICY_VERSION,
     planning_descriptor,
@@ -30,9 +29,6 @@ def build_planning_catalog(
     hidden = frozenset(hidden_commit_capabilities)
     capabilities: list[dict[str, Any]] = []
     for spec in registry.list():
-        # Only summary sources can enter a protected comparison plan.
-        if spec.name.startswith("taihua.analytics.") and spec.name != "taihua.analytics.personal.summary":
-            continue
         if spec.name in hidden:
             continue
         if spec.effect != "read" and spec.name not in prepares:
@@ -53,8 +49,7 @@ def build_planning_catalog(
                 "effect": spec.effect,
                 "requiredScopes": sorted(required),
                 "inputSchema": spec.input_schema,
-                "outputSchema": (REFERENCE_SCHEMA
-                                 if spec.name == "taihua.analytics.personal.summary" else spec.output_schema),
+                "outputSchema": spec.output_schema,
                 "planningRole": roles[0],
                 "planningRoles": roles,
                 "planningDescriptor": descriptor,

@@ -2546,10 +2546,10 @@ class TaskHubStoreTests(unittest.TestCase):
         report_id = "a" * 32
         protected, _ = service.tasks.link_artifact(
             task_id=origin["task"]["taskId"], user_subject="user-a",
-            artifact={"artifact_type": "taihua_personal_csv", "source_ref": report_id,
+            artifact={"artifact_type": "database_csv", "source_ref": report_id,
                       "filename": "taihua-personal-daily.csv", "content_type": "text/csv",
                       "byte_size": 100, "expires_at": "2099-07-30T00:30:00+00:00",
-                      "download_url": f"/api/analytics/reports/{report_id}/download"},
+                      "download_url": f"/api/database/reports/taihua_primary/{report_id}/download"},
         )
         claimed = service.claim_host_notifications(
             user_subject="user-a", agent_host="openclaw", endpoint_key="telegram:*:1001",

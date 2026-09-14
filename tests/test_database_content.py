@@ -129,7 +129,7 @@ class ContentExecutionTests(unittest.TestCase):
             configured_source(root)
             runtime = IndependentDatabase(root)
             runtime.grants.set('a', ['database.logs.content_analyze'])
-            with patch('bscli.database.independent.DataSourceConfig.load') as load:
+            with patch.object(runtime, '_execute') as load:
                 with self.assertRaisesRegex(DatabaseRejected, 'DATABASE_CAPABILITY_DENIED'):
                     runtime.execute('a', 'database.comments.analyze', WINDOW)
                 load.assert_not_called()

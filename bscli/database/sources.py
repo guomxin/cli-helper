@@ -72,8 +72,8 @@ class Sources:
         if self.get(LEGACY, required=False): return
         path=self.home/'analytics'/'source.json'
         if not path.exists(): return
-        from bscli.core.data_sources import DataSourceConfig
-        old=DataSourceConfig.load(path)
+        from bscli.database.legacy_source import LegacySourceConfig
+        old=LegacySourceConfig.load(path)
         old.validate()
         value=validate(dict(source_id=LEGACY,name='泰华日志库',description='日志、人员、部门、项目及评论',engine='postgresql',
             host=old.host,port=old.port,dbname=old.dbname,username=old.username,sslmode=old.sslmode,
@@ -164,10 +164,9 @@ def connect(sources, config):
 
 
 def check_role(conn):
-    from bscli.database.postgres_read import ROLE_SQL
+    from bscli.database.postgres_policy import ROLE_SQL
     from bscli.database.independent import DatabaseRejected
-    # The old analysis schema is not a universal requirement.
-    row=conn.execute(ROLE_SQL.replace("has_schema_privilege('analysis','USAGE') AS analysis_access",'true AS analysis_access')).fetchone()
+    row=conn.execute(ROLE_SQL).fetchone()
     if not row or not all(row[k] for k in ('readonly','repeatable','default_readonly')) or any(row[k] for k in ('privileged','writable','sequence_update','sequence_usage','temp')):
         raise DatabaseRejected('DATABASE_ROLE_REJECTED')
 

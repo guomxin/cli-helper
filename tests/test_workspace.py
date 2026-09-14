@@ -2744,8 +2744,8 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertTrue(completed["authenticated"])
                 cookies.update(_cookies(headers))
 
-                csv_path = "/api/analytics/reports/" + "a" * 32 + "/download"
-                with patch.object(application, "analytics_report", return_value={
+                csv_path = "/api/database/reports/taihua_primary/" + "a" * 32 + "/download"
+                with patch.object(application, "database_report", return_value={
                     "body": b"date,hours\r\n2026-09-01,1.5\r\n",
                     "filename": "taihua-personal-daily.csv", "content_type": "text/csv; charset=utf-8",
                 }) as csv_download:

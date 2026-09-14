@@ -11,8 +11,6 @@ import sqlite3
 import threading
 from uuid import uuid4
 
-from bscli.core.data_sources import DataSourceConfig
-from bscli.core.data_source_secrets import DataSourceSecretStore
 from bscli.database.content import INPUT_SCHEMAS, compile_query, add_evidence
 from bscli.database.sources import Sources, LEGACY, source_id as validate_source_id
 

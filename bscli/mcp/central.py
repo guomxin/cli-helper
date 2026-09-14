@@ -23,14 +23,6 @@ from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 import uvicorn
 
-from bscli.analytics.reports import EXPORT as ANALYTICS_EXPORT, DOWNLOAD as ANALYTICS_DOWNLOAD, EXPORT_SCOPES
-
-from bscli.analytics.contracts import (
-    CAPABILITIES as ANALYTICS_CAPABILITIES,
-    SCOPES as ANALYTICS_SCOPES,
-    SUMMARY as ANALYTICS_SUMMARY,
-    RESULT_GET as ANALYTICS_RESULT_GET,
-)
 
 from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_PREPARE_CAPABILITY,
@@ -954,10 +946,6 @@ def create_central_mcp_server(
                 operation_ids=[],
                 interaction_ids=[],
             )
-        analytics_options = {}
-        if capability_name in ANALYTICS_CAPABILITIES:
-            analytics_options = {"analytics_authority_id": identity["token_id"],
-                                 "analytics_cancellation": threading.Event()}
         try:
             response = await asyncio.to_thread(
                 service.invoke,
@@ -971,12 +959,7 @@ def create_central_mcp_server(
                 host_instance_id=runtime_context.get("hostInstanceId"),
                 host_run_id=runtime_context.get("hostRunId"),
                 origin_endpoint_id=runtime_context.get("endpointId"),
-                **analytics_options,
             )
-        except asyncio.CancelledError:
-            if analytics_options:
-                analytics_options["analytics_cancellation"].set()
-            raise
         except Exception as exc:
             trace = service.runtime_governance.trace_for_request(
                 request_id,
@@ -6142,8 +6125,6 @@ def serve_central_mcp(
         )
     finally:
         governance.stop()
-        if service._analytics is not None and service._analytics.instance_lock is not None:
-            service._analytics.instance_lock.close()
         keepalive.stop()
         interactive_broker.shutdown()
         if admin_server is not None:

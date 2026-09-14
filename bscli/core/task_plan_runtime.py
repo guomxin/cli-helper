@@ -416,8 +416,6 @@ class TaskPlanRuntime:
             task_id=plan["parent_task_id"],
             host_type="task_plan",
             host_run_id=plan["plan_id"],
-            **({"analytics_authority_id": (plan.get("authority_snapshot") or {}).get("tokenId")}
-               if capability_name == "taihua.analytics.personal.summary" else {}),
         )
 
     def _invoke_transform(
@@ -451,10 +449,7 @@ class TaskPlanRuntime:
         if not reused:
             self.service.operations.mark_running(operation["operation_id"])
             try:
-                if transform_name == "taihua_personal_compare.v1":
-                    result = self.service.analytics_runtime().compare_plan(plan, arguments, operation["operation_id"])
-                else:
-                    result = self.transforms.invoke(transform_name, arguments)
+                result = self.transforms.invoke(transform_name, arguments)
             except (TransformRejected, CapabilityRejected) as exc:
                 operation = self.service.operations.mark_failed(
                     operation["operation_id"],
@@ -863,9 +858,7 @@ class TaskPlanRuntime:
                 }
             ),
         }
-        if transform.result_projection == "protected_analytics":
-            projection["result"] = result
-        elif transform.result_projection == "private_draft":
+        if transform.result_projection == "private_draft":
             projection["result"] = {
                 key: result.get(key)
                 for key in (
@@ -952,10 +945,6 @@ class TaskPlanRuntime:
                 "source": "plan.resultProjection.result",
                 "doNotQueryOperations": True,
             }
-            if plan["result_projection"].get("kind") == "protected_analytics":
-                response["nextAction"] = {"type": "read_protected_result", "tool": "taihua_analytics_result_get",
-                    "arguments": {"result_id": plan["result_projection"]["result"]["result_id"]},
-                    "doNotQueryOperations": True}
         if plan.get("terminal_reason") == "PLAN_SOURCE_INCOMPLETE":
             response["nextAction"] = {
                 "type": "report_plan_failure", "doNotRetryAtomicTools": True,

@@ -1,14 +1,20 @@
+"""Read-only parser for the pre-migration source.json format."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
-from bscli.analytics.contracts import POLICY, reject
+from bscli.core.capability_runtime import CapabilityRejected
+
+POLICY = "taihua.personal.api-visible.v1"  # Historical config format, migration only.
+
+def reject(code: str) -> None:
+    raise CapabilityRejected(code, "旧数据源配置无效，无法迁移。")
 
 
 @dataclass(frozen=True)
-class DataSourceConfig:
+class LegacySourceConfig:
     enabled: bool = False
     source_id: str = "taihua_primary"
     host: str = "10.10.50.101"
@@ -24,7 +30,7 @@ class DataSourceConfig:
     privilege_policy: str = "strict"
 
     @classmethod
-    def load(cls, path: Path) -> "DataSourceConfig":
+    def load(cls, path: Path) -> "LegacySourceConfig":
         if not path.exists():
             return cls()
         try:
@@ -34,12 +40,6 @@ class DataSourceConfig:
             reject("SOURCE_UNAVAILABLE")
         return config
 
-    def authorize(self, subject: str) -> None:
-        self.validate()
-        if not self.enabled or not self.single_instance or not self.privileges_reviewed:
-            reject("SOURCE_UNAVAILABLE")
-        if subject not in self.admitted_subjects:
-            reject("DATA_ACCESS_DENIED")
 
     def validate(self) -> None:
         if self.privilege_policy not in ("strict", "controlled_readonly_pilot"):

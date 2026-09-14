@@ -2065,10 +2065,7 @@ class TaskHubStore:
             if not isinstance(download_url,str) or not re.fullmatch(r"/api/database/reports/[a-z][a-z0-9_-]{0,63}/"+re.escape(report_id)+r"/download",download_url) or not re.fullmatch(r'[0-9a-f]{32}',report_id):
                 raise ValueError('database CSV download reference is invalid')
         elif artifact_type == "taihua_personal_csv":
-            report_id = source_ref.split(":", 1)[0]
-            download_url = artifact.get("download_url")
-            if not re.fullmatch(r"[0-9a-f]{32}", report_id) or download_url != f"/api/analytics/reports/{report_id}/download":
-                raise ValueError("protected CSV download reference is invalid")
+            raise ValueError("legacy database CSV delivery is retired")
         else:
             download_url = _artifact_download_url(artifact.get("download_url"))
         expires_at = _required_future_time(

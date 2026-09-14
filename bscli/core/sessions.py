@@ -86,8 +86,6 @@ class SessionRegistry:
             }
             if "authority_generation" not in columns:
                 connection.execute("ALTER TABLE sessions ADD COLUMN authority_generation INTEGER NOT NULL DEFAULT 1")
-            if "analytics_principal_id" not in columns:
-                connection.execute("ALTER TABLE sessions ADD COLUMN analytics_principal_id TEXT")
             for column in (
                 "last_user_activity_at",
                 "last_keepalive_at",
@@ -248,18 +246,6 @@ class SessionRegistry:
             ).fetchone()
         return _session_from_row(row) if row is not None else None
 
-    def bind_analytics_principal(self, session_id: str, principal_id: str) -> None:
-        from bscli.analytics.contracts import bigint, reject
-        principal_id = bigint(principal_id)
-        with self._connect() as connection:
-            cursor = connection.execute("""UPDATE sessions SET analytics_principal_id=?
-                WHERE session_id=? AND state='active'
-                AND (analytics_principal_id IS NULL OR analytics_principal_id=?)""",
-                (principal_id, session_id, principal_id))
-            changed = cursor.rowcount != 1
-        if changed:
-            self.quarantine(session_id, "Analytics principal identity changed.")
-            reject("IDENTITY_CHANGED")
 
     def get(self, session_id: str) -> dict:
         with self._connect() as connection:
@@ -450,7 +436,7 @@ class SessionRegistry:
                 """
                 UPDATE sessions
                 SET expected_principal_ref = ?, downstream_principal_ref = NULL,
-                    authority_generation = authority_generation + 1, analytics_principal_id = NULL,
+                    authority_generation = authority_generation + 1,
                     state = 'expired', last_error = ?, updated_at = ?,
                     last_verified_at = NULL, last_user_activity_at = NULL,
                     last_keepalive_at = NULL, expired_at = ?

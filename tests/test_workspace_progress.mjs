@@ -98,10 +98,11 @@ test("protected CSV cards accept only the exact authenticated same-origin route"
   const render = runInNewContext(`${source.slice(start, end)}; appendArtifactList`, {
     document: {createElement: () => new Element()}, formatBytes: String, formatTime: String,
   });
-  for (const [url, allowed] of [["/api/analytics/reports/" + "a".repeat(32) + "/download", true],
+  for (const [url, allowed] of [["/api/database/reports/taihua_primary/" + "a".repeat(32) + "/download", true],
+                               ["/api/analytics/reports/" + "a".repeat(32) + "/download", false],
                                ["//attacker.test/file", false], ["/api/other/file", false]]) {
     const root = new Element();
-    render(root, [{state: "ready", filename: "daily.csv", artifact_type: "taihua_personal_csv",
+    render(root, [{state: "ready", filename: "daily.csv", artifact_type: "database_csv",
                    download_url: url, byte_size: 10, expires_at: "2099"}]);
     const row = root.children[0].children[1];
     assert.equal(row.children.some(child => child.className === "secondary task-artifact-download"), allowed);

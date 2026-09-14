@@ -11,7 +11,6 @@ from pathlib import Path
 import threading
 from typing import Callable, Iterator
 from uuid import uuid4
-from bscli.analytics.contracts import CAPABILITIES as ANALYTICS_CAPABILITIES, SCOPES as ANALYTICS_SCOPES
 
 from bscli.adapters.seeyon_pending_batch import (
     PENDING_BATCH_PREPARE_CAPABILITY,
@@ -768,9 +767,6 @@ def _prefill_trusted_field_schema(schema: dict, arguments: dict) -> dict:
 
 
 def capability_required_scopes(capability_name: str) -> frozenset[str]:
-    if capability_name in ANALYTICS_CAPABILITIES:
-        return (frozenset({*ANALYTICS_SCOPES, "taihua:analytics:export"})
-                if capability_name in {"taihua.analytics.report.export", "taihua.analytics.report.download"} else ANALYTICS_SCOPES)
     try:
         return _CAPABILITY_SCOPES[capability_name]
     except KeyError as exc:
@@ -889,14 +885,7 @@ class CentralCapabilityService:
             transforms=self.transforms,
         )
         self._task_plan_authority_resolver = None
-        self._analytics = None
 
-    def analytics_runtime(self):
-        with self._locks_guard:
-            if self._analytics is None:
-                from bscli.analytics.central import CentralAnalytics
-                self._analytics = CentralAnalytics(self)
-            return self._analytics
 
     def list_capabilities(self, *, system: str | None = None) -> dict:
         return {
@@ -911,9 +900,6 @@ class CentralCapabilityService:
         }
 
     def planning_required_scopes(self, capability_name: str) -> frozenset[str]:
-        if capability_name in ANALYTICS_CAPABILITIES:
-            return (frozenset({*ANALYTICS_SCOPES, "taihua:analytics:export"})
-                if capability_name in {"taihua.analytics.report.export", "taihua.analytics.report.download"} else ANALYTICS_SCOPES)
         if capability_name in _CAPABILITY_SCOPES:
             return _CAPABILITY_SCOPES[capability_name]
         spec = self.registry.get(capability_name)
@@ -1162,15 +1148,6 @@ class CentralCapabilityService:
 
     def cancel_unsubmitted_task(self, *, user_subject: str, task_id: str) -> dict:
         task = self.tasks.get_task(task_id, user_subject=user_subject)
-        if self._analytics is not None:
-            stopped = self._analytics.cancel(user_subject, task_id=task_id)
-            if stopped is not None:
-                task = self.tasks.get_task(task_id, user_subject=user_subject)
-                if stopped and task["status"] in ACTIVE_TASK_STATUSES:
-                    task = self.tasks.cancel_task(task_id=task_id, user_subject=user_subject,
-                                                 reason="analysis_execution_stopped")
-                return {"status": "succeeded" if stopped else "running", "taskId": task_id,
-                        "task": task_response(task), "cancellation_pending": not stopped, "businessWriteOccurred": False}
         plan = self.task_plans.get_for_task(parent_task_id=task_id, user_subject=user_subject)
         if plan:
             return self.cancel_task_plan(user_subject=user_subject, plan_id=plan["plan_id"])
@@ -1181,13 +1158,6 @@ class CentralCapabilityService:
             return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
                     "message": "只能取消尚未提交的填写或授权任务；已完成、执行中及结果未知的业务不能通过此入口撤销。"}}
         interaction = self.interactions.get(interaction_id, user_subject=user_subject)
-        if interaction["interaction_type"] == "credential":
-            preceding = self.tasks.operation_before_interaction(task_id=task_id, user_subject=user_subject,
-                                                                interaction_id=interaction_id)
-            if preceding and self.operations.get(preceding["operation_id"])["capability_name"] in ANALYTICS_CAPABILITIES:
-                task = self.tasks.cancel_task(task_id=task_id, user_subject=user_subject,
-                    reason="analysis_login_canceled", causation_ref=interaction_id)
-                return {"status": "succeeded", "task": task_response(task), "businessWriteOccurred": False}
         # Check and retire the pending resource in its own write transaction;
         # approval/submission that wins this race must never be called canceled.
         try:
@@ -1265,8 +1235,6 @@ class CentralCapabilityService:
         host_instance_id: str | None = None,
         host_run_id: str | None = None,
         origin_endpoint_id: str | None = None,
-        analytics_authority_id: str | None = None,
-        analytics_cancellation=None,
     ) -> dict:
         if capability_name.startswith('taihua.analytics.'):
             return {'status':'rejected','result':None,'error':{'code':'CAPABILITY_RETIRED','message':'旧数据库分析已退役，请使用 database_capabilities/database_execute。'}}
@@ -3933,18 +3901,11 @@ class CentralCapabilityService:
                 return None
             # The ledger holds exact read arguments, unlike redacted write inputs.
             try:
-                analytics_kwargs = {}
-                if spec.name in ANALYTICS_CAPABILITIES:
-                    saved = self.analytics_runtime().authorities.load(original["operation_id"])
-                    if saved.get("owner") != user_subject:
-                        raise ValueError("analysis authority owner mismatch")
-                    analytics_kwargs["analytics_authority_id"] = saved.get("authority_id")
                 response = self.invoke(
                     user_subject=user_subject, capability_name=spec.name,
                     arguments=original["input_summary"], idempotency_key=key,
                     task_id=task_id, host_type="interaction_resume",
                     host_run_id=record["interaction_id"],
-                    **analytics_kwargs,
                 )
             except (ValueError, KeyError):
                 response = {"status": "failed", "error": {"code": "LOGIN_READ_INPUT_INVALID"}}

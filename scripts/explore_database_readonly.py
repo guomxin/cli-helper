@@ -2,25 +2,20 @@
 import json
 from pathlib import Path
 import argparse
-from bscli.core.data_sources import DataSourceConfig
-from bscli.core.data_source_secrets import DataSourceSecretStore
-import psycopg
-from psycopg.rows import dict_row
+from bscli.database.sources import Sources, connect
 from psycopg import sql
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--home', required=True, type=Path)
+    parser.add_argument('--source-id', required=True)
     args = parser.parse_args()
-    root = args.home / 'analytics'
-    config = DataSourceConfig.load(root / 'source.json')
-    config.validate()
-    secret = DataSourceSecretStore(root / 'credentials').load(f'{config.source_id}:{config.credential_version}')
-    with psycopg.connect(host=config.host, port=config.port, dbname=config.dbname,
-                          user=config.username, password=secret['password'], sslmode=config.sslmode,
-                          connect_timeout=5, row_factory=dict_row,
-                          options='-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=1000 -c search_path=pg_catalog') as conn:
-        del secret
+    sources = Sources(args.home)
+    record = sources.get(args.source_id)
+    if record['state'] != 'enabled' or record['active']['template_pack'] != 'taihua_logs':
+        raise ValueError('This inventory requires an enabled taihua_logs source')
+    config = record['active']
+    with connect(sources, config) as conn:
         conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         tables = conn.execute("""SELECT table_name,column_name,data_type,is_nullable
           FROM information_schema.columns WHERE table_schema='analysis'
@@ -62,7 +57,7 @@ def main():
           (SELECT count(*) FROM (SELECT fullname FROM analysis.users GROUP BY fullname HAVING count(*)>1) q) AS duplicate_fullnames,
           (SELECT count(*) FROM (SELECT username FROM analysis.users GROUP BY username HAVING count(*)>1) q) AS duplicate_usernames,
           (SELECT count(*) FROM (SELECT name FROM analysis.projects GROUP BY name HAVING count(*)>1) q) AS duplicate_project_names''').fetchone()
-        print(json.dumps({'source_id':config.source_id,'inventory':inventory,'relations':relations,
+        print(json.dumps({'source_id':args.source_id,'inventory':inventory,'relations':relations,
           'quality':quality,'daily_quality':daily_quality,'status_distributions':distributions,
           'channels':channels,'name_quality':duplicates},ensure_ascii=False,default=str,indent=2))
         conn.rollback()

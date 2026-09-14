@@ -43,4 +43,42 @@ class RetirementTests(unittest.TestCase):
         obj=MagicMock()
         with self.assertRaises(WorkspaceArtifactError):
             WorkspaceApplication.analytics_report(obj,{'user_subject':'a'},'a'*32)
-        obj.service.analytics_runtime.assert_not_called()
+        self.assertEqual(obj.service.mock_calls, [])
+
+    def test_old_runtime_and_cli_scopes_are_removed_without_touching_history(self):
+        import argparse
+        import importlib.util
+        from pathlib import Path
+        from bscli.cli.main import build_parser
+        from bscli.core.sessions import SessionRegistry
+        pending = [build_parser()]
+        while pending:
+            parser = pending.pop()
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    pending.extend(action.choices.values())
+                elif action.choices is not None:
+                    self.assertFalse(any(str(x).startswith('taihua:analytics:') for x in action.choices))
+        self.assertFalse(hasattr(CentralCapabilityService, 'analytics_runtime'))
+        self.assertFalse(hasattr(SessionRegistry, 'bind_analytics_principal'))
+        for module in ('admin', 'central', 'comparison', 'results', 'reports', 'taihua_personal', 'visibility'):
+            try:
+                spec = importlib.util.find_spec('bscli.analytics.' + module)
+            except ModuleNotFoundError:
+                spec = None
+            self.assertIsNone(spec)
+        with tempfile.TemporaryDirectory() as home:
+            history = Path(home) / 'analytics' / 'results' / 'preserved.bin'
+            history.parent.mkdir(parents=True)
+            history.write_bytes(b'historical encrypted payload')
+            service = CentralCapabilityService(home=home, base_url='http://127.0.0.1:1')
+            result = service.invoke(user_subject='a', capability_name='taihua.analytics.report.export', arguments={})
+            self.assertEqual(result['error']['code'], 'CAPABILITY_RETIRED')
+            self.assertEqual(history.read_bytes(), b'historical encrypted payload')
+            with self.assertRaisesRegex(ValueError, 'retired'):
+                service.tasks.link_artifact(task_id='unused', user_subject='a', artifact={
+                    'artifact_type': 'taihua_personal_csv', 'source_ref': 'a' * 32,
+                    'filename': 'old.csv', 'content_type': 'text/csv', 'byte_size': 10,
+                    'expires_at': '2099-01-01T00:00:00+00:00',
+                    'download_url': '/api/analytics/reports/' + 'a' * 32 + '/download',
+                })
