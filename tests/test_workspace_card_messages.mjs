@@ -6,6 +6,30 @@ import { runInNewContext } from "node:vm";
 const source = readFileSync(
   new URL("../bscli/workspace/static/workspace.js", import.meta.url), "utf8",
 );
+
+test("database CSV artifacts expose only valid authenticated download paths", () => {
+  const node = (tag = "div") => ({tag, children: [], append(...items) { this.children.push(...items); }});
+  const begin = source.indexOf("function appendArtifactList(");
+  const end = source.indexOf("async function reissueArtifact(", begin);
+  const render = runInNewContext(`${source.slice(begin, end)}\nappendArtifactList;`, {
+    document: {createElement: node}, formatBytes: String, formatTime: String,
+  });
+  const path = `/api/database/reports/taihua_primary/${"a".repeat(32)}/download`;
+  for (const [type, url, state, allowed] of [
+    ["database_csv", path, "ready", true],
+    ["database_csv", path, "expired", false],
+    ["database_csv", path.replace("taihua_primary", "../other"), "ready", false],
+    ["database_csv", "javascript:alert(1)", "ready", false],
+    ["taihua_personal_csv", `/api/analytics/reports/${"a".repeat(32)}/download`, "ready", false],
+  ]) {
+    const root = node();
+    render(root, [{artifact_type: type, download_url: url, state, filename: "report.csv"}]);
+    const flatten = (n) => [n, ...n.children.flatMap(flatten)];
+    const links = flatten(root).filter(n => n.tag === "a");
+    assert.equal(links.length, allowed ? 1 : 0);
+    if (allowed) assert.equal(links[0].href, path);
+  }
+});
 const start = source.indexOf("function completedInteractionPresentation(");
 const end = source.indexOf("function taskCardStatusForInteraction(", start);
 assert.ok(start >= 0 && end > start);

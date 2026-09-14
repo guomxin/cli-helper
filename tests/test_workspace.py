@@ -1754,6 +1754,42 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 self.assertEqual(service.workspace.get_host_dispatch(d["dispatch_id"])["state"], "accepted")
                 self.assertFalse(any(m == "send_stream" for m, _ in app.gateway.calls))
 
+    def test_confirmed_zero_tool_startup_recovery_tracks_its_final_result(self) -> None:
+        import hashlib
+        key = "recovered-startup"
+        recovered = key + "-recovery-1-" + hashlib.sha256(f"{key}:1".encode()).hexdigest()[:12]
+        class RecoveredGateway(FakeGateway):
+            def send_stream(self, **kwargs):
+                yield {"type":"accepted", "runId":key}
+                yield {"type":"accepted", "runId":recovered, "recoveredFromRunId":key}
+                yield {"type":"chat", "runId":recovered, "state":"final", "text":"recovered result"}
+        with TemporaryDirectory() as tmp, patch.object(WorkspaceApplication, "_ensure_dispatch_worker"):
+            service = _service(tmp)
+            account = _create_account(service, user_subject="user-a", username="alice", endpoint_key="telegram:*:alice")
+            with closing(WorkspaceApplication(service=service, gateway=RecoveredGateway())) as app:
+                app.send_chat_stream(account, message="read only", idempotency_key=key)
+                d = service.workspace.claim_next_host_dispatch(account_id=account["account_id"], claim_owner="test")
+                app._process_host_dispatch(d)
+                result = service.workspace.get_host_dispatch(d["dispatch_id"])
+                self.assertEqual(result["accepted_run_id"], recovered)
+                self.assertEqual(result["state"], "completed")
+
+    def test_duplicate_acceptance_remains_rejected_without_safe_recovery_link(self) -> None:
+        import hashlib
+        for had_tool, previous, run in [(False,None,"other"),(False,"wrong","valid"),(True,"first","valid")]:
+            with self.subTest(had_tool=had_tool, previous=previous), TemporaryDirectory() as tmp, patch.object(WorkspaceApplication, "_ensure_dispatch_worker"):
+                service = _service(tmp)
+                account = _create_account(service, user_subject="user-a", username="alice", endpoint_key="telegram:*:alice")
+                with closing(WorkspaceApplication(service=service, gateway=FakeGateway())) as app:
+                    app.send_chat_stream(account,message="read only",idempotency_key="first")
+                    d=service.workspace.claim_next_host_dispatch(account_id=account["account_id"],claim_owner="test")
+                    service.workspace.mark_host_dispatch_accepted(d["dispatch_id"],claim_token=d["claim_token"],run_id="first")
+                    if had_tool:
+                        service.workspace.append_host_dispatch_stream_event(d["dispatch_id"],claim_token=d["claim_token"],event_name="host_progress",payload={},had_tool_activity=True)
+                    target = "first-recovery-1-" + hashlib.sha256(b"first:1").hexdigest()[:12] if run=="valid" else run
+                    with self.assertRaises(WorkspaceConflictError):
+                        service.workspace.mark_host_dispatch_accepted(d["dispatch_id"],claim_token=d["claim_token"],run_id=target,recovered_from_run_id=previous)
+
     def test_terminal_dispatch_drains_events_committed_between_reads(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)

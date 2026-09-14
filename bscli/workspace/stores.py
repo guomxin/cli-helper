@@ -1494,6 +1494,7 @@ class WorkspaceStore:
         claim_token: str,
         run_id: str,
         status: str = "started",
+        recovered_from_run_id: str | None = None,
     ) -> dict:
         run_id = _required_text(run_id, "run_id", 256)
         now = _format_time(self._now())
@@ -1505,9 +1506,15 @@ class WorkspaceStore:
                 claim_token,
             )
             if row["accepted_run_id"] and row["accepted_run_id"] != run_id:
-                raise WorkspaceConflictError(
-                    "HOST_ACCEPT_DUPLICATE_RUN_VIOLATION"
-                )
+                # The gateway only emits this link after confirmed abort and
+                # authoritative zero-tool evidence for the startup attempt.
+                base = row["idempotency_key"]
+                suffix = "-recovery-1-" + hashlib.sha256(f"{base}:1".encode()).hexdigest()[:12]
+                expected_recovery = base[:128 - len(suffix)] + suffix
+                if (recovered_from_run_id != row["accepted_run_id"]
+                    or row["had_tool_activity"]
+                    or run_id != expected_recovery):
+                    raise WorkspaceConflictError("HOST_ACCEPT_DUPLICATE_RUN_VIOLATION")
             connection.execute(
                 """
                 UPDATE agent_host_dispatches
@@ -1525,6 +1532,7 @@ class WorkspaceStore:
                     "type": "accepted",
                     "runId": run_id,
                     "status": status,
+                    **({"recoveredFromRunId": recovered_from_run_id} if recovered_from_run_id else {}),
                 },
                 created_at=now,
             )

@@ -754,6 +754,7 @@ class WorkspaceApplication:
                         run_id=run_id,
                         status=_safe_text(item.get("status"), 80)
                         or "started",
+                        recovered_from_run_id=_safe_text(item.get("recoveredFromRunId"), 256) or None,
                     )
                     accepted = True
                     recovery_attempts = dispatch["retry_count"] + max(
