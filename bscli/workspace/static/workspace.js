@@ -26,6 +26,7 @@ const state = {
   syncedMessages: new Map(),
   taskCards: new Map(),
   taskCardMeta: new Map(),
+  queryGroupOpen: new Map(),
   taskSyncTimers: new Map(),
   toasts: new Map(),
   composerAttachments: [],
@@ -267,6 +268,7 @@ async function logout() {
   state.syncedMessages.clear();
   state.taskCards.clear();
   state.taskCardMeta.clear();
+  state.queryGroupOpen.clear();
   state.composerAttachments = [];
   state.timelineCursor = 0;
   state.chatTimelineOldestSequence = 0;
@@ -654,7 +656,64 @@ function renderChatTimeline() {
   const olderControl = state.chatTimelineHasOlder
     ? [olderChatControl()]
     : [];
-  container.replaceChildren(...olderControl, ...stable, ...live);
+  container.replaceChildren(...olderControl, ...groupQueryCards(stable), ...live);
+}
+
+function groupQueryCards(nodes) {
+  const output = [];
+  const groups = new Map();
+  let userBoundary = "";
+  for (const node of nodes) {
+    if (node.dataset.messageRole === "user") {
+      userBoundary = node.dataset.timelineKey;
+    }
+    const scope = node.dataset.queryScope;
+    const turn = node.dataset.queryTurn || (userBoundary && `legacy:${userBoundary}`);
+    if (!scope || !turn) {
+      output.push(node);
+      continue;
+    }
+    const key = JSON.stringify([scope, turn]);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, cards: [], element: document.createElement("article") };
+      groups.set(key, group);
+      output.push(group.element);
+    }
+    group.cards.push(node);
+  }
+  for (const { key, cards, element } of groups.values()) {
+    element.className = "message assistant application-card query-group";
+    const header = document.createElement("div");
+    header.className = "application-card-header";
+    const title = document.createElement("strong");
+    title.className = "application-card-title";
+    title.textContent = "数据库查询过程";
+    const status = document.createElement("span");
+    status.className = "application-card-status";
+    const states = cards.map(card => card.dataset.queryStatus);
+    const pending = states.filter(value => ["active", "running", "waiting_user"].includes(value)).length;
+    const failed = states.filter(value => !["succeeded", "active", "running", "waiting_user"].includes(value)).length;
+    status.textContent = failed ? `${failed} 个步骤需关注` : pending ? "查询中" : "查询步骤已结束";
+    if (failed) status.classList.add("failed");
+    header.append(title, status);
+    const details = document.createElement("details");
+    details.className = "query-group-details";
+    details.open = state.queryGroupOpen.get(key) === true;
+    details.addEventListener("toggle", () => state.queryGroupOpen.set(key, details.open));
+    const summary = document.createElement("summary");
+    summary.textContent = `查看查询步骤（${cards.length}）`;
+    details.append(summary, ...cards);
+    element.append(header);
+    if (failed) {
+      const warning = document.createElement("p");
+      warning.className = "application-card-copy";
+      warning.textContent = "部分步骤失败、取消或结果待核对，请展开查看具体状态。";
+      element.append(warning);
+    }
+    element.append(details);
+  }
+  return output;
 }
 
 function olderChatControl() {
@@ -1487,7 +1546,7 @@ async function hydrateTaskCards({ render = true } = {}) {
         return active.has(task.status) ||
           (Number.isFinite(updatedAt) && updatedAt >= recentCutoff);
       })
-      .slice(0, 8);
+      .slice(0, 30);
     const recentIds = new Set(
       recentCandidates.map((task) => task.task_id),
     );
@@ -1643,6 +1702,19 @@ function upsertTaskCardVariant(
     interaction?.state,
     task.status,
   );
+  // Keep independent backend tasks; only group read-only database presentation.
+  // Older records have no turn metadata, so the visible user-message boundary
+  // is a conservative fallback. Never fold approvals, artifacts or business plans.
+  const queryGroup = task.summary?.workspaceQueryGroup;
+  const queryTool = ["database_capabilities", "database_execute"].includes(queryGroup?.toolName);
+  const legacyQuery = !queryGroup && ["独立数据库能力目录", "执行独立数据库查询与分析"].includes(task.title);
+  const canGroup = (queryTool || legacyQuery) && !interaction &&
+    !result.artifacts?.length && !result.plan && !task.summary?.batch;
+  card.dataset.queryScope = canGroup
+    ? `${task.agent_host || ""}|${task.origin_endpoint_id || ""}|${task.active_conversation_ref || ""}`
+    : "";
+  card.dataset.queryTurn = canGroup ? queryGroup?.turnRef || "" : "";
+  card.dataset.queryStatus = cardStatus;
   card.className =
     `message assistant application-card ${escapeClass(cardStatus)}`;
   card.replaceChildren();

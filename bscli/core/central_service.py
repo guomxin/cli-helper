@@ -2458,6 +2458,7 @@ class CentralCapabilityService:
                     route=route,
                     capabilities=capabilities,
                 )
+        workspace_query_group = None
         if endpoint["client_type"] == "web":
             turn = self.workspace.resolve_gateway_turn(
                 user_subject=user_subject,
@@ -2474,6 +2475,11 @@ class CentralCapabilityService:
                         + hashlib.sha256(canonical_key.encode("utf-8")).hexdigest()
                     )
                 planning_task_key = canonical_key
+                if tool_name in {"database_capabilities", "database_execute"}:
+                    workspace_query_group = {
+                        "turnRef": turn["turn_ref"],
+                        "toolName": tool_name,
+                    }
                 if task_scope == "user_turn":
                     host_task_key = canonical_key
         capability_name = planning_capability_for_tool(tool_name)
@@ -2500,6 +2506,8 @@ class CentralCapabilityService:
             origin_endpoint_id=endpoint["endpoint_id"],
             active_conversation_ref=conversation_ref,
             title=title,
+            summary={"workspaceQueryGroup": workspace_query_group}
+            if workspace_query_group else None,
         )
         coordinator_lease = None
         if host_instance_id and host_version:

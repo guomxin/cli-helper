@@ -1561,3 +1561,20 @@ td {
     max-width: 94%;
   }
 }
+.query-group-details {
+  min-width: 0;
+  margin: 0 16px 12px;
+}
+
+.query-group-details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+.query-group-details > .application-card {
+  width: 100%;
+  max-width: 100%;
+  margin: 10px 0 0;
+  box-sizing: border-box;
+}

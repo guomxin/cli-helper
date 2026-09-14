@@ -355,6 +355,23 @@ class WorkspaceStoreTests(unittest.TestCase):
                 f"{account['openclaw_session_key']}|workspace:request-one",
             )
 
+            query_ids = []
+            for index, tool in enumerate(["database_capabilities", "database_execute", "database_execute"]):
+                query = service.ensure_host_task(
+                    **common, host_task_key=f"session|query-{index}",
+                    title="数据库查询", tool_name=tool,
+                )
+                query_id = query["task"]["taskId"]
+                query_ids.append(query_id)
+                service.finish_host_task(user_subject="user-a", task_id=query_id, outcome="succeeded")
+                saved_query = service.tasks.get_task(query_id, user_subject="user-a")
+                self.assertEqual(saved_query["summary"]["workspaceQueryGroup"], {
+                    "turnRef": "request-one", "toolName": tool,
+                })
+                self.assertEqual(saved_query["status"], "succeeded")
+            self.assertEqual(len(set(query_ids)), 3)
+            self.assertNotIn("workspaceQueryGroup", stored["summary"])
+
             service.finish_host_task(
                 user_subject="user-a", task_id=first["task"]["taskId"],
                 outcome="failed", error_code="PLAN_REQUIRED",
@@ -395,6 +412,13 @@ class WorkspaceStoreTests(unittest.TestCase):
                 first["task"]["taskId"],
                 next_turn["task"]["taskId"],
             )
+            next_query = service.ensure_host_task(
+                **common, host_task_key="session|query-next",
+                title="数据库查询", tool_name="database_execute",
+            )
+            self.assertEqual(service.tasks.get_task(
+                next_query["task"]["taskId"], user_subject="user-a",
+            )["summary"]["workspaceQueryGroup"]["turnRef"], "request-two")
 
     def test_session_idle_timeout_and_logout_do_not_unlink_identity(self) -> None:
         clock = MutableClock()
