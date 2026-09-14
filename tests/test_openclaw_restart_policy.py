@@ -66,6 +66,68 @@ function Decide($snapshot) {
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout.strip().splitlines()[-1])
 
+    def test_relocated_checkout_and_plugin_newlines_do_not_restart(self):
+        result = self.run_policy("""
+$copy = Join-Path $env:POLICY_ROOT 'release'
+New-Item -ItemType Directory $copy | Out-Null
+Copy-Item (Join-Path $env:POLICY_ROOT 'integrations') $copy -Recurse
+$p = Join-Path $copy 'integrations/openclaw-agentbridge/index.js'
+[IO.File]::WriteAllText($p, ([IO.File]::ReadAllText($p)).Replace(';', ";`r`n"))
+$original = Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/index.js'
+[IO.File]::WriteAllText($original, ([IO.File]::ReadAllText($original)).Replace(';', ";`n"))
+$baseline.inputs = Snapshot
+$after = Get-AgentBridgeOpenClawInputs -RepoRoot $copy `
+    -GatewayLauncher (Join-Path $env:POLICY_ROOT 'gateway.cmd') `
+    -ConfigPath (Join-Path $env:POLICY_ROOT 'config.json')
+[pscustomobject]@{decision=(Decide $after); equal=($baseline.inputs.fingerprint -eq $after.fingerprint)} | ConvertTo-Json -Depth 5 -Compress
+""")
+        self.assertFalse(result["decision"]["required"])
+        self.assertTrue(result["equal"])
+
+    def test_legacy_baseline_is_verified_before_newline_conversion(self):
+        result = self.run_policy("""
+$p = Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/index.js'
+[IO.File]::WriteAllText($p, "export default {};`r`n")
+$baseline.inputs = Snapshot
+$baseline.inputs.PSObject.Properties.Remove('algorithm')
+$copy = Join-Path $env:POLICY_ROOT 'release'
+New-Item -ItemType Directory $copy | Out-Null
+Copy-Item (Join-Path $env:POLICY_ROOT 'integrations') $copy -Recurse
+[IO.File]::WriteAllText((Join-Path $copy 'integrations/openclaw-agentbridge/index.js'), "export default {};`n")
+$after = Get-AgentBridgeOpenClawInputs -RepoRoot $copy `
+    -GatewayLauncher (Join-Path $env:POLICY_ROOT 'gateway.cmd') `
+    -ConfigPath (Join-Path $env:POLICY_ROOT 'config.json')
+$verified = Decide $after
+[IO.File]::WriteAllText($p, 'changed since certification')
+$unverified = Decide $after
+[pscustomobject]@{verified=$verified; unverified=$unverified} | ConvertTo-Json -Depth 5 -Compress
+""")
+        self.assertFalse(result["verified"]["required"])
+        self.assertTrue(result["unverified"]["required"])
+        self.assertEqual(result["unverified"]["reason"], "baseline_invalid")
+
+    def test_legacy_exact_bytes_work_even_after_old_directory_disappears(self):
+        result = self.run_policy("""
+$baseline.inputs.PSObject.Properties.Remove('algorithm')
+foreach ($f in $baseline.inputs.files) { $f.path = Join-Path $env:POLICY_ROOT 'missing-old-path' }
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertFalse(result["required"])
+
+    def test_host_newlines_and_unknown_binary_assets_remain_exact(self):
+        result = self.run_policy("""
+$p = Join-Path $env:POLICY_ROOT 'gateway.cmd'
+$b = Join-Path $env:POLICY_ROOT 'integrations/openclaw-agentbridge/lib/asset.bin'
+[IO.File]::WriteAllText($p, "node gateway`r`n")
+[IO.File]::WriteAllBytes($b, [byte[]]@(0,13,10,255))
+$baseline.inputs = Snapshot
+[IO.File]::WriteAllText($p, "node gateway`n")
+[IO.File]::WriteAllBytes($b, [byte[]]@(0,10,255))
+Decide (Snapshot) | ConvertTo-Json -Compress
+""")
+        self.assertTrue(result["required"])
+        self.assertEqual(result["changedInputs"], ["host/launcher", "plugin/lib/asset.bin"])
+
     def test_typed_json_baseline_keeps_precision_in_restart_decision(self):
         result = self.run_policy("""
 $precise = [DateTimeOffset]::Parse('2026-09-09T20:01:23.1234567+08:00')

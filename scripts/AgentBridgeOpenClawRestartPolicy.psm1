@@ -1,6 +1,30 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Paths are diagnostic metadata, never runtime-content identity.
+function Get-OpenClawFileHashes {
+    param([string]$Name, [string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]@{ hash = $null; contentHash = $null }
+    }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $raw = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+        # Normalize only known UTF-8 plugin source/metadata. Host config, env,
+        # launchers and unknown/binary assets retain byte-exact comparison.
+        if ($Name -match '^plugin/.*\.(js|mjs|cjs|json|yaml|yml|lock)$') {
+            try {
+                $utf8 = [Text.UTF8Encoding]::new($false, $true)
+                $text = $utf8.GetString($bytes).Replace("`r`n", "`n")
+                $bytes = $utf8.GetBytes($text)
+            } catch [Text.DecoderFallbackException] { }
+        }
+        $content = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+    [pscustomobject]@{ hash = $raw; contentHash = $content }
+}
+
 function Get-AgentBridgeOpenClawInputs {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -35,25 +59,24 @@ function Get-AgentBridgeOpenClawInputs {
     $files = @(
         foreach ($name in @($paths.Keys | Sort-Object)) {
             $path = $paths[$name]
+            $hashes = Get-OpenClawFileHashes -Name $name -Path $path
             [ordered]@{
                 name = $name
                 path = $path
-                hash = if (Test-Path -LiteralPath $path -PathType Leaf) {
-                    $algorithm = [Security.Cryptography.SHA256]::Create()
-                    $stream = [IO.File]::OpenRead($path)
-                    try {
-                        [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace("-", "").ToLowerInvariant()
-                    } finally { $stream.Dispose(); $algorithm.Dispose() }
-                } else { $null }
+                hash = $hashes.hash
+                contentHash = $hashes.contentHash
             }
         }
     )
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(($files | ConvertTo-Json -Compress -Depth 4))
+        $identity = @($files | ForEach-Object {
+            [ordered]@{ name = $_.name; hash = $_.contentHash }
+        })
+        $bytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $identity -Compress -Depth 4))
         $fingerprint = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
     } finally { $sha.Dispose() }
-    [pscustomobject]@{ fingerprint = $fingerprint; files = $files }
+    [pscustomobject]@{ algorithm = "logical-content-v2"; fingerprint = $fingerprint; files = $files }
 }
 
 function Get-AgentBridgeOpenClawRestartDecision {
@@ -78,17 +101,38 @@ function Get-AgentBridgeOpenClawRestartDecision {
                 [DateTimeOffset]$Baseline.gatewayStartedAt -ne
                 [DateTimeOffset]$GatewayStartedAt) {
                 $reason = "gateway_process_changed"
-            } elseif ($Baseline.inputs.fingerprint -ne $Inputs.fingerprint) {
-                $reason = "inputs_changed"
+            } else {
                 $old = @{}
-                foreach ($file in $Baseline.inputs.files) { $old[$file.name] = $file.hash }
+                $current = @{}
+                foreach ($file in $Inputs.files) { $current[$file.name] = $file }
+                $modern = $Baseline.inputs.PSObject.Properties.Name -contains 'algorithm'
+                if ($modern -and $Baseline.inputs.algorithm -ne 'logical-content-v2') {
+                    throw 'Unsupported input fingerprint algorithm'
+                }
+                foreach ($file in $Baseline.inputs.files) {
+                    if ($old.ContainsKey($file.name)) { throw 'Duplicate baseline input' }
+                    if ($modern) {
+                        $old[$file.name] = $file.contentHash
+                    } elseif ($current.ContainsKey($file.name) -and
+                        $current[$file.name].hash -eq $file.hash) {
+                        # Exact bytes still match the certified legacy baseline.
+                        $old[$file.name] = $current[$file.name].contentHash
+                    } else {
+                        # Never bless changed files by rehashing their old paths.
+                        # First prove those bytes still match the saved raw hash.
+                        $verified = Get-OpenClawFileHashes -Name $file.name -Path $file.path
+                        if ($verified.hash -ne $file.hash) { throw 'Legacy baseline cannot be verified' }
+                        $old[$file.name] = $verified.contentHash
+                    }
+                }
                 foreach ($file in $Inputs.files) {
-                    if (-not $old.ContainsKey($file.name) -or $old[$file.name] -ne $file.hash) {
+                    if (-not $old.ContainsKey($file.name) -or $old[$file.name] -ne $file.contentHash) {
                         $changed += $file.name
                     }
                     $old.Remove($file.name)
                 }
                 $changed += @($old.Keys)
+                if ($changed.Count -gt 0) { $reason = "inputs_changed" }
             }
         } catch { $reason = "baseline_invalid" }
     }
