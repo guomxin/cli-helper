@@ -7,6 +7,39 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 
 
 class McpIdentityTokenStoreTests(unittest.TestCase):
+    def test_stored_retired_scopes_are_neither_displayed_nor_authorized(self):
+        import json
+        import sqlite3
+        from contextlib import closing
+        from bscli.admin.application import AdminControlPlane
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "agentbridge.db"
+            store = McpIdentityTokenStore(path)
+            issued = store.issue(user_subject="user-a", expected_principal_ref="Alice",
+                                 scopes=["oa:read", "taihua:read"])
+            historical = ["oa:read", "taihua:analytics:read", "taihua:analytics:export", "taihua:read"]
+            with closing(sqlite3.connect(path)) as connection, connection:
+                connection.execute("UPDATE mcp_identity_tokens SET scopes_json=? WHERE token_id=?",
+                                   (json.dumps(historical), issued["token_id"]))
+            expected = ["oa:read", "taihua:read"]
+            self.assertEqual(store.get(issued["token_id"])["scopes"], expected)
+            self.assertEqual(store.list()[0]["scopes"], expected)
+            self.assertEqual(store.verify(issued["token"], required_scopes={"oa:read"})["scopes"], expected)
+            self.assertEqual(store.resolve_client(issued["token_id"])["scopes"], expected)
+            for scope in historical[1:3]:
+                self.assertIsNone(store.verify(issued["token"], required_scopes={scope}))
+                with self.assertRaises(PermissionError):
+                    store.resolve_client(issued["token_id"], required_scopes={scope})
+            from types import SimpleNamespace
+            admin = SimpleNamespace(identity_store=store)
+            self.assertEqual(AdminControlPlane.list_tokens(admin)[0]["scopes"], expected)
+            store.revoke(issued["token_id"])
+            self.assertEqual(AdminControlPlane.list_tokens(admin)[0]["scopes"], expected)
+            with closing(sqlite3.connect(path)) as connection:
+                saved = connection.execute("SELECT scopes_json FROM mcp_identity_tokens").fetchone()[0]
+            self.assertEqual(json.loads(saved), historical)
+
     def test_issue_persists_only_hash_and_verifies_identity(self):
         with TemporaryDirectory() as tmp:
             now = datetime(2026, 7, 12, 8, 0, tzinfo=timezone.utc)

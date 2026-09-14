@@ -247,7 +247,10 @@ def _record_from_row(row: sqlite3.Row) -> dict:
         "user_subject": row["user_subject"],
         "expected_principal_ref": row["expected_principal_ref"],
         "label": row["label"],
-        "scopes": json.loads(row["scopes_json"]),
+        # Stored scopes are issuance history; only supported scopes are effective.
+        # All readers (admin listing, authentication and client resolution) share
+        # this projection so retired permissions cannot appear active again.
+        "scopes": [scope for scope in json.loads(row["scopes_json"]) if scope in _ALLOWED_SCOPES],
         "state": row["state"],
         "created_at": row["created_at"],
         "expires_at": row["expires_at"],
