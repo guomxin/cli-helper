@@ -9735,5 +9735,9 @@
       },
       "title": "List AgentBridge Operations"
     }
+  ],
+  "userTurnSourceTools": [
+    "oa_workflow_sent_list",
+    "oa_workflow_done_list"
   ]
 }

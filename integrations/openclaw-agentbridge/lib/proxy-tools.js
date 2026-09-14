@@ -1,5 +1,6 @@
 import {
   AGENTBRIDGE_TOOL_CATALOG,
+  AGENTBRIDGE_USER_TURN_SOURCE_TOOLS,
 } from "./tool-catalog.js";
 import { extractToolPayload } from "./mcp-client.js";
 import {
@@ -59,9 +60,12 @@ const AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOLS = new Set(
   AGENTBRIDGE_INDEPENDENT_TASK_ENTRY_TOOL_NAMES,
 );
 const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
-const PROTECTED_ANALYTICS_RESULT_TOOLS = new Set([
-  "database_capabilities",
-  "database_execute",
+const INDEPENDENT_READ_TASK_TOOLS = new Set([
+  ...AGENTBRIDGE_TOOL_CATALOG.filter(
+    (tool) => isTaskEligibleTool(tool.name) &&
+      tool.annotations?.readOnlyHint === true &&
+      !AGENTBRIDGE_USER_TURN_SOURCE_TOOLS.includes(tool.name),
+  ).map((tool) => tool.name),
 ]);
 const SAFE_MCP_RETRY_DELAYS_MS = Object.freeze([500, 2_000]);
 const UNREFERENCED_FAILURE_STATUSES = new Set([
@@ -578,10 +582,10 @@ async function resolveTaskId({
   if (!sessionKey) {
     return null;
   }
-  // Independent database reads and protected-result operations can follow a completed task. Workspace
-  // must not fold them into that terminal task and then request its lease.
-  const protectedResultCall = PROTECTED_ANALYTICS_RESULT_TOOLS.has(descriptor.name);
-  const resumedTaskId = protectedResultCall ? null : boundedText(
+  // Atomic reads can follow a completed task, including pagination and details.
+  // Keep each call separate while preserving the shared planning turn below.
+  const independentReadCall = INDEPENDENT_READ_TASK_TOOLS.has(descriptor.name);
+  const resumedTaskId = boundedText(
     taskIdResolver?.(sessionKey, descriptor.name),
     128,
   );
@@ -593,7 +597,7 @@ async function resolveTaskId({
         taskRunRefResolver?.(toolCallId, sessionKey, independentTaskEntry ? null : descriptor.name),
         256,
       );
-  const runRef = protectedResultCall ? boundedText(toolCallId, 256) :
+  const runRef = independentReadCall ? boundedText(toolCallId, 256) :
     (!independentTaskEntry && sharedTurnRef) ||
     boundedText(context.runId, 256) ||
     boundedText(toolCallId, 256);
@@ -651,7 +655,7 @@ async function resolveTaskId({
             ]
           : ["direct_status", "trusted_interaction"],
         task_scope: workspaceSession
-          ? protectedResultCall || independentTaskEntry ||
+          ? independentReadCall || independentTaskEntry ||
             taskScopeResolver?.(sessionKey, descriptor.name) === "independent"
             ? "independent"
             : "user_turn"
@@ -669,7 +673,7 @@ async function resolveTaskId({
       );
       return taskContextUnavailable();
     } else {
-      if (!protectedResultCall) taskIdBinder?.(sessionKey, descriptor.name, taskId);
+      if (!independentReadCall) taskIdBinder?.(sessionKey, descriptor.name, taskId);
     }
     return { taskId };
   } catch (error) {

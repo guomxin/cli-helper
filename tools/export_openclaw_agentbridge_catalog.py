@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 from starlette.testclient import TestClient
 
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.planning_policy import planning_capability_for_tool, planning_descriptor
 from bscli.mcp.central import (
     create_central_mcp_server,
     validate_central_mcp_server_config,
@@ -70,6 +71,12 @@ def build_catalog() -> dict:
 
     return {
         "schemaVersion": "agentbridge.openclaw-tool-catalog.v1",
+        "userTurnSourceTools": [
+            tool["name"] for tool in tools
+            if "business_source" in (
+                planning_descriptor(planning_capability_for_tool(tool["name"])) or {}
+            ).get("roles", [])
+        ],
         "tools": tools,
     }
 

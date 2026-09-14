@@ -1,4 +1,5 @@
 import test from "node:test";
+import { AGENTBRIDGE_TOOL_CATALOG, AGENTBRIDGE_USER_TURN_SOURCE_TOOLS } from "../lib/tool-catalog.js";
 import assert from "node:assert/strict";
 
 import {
@@ -941,7 +942,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.94",
+      hostVersion: "0.4.95",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1360,7 +1361,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.94",
+        hostVersion: "0.4.95",
       },
     },
   });
@@ -1531,7 +1532,7 @@ test("shares workspace identity and endpoint bindings with the agent runtime ins
     "workspace:account-123",
   );
   assert.equal(taskEnsure.body.params.arguments.client_type, "web");
-  assert.equal(taskEnsure.body.params.arguments.task_scope, "user_turn");
+  assert.equal(taskEnsure.body.params.arguments.task_scope, "independent");
   assert.equal(
     requests[0].body.params.arguments.turn_ref,
     "workspace-turn-123",
@@ -1713,7 +1714,7 @@ test("splits governed writes from prerequisite Workspace reads and keeps each wr
       (request) => request.params.arguments.host_task_key,
     ),
     [
-      `${sessionKey}|workspace:request-123456`,
+      `${sessionKey}|tool-search`,
       `${sessionKey}|workspace:request-123456`,
       `${sessionKey}|call-cancel-fields|fc-cancel-fields`,
       `${sessionKey}|call-revoke|fc-revoke`,
@@ -1721,7 +1722,7 @@ test("splits governed writes from prerequisite Workspace reads and keeps each wr
   );
   assert.deepEqual(
     taskEnsures.map((request) => request.params.arguments.task_scope),
-    ["user_turn", "user_turn", "independent", "independent"],
+    ["independent", "user_turn", "independent", "independent"],
   );
   const cancellationCalls = requests.filter(
     (request) =>
@@ -2116,6 +2117,89 @@ test("Workspace database exploration and protected analytics get fresh leases af
   assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 7);
   assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
   assert.equal(terminal.size, 7);
+});
+
+test("Workspace OA directory queries get fresh leases for tree and two departments", async () => {
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const terminal = new Set();
+  const ensures = [];
+  const client = {
+    async callTool(name, args) {
+      if (name === "agentbridge_host_task_ensure") {
+        ensures.push(args);
+        return { task: { taskId: args.task_scope === "user_turn" ? "summary-task" : args.host_task_key } };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return terminal.has(args.task_id) ? { status: "ignored", reason: "task_terminal" }
+          : { coordinatorLease: { hostInstanceId: "openclaw-gateway", version: 1 } };
+      }
+      if (name === "agentbridge_host_task_observe") terminal.add(args.task_id);
+      return {};
+    },
+    async callToolResult(name) {
+      return { structuredContent: { status: "succeeded", operationId: `operation-${name}`, result: {} }, content: [] };
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey, runId: "same-model-run" }, serverName: "agentbridge",
+    identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+    taskRunRefResolver: () => "same-user-turn",
+  });
+  for (const [index, name] of ["oa_addressbook_organization_tree", "oa_addressbook_department_members", "oa_addressbook_department_members"].entries()) {
+    const result = await tools.find(tool => tool.name === name).execute(`call-${index}-${name}`, {});
+    assert.equal(result.structuredContent.status, "succeeded");
+  }
+  assert.deepEqual(ensures.map(x => x.task_scope), ["independent", "independent", "independent"]);
+  assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 3);
+  assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
+  assert.equal(terminal.size, 3);
+});
+
+test("all atomic read tools support repeated calls in one turn after prior task completion", async () => {
+  const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+  const names = AGENTBRIDGE_TOOL_CATALOG.filter(tool =>
+    tool.annotations?.readOnlyHint === true && !tool.name.startsWith("agentbridge_") &&
+    !tool.name.endsWith("_session_status") && !AGENTBRIDGE_USER_TURN_SOURCE_TOOLS.includes(tool.name)
+  ).flatMap(tool => [tool.name, tool.name]);
+  assert.ok(names.length > 100);
+  const terminal = new Set();
+  const ensures = [];
+  const client = {
+    async callTool(name, args) {
+      if (name === "agentbridge_host_task_ensure") {
+        ensures.push(args);
+        return { task: { taskId: args.task_scope === "user_turn" ? "summary-task" : args.host_task_key } };
+      }
+      if (name === "agentbridge_host_coordinator_lease_acquire") {
+        return terminal.has(args.task_id) ? { status: "ignored", reason: "task_terminal" }
+          : { coordinatorLease: { hostInstanceId: "openclaw-gateway", version: 1 } };
+      }
+      if (name === "agentbridge_host_task_observe") terminal.add(args.task_id);
+      return {};
+    },
+    async callToolResult(name) {
+      return { structuredContent: { status: "succeeded", operationId: `operation-${name}`, result: {} }, content: [] };
+    },
+  };
+  const tools = createAgentBridgeProxyTools({
+    context: { sessionKey, runId: "same-model-run" }, serverName: "agentbridge",
+    identityRouter: {
+      resolveToolContext: () => ({ bound: true, binding: {}, client }),
+      endpointKeyForSession: () => "workspace:account-a",
+    },
+    taskRunRefResolver: () => "same-user-turn",
+  });
+  for (const [index, name] of names.entries()) {
+    const result = await tools.find(tool => tool.name === name).execute(`call-${index}-${name}`, {});
+    assert.equal(result.structuredContent.status, "succeeded");
+  }
+  assert.deepEqual(ensures.map(x => x.task_scope), names.map(() => "independent"));
+  assert.equal(new Set(ensures.map(x => x.host_task_key)).size, names.length);
+  assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
+  assert.equal(terminal.size, names.length);
 });
 
 test("failed preflight never falls through to an untracked business call", async () => {
@@ -2517,7 +2601,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.94",
+      hostVersion: "0.4.95",
     },
   });
   assert.equal(

@@ -1083,7 +1083,7 @@ test("creates and observes one host-owned task without model task arguments", as
   );
   assert.equal(
     requests[0].body.params.arguments.host_task_key,
-    "agent:main:telegram:direct:1001|run-42",
+    "agent:main:telegram:direct:1001|tool-call-42",
   );
   assert.equal(
     Object.hasOwn(
@@ -1097,7 +1097,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.94",
+      hostVersion: "0.4.95",
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",
