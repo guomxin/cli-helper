@@ -286,22 +286,15 @@ class WorkspaceApplication:
         return items
 
     def analytics_report(self, account: dict, report_id: str) -> dict:
-        from bscli.analytics.reports import DOWNLOAD
-        from bscli.core.capability_runtime import CapabilityRejected
-        runtime = self.service.analytics_runtime()
+        raise WorkspaceArtifactError('CAPABILITY_RETIRED', '旧数据库报告入口已退役。请重新查询导出。')
+
+    def database_report(self, account: dict, source_id: str, report_id: str) -> dict:
+        from bscli.database.independent import IndependentDatabase, DatabaseRejected
+        from bscli.database.reports import Reports
         try:
-            report = runtime.results.load(report_id, owner=account["user_subject"])
-            if report.get("kind") != "csv":
-                raise WorkspaceArtifactError("DATA_ACCESS_DENIED", "无权下载此文件。")
-            response = runtime.invoke(user_subject=account["user_subject"], capability_name=DOWNLOAD,
-                arguments={"report_id": report_id}, authority_id=report.get("authority_id"), host_type="workspace")
-        except CapabilityRejected as exc:
-            raise WorkspaceArtifactError(exc.code, exc.message) from exc
-        if response["status"] != "succeeded":
-            error = response.get("error") or {}
-            raise WorkspaceArtifactError(error.get("code", "DATA_ACCESS_DENIED"), error.get("message", "下载未完成。"))
-        file = response["result"]["file"]
-        return {"body": base64.b64decode(file["content_base64"]), "filename": file["filename"], "content_type": file["content_type"]}
+            return Reports(IndependentDatabase(self.service.home)).web_download(account['user_subject'],source_id,report_id)
+        except DatabaseRejected as exc:
+            raise WorkspaceArtifactError(str(exc),'此文件不可下载，请检查权限或重新导出。') from exc
 
     def reissue_artifact(
         self,

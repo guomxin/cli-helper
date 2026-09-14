@@ -98,7 +98,7 @@ def positive_id(raw):
     return int(raw)
 
 
-def compile_query(capability, arguments):
+def compile_query(capability, arguments, *, source_scope=''):
     """Only SQL identifiers below are interpolated; all user values are bound."""
     schema = INPUT_SCHEMAS[capability]
     if not isinstance(arguments, dict) or set(arguments) - set(schema['properties']):
@@ -176,7 +176,7 @@ def compile_query(capability, arguments):
             raise ValueError()
         count_statement = 'SELECT count(*) AS total_matching' + base
         count_params = list(params)
-        scope = hashlib.sha256((capability + str(mode) + order + count_statement + json.dumps(count_params, default=str, ensure_ascii=True)).encode()).hexdigest()
+        scope = hashlib.sha256((source_scope + capability + str(mode) + order + count_statement + json.dumps(count_params, default=str, ensure_ascii=True)).encode()).hexdigest()
         ordering_date, ordering_id = ('m.created_at', 'm.id') if comments else ('l.log_date', 'l.id')
         if 'after' in arguments:
             after = arguments['after']

@@ -252,147 +252,23 @@ class CentralTests(Assertions):
         return self.service.invoke(user_subject="self",capability_name=capability,
             arguments=ARGS if arguments is None else arguments, analytics_authority_id="token", **kwargs)
 
-    def test_summary_hydrates_but_operation_only_holds_reference(self):
-        response = self.invoke()
-        self.assertEqual(response["status"], "succeeded", response)
-        self.assertEqual(response["result"]["metrics"]["registered_hours"], "1.5")
-        self.assertEqual(len(response["result"]["series"]), 7)
-        operation = self.service.operations.get(response["operationId"])
-        self.assertNotIn("metrics", operation["result"])
-        self.assertTrue(self.connection.closed and self.connection.rolled_back)
-        self.assertNotIn(b"SYNTHETIC-PASSWORD", self.runtime.secrets.path("taihua_primary:1").read_bytes())
 
-    def test_empty_window_returns_proven_zero(self):
-        self.worker.rows = []
-        response = self.invoke()
-        self.assertEqual(response["status"], "succeeded", response)
-        self.assertEqual(response["result"]["metrics"]["log_count"],0)
 
-    def test_replay_checks_visibility_without_database_rerun(self):
-        first = self.invoke(idempotency_key="fixed")
-        self.assertEqual(first["status"],"succeeded",first)
-        sql_calls = len(self.connection.calls)
-        second = self.invoke(idempotency_key="fixed")
-        self.assertEqual(second["status"],"succeeded",second)
-        self.assertEqual(len(self.connection.calls),sql_calls)
-        self.worker.rows = []
-        third = self.invoke(idempotency_key="fixed")
-        self.assertEqual(third["error"]["code"],"RESULT_ACCESS_REVOKED", third)
-        self.assertIsNone(third["result"])
 
-    def test_scope_revocation_blocks_even_cached_result(self):
-        self.invoke(idempotency_key="fixed")
-        self.allowed = False
-        self.assertEqual(self.invoke(idempotency_key="fixed")["error"]["code"], "DATA_ACCESS_DENIED")
 
-    def test_disabled_source_does_not_query_or_prompt_login(self):
-        self.config = replace(self.config, enabled=False)
-        self.service.sessions.mark_expired(self.session["session_id"])
-        self.assertEqual(self.invoke()["error"]["code"], "SOURCE_UNAVAILABLE")
-        self.assertEqual(self.worker.calls, [])
 
-    def test_login_required_separate_from_database_auth(self):
-        self.service.sessions.mark_expired(self.session["session_id"])
-        response = self.invoke()
-        self.assertEqual(response["error"]["code"], "LOGIN_REQUIRED", response)
 
-    def test_source_changes_fail_without_result_storage(self):
-        self.worker.change_after = lambda w: w.rows.clear()
-        self.assertEqual(self.invoke()["error"]["code"], "SOURCE_CHANGED")
-        with closing(sqlite3.connect(self.service.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM analysis_results").fetchone()[0],0)
 
-    def test_cross_user_and_expiry(self):
-        result = self.invoke()["result"]
-        rid = result["result_id"]
-        self.error("DATA_ACCESS_DENIED", lambda: self.runtime.results.load(rid, owner="other"))
-        with closing(sqlite3.connect(self.service.db_path)) as conn, conn:
-            conn.execute("UPDATE analysis_results SET expires_at='2000' WHERE result_id=?", (rid,))
-        response = self.invoke(RESULT_GET, {"result_id":rid})
-        self.assertEqual(response["error"]["code"], "RESULT_EXPIRED")
-        self.assertFalse(self.runtime.results.payloads.path(rid).exists())
 
-    def test_session_generation_changes_but_not_keepalive(self):
-        old = self.session["authority_generation"]
-        self.service.sessions.record_keepalive(self.session["session_id"])
-        self.assertEqual(self.service.sessions.get(self.session["session_id"])["authority_generation"], old)
-        first = self.invoke()["result"]["result_id"]
-        self.service.sessions.mark_expired(self.session["session_id"])
-        self.service.sessions.activate(self.session["session_id"], observed_principal_ref="测试本人")
-        self.assertEqual(self.invoke(RESULT_GET, {"result_id":first})["error"]["code"], "RESULT_ACCESS_REVOKED")
 
-    def test_database_enforces_all_bound_constraints(self):
-        self.invoke()
-        args = next(params for sql,params in self.connection.calls if sql == ROWS_SQL)
-        self.assertEqual(args,(7,[10],date(2026,8,31),date(2026,9,7),"DAILY"))
-        self.assertNotIn("content", ROWS_SQL)
-        self.assertNotIn("status", ROWS_SQL)
 
-    def test_unsafe_role_schema_and_ownership_fail_closed(self):
-        for attribute,code in (("unsafe","DATASOURCE_POLICY_REJECTED"),("bad_schema","DATA_CONTRACT_CHANGED"),("bad_owner","SOURCE_CHANGED")):
-            setattr(self.connection,attribute,True)
-            self.assertEqual(self.invoke()["error"]["code"],code)
-            setattr(self.connection,attribute,False)
 
-    def test_db_errors_are_sanitized(self):
-        def broken(**_kwargs): raise RuntimeError("SYNTHETIC-PASSWORD select sensitive")
-        self.runtime.executor.connect = broken
-        response = self.invoke()
-        self.assertEqual(response["error"]["code"], "SOURCE_UNAVAILABLE")
-        self.assertNotIn("SYNTHETIC",json.dumps(response))
 
-    def test_analysis_view_access_and_source_key_fail_closed(self):
-        for flag in ("analysis_access", "primary_key"):
-            with self.subTest(flag=flag):
-                self.connection.calls.clear()
-                self.connection.role_flags = {flag: False}
-                self.assertEqual(self.invoke()["error"]["code"], "DATA_CONTRACT_CHANGED")
-                self.assertFalse(any(sql == ROWS_SQL for sql, _ in self.connection.calls))
 
-    def test_pilot_allows_only_temp_and_sequence_usage_with_evidence(self):
-        self.config = replace(self.config, privilege_policy="controlled_readonly_pilot")
-        self.connection.role_flags = {"temp": True, "sequence_usage": True}
-        result = self.invoke()
-        self.assertEqual(result["status"], "succeeded", result)
-        evidence = result["result"]["provenance"]
-        self.assertEqual(evidence["privilege_warnings"], ["temp", "sequence_usage"])
-        self.assertEqual(evidence["privilege_policy"], "controlled_readonly_pilot")
-        self.assertTrue(self.connection.closed and self.connection.rolled_back)
 
-    def test_pilot_keeps_write_privilege_and_transaction_gates(self):
-        self.config = replace(self.config, privilege_policy="controlled_readonly_pilot")
-        for flag in ("privileged", "writable", "sequence_update", "readonly", "repeatable"):
-            with self.subTest(flag=flag):
-                self.connection.calls.clear()
-                self.connection.role_flags = {flag: flag not in ("readonly", "repeatable")}
-                result = self.invoke()
-                self.assertEqual(result["status"], "failed", result)
-                self.assertFalse(any(sql == ROWS_SQL for sql, _ in self.connection.calls))
 
-    def test_strict_still_rejects_sequence_usage_and_unknown_policy(self):
-        self.connection.role_flags = {"sequence_usage": True}
-        self.assertEqual(self.invoke()["error"]["code"], "DATASOURCE_POLICY_REJECTED")
-        self.config = replace(self.config, privilege_policy="allow_all")
-        self.assertEqual(self.invoke()["error"]["code"], "SOURCE_UNAVAILABLE")
 
-    def test_cancellation_cancels_statement_and_closes(self):
-        self.connection.block = True
-        result = []
-        thread = threading.Thread(target=lambda:result.append(self.invoke(request_id="cancel-me")))
-        thread.start()
-        self.assertTrue(self.connection.running.wait(2))
-        self.runtime.cancel("self",request_id="cancel-me")
-        thread.join(3)
-        self.assertFalse(thread.is_alive())
-        self.assertTrue(self.connection.canceled.is_set() and self.connection.closed)
-        self.assertEqual(result[0]["error"]["code"], "INTERRUPTED")
 
-    def test_second_request_busy_and_does_not_query(self):
-        self.connection.block = True
-        thread = threading.Thread(target=lambda:self.invoke(request_id="busy"))
-        thread.start(); self.assertTrue(self.connection.running.wait(2))
-        self.assertEqual(self.invoke()["error"]["code"],"ANALYSIS_BUSY")
-        self.runtime.cancel("self",request_id="busy"); thread.join(3)
 
     def test_idle_driver_poll_observes_cancel_and_closes_generator(self):
         closed = []
@@ -415,105 +291,13 @@ class CentralTests(Assertions):
             host_task_key="analytics", endpoint_key="origin", client_type="web", external_subject="self",
             conversation_ref="private:self", title="本人日报分析", capabilities=["direct_status", "timeline_message"])["task"]["taskId"]
 
-    def login_wait(self):
-        task_id = self.task()
-        self.service.sessions.mark_expired(self.session["session_id"])
-        response = self.invoke(task_id=task_id)
-        self.assertEqual(response["error"]["code"],"LOGIN_REQUIRED",response)
-        login = self.service.start_login(user_subject="self",system_id="taihua", expected_principal_ref="测试本人",
-                                        card_base_url="http://127.0.0.1:8780")
-        interaction_id = login["interaction"]["interactionId"]
-        self.service.observe_host_task(user_subject="self",task_id=task_id,interaction_ids=[interaction_id])
-        challenge_id = login["challenge"]["challengeId"]
-        csrf = self.service.challenges.issue_csrf(challenge_id)
-        self.service.challenges.claim(challenge_id,csrf_token=csrf,csrf_cookie=csrf)
-        self.service.challenges.complete(challenge_id,result={"principal":"测试本人"})
-        self.service.sessions.activate(self.session["session_id"],observed_principal_ref="测试本人")
-        return task_id, interaction_id
 
-    def test_login_resumes_once_and_does_not_copy_metrics_to_timeline(self):
-        task_id, interaction_id = self.login_wait()
-        response = self.service.resume_interaction(user_subject="self",interaction_id=interaction_id)
-        self.assertEqual(response["status"],"succeeded",response)
-        sql_calls = len(self.connection.calls)
-        repeated = self.service.resume_interaction(user_subject="self",interaction_id=interaction_id)
-        self.assertEqual(repeated["status"],"ignored",repeated)
-        self.assertEqual(len(self.connection.calls),sql_calls)
-        timeline = self.service.tasks.list_timeline(user_subject="self")
-        self.assertNotIn('"registered_hours"', json.dumps(timeline))
-        self.assertEqual(self.service.tasks.get_task(task_id,user_subject="self")["status"],"succeeded")
 
-    def test_login_scope_revocation_never_resumes_query(self):
-        _, interaction_id = self.login_wait()
-        self.allowed = False
-        response = self.service.resume_interaction(user_subject="self",interaction_id=interaction_id)
-        self.assertEqual(response["status"],"failed",response)
-        self.assertEqual(self.connection.calls,[])
 
-    def test_cancel_login_task_prevents_resume(self):
-        task_id, interaction_id = self.login_wait()
-        canceled = self.service.cancel_unsubmitted_task(user_subject="self",task_id=task_id)
-        self.assertEqual(canceled["status"],"succeeded",canceled)
-        response = self.service.resume_interaction(user_subject="self",interaction_id=interaction_id)
-        self.assertEqual(response["status"],"ignored",response)
-        self.assertEqual(self.connection.calls,[])
 
-    def test_task_cancellation_waits_for_executor_then_marks_canceled(self):
-        task_id = self.task()
-        self.connection.block = True
-        result = []
-        thread = threading.Thread(target=lambda:result.append(self.invoke(task_id=task_id)))
-        thread.start(); self.assertTrue(self.connection.running.wait(2))
-        response = self.service.cancel_unsubmitted_task(user_subject="self",task_id=task_id)
-        self.assertIn(response["status"],("running","succeeded"))
-        thread.join(3)
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(self.service.tasks.get_task(task_id,user_subject="self")["status"],"canceled")
-        self.assertTrue(self.connection.closed)
 
-    def test_refresh_state_saved_even_on_database_failure(self):
-        def broken(**_kwargs):
-            self.worker.state["authorization"] = "Bearer rotated"
-            raise RuntimeError("driver unavailable")
-        self.runtime.executor.connect = broken
-        self.invoke()
-        state = self.service.session_states.load(self.session["session_id"])
-        self.assertEqual(state["http"]["authorization"],"Bearer rotated")
 
-    def test_revocation_at_delivery_discards_new_snapshot(self):
-        save = self.runtime.results.save
-        def revoked(**kwargs):
-            reference = save(**kwargs)
-            self.allowed = False
-            return reference
-        self.runtime.results.save = revoked
-        response = self.invoke()
-        self.assertEqual(response["status"],"failed",response)
-        with closing(sqlite3.connect(self.service.db_path)) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM analysis_results").fetchone()[0],0)
-        self.assertEqual(list(self.runtime.results.payloads.root.glob("*.bin")),[])
 
-    def test_mcp_scope_guard_and_real_central_routing(self):
-        from starlette.testclient import TestClient
-        from bscli.core.mcp_identities import McpIdentityTokenStore
-        from bscli.mcp.central import create_central_mcp_server, validate_central_mcp_server_config
-        store = McpIdentityTokenStore(self.service.db_path)
-        permitted = store.issue(user_subject="self", expected_principal_ref="测试本人", scopes=list(SCOPES))
-        ordinary = store.issue(user_subject="self", expected_principal_ref="测试本人", scopes=["taihua:read"])
-        server = create_central_mcp_server(service=self.service,identity_store=store,
-            config=validate_central_mcp_server_config(host="127.0.0.1",port=8790,public_base_url="http://testserver",tls_cert=None,tls_key=None),
-            auth_card_base_url="http://127.0.0.1:8780")
-        with TestClient(server.streamable_http_app()) as client:
-            for token, allowed in ((ordinary,False),(permitted,True)):
-                response = client.post("/mcp",headers={"Accept":"application/json, text/event-stream",
-                    "Authorization":"Bearer " + token["token"],"MCP-Protocol-Version":"2025-06-18"},
-                    json={"jsonrpc":"2.0","id":str(allowed),"method":"tools/call",
-                          "params":{"name":"taihua_analytics_personal_summary","arguments":ARGS}}).json()
-                if allowed:
-                    self.assertEqual(response["result"]["structuredContent"]["status"],"succeeded",response)
-                else:
-                    self.assertTrue(response["result"]["isError"],response)
-                    self.assertEqual(self.connection.calls,[])
 
 
 class HttpBoundTests(Assertions):

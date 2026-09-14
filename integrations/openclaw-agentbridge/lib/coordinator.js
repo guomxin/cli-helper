@@ -2984,12 +2984,12 @@ function normalizePreparedDocuments(payload, allowedOrigins) {
   const csv = payload?.status === "succeeded" ? payload.result : null;
   if (csv?.schemaVersion === "agentbridge.protected_csv_delivery.v1") {
     const file = csv.file;
-    if (!/^[0-9a-f]{32}$/.test(csv.report_id || "") || file?.filename !== "taihua-personal-daily.csv"
+    if (!/^[0-9a-f]{32}$/.test(csv.report_id || "") || !/^[a-z][a-z0-9_-]{0,63}-[0-9]{8}-[0-9]{6}\.csv$/.test(file?.filename || "")
         || file.content_type !== "text/csv; charset=utf-8"
-        || typeof file.content_base64 !== "string" || file.content_base64.length > 87384
+        || typeof file.content_base64 !== "string" || file.content_base64.length > 13981016
         || !/^[A-Za-z0-9+/]+={0,2}$/.test(file.content_base64)) return [];
     const bytes = Buffer.from(file.content_base64, "base64");
-    if (!bytes.length || bytes.length > 65536 || bytes.toString("base64") !== file.content_base64) return [];
+    if (!bytes.length || bytes.length > 10485760 || bytes.toString("base64") !== file.content_base64) return [];
     return [{filename: file.filename, contentType: "text/csv", protectedCsv: true,
              contentBase64: file.content_base64, downloadId: csv.report_id, artifactId: normalizeOpaqueId(csv.artifact_id)}];
   }

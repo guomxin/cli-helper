@@ -4,6 +4,7 @@ const state = { account: null, view: "overview", modalAction: null, coordination
 const titles = {
   overview: ["CONTROL PLANE", "运行总览"],
   users: ["IDENTITY", "用户与令牌"],
+  databases: ["DATA SOURCES", "数据库"],
   sessions: ["DOWNSTREAM", "系统会话"],
   capabilities: ["GOVERNANCE", "能力与策略"],
   operations: ["EXECUTION", "操作记录"],
@@ -37,7 +38,7 @@ const statusClass = value => ["active", "succeeded", "approved", "submitted", "c
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
 const scopeGroups = [
   { label: "致远 OA", items: ["oa:read", "oa:read:addressbook", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
-  { label: "泰华日志", items: ["taihua:read", "taihua:analytics:read", "taihua:analytics:export", "taihua:write:worklog"] },
+  { label: "泰华日志", items: ["taihua:read", "taihua:write:worklog"] },
   { label: "部门信息库", items: ["yuque:read"] },
   { label: "照明实验室", items: ["smartlight:read", "smartlight:write:alarm_remark", "smartlight:write:alarm_work_area_submit", "smartlight:write:alarm_work_area_revoke", "smartlight:write:alarm_disposition"] },
 ];
@@ -221,7 +222,7 @@ async function loadView(view) {
   content.innerHTML = '<div class="loading">正在读取中心状态</div>';
   try {
     const renderers = {
-      overview: renderOverview, users: renderUsers, sessions: renderSessions, capabilities: renderCapabilities,
+      overview: renderOverview, databases: renderDatabases, users: renderUsers, sessions: renderSessions, capabilities: renderCapabilities,
       operations: renderOperations, interactions: renderInteractions, traces: renderTraces,
       incidents: renderIncidents, coordination: renderCoordination, runtime: renderRuntime, audit: renderAudit,
     };
@@ -299,12 +300,57 @@ async function renderOverview() {
 function principalBindingSummary(user) {
   return Object.entries(user.principal_bindings || {}).map(([system, binding]) => `${escapeHtml(system)}: ${escapeHtml(binding.verified || binding.expected || "--")}`).join("<br>") || "--";
 }
+
+async function renderDatabases() {
+  const data = await api("/api/database-sources");
+  const admin = state.account.role === "admin";
+  const rows = data.items.map(r => {
+    const c = r.active || r.draft;
+    const status = {enabled:"已启用",disabled:"已停用",draft:"草稿"}[r.state];
+    const check = {passed:"预检通过",failed:"预检失败",pending:"待预检",migrated:"原配置已迁入"}[r.preflight?.status] || "待预检";
+    return filterRow(`${c.name} ${r.source_id}`, r.state, `<td><strong>${escapeHtml(c.name)}</strong><div class="muted">${escapeHtml(r.source_id)}</div></td><td>PostgreSQL<div class="muted">${c.template_pack === "taihua_logs" ? "泰华日志" : "通用只读"}</div></td><td>${status}<div class="muted">${check} · 版本 ${r.revision}</div>${r.preflight?.code ? `<p class="form-error">${escapeHtml(r.preflight.code)}</p>` : ""}</td><td>${c.allowed_relations.length} 个开放对象</td><td><div class="actions"><button class="button secondary small" data-source-edit="${escapeHtml(r.source_id)}">${admin ? "配置" : "查看"}</button><button class="button secondary small" data-source-grants="${escapeHtml(r.source_id)}">账号授权</button>${admin ? `<button class="button secondary small" data-source-action="preflight" data-source-id="${escapeHtml(r.source_id)}">只读预检</button><button class="button secondary small" data-source-action="${r.state === "enabled" ? "disable" : "enable"}" data-source-id="${escapeHtml(r.source_id)}">${r.state === "enabled" ? "停用" : "启用"}</button>` : ""}</div></td>`);
+  });
+  content.innerHTML = `<div class="toolbar"><div><strong>独立数据源</strong><p class="muted">先配置与预检，再启用并按账号授权。保存授权无需更换 Token。</p></div>${admin ? '<button class="button primary" data-source-new>接入数据库</button>' : ""}</div>${filteredTable(["数据源","引擎与能力包","状态","开放范围","操作"],rows,"搜索数据源")}`;
+}
+
+async function sourceGrantUser(sourceId) {
+  const users = await api("/api/users");
+  openModal({title: `${sourceId} · 选择中央账号`,submit:"查看能力",body:`<label>中央账号<select name="user">${users.items.map(u => `<option value="${escapeHtml(u.user_subject)}">${escapeHtml(u.user_subject)}</option>`).join("")}</select></label>`,action:async form => { const u = form.get("user"); closeModal(); await openDatabaseGrants(u,sourceId); }});
+}
+
+async function sourceAction(sourceId, action) {
+  const data = await api("/api/database-sources"); const r = data.items.find(x => x.source_id === sourceId);
+  if (!r) throw new Error("数据源已变化，请刷新");
+  openModal({title: `${{preflight:"只读预检",enable:"启用数据源",disable:"停用数据源"}[action]} · ${(r.draft || r.active).name}`,submit:"执行",body:`<p>${action === "preflight" ? "检查当前草稿的连接、只读权限、开放对象和模板结构，不读取业务正文。" : action === "disable" ? "停用后此源的查询和下载立即不可用。" : "仅启用通过预检的当前草稿。不会自动为账号授权。"}</p>${reasonField()}`,action:async form => {
+    const result = await api("/api/database-sources",{method:"POST",body:JSON.stringify({source_id:sourceId,action,expected_revision:r.revision,reason:form.get("reason")})});
+    closeModal(); toast(result.preflight?.status === "failed" ? "预检未通过，请查看原因" : "数据源状态已保存"); await loadView("databases");
+  }});
+}
+
+async function openSource(sourceId) {
+  const data = await api("/api/database-sources");
+  const r = data.items.find(x => x.source_id === sourceId);
+  const c = r?.draft || {source_id:"",name:"",description:"",engine:"postgresql",host:"",port:5432,dbname:"",username:"",sslmode:"verify-full",allowed_relations:[],template_pack:"generic",statement_timeout_ms:10000,export_rows:10000,export_bytes:10485760};
+  const admin = state.account.role === "admin";
+  const field = (label,key,type="text") => `<label>${label}<input name="${key}" type="${type}" value="${escapeHtml(c[key])}" ${key === "source_id" && r ? "readonly" : ""} required></label>`;
+  openModal({title:r ? `配置 · ${c.name}` : "接入数据库",submit:admin ? "保存草稿" : "关闭",body:`<fieldset ${admin ? "" : "disabled"} class="source-fields"><p class="database-grant-note">第一阶段支持 PostgreSQL。草稿保存后，运行只读预检并启用；新库默认没有账号权限。</p><div class="source-grid">${field("唯一标识（英文）","source_id")}${field("显示名称","name")}${field("主机","host")}${field("端口","port","number")}${field("数据库名","dbname")}${field("只读用户名","username")}</div><label>连接密码<input name="password" type="password" autocomplete="new-password" ${r ? 'placeholder="留空保留现有凭据"' : 'required'}></label><label>TLS<select name="sslmode"><option value="verify-full" ${c.sslmode === "verify-full" ? "selected" : ""}>验证证书与主机名</option>${sourceId === "taihua_primary" ? '<option value="disable" '+(c.sslmode === "disable" ? "selected" : "")+'>既有泰华内网配置</option>' : ""}</select></label><label>开放表或视图（每行 schema.table）<textarea name="allowed_relations" required rows="5">${escapeHtml(c.allowed_relations.join("\n"))}</textarea></label><label>能力包<select name="template_pack"><option value="generic" ${c.template_pack === "generic" ? "selected" : ""}>通用只读查询</option><option value="taihua_logs" ${c.template_pack === "taihua_logs" ? "selected" : ""}>泰华日志（需匹配五视图结构）</option></select></label><label>业务说明<textarea name="description">${escapeHtml(c.description)}</textarea></label><details><summary>查询与导出预算</summary><div class="source-grid">${field("SQL 超时（毫秒，最多 30000）","statement_timeout_ms","number")}${field("导出最多行数（最多 100000）","export_rows","number")}${field("导出字节上限（最多 10485760）","export_bytes","number")}</div></details>${admin ? reasonField() : ""}</fieldset>`,action:async form => {
+    if (!admin) {closeModal();return;}
+    const config = {...c};
+    for (const key of ["source_id","name","host","dbname","username","sslmode","template_pack","description"]) config[key]=form.get(key);
+    for (const key of ["port","statement_timeout_ms","export_rows","export_bytes"]) config[key]=Number(form.get(key));
+    config.allowed_relations=String(form.get("allowed_relations")).split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
+    const body={source_id:config.source_id,action:"save",config,expected_revision:r?.revision || 0,reason:form.get("reason")};
+    if (form.get("password")) body.password=form.get("password");
+    await api("/api/database-sources",{method:"POST",body:JSON.stringify(body)});closeModal();toast("草稿已保存，请运行只读预检");await loadView("databases");
+  }});
+}
+
 async function renderUsers() {
   const [users, tokens] = await Promise.all([api("/api/users"), api("/api/tokens")]);
-  const userRows = users.items.map(user => filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><span class="muted">已授权 ${user.database_grants?.capabilities?.length || 0} 项</span><div class="actions"><button class="button secondary small" data-database-grants="${escapeHtml(user.user_subject)}">${state.account.role === "admin" ? "配置数据库能力" : "查看数据库能力"}</button></div></td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td>`));
+  const userRows = users.items.map(user => filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><span class="muted">泰华库 ${user.database_grants?.capabilities?.length || 0} 项；按源配置</span><div class="actions"><button class="button secondary small" data-database-grants="${escapeHtml(user.user_subject)}">${state.account.role === "admin" ? "配置数据库能力" : "查看数据库能力"}</button></div></td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td>`));
   const tokenRows = tokens.items.map(token => filterRow(`${token.token_id} ${token.label} ${token.user_subject} ${token.scopes.join(" ")}`, token.state, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${scopeBadges(token.scopes)}</td><td>${badge(token.state)}</td><td>${fmtTime(token.expires_at)}</td><td><div class="actions">${state.account.role === "admin" && token.state === "active" ? `<button class="button secondary small" data-revoke-token="${token.token_id}">撤销</button>` : ""}</div></td>`));
   content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
-    <p class="muted">数据库能力按中央账号配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
+    <p class="muted">数据库能力按中央账号和数据源配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
     ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", ""], userRows, "搜索用户或下游主体")}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>一个 Token 可以承载多个系统的能力范围；管理员看不到已签发密钥。</p></div></div>
     ${filteredTable(["Token ID", "标签", "用户", "权限范围", "状态", "到期时间", ""], tokenRows, "搜索 Token、用户或权限", ["active", "expired", "revoked"])} `;
@@ -566,21 +612,26 @@ async function renderAudit() {
   content.innerHTML = `<div class="view-head"><div><h2>独立管理审计</h2><p>管理事件仅追加写入，包含操作人、来源、原因和前后状态。</p></div></div>${filteredTable(["时间", "管理员", "动作", "对象类型", "对象 ID", "原因", "结果", "来源 IP"], rows, "搜索管理员、动作、对象或原因", ["succeeded", "failed"])}`;
 }
 
-async function openDatabaseGrants(userSubject) {
+async function openDatabaseGrants(userSubject, sourceId) {
+  if (!sourceId) {
+    const sources = await api("/api/database-sources");
+    if (!sources.items.length) { toast("请先在数据库页面接入数据源"); return; }
+    openModal({title: `${userSubject} · 选择数据源`, submit: "查看能力", body: `<label>数据源<select name="source">${sources.items.map(r => `<option value="${escapeHtml(r.source_id)}">${escapeHtml((r.active || r.draft).name)} · ${escapeHtml(r.source_id)}</option>`).join("")}</select></label>`, action: async form => { const id = form.get("source"); closeModal(); await openDatabaseGrants(userSubject, id); }}); return;
+  }
   const request = state.databaseGrantRequest = (state.databaseGrantRequest || 0) + 1;
-  const config = await api(`/api/database-grants?user=${encodeURIComponent(userSubject)}`);
-  if (request !== state.databaseGrantRequest || state.view !== "users" || !state.account) return;
+  const config = await api(`/api/database-grants?user=${encodeURIComponent(userSubject)}&source=${encodeURIComponent(sourceId)}`);
+  if (request !== state.databaseGrantRequest || !["users", "databases"].includes(state.view) || !state.account) return;
   const editable = state.account.role === "admin";
   const selected = new Set(config.capabilities);
   const labels = { "database.schema": "数据库结构", "database.directory": "人员、部门与项目目录", "database.logs.query": "日志正文查询", "database.logs.analyze": "日志统计分析", "database.logs.content_analyze": "日志内容分析", "database.comments.analyze": "日志评论分析", "database.free.read": "自由只读 SQL" };
   const choices = advanced => config.available.filter(item => item.advanced === advanced).map(item => `<label class="check database-capability"><input type="checkbox" name="database_capability" value="${escapeHtml(item.name)}" ${selected.has(item.name) ? "checked" : ""} ${editable ? "" : "disabled"}><span><strong>${escapeHtml(labels[item.name] || item.name)}</strong><small>${escapeHtml(item.description)}</small></span></label>`).join("");
-  openModal({ title: `${userSubject} · 数据库能力`, submit: editable ? "保存授权" : "关闭",
-    body: `<div class="database-grant-note"><strong>保存即生效</strong><p>继续使用原 Token，无需重启 OpenClaw。只影响此中央账号的独立数据库能力。</p></div><fieldset class="scope-group"><legend>常规只读能力</legend><div class="checkbox-grid">${choices(false)}</div></fieldset><fieldset class="scope-group database-advanced"><legend>高级能力</legend>${choices(true)}<p class="muted">可自由查询五个开放视图，包括评论。请独立选择此项。</p></fieldset><p class="muted">全部取消表示撤销全部独立数据库能力。当前配置版本：${config.revision}</p>${editable ? reasonField() : '<p class="muted">审计员仅可查看。</p>'}`,
+  openModal({ title: `${userSubject} · ${sourceId}`, submit: editable ? "保存授权" : "关闭",
+    body: `<div class="database-grant-note"><strong>保存即生效</strong><p>继续使用原 Token，无需重启 OpenClaw。只影响此中央账号在当前数据源的能力。</p></div><fieldset class="scope-group"><legend>常规只读能力</legend><div class="checkbox-grid">${choices(false)}</div></fieldset><fieldset class="scope-group database-advanced"><legend>高级能力</legend>${choices(true)}<p class="muted">可查询当前源的全部开放对象，可能包含评论。请独立选择此项。</p></fieldset><p class="muted">全部取消只撤销当前数据源权限，其他数据源不受影响。当前配置版本：${config.revision}</p>${editable ? reasonField() : '<p class="muted">审计员仅可查看。</p>'}`,
     action: async form => {
       if (!editable) { closeModal(); return; }
-      await api("/api/database-grants", { method: "POST", body: JSON.stringify({ user_subject: config.user_subject,
+      await api("/api/database-grants", { method: "POST", body: JSON.stringify({ user_subject: config.user_subject, source_id: sourceId,
         capabilities: form.getAll("database_capability"), expected_revision: config.revision, reason: form.get("reason") }) });
-      closeModal(); toast("数据库授权已生效；原 Token 继续使用，无需重启"); await loadView("users");
+      closeModal(); toast("数据库授权已生效；原 Token 继续使用，无需重启"); await loadView(state.view);
     }
   });
 }
@@ -661,6 +712,10 @@ content.addEventListener("click", async event => {
   else if (target.dataset.recoveryAction) openRuntimeRecovery({ actionType: target.dataset.recoveryAction, targetId: target.dataset.recoveryTarget, title: target.dataset.recoveryAction === "retry_delivery" ? "重新投递通知" : "归档投递记录", submit: target.dataset.recoveryAction === "retry_delivery" ? "重新投递" : "归档", danger: target.dataset.recoveryAction === "archive_delivery" });
   else if (target.matches("[data-issue-token]")) openIssueToken();
   else if (target.matches("[data-create-admin]")) openAdminAccount();
+  else if (target.hasAttribute("data-source-new")) await openSource();
+  else if (target.dataset.sourceEdit) await openSource(target.dataset.sourceEdit);
+  else if (target.dataset.sourceAction) await sourceAction(target.dataset.sourceId, target.dataset.sourceAction);
+  else if (target.dataset.sourceGrants) await sourceGrantUser(target.dataset.sourceGrants);
   else if (target.dataset.databaseGrants) await openDatabaseGrants(target.dataset.databaseGrants);
   else if (target.dataset.pauseUser) openPause({ scopeType: "user", scopeValue: target.dataset.pauseUser, title: `暂停 ${target.dataset.pauseUser} 的写入` });
   else if (target.dataset.pauseCapability) openPause({ scopeType: "capability", scopeValue: target.dataset.pauseCapability, version: target.dataset.version, title: "暂停具体能力" });

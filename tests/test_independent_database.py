@@ -1,3 +1,4 @@
+from tests.database_fixtures import configured_source
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,7 @@ class IndependentDatabaseTests(unittest.TestCase):
             identity = store.issue(user_subject='central-a',expected_principal_ref='unused')
             service = MagicMock()
             service.home = Path(root)
+            configured_source(root)
             runtime = IndependentDatabase(root)
             runtime.grants.set('central-a',['database.logs.analyze'])
             server = create_central_mcp_server(service=service,identity_store=store,
@@ -57,6 +59,7 @@ class IndependentDatabaseTests(unittest.TestCase):
 
     def test_denied_before_source_or_business_session(self):
         with tempfile.TemporaryDirectory() as root:
+            configured_source(root)
             runtime = IndependentDatabase(root)
             with self.assertRaisesRegex(DatabaseRejected,'DATABASE_CAPABILITY_DENIED'):
                 runtime.execute('a','database.free.read',{'sql':'select 1'})

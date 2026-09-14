@@ -2059,7 +2059,12 @@ class TaskHubStore:
         byte_size = int(artifact.get("byte_size") or 0)
         if byte_size <= 0 or byte_size > 32 * 1024 * 1024:
             raise ValueError("artifact byte_size is invalid")
-        if artifact_type == "taihua_personal_csv":
+        if artifact_type == "database_csv":
+            report_id = source_ref.split(":", 1)[0]
+            download_url = artifact.get("download_url")
+            if not isinstance(download_url,str) or not re.fullmatch(r"/api/database/reports/[a-z][a-z0-9_-]{0,63}/"+re.escape(report_id)+r"/download",download_url) or not re.fullmatch(r'[0-9a-f]{32}',report_id):
+                raise ValueError('database CSV download reference is invalid')
+        elif artifact_type == "taihua_personal_csv":
             report_id = source_ref.split(":", 1)[0]
             download_url = artifact.get("download_url")
             if not re.fullmatch(r"[0-9a-f]{32}", report_id) or download_url != f"/api/analytics/reports/{report_id}/download":

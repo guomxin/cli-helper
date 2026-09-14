@@ -8,7 +8,6 @@
     ],
     "tools": [
       "agentbridge_identity_status",
-
       "oa_efficiency_data_approval_prepare",
       "oa_travel_expense_approval_prepare",
       "oa_labor_contract_renewal_approval_prepare",
@@ -64,10 +63,6 @@
       "yuque_document_read",
       "yuque_session_status",
       "yuque_session_login",
-      "taihua_analytics_report_export",
-      "taihua_analytics_report_download",
-      "taihua_analytics_personal_summary",
-      "taihua_analytics_result_get",
       "taihua_work_log_my_list",
       "taihua_work_log_team_list",
       "taihua_project_search",

@@ -29,7 +29,6 @@ MCP_SCOPES = (
     "oa:write:submit",
     "oa:write:revoke",
     "taihua:read",
-    "taihua:analytics:read", "taihua:analytics:export",
     "taihua:write:worklog",
     "yuque:read",
     "smartlight:read",
@@ -581,29 +580,54 @@ class AdminControlPlane:
         )
         return [{**user, 'database_grants': self.database_grants.get(user['user_subject'])} for user in users]
 
-    def database_grant_config(self, user_subject: str) -> dict:
+    def database_sources(self):
+        from bscli.database.sources import Sources
+        sources=Sources(self.service.home)
+        return {'items':[sources.public(r) for r in sources.list()]}
+
+    def save_database_source(self, *, actor, request_ip, body):
+        from bscli.database.sources import Sources
+        _require_admin(actor)
+        allowed={'source_id','action','expected_revision','reason','config','password'}
+        if set(body)-allowed: raise ValueError('数据源请求字段无效')
+        sources=Sources(self.service.home)
+        sources.migrate()
+        result=sources.write(body.get('source_id'),body.get('action'),revision=body.get('expected_revision'),
+            actor=actor['username'],reason=body.get('reason'),config=body.get('config'),password=body.get('password'))
+        self.audit.append(actor=actor,action='database.source.'+body['action'],target_type='database_source',
+            target_id=body['source_id'],request_ip=request_ip,reason=body['reason'],result='succeeded',after={'revision':result['revision'],'state':result['state'],'preflight':result.get('preflight',{}).get('status')})
+        return result
+
+    def database_grant_config(self, user_subject: str, source_id='taihua_primary') -> dict:
         if not isinstance(user_subject, str) or not any(user['user_subject'] == user_subject for user in self.users()):
             raise KeyError('中央账号不存在')
-        return {'user_subject': user_subject, **self.database_grants.get(user_subject),
+        from bscli.database.sources import Sources
+        sources=Sources(self.service.home)
+        sources.migrate()
+        record=sources.get(source_id)
+        available=sources.capabilities(record['active'] or record['draft'])
+        return {'user_subject': user_subject, 'source_id':source_id, **self.database_grants.get(user_subject,source_id),
                 'available': [{'name':name,'description':description,'advanced':name == 'database.free.read'}
-                              for name,description in DATABASE_CAPABILITIES.items()],
+                              for name,description in DATABASE_CAPABILITIES.items() if name in available],
                 'effective': 'next_call', 'token_reissue_required': False, 'gateway_restart_required': False}
 
     def save_database_grants(self, *, actor: dict, request_ip: str, user_subject: str,
-                             capabilities: list[str], expected_revision: int, reason: str) -> dict:
+                             capabilities: list[str], expected_revision: int, reason: str, source_id='taihua_primary') -> dict:
         _require_admin(actor)
         if type(expected_revision) is not int or expected_revision < 0:
             raise ValueError('授权版本无效')
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
             raise ValueError('请填写不超过 1000 字的变更原因')
-        before = self.database_grant_config(user_subject)
+        before = self.database_grant_config(user_subject,source_id)
+        if not isinstance(capabilities,list) or any(not isinstance(n,str) or n not in {x['name'] for x in before['available']} for n in capabilities):
+            raise ValueError('此数据源不支持所选能力')
         change_actor = {k:actor.get(k) for k in ('account_id','username','role')}
         after = self.database_grants.set(user_subject, capabilities, expected_revision=expected_revision,
-                                        change_actor=change_actor, reason=reason.strip())
+                                        change_actor=change_actor, reason=reason.strip(), source_id=source_id)
         self.audit.append(actor=actor, action='database.grants.update', target_type='central_user',
                           target_id=user_subject, request_ip=request_ip, reason=reason.strip(), result='succeeded',
                           before={k:before[k] for k in ('capabilities','revision')}, after=after)
-        return {'user_subject':user_subject, **after, 'effective':'next_call',
+        return {'user_subject':user_subject, 'source_id':source_id, **after, 'effective':'next_call',
                 'token_reissue_required':False, 'gateway_restart_required':False}
 
     def _users(self, *, tokens: list[dict], sessions: list[dict]) -> list[dict]:

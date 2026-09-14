@@ -570,21 +570,7 @@ class TaihuaCentralAdapter:
 
 
 def build_taihua_capability_registry() -> CapabilityRegistry:
-    from bscli.analytics.contracts import INPUT_SCHEMA, RESULT_GET, SUMMARY
-    from bscli.analytics.reports import EXPORT, DOWNLOAD
     registry = CapabilityRegistry()
-    for name, schema, description in (
-        (EXPORT, {"type": "object", "required": ["result_id"], "additionalProperties": False,
-                  "properties": {"result_id": {"type": "string"}}}, "核验当前权限后导出本人每日汇总 CSV；需单独导出 Scope。"),
-        (DOWNLOAD, {"type": "object", "required": ["report_id"], "additionalProperties": False,
-                    "properties": {"report_id": {"type": "string"}}}, "认证并重新核验源结果后下载 CSV；引用十分钟有效。"),
-        (SUMMARY, INPUT_SCHEMA, "分析本人可见日报的登记工时与每日分布，最多七天；需独立分析权限和已验收数据源。"),
-        (RESULT_GET, {"type": "object", "required": ["result_id"], "additionalProperties": False,
-                      "properties": {"result_id": {"type": "string"}}}, "重新核验权限后读取本人历史分析结果。"),
-    ):
-        registry.register(CapabilitySpec(name=name, version="0.1.0", description=description,
-            input_schema=schema, output_schema={"type": "object"}, effect="read",
-            adapter=TAIHUA_ADAPTER_ID, workflow=name.replace(".", "-") + "-v1"))
     for spec in (
         CapabilitySpec(
             name=TAIHUA_MY_LOGS_CAPABILITY,

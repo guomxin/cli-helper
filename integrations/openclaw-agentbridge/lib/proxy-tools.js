@@ -62,9 +62,6 @@ const TASK_FINALIZATION_TIMEOUT_MS = 3_000;
 const PROTECTED_ANALYTICS_RESULT_TOOLS = new Set([
   "database_capabilities",
   "database_execute",
-  "taihua_analytics_result_get",
-  "taihua_analytics_report_export",
-  "taihua_analytics_report_download",
 ]);
 const SAFE_MCP_RETRY_DELAYS_MS = Object.freeze([500, 2_000]);
 const UNREFERENCED_FAILURE_STATUSES = new Set([

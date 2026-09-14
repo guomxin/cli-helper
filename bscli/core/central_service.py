@@ -1268,10 +1268,9 @@ class CentralCapabilityService:
         analytics_authority_id: str | None = None,
         analytics_cancellation=None,
     ) -> dict:
-        if capability_name in ANALYTICS_CAPABILITIES:
-            return self.analytics_runtime().invoke(user_subject=user_subject, capability_name=capability_name,
-                arguments=arguments, idempotency_key=idempotency_key, request_id=request_id, task_id=task_id,
-                host_type=host_type, authority_id=analytics_authority_id, cancellation=analytics_cancellation)
+        if capability_name.startswith('taihua.analytics.'):
+            return {'status':'rejected','result':None,'error':{'code':'CAPABILITY_RETIRED','message':'旧数据库分析已退役，请使用 database_capabilities/database_execute。'}}
+
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
         planning_control = self.planning_gate_for_call(
@@ -2198,7 +2197,7 @@ class CentralCapabilityService:
                 # Protected CSV URLs require a Workspace session. Companion
                 # notifications cannot fetch them as anonymous media or send
                 # them through the generic certificate-link fallback.
-                if (event.get("payload") or {}).get("artifactType") != "taihua_personal_csv":
+                if (event.get("payload") or {}).get("artifactType") not in {"taihua_personal_csv", "database_csv"}:
                     item["deliveryMode"] = "artifact"
                     item["artifact"] = _artifact_notification(event)
             elif event.get("eventType") == "task.interaction.waiting":

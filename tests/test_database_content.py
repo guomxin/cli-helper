@@ -1,3 +1,4 @@
+from tests.database_fixtures import configured_source
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -108,12 +109,13 @@ class ContentQueryTests(unittest.TestCase):
         self.assertEqual(result['snapshot_scope'], 'single_request')
 
     def test_all_modes_and_schemas_are_discoverable(self):
-        self.assertEqual(set(INPUT_SCHEMAS), set(CAPABILITIES))
+        self.assertEqual(set(INPUT_SCHEMAS), set(CAPABILITIES)|{'database.report.download'})
         for mode in CONTENT_MODES:
             plan = compile_query('database.logs.content_analyze', {**WINDOW, 'mode': mode})
             result = add_evidence({'rows': [], 'truncated': False}, plan, 0)
             self.assertEqual(result['analysis']['mode'], mode)
         with tempfile.TemporaryDirectory() as root:
+            configured_source(root)
             runtime = IndependentDatabase(root)
             runtime.grants.set('a', ['database.logs.content_analyze'])
             item = runtime.catalog('a')['capabilities'][0]
@@ -124,6 +126,7 @@ class ContentQueryTests(unittest.TestCase):
 class ContentExecutionTests(unittest.TestCase):
     def test_paged_executor_counts_in_transaction_and_keeps_authorization_separate(self):
         with tempfile.TemporaryDirectory() as root:
+            configured_source(root)
             runtime = IndependentDatabase(root)
             runtime.grants.set('a', ['database.logs.content_analyze'])
             with patch('bscli.database.independent.DataSourceConfig.load') as load:
@@ -140,10 +143,7 @@ class ContentExecutionTests(unittest.TestCase):
             cursor = connection.cursor.return_value.__enter__.return_value
             cursor.description = [SimpleNamespace(name=n) for n in ('id','log_date','content')]
             cursor.fetchmany.return_value = [{'id': i, 'log_date': '2026-09-01', 'content': '计划完成\n未找到结果'} for i in (1,2,3)]
-            with patch('bscli.database.independent.DataSourceConfig.load', return_value=config), \
-                 patch('bscli.database.independent.DataSourceSecretStore') as secrets, \
-                 patch('psycopg.connect') as connect:
-                secrets.return_value.load.return_value = {'password': 'unused-test-password'}
+            with patch('bscli.database.sources.connect') as connect:
                 connect.return_value.__enter__.return_value = connection
                 first = runtime.execute('a', 'database.logs.content_analyze', {**WINDOW, 'page_size': 2})
                 self.assertEqual(first['returned'], 2)
@@ -152,7 +152,7 @@ class ContentExecutionTests(unittest.TestCase):
                 self.assertEqual(cursor.fetchmany.call_args.args, (3,))
                 self.assertIn('READ ONLY', connection.execute.call_args_list[0].args[0])
                 connection.rollback.assert_called_once()
-                cursor.fetchmany.return_value = [{'id': 3, 'log_date': '2026-09-01', 'content': '明确后续'}]
+                cursor.fetchmany.side_effect = [[{'id': 3, 'log_date': '2026-09-01', 'content': '明确后续'}],[]]
                 last = runtime.execute('a', 'database.logs.content_analyze', {**WINDOW, 'page_size': 2, 'after': first['next_cursor']})
                 self.assertFalse(last['has_more'])
                 self.assertEqual(len({r['id'] for r in first['rows']+last['rows']}), last['total_matching'])

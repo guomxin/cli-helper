@@ -876,6 +876,8 @@ class AdminHttpServerTests(unittest.TestCase):
 
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(home=tmp, base_url="http://127.0.0.1:1/seeyon")
+            from tests.database_fixtures import configured_source
+            configured_source(tmp)
             identities = McpIdentityTokenStore(service.db_path)
             tokens = {name: identities.issue(user_subject=name, expected_principal_ref="unused")
                       for name in ("guomao", "lishiyu")}
@@ -908,7 +910,7 @@ class AdminHttpServerTests(unittest.TestCase):
                 status, _, config = _request(port, "GET", "/api/database-grants?user=guomao", cookies=cookies["auditor"])
                 self.assertEqual(status, 200)
                 self.assertEqual(config["capabilities"], [])
-                self.assertEqual(len(config["available"]), 7)
+                self.assertEqual(len(config["available"]), 8)
                 self.assertEqual(sum(item["advanced"] for item in config["available"]), 1)
                 for kwargs, expected in (({"role": "auditor"}, 403), ({"csrf": "wrong"}, 401), ({"csrf": None}, 401), ({"origin": "https://untrusted.example"}, 403)):
                     self.assertEqual(save("guomao", list(CAPABILITIES), 0, **kwargs)[0], expected)
@@ -932,14 +934,14 @@ class AdminHttpServerTests(unittest.TestCase):
                             "MCP-Protocol-Version": "2025-06-18"}, json={"jsonrpc": "2.0", "id": "1",
                             "method": "tools/call", "params": {"name": name, "arguments": arguments}}).json()["result"]["structuredContent"]
 
-                    self.assertEqual(call("guomao", "database_capabilities", {})["capabilities"], [])
+                    self.assertEqual(call("guomao", "database_capabilities", {})["sources"], [])
                     for subject in tokens:
                         status, _, saved = save(subject, list(CAPABILITIES), 0)
                         self.assertEqual(status, 200)
                         self.assertFalse(saved["token_reissue_required"])
                         self.assertFalse(saved["gateway_restart_required"])
-                        self.assertEqual({item["name"] for item in call(subject, "database_capabilities", {})["capabilities"]}, set(CAPABILITIES))
-                        for capability in CAPABILITIES:
+                        self.assertEqual({item["name"] for item in call(subject, "database_capabilities", {})["capabilities"]}, set(CAPABILITIES)|{"database.report.download"})
+                        for capability in (c for c in CAPABILITIES if c != "database.report.export"):
                             self.assertEqual(call(subject, "database_execute", {"capability": capability, "arguments": {}})["status"], "succeeded")
                     self.assertEqual(save("guomao", [], 0)[0], 409)
                     self.assertEqual(save("guomao", [], 1)[0], 200)
@@ -947,14 +949,14 @@ class AdminHttpServerTests(unittest.TestCase):
                     self.assertEqual(call("guomao", "database_execute", {
                         "capability": "database.free.read", "arguments": {"sql": "select 1"}})["code"], "DATABASE_CAPABILITY_DENIED")
                     self.assertEqual(execute.call_count, count)
-                    self.assertEqual(len(call("lishiyu", "database_capabilities", {})["capabilities"]), 7)
+                    self.assertEqual(len(call("lishiyu", "database_capabilities", {})["capabilities"]), 9)
                     self.assertEqual(save("guomao", list(CAPABILITIES), 2)[0], 200)
-                    self.assertEqual(len(call("guomao", "database_capabilities", {})["capabilities"]), 7)
+                    self.assertEqual(len(call("guomao", "database_capabilities", {})["capabilities"]), 9)
 
                 audit = [item for item in control.audit.list() if item["action"] == "database.grants.update"]
                 self.assertEqual(len(audit), 4)
                 revoked = next(item for item in audit if item["after"]["capabilities"] == [])
-                self.assertEqual(len(revoked["before"]["capabilities"]), 7)
+                self.assertEqual(len(revoked["before"]["capabilities"]), 8)
                 self.assertEqual(revoked["after"]["revision"], 2)
                 with closing(sqlite3.connect(control.database_grants.path)) as connection:
                     self.assertEqual(connection.execute("SELECT count(*) FROM database_audit WHERE capability='database.grants'").fetchone()[0], 4)

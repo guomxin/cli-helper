@@ -332,6 +332,10 @@ def create_workspace_http_server(
                         ),
                     )
                     return
+                database_report_match = re.fullmatch(r"/api/database/reports/([a-z][a-z0-9_-]{0,63})/([0-9a-f]{32})/download", route.path)
+                if database_report_match:
+                    self._download(application.database_report(account,*database_report_match.groups()))
+                    return
                 report_match = re.fullmatch(r"/api/analytics/reports/([0-9a-f]{32})/download", route.path)
                 if report_match:
                     self._download(application.analytics_report(account, report_match.group(1)))

@@ -941,7 +941,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.93",
+      hostVersion: "0.4.94",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1360,7 +1360,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.93",
+        hostVersion: "0.4.94",
       },
     },
   });
@@ -2108,11 +2108,11 @@ test("Workspace database exploration and protected analytics get fresh leases af
     },
     taskRunRefResolver: () => "same-user-turn",
   });
-  for (const [index, name] of ["taihua_analytics_personal_summary", "taihua_analytics_result_get", "taihua_analytics_report_export", "taihua_analytics_report_download", "database_capabilities", "database_execute", "database_execute"].entries()) {
+  for (const [index, name] of ["database_capabilities", "database_execute", "database_execute", "database_capabilities", "database_execute", "database_execute", "database_execute"].entries()) {
     const result = await tools.find(tool => tool.name === name).execute(`call-${index}-${name}`, {});
     assert.equal(result.structuredContent.status, "succeeded");
   }
-  assert.deepEqual(ensures.map(x => x.task_scope), ["user_turn", "independent", "independent", "independent", "independent", "independent", "independent"]);
+  assert.deepEqual(ensures.map(x => x.task_scope), ["independent", "independent", "independent", "independent", "independent", "independent", "independent"]);
   assert.equal(new Set(ensures.map(x => x.host_task_key)).size, 7);
   assert.ok(ensures.every(x => x.planning_task_key === `${sessionKey}|same-user-turn`));
   assert.equal(terminal.size, 7);
@@ -2517,7 +2517,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.93",
+      hostVersion: "0.4.94",
     },
   });
   assert.equal(
@@ -7505,15 +7505,15 @@ test("delivers authenticated Taihua CSV bytes without an anonymous fetch", async
   });
   const sessionKey = "agent:main:telegram:direct:7052061588";
   bindDeliveryRoute(harness, { sessionKey, to: "7052061588" });
-  bindToolCall(harness, { toolCallId: "taihua-csv", runId: "taihua-csv", sessionKey, toolName: "taihua_analytics_report_download" });
+  bindToolCall(harness, { toolCallId: "taihua-csv", runId: "taihua-csv", sessionKey, toolName: "database_execute" });
   const structuredContent = {status: "succeeded", result: {
     schemaVersion: "agentbridge.protected_csv_delivery.v1", report_id: "a".repeat(32),
-    file: {filename: "taihua-personal-daily.csv", content_type: "text/csv; charset=utf-8",
+    file: {filename: "taihua_primary-20260914-120000.csv", content_type: "text/csv; charset=utf-8",
            content_base64: Buffer.from("日期,登记工时\r\n2026-09-01,1.5\r\n").toString("base64")},
   }};
   const result = {content: [{type: "text", text: JSON.stringify(structuredContent)}],
-    details: {mcpServer: "agentbridge", mcpTool: "taihua_analytics_report_download", structuredContent}};
-  const replacement = await harness.middleware({toolCallId: "taihua-csv", toolName: "taihua_analytics_report_download", result},
+    details: {mcpServer: "agentbridge", mcpTool: "database_execute", structuredContent}};
+  const replacement = await harness.middleware({toolCallId: "taihua-csv", toolName: "database_execute", result},
     {runtime: "openclaw", sessionKey});
   assert.equal(replacement.result.details.structuredContent.hostDelivery.state, "delivered");
   assert.match(savedBytes.toString("utf8"), /1.5/);
@@ -7529,7 +7529,7 @@ test("does not fall back to a public link for protected CSV", async () => {
   const sessionKey = "agent:main:telegram:direct:7052061588";
   bindDeliveryRoute(harness, {sessionKey, to: "7052061588"});
   const receipt = await coordinator.performPreparedDocumentDelivery(sessionKey, {
-    protectedCsv: true, contentBase64: "YQ==", filename: "taihua-personal-daily.csv", contentType: "text/csv",
+    protectedCsv: true, contentBase64: "YQ==", filename: "taihua_primary-20260914-120000.csv", contentType: "text/csv",
   });
   assert.equal(receipt.state, "failed");
   assert.equal(harness.sentPayloads.length, 0);
@@ -7549,12 +7549,12 @@ test("native CSV delivery survives missing middleware and strips bytes on succes
     bindDeliveryRoute(harness, {sessionKey, to: "7052061588"});
     const structuredContent = {status: "succeeded", result: {
       schemaVersion: "agentbridge.protected_csv_delivery.v1", report_id: "b".repeat(32),
-      file: {filename: "taihua-personal-daily.csv", content_type: "text/csv; charset=utf-8",
+      file: {filename: "taihua_primary-20260914-120000.csv", content_type: "text/csv; charset=utf-8",
         content_base64: Buffer.from("date,hours\r\n2026-09-01,1.5\r\n").toString("base64")},
     }};
-    const event = {toolCallId: "native-csv", toolName: "taihua_analytics_report_download", result: {
+    const event = {toolCallId: "native-csv", toolName: "database_execute", result: {
       structuredContent, content: [{type: "text", text: JSON.stringify(structuredContent)}],
-      details: {mcpServer: "agentbridge", mcpTool: "taihua_analytics_report_download"},
+      details: {mcpServer: "agentbridge", mcpTool: "database_execute"},
     }};
     const result = await captureNativeAgentBridgeResult(coordinator, event, {sessionKey});
     assert.equal(result.structuredContent.hostDelivery.state, fail ? "failed" : "delivered");

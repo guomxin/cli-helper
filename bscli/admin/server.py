@@ -17,6 +17,7 @@ from bscli.admin.application import AdminControlPlane, MCP_SCOPES
 from bscli.auth.server import validate_auth_server_config
 from bscli.core.tls_http import ThreadedTLSHTTPServer
 from bscli.database.independent import DatabaseGrantConflict
+from bscli.database.sources import SourceConflict
 
 
 MAX_ADMIN_BODY_BYTES = 64 * 1024
@@ -214,7 +215,9 @@ def create_admin_http_server(
                 elif route.path == "/api/users":
                     self._json(200, {"items": control_plane.users()})
                 elif route.path == "/api/database-grants":
-                    self._json(200, control_plane.database_grant_config(_query_value(query, "user")))
+                    self._json(200, control_plane.database_grant_config(_query_value(query, "user"),_query_value(query,"source") or 'taihua_primary'))
+                elif route.path == "/api/database-sources":
+                    self._json(200, control_plane.database_sources())
                 elif route.path == "/api/tokens":
                     self._json(
                         200,
@@ -331,13 +334,16 @@ def create_admin_http_server(
                     )
                     self._json(201, account)
                     return
+                if route.path == "/api/database-sources":
+                    self._json(200,control_plane.save_database_source(actor=actor,request_ip=self.client_address[0],body=body))
+                    return
                 if route.path == "/api/database-grants":
-                    if set(body) != {'user_subject','capabilities','expected_revision','reason'}:
+                    if set(body)-{'user_subject','capabilities','expected_revision','reason','source_id'} or not {'user_subject','capabilities','expected_revision','reason'}.issubset(body):
                         raise ValueError('数据库授权请求字段无效')
                     result = control_plane.save_database_grants(
                         actor=actor, request_ip=self.client_address[0],
                         user_subject=_required_string(body, 'user_subject'), capabilities=body['capabilities'],
-                        expected_revision=body['expected_revision'], reason=_required_string(body, 'reason'))
+                        expected_revision=body['expected_revision'], reason=_required_string(body, 'reason'), source_id=body.get('source_id','taihua_primary'))
                     self._json(200, result)
                     return
                 if route.path == "/api/tokens":
@@ -637,7 +643,7 @@ def create_admin_http_server(
                 self.send_header("Strict-Transport-Security", "max-age=31536000")
 
         def _handle_error(self, exc: Exception) -> None:
-            if isinstance(exc, DatabaseGrantConflict):
+            if isinstance(exc, (DatabaseGrantConflict, SourceConflict)):
                 status, code = 409, 'DATABASE_GRANT_CONFLICT'
             elif isinstance(exc, PermissionError):
                 status, code = 403, "ADMIN_FORBIDDEN"
