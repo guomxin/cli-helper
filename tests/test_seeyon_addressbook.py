@@ -68,6 +68,36 @@ class SeeyonAddressbookTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["department_id"], "201")
         self.assertEqual(result["items"][0]["parent_department_id"], "200")
 
+    def test_organization_tree_matches_names_when_paths_are_empty(self):
+        page = FakePage(FakeFrame([
+            _node("100", "", "集团", [], True),
+            _node("200", "100", "照明市场推广中心", [], False),
+            _node("201", "100", "智能照明运维中心", [], False),
+            _node("202", "100", "研发中心", [], False),
+        ]))
+        with patch(
+            "bscli.adapters.seeyon_addressbook._open_home",
+            return_value=(page, "100"),
+        ), patch(
+            "bscli.adapters.seeyon_addressbook._wait_for_frame",
+            return_value=page.frames[0],
+        ):
+            for keyword, expected in [
+                ("照明", ["200", "201"]),
+                ("照明市场推广中心", ["200"]),
+                ("不存在", []),
+                ("", ["200", "201", "202"]),
+            ]:
+                with self.subTest(keyword=keyword):
+                    result = organization_tree(
+                        object(), base_url=BASE_URL,
+                        arguments={"keyword": keyword, "limit": 500},
+                    )
+                    self.assertEqual(
+                        [item["department_id"] for item in result["items"]], expected
+                    )
+                    self.assertEqual(result["matched_count"], len(expected))
+
     def test_person_search_uses_server_filter_and_preserves_masked_values(self):
         raw = {
             "rows": [

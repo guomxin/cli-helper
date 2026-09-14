@@ -290,7 +290,9 @@ def organization_tree(worker, *, base_url: str, arguments: dict) -> dict:
             "path": [str(value) for value in node.get("path") or [] if value],
             "has_children": bool(node.get("has_children")),
         }
-        if keyword and keyword.casefold() not in " ".join(item["path"]).casefold():
+        # Some OA zTree versions expose names and parents but no node.getPath().
+        search_text = " ".join([name, *item["path"]]).casefold()
+        if keyword and keyword.casefold() not in search_text:
             continue
         departments.append(item)
     matched_count = len(departments)
