@@ -149,7 +149,7 @@ class ContentExecutionTests(unittest.TestCase):
                 self.assertEqual(first['returned'], 2)
                 self.assertTrue(first['has_more'])
                 self.assertEqual(first['total_matching'], 3)
-                self.assertEqual(cursor.fetchmany.call_args.args, (3,))
+                self.assertEqual(cursor.fetchmany.call_args.args, (1,))  # Bound raw text before transport pagination.
                 self.assertIn('READ ONLY', connection.execute.call_args_list[0].args[0])
                 connection.rollback.assert_called_once()
                 cursor.fetchmany.side_effect = [[{'id': 3, 'log_date': '2026-09-01', 'content': '明确后续'}],[]]

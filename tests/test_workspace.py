@@ -2768,6 +2768,31 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertTrue(completed["authenticated"])
                 cookies.update(_cookies(headers))
 
+                original_path = '/api/database/logs/taihua_primary/123'
+                with patch.object(application, 'database_original', return_value={
+                    'author': '测试作者', 'paragraphs': [{'number': 1, 'text': '<img src=x onerror=evil()>'}],
+                }) as original:
+                    denied, _, _ = _request(port, 'GET', original_path)
+                    self.assertEqual(denied, 401)
+                    original.assert_not_called()
+                    status, original_headers, body = _request(port, 'GET', original_path, cookies=cookies)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(original_headers.get('Cache-Control'), 'no-store')
+                    self.assertEqual(body['author'], '测试作者')
+                    self.assertEqual(original.call_args.args[0]['user_subject'], 'user-a')
+                    from bscli.database.independent import DatabaseRejected
+                    for code, expected_status in [('DATABASE_LOG_NOT_FOUND', 404), ('DATABASE_CAPABILITY_DENIED', 403),
+                                                  ('DATABASE_AUTHORIZATION_CHANGED', 403)]:
+                        original.side_effect = DatabaseRejected(code)
+                        status, _, body = _request(port, 'GET', original_path, cookies=cookies)
+                        self.assertEqual(status, expected_status)
+                        self.assertEqual(body['code'], code)
+                status, original_headers, shell = _raw_request(port, 'GET', '/database/logs/taihua_primary/123')
+                self.assertEqual(status, 200)
+                self.assertNotIn('测试作者', shell)
+                self.assertNotIn('__WORKSPACE_ASSET_VERSION__', shell)
+                self.assertIn('/assets/original.js?v=', shell)
+
                 csv_path = "/api/database/reports/taihua_primary/" + "a" * 32 + "/download"
                 with patch.object(application, "database_report", return_value={
                     "body": b"date,hours\r\n2026-09-01,1.5\r\n",

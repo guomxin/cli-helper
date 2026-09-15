@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>查看日志原文 · AgentBridge</title>
+  <link rel="stylesheet" href="/assets/original.css?v=__WORKSPACE_ASSET_VERSION__">
+  <script src="/assets/original.js?v=__WORKSPACE_ASSET_VERSION__" defer></script>
+</head>
+<body>
+  <header class="topbar"><a href="/" class="brand">AgentBridge <span>工作台</span></a><span class="badge">日志原文</span></header>
+  <main>
+    <div class="eyebrow">SOURCE · 来源核查</div>
+    <h1 id="title">查看日志原文</h1>
+    <p class="intro">回到原始记录，核对工作进展。</p>
+    <section id="status" class="notice" role="status">正在读取日志……</section>
+    <section id="auth" hidden class="panel">
+      <h2>登录工作台</h2><p>使用你的工作台账号，按当前数据库授权查看原文。</p>
+      <form id="login-form">
+        <label>用户名<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">登录并查看</button>
+      </form>
+    </section>
+    <article id="record" hidden>
+      <dl id="metadata" class="metadata"></dl>
+      <div id="changed" class="notice warning" hidden role="status"></div>
+      <section class="paper" aria-label="日志正文"><div id="paragraphs"></div></section>
+      <footer class="footnote">展示当前数据库中的文字内容。人员部门为当前归属；此页不作为查询时的历史快照。</footer>
+    </article>
+    <button id="retry" hidden type="button" class="secondary">重新读取</button>
+  </main>
+</body>
+</html>

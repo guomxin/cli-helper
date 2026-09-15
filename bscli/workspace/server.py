@@ -46,6 +46,7 @@ def _workspace_asset_version() -> str:
     digest = hashlib.sha256()
     for name in (
         "index.html", "workspace.css", "workspace.js",
+        "original.html", "original.css", "original.js",
         "vendor/marked.umd.js", "vendor/purify.min.js",
     ):
         digest.update(name.encode("ascii"))
@@ -185,6 +186,9 @@ def create_workspace_http_server(
             if route.path in {"/", "/index.html"}:
                 self._static("index.html")
                 return
+            if re.fullmatch(r'/database/logs/[a-z][a-z0-9_-]{0,63}/[0-9]{1,19}', route.path):
+                self._static('original.html')
+                return
             if route.path.startswith("/assets/"):
                 self._static(route.path.removeprefix("/assets/"))
                 return
@@ -220,6 +224,19 @@ def create_workspace_http_server(
                 return
             query = parse_qs(route.query)
             try:
+                original_match = re.fullmatch(r'/api/database/logs/([a-z][a-z0-9_-]{0,63})/([0-9]{1,19})', route.path)
+                if original_match:
+                    from bscli.database.independent import DatabaseRejected, rejection_result
+                    try:
+                        result = application.database_original(account, *original_match.groups())
+                        if application.session(self._cookie(SESSION_COOKIE)) is None:
+                            self._json(401, {'error': {'code': 'AUTH_REQUIRED'}})
+                            return
+                        self._json(200, result)
+                    except DatabaseRejected as exc:
+                        status = 404 if str(exc) == 'DATABASE_LOG_NOT_FOUND' else 403 if str(exc) in {'DATABASE_CAPABILITY_DENIED', 'DATABASE_AUTHORIZATION_CHANGED'} else 400
+                        self._json(status, rejection_result(exc))
+                    return
                 if route.path == "/api/tasks":
                     self._json(
                         200,
@@ -818,7 +835,7 @@ def create_workspace_http_server(
             except (ValueError, OSError):
                 self._json(404, {"error": {"code": "NOT_FOUND"}})
                 return
-            if path.name == "index.html":
+            if path.name in {"index.html", "original.html"}:
                 body = body.replace(
                     ASSET_VERSION_PLACEHOLDER.encode("ascii"),
                     asset_version.encode("ascii"),
@@ -834,7 +851,7 @@ def create_workspace_http_server(
                 "Cache-Control",
                 (
                     "no-store"
-                    if path.name == "index.html"
+                    if path.name in {"index.html", "original.html"}
                     else "public, max-age=31536000, immutable"
                 ),
             )

@@ -18,6 +18,8 @@ COMPOSED_TASK_PLANNING_POLICY = {
     "modelContext": "\n".join(
         (
             "AgentBridge durable composed-task policy:",
+            "- 数据库来源用 source_label 配 source_url 的‘查看原文’链接，后台保留完整 evidence_id，前台不堆内部编号。没有 URL 时不编造链接。原文页沿用 Workspace 登录与当前数据库授权，正文变化会提示。",
+            "- 内容查询默认紧凑证据并按 max_chars 分页；保留 next_cursor，has_more=false 仍须检查 content_complete。单篇长正文按 next_text_offset 和 source_revision_hash 通过 log_id/text_offset/expected_revision 续读，合并全部片段后才算读完。",
             "- 根据工作日志归纳进展、问题、主题或统计，优先发现获准日志数据库；用户明确指定业务系统/API时遵从指定来源。缺少数据库授权时说明限制，不静默换源。",
             "- 数据库实体先同源目录消歧：空候选可缩短关键词重查；重名按父级/ID区分，不混用其他系统ID或凭历史对话认定现时层级。部门本级用 department_id，多部门用 department_ids（互斥）；公司/组织整体范围使用 include_descendants=true，在数据库核实下级。依据 resolved_department_scope 说明当前归属、包含范围与限制；未知 status 不作排除条件。目录截断保持条件用 next_after_id 作为 after_id 继续读取。",
             "- 数据库总结分别检查范围确认、记录读完、事项覆盖。先建立事项清单，区分已发生进展、进行中、计划、问题和未知，再按用户所需详细度归纳；各项进展不能遗漏独立交付、安全、验收、阻塞事项。逐项核对引用是否支持结论，不把剩余计划写成成果；排序判断标明依据。",

@@ -296,6 +296,10 @@ class WorkspaceApplication:
         except DatabaseRejected as exc:
             raise WorkspaceArtifactError(str(exc),'此文件不可下载，请检查权限或重新导出。') from exc
 
+    def database_original(self, account: dict, source_id: str, log_id: str) -> dict:
+        from bscli.database.independent import IndependentDatabase
+        return IndependentDatabase(self.service.home).read_original(account['user_subject'], source_id, log_id)
+
     def reissue_artifact(
         self,
         account: dict,

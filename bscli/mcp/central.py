@@ -775,6 +775,7 @@ def create_central_mcp_server(
     identity_store: McpIdentityTokenStore,
     config: CentralMcpServerConfig,
     auth_card_base_url: str,
+    workspace_base_url: str = '',
 ) -> FastMCP:
     service.set_task_plan_authority_resolver(
         lambda token_id, required_scopes: identity_store.resolve_client(
@@ -3392,8 +3393,9 @@ def create_central_mcp_server(
 
     @mcp.tool(name="database_execute", title="执行独立数据库查询与分析",
         description=("先调用 database_capabilities 选择获准 source_id 及 input_schema，执行明确 source_id。database.schema 参数为 {}。两窗口比较用 database.free.read。取消历史结果读取，query_id 仅追踪。CSV 通过 database.report.export 传 query_capability/query_arguments/request_key 重新查询，再以 report_id 调用 database.report.download，文件交付使用现有附件机制，不输出 base64，不编造 URL。不建立专用比较计划。"
+                     "日志 query/content_analyze 可用 log_id 单独读取无需日期；内容默认 evidence_format=compact，max_chars=12000 控制完整响应容量。source_label/source_url 用于用户查看原文，后台保留 evidence_id。长单篇 content_complete=false 时用 log_id、next_text_offset作为text_offset、source_revision_hash作为expected_revision续读到next_text_offset=null；不要漏读片段。"
                      "部门条件支持 department_id 或 department_ids（互斥），include_descendants=true 包含同源当前组织树下属，不按未知 status 排除；读取 resolved_department_scope 核验范围。无历史归属还原。目录部门返回 parent_id（若源支持），可按 parent_id 筛直接子级；after_id 使用 next_after_id 翻页。名称空候选可缩短关键词重查，重名须消歧。"
-                     "database.logs.query/analyze/content_analyze 必填 start_date、end_date_exclusive；可选 user_id、department_id、project_id、log_type=DAILY/WEEKLY、keyword 或 keywords、keyword_mode=any/all。"
+                     "database.logs.query/analyze/content_analyze 按时间查询须传 start_date、end_date_exclusive（query/content_analyze 按 log_id 单篇读取例外）；可选 user_id、department_id、project_id、log_type=DAILY/WEEKLY、keyword 或 keywords、keyword_mode=any/all。"
                      "logs.analyze 可选 group_by=none/day/month/person/department/project。logs.content_analyze 的 mode=summary/topics/progress/issues/experience/collaboration/changes。"
                      "database.comments.analyze 单独授权，mode=feedback/questions/followup，date_basis=comment_created_at/log_date，search_in=comments/logs/both，commenter_id 筛评论作者，user_id 筛日志作者。"
                      "明细与内容/评论证据支持 page_size、order=asc/desc、after；保持筛选条件，用 next_cursor 读到 has_more=false，按 evidence_id 引用和去重并核对 total_matching。跨请求不是冻结快照。"
@@ -3407,7 +3409,7 @@ def create_central_mcp_server(
         from bscli.database.independent import IndependentDatabase, DatabaseRejected, rejection_result
         identity = _request_identity(identity_store)
         try:
-            result = await asyncio.to_thread(IndependentDatabase(service.home).execute,
+            result = await asyncio.to_thread(IndependentDatabase(service.home, original_base_url=workspace_base_url).execute,
                                             identity['user_subject'], capability, arguments, source_id)
         except DatabaseRejected as exc:
             return rejection_result(exc)
@@ -6115,6 +6117,7 @@ def serve_central_mcp(
             identity_store=identity_store,
             config=mcp_config,
             auth_card_base_url=auth_config.public_base_url,
+            workspace_base_url=workspace_config.public_base_url if workspace_config else '',
         )
         uvicorn.run(
             mcp.streamable_http_app(),

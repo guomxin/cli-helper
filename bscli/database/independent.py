@@ -50,6 +50,9 @@ def rejection_result(exc):
         'DATABASE_HIERARCHY_UNAVAILABLE': '此数据源未提供可读取的部门父子关系，无法核实下属范围；不能按名称猜测。',
         'DATABASE_SCOPE_TOO_LARGE': '组织范围超过 1000 个部门，请缩小范围；未返回部分范围冒充完整结果。',
         'DATABASE_SCOPE_CHANGED': '分页期间组织范围已变化，请从第一页重新查询并说明变化，不能拼接为完整结果。',
+        'DATABASE_EVIDENCE_TOO_LARGE': '证据超过单次文本容量。请缩小范围，或以 log_id 单独读取；不要将本次视为已完整读取。',
+        'DATABASE_CONTENT_CHANGED': '正文在续读期间发生变化，请从开头重新读取，不能拼接不同版本。',
+        'DATABASE_LOG_NOT_FOUND': '这条日志不存在或已删除。',
         'DATABASE_CAPABILITY_DENIED': '当前账号未获准使用此数据源能力。',
         'DATABASE_QUERY_FAILED': '数据库查询未完成，请检查数据源结构与可用性；不要据此判断没有记录。',
     }
@@ -185,8 +188,9 @@ def log_query(arguments, *, aggregate):
 
 
 class IndependentDatabase:
-    def __init__(self, home):
+    def __init__(self, home, *, original_base_url=''):
         self.home = Path(home)
+        self.original_base_url = original_base_url
         self.grants = DatabaseGrants(self.home / 'database' / 'grants.sqlite3')
 
     def catalog(self, subject, source_id=None):
@@ -231,7 +235,24 @@ class IndependentDatabase:
         if latest!=grant or new['revision']!=record['revision']:
             raise DatabaseRejected('DATABASE_AUTHORIZATION_CHANGED')
 
-    def execute(self, subject, capability, arguments, source_id=LEGACY):
+    def read_original(self, subject, source_id, log_id):
+        granted = self.grants.get(subject, source_id)['capabilities']
+        capability = next((c for c in ('database.logs.query', 'database.logs.content_analyze') if c in granted), None)
+        if capability is None:
+            raise DatabaseRejected('DATABASE_CAPABILITY_DENIED')
+        result = self.execute(subject, capability, {'log_id': log_id}, source_id, original=True)
+        if not result['rows']:
+            raise DatabaseRejected('DATABASE_LOG_NOT_FOUND')
+        from bscli.database.content import plain_text
+        from bscli.database.evidence import text_revision
+        row = result['rows'][0]
+        return {'source_id': source_id, 'source_name':result['source_name'], 'id': str(row['id']), 'author': row.get('fullname') or row.get('username'),
+                'log_date': row['log_date'], 'department': row.get('current_department'),
+                'log_type': row.get('type_code'), 'updated_at': row.get('updated_at'),
+                'queried_at': result['queried_at'], 'revision': text_revision(row['content']),
+                'paragraphs': [{'number': i, 'text': text} for i, text in enumerate(plain_text(row['content']).split('\n'), 1)]}
+
+    def execute(self, subject, capability, arguments, source_id=LEGACY, *, original=False):
         if capability in ('database.report.export','database.report.download'):
             from bscli.database.reports import Reports
             reports=Reports(self)
@@ -243,7 +264,11 @@ class IndependentDatabase:
         acquired=slot.acquire(blocking=False)
         try:
             if not acquired: raise DatabaseRejected('DATABASE_BUSY')
-            result=self._execute(subject,capability,arguments,grant,source_id)
+            if original:
+                if set(arguments) != {'log_id'}: raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
+                result=self._execute(subject,capability,arguments,grant,source_id,original=True)
+            else:
+                result=self._execute(subject,capability,arguments,grant,source_id)
             self.grants.audit(subject,capability,'succeeded',{'source_id':source_id,**{k:result[k] for k in ('query_id','sql_sha256','truncated')}})
             return result
         except DatabaseRejected as exc:
@@ -253,7 +278,7 @@ class IndependentDatabase:
             if acquired: slot.release()
             _SLOTS.release()
 
-    def _execute(self, subject, capability, arguments, grant, source_id=LEGACY, *, export=False):
+    def _execute(self, subject, capability, arguments, grant, source_id=LEGACY, *, export=False, original=False):
         import psycopg
         from bscli.database.sources import connect, check_role
         current,record=self.snapshot(subject,capability,source_id)
@@ -341,18 +366,23 @@ class IndependentDatabase:
                     deadline=time.monotonic()+config['statement_timeout_ms']/1000
                     while len(rows)<=row_limit:
                         if time.monotonic()>deadline: raise DatabaseRejected('DATABASE_QUERY_TIMEOUT')
-                        batch=cursor.fetchmany(min(200,row_limit+1-len(rows)))
+                        text_page=bool(plan and plan.count_statement and not export and not original)
+                        batch=cursor.fetchmany(1 if text_page else min(200,row_limit+1-len(rows)))
                         if not batch: break
                         size+=len(json.dumps(batch,default=str).encode())
                         if size>(config['export_bytes'] if export else 1048576): raise DatabaseRejected('DATABASE_RESULT_TOO_LARGE')
                         rows.extend(batch)
                         self.unchanged(subject,capability,source_id,grant,record)
+                        if text_page and size >= 131072 and len(rows) > 1:
+                            # Keep a lookahead row; do not read a huge batch only to discard it later.
+                            row_limit=min(row_limit,len(rows)-1)
+                            break
                 conn.rollback()
         except DatabaseRejected: raise
         except psycopg.Error: raise DatabaseRejected('DATABASE_QUERY_FAILED') from None
         self.unchanged(subject,capability,source_id,grant,record)
         if export and len(rows)>row_limit: raise DatabaseRejected('DATABASE_EXPORT_LIMIT_EXCEEDED')
-        result={'query_id':uuid4().hex,'capability':capability,'source_id':source_id,'source_revision':record['revision'],
+        result={'query_id':uuid4().hex,'capability':capability,'source_id':source_id,'source_name':config['name'],'source_revision':record['revision'],
             'queried_at':datetime.now(timezone.utc).isoformat(),'columns':columns,'rows':rows[:row_limit],
             'truncated':len(rows)>row_limit,'row_limit':row_limit,'notes':NOTES if config['template_pack']=='taihua_logs' else [],
             'sql_sha256':hashlib.sha256(statement.encode()).hexdigest(),'executed_sql':statement}
@@ -372,7 +402,7 @@ class IndependentDatabase:
             result['directory_semantics']={'match':'literal_substring','status_meaning':'unverified',
                 'hierarchy_available':hierarchy_available if directory_entity=='departments' else None,
                 'instructions':'空候选不等于实体不存在；可缩短关键词重查。同名须按父级/标识消歧，不混用其他系统 ID，不按未知 status 排除。after_id 翻页须保持 entity、keyword、parent_id。'}
-        if plan and plan.count_statement and not export:
+        if plan and plan.count_statement and not export and not original:
             add_evidence(result,plan,total_matching)
             if plan.include_descendants and result['next_cursor']:
                 result['next_cursor']['department_scope']=scope_fingerprint
@@ -382,6 +412,8 @@ class IndependentDatabase:
                 for passage in row.get('passages',[]): passage['evidence_id']=source_id+':'+passage['evidence_id']
             result['query_scope']={k:v for k,v in arguments.items() if k not in {'after','page_size'}}
             result['columns']=list(result['rows'][0]) if result['rows'] else columns
+            from bscli.database.evidence import prepare_evidence_page
+            result=prepare_evidence_page(result,plan,arguments,getattr(self,'original_base_url',''))
         if not export and len(json.dumps(result,default=str).encode())>1048576: raise DatabaseRejected('DATABASE_RESULT_TOO_LARGE')
         return json.loads(json.dumps(result,default=str))
 
