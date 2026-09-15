@@ -11,7 +11,7 @@ import sqlite3
 import threading
 from uuid import uuid4
 
-from bscli.database.content import INPUT_SCHEMAS, compile_query, add_evidence
+from bscli.database.content import INPUT_SCHEMAS, compile_query, add_evidence, positive_id, department_scope_sql
 from bscli.database.sources import Sources, LEGACY, source_id as validate_source_id
 
 RELATIONS = frozenset({'work_logs', 'users', 'departments', 'projects', 'work_log_comments'})
@@ -39,6 +39,23 @@ _SOURCE_SLOTS = {}
 
 class DatabaseRejected(ValueError):
     pass
+
+
+def rejection_result(exc):
+    code = str(exc)
+    messages = {
+        'DATABASE_SQL_UNSUPPORTED': '此 SQL 结构不受支持。组织下级范围请使用标准查询 include_descendants；不要重复提交同一 SQL。',
+        'INVALID_DATABASE_ARGUMENTS': '查询参数无效，请按能力目录的 input_schema 修正，保留用户要求的范围。',
+        'DATABASE_DEPARTMENT_NOT_FOUND': '指定部门不存在，请在当前数据源重新检索部门；不要改为无部门条件查询。',
+        'DATABASE_HIERARCHY_UNAVAILABLE': '此数据源未提供可读取的部门父子关系，无法核实下属范围；不能按名称猜测。',
+        'DATABASE_SCOPE_TOO_LARGE': '组织范围超过 1000 个部门，请缩小范围；未返回部分范围冒充完整结果。',
+        'DATABASE_SCOPE_CHANGED': '分页期间组织范围已变化，请从第一页重新查询并说明变化，不能拼接为完整结果。',
+        'DATABASE_CAPABILITY_DENIED': '当前账号未获准使用此数据源能力。',
+        'DATABASE_QUERY_FAILED': '数据库查询未完成，请检查数据源结构与可用性；不要据此判断没有记录。',
+    }
+    message = messages.get(code, '数据库请求未完成：' + code)
+    return {'status': 'rejected', 'code': code, 'message': message,
+            'error': {'code': code, 'message': message}}
 
 
 class DatabaseGrantConflict(ValueError):
@@ -244,6 +261,7 @@ class IndependentDatabase:
         sources=Sources(self.home)
         config=record['active']
         plan=None
+        directory_entity=None
         if capability=='database.schema':
             if arguments!={}: raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             statement="SELECT table_schema,table_name,column_name,data_type FROM information_schema.columns WHERE (table_schema||'.'||table_name)=ANY(%s) ORDER BY table_schema,table_name,ordinal_position"
@@ -254,26 +272,64 @@ class IndependentDatabase:
             except ValueError: raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS') from None
             statement,params=plan.statement,plan.params
         elif capability=='database.directory':
-            if not isinstance(arguments,dict) or set(arguments)-{'entity','keyword'} or arguments.get('entity') not in {'users','departments','projects'} or not isinstance(arguments.get('keyword',''),str) or len(arguments.get('keyword',''))>100:
+            if not isinstance(arguments,dict) or set(arguments)-{'entity','keyword','parent_id','after_id'} or arguments.get('entity') not in {'users','departments','projects'} or not isinstance(arguments.get('keyword',''),str) or len(arguments.get('keyword',''))>100:
                 raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             entity,keyword=arguments['entity'],arguments.get('keyword','')
+            directory_entity=entity
+            if 'parent_id' in arguments and entity!='departments':
+                raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             if entity=='users':
                 statement='SELECT id,username,fullname,dept_id,status FROM analysis.users WHERE strpos(fullname,%s)>0 OR strpos(username,%s)>0 ORDER BY id'
                 params=[keyword,keyword]
             else:
                 statement=f'SELECT id,name,status FROM analysis.{entity} WHERE strpos(name,%s)>0 ORDER BY id'
                 params=[keyword]
+            try:
+                for field in ('parent_id','after_id'):
+                    if field in arguments:
+                        value=positive_id(arguments[field])
+                        clause='parent_id = %s' if field=='parent_id' else 'id > %s'
+                        statement=statement.replace(' WHERE ', ' WHERE (', 1).replace(' ORDER BY id', ') AND '+clause+' ORDER BY id')
+                        params.append(value)
+            except ValueError:
+                raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS') from None
         elif capability=='database.free.read':
             if not isinstance(arguments,dict) or set(arguments)!={'sql'}: raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
             statement,params=validate_sql(arguments['sql'],config['allowed_relations']),[]
         else: raise DatabaseRejected('DATABASE_CAPABILITY_DENIED')
         row_limit=config['export_rows'] if export else (plan.limit if plan else 200)
         total_matching=None
+        resolved_scope=None
+        hierarchy_available=None
         rows=[]
         try:
             with connect(sources,config) as conn:
                 conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
                 check_role(conn)
+                if directory_entity=='departments' or (plan and plan.include_descendants):
+                    hierarchy_available=bool(conn.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='analysis' AND table_name='departments' AND column_name='parent_id') AS available").fetchone()['available'])
+                    if not hierarchy_available and (arguments.get('include_descendants') or 'parent_id' in arguments):
+                        raise DatabaseRejected('DATABASE_HIERARCHY_UNAVAILABLE')
+                    if directory_entity=='departments' and hierarchy_available:
+                        statement=statement.replace('SELECT id,name,status', 'SELECT id,name,parent_id,status')
+                if plan and plan.department_roots:
+                    roots=list(plan.department_roots)
+                    found=conn.execute('SELECT id FROM analysis.departments WHERE id = ANY(%s)',[roots]).fetchall()
+                    if {int(x['id']) for x in found}!=set(roots):
+                        raise DatabaseRejected('DATABASE_DEPARTMENT_NOT_FOUND')
+                    scoped=conn.execute(department_scope_sql(plan.include_descendants)+
+                        'SELECT d.id,d.name FROM analysis.departments d JOIN selected_departments s ON s.id=d.id ORDER BY d.id LIMIT 1001', [roots]).fetchall()
+                    if len(scoped)>1000:
+                        raise DatabaseRejected('DATABASE_SCOPE_TOO_LARGE')
+                    resolved_scope={'root_ids':[str(x) for x in roots],
+                        'include_descendants':plan.include_descendants,'basis':'current_department_membership',
+                        'verification':'database_same_transaction','status_filter':'none',
+                        'departments':[{'id':str(x['id']),'name':x['name']} for x in scoped]}
+                    # Bind cursors to the actual hierarchy as well as the requested filters.
+                    if plan.include_descendants:
+                        scope_fingerprint=hashlib.sha256(json.dumps(resolved_scope,sort_keys=True).encode()).hexdigest()
+                        if 'after' in arguments and arguments['after']['department_scope']!=scope_fingerprint:
+                            raise DatabaseRejected('DATABASE_SCOPE_CHANGED')
                 if plan and plan.count_statement:
                     total_matching=conn.execute(plan.count_statement,plan.count_params).fetchone()['total_matching']
                 with conn.cursor(name='database_read') as cursor:
@@ -300,8 +356,26 @@ class IndependentDatabase:
             'queried_at':datetime.now(timezone.utc).isoformat(),'columns':columns,'rows':rows[:row_limit],
             'truncated':len(rows)>row_limit,'row_limit':row_limit,'notes':NOTES if config['template_pack']=='taihua_logs' else [],
             'sql_sha256':hashlib.sha256(statement.encode()).hexdigest(),'executed_sql':statement}
+        if resolved_scope is not None:
+            result['resolved_department_scope']=resolved_scope
+        # JSON/JavaScript cannot round-trip bigint IDs as numbers.
+        for row in result['rows']:
+            for key, value in row.items():
+                if (key=='id' or key.endswith('_id')) and type(value) is int and abs(value)>2**53-1:
+                    row[key]=str(value)
+        if directory_entity:
+            for row in result['rows']:
+                for key in ('id','dept_id','parent_id'):
+                    if row.get(key) is not None: row[key]=str(row[key])
+            result['has_more']=result['truncated']
+            result['next_after_id']=result['rows'][-1]['id'] if result['truncated'] else None
+            result['directory_semantics']={'match':'literal_substring','status_meaning':'unverified',
+                'hierarchy_available':hierarchy_available if directory_entity=='departments' else None,
+                'instructions':'空候选不等于实体不存在；可缩短关键词重查。同名须按父级/标识消歧，不混用其他系统 ID，不按未知 status 排除。after_id 翻页须保持 entity、keyword、parent_id。'}
         if plan and plan.count_statement and not export:
             add_evidence(result,plan,total_matching)
+            if plan.include_descendants and result['next_cursor']:
+                result['next_cursor']['department_scope']=scope_fingerprint
             for row in result['rows']:
                 for k in ('evidence_id','log_evidence_id'):
                     if k in row: row[k]=source_id+':'+row[k]

@@ -18,6 +18,9 @@ COMPOSED_TASK_PLANNING_POLICY = {
     "modelContext": "\n".join(
         (
             "AgentBridge durable composed-task policy:",
+            "- 根据工作日志归纳进展、问题、主题或统计，优先发现获准日志数据库；用户明确指定业务系统/API时遵从指定来源。缺少数据库授权时说明限制，不静默换源。",
+            "- 数据库实体先同源目录消歧：空候选可缩短关键词重查；重名按父级/ID区分，不混用其他系统ID或凭历史对话认定现时层级。部门本级用 department_id，多部门用 department_ids（互斥）；公司/组织整体范围使用 include_descendants=true，在数据库核实下级。依据 resolved_department_scope 说明当前归属、包含范围与限制；未知 status 不作排除条件。目录截断保持条件用 next_after_id 作为 after_id 继续读取。",
+            "- 数据库总结分别检查范围确认、记录读完、事项覆盖。先建立事项清单，区分已发生进展、进行中、计划、问题和未知，再按用户所需详细度归纳；各项进展不能遗漏独立交付、安全、验收、阻塞事项。逐项核对引用是否支持结论，不把剩余计划写成成果；排序判断标明依据。",
             "- 数据库先选 source_id；多个库不猜来源。比较两段时间用获准的 database.free.read 一次 SQL，不建立专用计划。CSV 使用 database_execute 的 database.report.export，参数 query_capability/query_arguments/request_key；这是重新查询，结果可能变化，再用 database.report.download(report_id) 交付附件。文件为短期交付，不存在历史结果读取；不得输出 base64 或编造链接。",
             "- 泰华日报类型与日期范围不能混淆：用户说‘周报’时，先澄清是 WEEKLY 周报还是一周 DAILY 日报汇总，不猜测类型。独立 database_execute 可以筛选 WEEKLY，但无记录时不得改查 DAILY 或称已有周报口径。不得把日报结果标为周报。",
             "- 用户指定‘数据库分析/数据库统计’时，先使用 database_capabilities，再按获准能力调用 database_execute；独立数据库无需业务系统登录或 API，不映射本人。本人含义不明时请用户明确人员条件；不得默认套用旧的本人七天限制，不得转到普通日志 API。旧数据库分析入口已退役，全部使用 database.*；不读取历史结果。",

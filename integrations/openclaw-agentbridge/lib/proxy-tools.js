@@ -761,11 +761,11 @@ export function taskOutcomeForUnreferencedResult(result) {
       ? payload.error
       : null;
   const errorCode = boundedText(
-    error?.code || payload?.errorCode,
+    error?.code || payload?.errorCode || (UNREFERENCED_FAILURE_STATUSES.has(status) ? payload?.code : null),
     120,
   );
   const errorMessage = boundedText(
-    error?.message || payload?.errorMessage,
+    error?.message || payload?.errorMessage || (UNREFERENCED_FAILURE_STATUSES.has(status) ? payload?.message : null),
     500,
   );
   if (
