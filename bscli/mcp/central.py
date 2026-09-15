@@ -3381,18 +3381,19 @@ def create_central_mcp_server(
         )
 
     @mcp.tool(name="database_capabilities", title="独立数据库能力目录",
-        description="列出当前中央账号获准的数据源及能力；指定 source_id 查看该源参数 schema。执行时明确 source_id。不依赖业务系统会话，不自动识别本人。",
+        description="分层列出当前账号获准数据库能力。默认只返回来源与能力摘要（无完整参数）；用 source_id 和 capability 获取单项 input_schema。来源清单按 next_after_source_id 翻页。不依赖业务系统会话，不自动识别本人。",
         annotations=read_annotations, structured_output=True)
-    async def database_capabilities(source_id: str | None = None) -> dict[str, Any]:
+    async def database_capabilities(source_id: str | None = None, capability: str | None = None,
+                                    after_source_id: str | None = None) -> dict[str, Any]:
         from bscli.database.independent import IndependentDatabase, rejection_result
         identity = _request_identity(identity_store)
         try:
-            return await asyncio.to_thread(IndependentDatabase(service.home).catalog, identity['user_subject'], source_id)
+            return await asyncio.to_thread(IndependentDatabase(service.home).discover, identity['user_subject'], source_id, capability, after_source_id)
         except ValueError as exc:
             return rejection_result(exc)
 
     @mcp.tool(name="database_execute", title="执行独立数据库查询与分析",
-        description=("先调用 database_capabilities 选择获准 source_id 及 input_schema，执行明确 source_id。database.schema 参数为 {}。两窗口比较用 database.free.read。取消历史结果读取，query_id 仅追踪。CSV 通过 database.report.export 传 query_capability/query_arguments/request_key 重新查询，再以 report_id 调用 database.report.download，文件交付使用现有附件机制，不输出 base64，不编造 URL。不建立专用比较计划。"
+        description=("先调用 database_capabilities 选择 source_id，再传 source_id、capability 获取单项 input_schema。执行明确 source_id。默认省略 max_chars 使用12000，include_diagnostics 默认false；容量错误按 recovery 的参数修正，不通过缩小业务范围、重复缩页或切换自由 SQL 恢复。明细与内容分析均按 analysis.review_contract 拆分独立事项并逐来源核对，段落不等于事项。用户来源保留作者、日期及段落链接。database.schema 参数为 {}。两窗口比较用 database.free.read。取消历史结果读取，query_id 仅追踪。CSV 通过 database.report.export 传 query_capability/query_arguments/request_key 重新查询，再以 report_id 调用 database.report.download，文件交付使用现有附件机制，不输出 base64，不编造 URL。不建立专用比较计划。"
                      "日志 query/content_analyze 可用 log_id 单独读取无需日期；内容默认 evidence_format=compact，max_chars=12000 控制完整响应容量。source_label/source_url 用于用户查看原文，后台保留 evidence_id。长单篇 content_complete=false 时用 log_id、next_text_offset作为text_offset、source_revision_hash作为expected_revision续读到next_text_offset=null；不要漏读片段。"
                      "部门条件支持 department_id 或 department_ids（互斥），include_descendants=true 包含同源当前组织树下属，不按未知 status 排除；读取 resolved_department_scope 核验范围。无历史归属还原。目录部门返回 parent_id（若源支持），可按 parent_id 筛直接子级；after_id 使用 next_after_id 翻页。名称空候选可缩短关键词重查，重名须消歧。"
                      "database.logs.query/analyze/content_analyze 按时间查询须传 start_date、end_date_exclusive（query/content_analyze 按 log_id 单篇读取例外）；可选 user_id、department_id、project_id、log_type=DAILY/WEEKLY、keyword 或 keywords、keyword_mode=any/all。"

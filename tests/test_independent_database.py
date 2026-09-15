@@ -27,7 +27,7 @@ class IndependentDatabaseTests(unittest.TestCase):
             with TestClient(server.streamable_http_app()) as client:
                 def call(name,arguments):
                     return client.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':'1','method':'tools/call','params':{'name':name,'arguments':arguments}}).json()['result']['structuredContent']
-                self.assertEqual(call('database_capabilities',{})['capabilities'][0]['name'],'database.logs.analyze')
+                self.assertEqual(call('database_capabilities',{})['sources'][0]['capabilities'][0]['name'],'database.logs.analyze')
                 with patch.object(IndependentDatabase,'_execute',return_value={'query_id':'q','sql_sha256':'h','truncated':False}) as execute:
                     self.assertEqual(call('database_execute',{'capability':'database.logs.analyze','arguments':{}})['status'],'succeeded')
                     self.assertEqual(execute.call_args.args[0],'central-a')
@@ -35,10 +35,12 @@ class IndependentDatabaseTests(unittest.TestCase):
                     self.assertEqual(call('database_execute',{'capability':'database.logs.analyze','arguments':{}})['code'],'DATABASE_CAPABILITY_DENIED')
                     self.assertEqual(execute.call_count,1)
                     runtime.grants.set('central-a',['database.logs.content_analyze','database.comments.analyze'])
-                    discovered = call('database_capabilities',{})['capabilities']
+                    discovered = call('database_capabilities',{})['sources'][0]['capabilities']
                     self.assertEqual({item['name'] for item in discovered}, {'database.logs.content_analyze','database.comments.analyze'})
-                    self.assertTrue(all('input_schema' in item for item in discovered))
+                    self.assertTrue(all('input_schema' not in item for item in discovered))
                     for capability in ('database.logs.content_analyze','database.comments.analyze'):
+                        detail = call('database_capabilities',{'source_id':'taihua_primary','capability':capability})
+                        self.assertIn('input_schema',detail['capability'])
                         self.assertEqual(call('database_execute',{'capability':capability,'arguments':{}})['status'],'succeeded')
                         self.assertEqual(execute.call_args.args[0],'central-a')
             service.start_login.assert_not_called()

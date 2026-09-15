@@ -38,7 +38,9 @@ _SOURCE_SLOTS = {}
 
 
 class DatabaseRejected(ValueError):
-    pass
+    def __init__(self, code, *, recovery=None):
+        super().__init__(code)
+        self.recovery = recovery
 
 
 def rejection_result(exc):
@@ -50,15 +52,25 @@ def rejection_result(exc):
         'DATABASE_HIERARCHY_UNAVAILABLE': '此数据源未提供可读取的部门父子关系，无法核实下属范围；不能按名称猜测。',
         'DATABASE_SCOPE_TOO_LARGE': '组织范围超过 1000 个部门，请缩小范围；未返回部分范围冒充完整结果。',
         'DATABASE_SCOPE_CHANGED': '分页期间组织范围已变化，请从第一页重新查询并说明变化，不能拼接为完整结果。',
-        'DATABASE_EVIDENCE_TOO_LARGE': '证据超过单次文本容量。请缩小范围，或以 log_id 单独读取；不要将本次视为已完整读取。',
+        'DATABASE_EVIDENCE_TOO_LARGE': '响应容量不足，请按 recovery 调整容量参数；保持查询范围，减少 page_size 不一定有效。',
+        'DATABASE_CATALOG_TOO_LARGE': '单项能力说明超过传输上限，请由管理员检查能力定义；本次未返回截断的参数结构。',
         'DATABASE_CONTENT_CHANGED': '正文在续读期间发生变化，请从开头重新读取，不能拼接不同版本。',
         'DATABASE_LOG_NOT_FOUND': '这条日志不存在或已删除。',
         'DATABASE_CAPABILITY_DENIED': '当前账号未获准使用此数据源能力。',
         'DATABASE_QUERY_FAILED': '数据库查询未完成，请检查数据源结构与可用性；不要据此判断没有记录。',
     }
     message = messages.get(code, '数据库请求未完成：' + code)
+    recovery = getattr(exc, 'recovery', None) or {
+        'DATABASE_SQL_UNSUPPORTED': {'action':'unsupported', 'retry_same_request':False, 'instruction':'组织下级使用标准日志查询 include_descendants；不重复此 SQL。'},
+        'INVALID_DATABASE_ARGUMENTS': {'action':'inspect_schema', 'retry_same_request':False, 'instruction':'用 database_capabilities 的 source_id、capability 获取单项参数，修正后重试。'},
+        'DATABASE_CAPABILITY_DENIED': {'action':'check_authorization', 'retry_same_request':False, 'instruction':'重新检查当前授权目录；不切换数据源或能力绕过权限。'},
+        'DATABASE_AUTHORIZATION_CHANGED': {'action':'check_authorization', 'retry_same_request':False},
+        'DATABASE_SCOPE_CHANGED': {'action':'restart_pagination', 'retry_same_request':False, 'instruction':'保留范围，从第一页重新核验；不拼接变化前后的页。'},
+        'DATABASE_CONTENT_CHANGED': {'action':'restart_document', 'retry_same_request':False, 'instruction':'重新读取同一 log_id 的首片段，使用新版本续读。'},
+        'DATABASE_CATALOG_TOO_LARGE': {'action':'capacity_limit', 'retry_same_request':False},
+    }.get(code, {'action':'inspect_failure', 'retry_same_request':False})
     return {'status': 'rejected', 'code': code, 'message': message,
-            'error': {'code': code, 'message': message}}
+            'error': {'code': code, 'message': message}, 'recovery':recovery}
 
 
 class DatabaseGrantConflict(ValueError):
@@ -192,6 +204,43 @@ class IndependentDatabase:
         self.home = Path(home)
         self.original_base_url = original_base_url
         self.grants = DatabaseGrants(self.home / 'database' / 'grants.sqlite3')
+
+    def discover(self, subject, source_id=None, capability=None, after_source_id=None):
+        """Bounded MCP discovery. Full internal catalog stays available to administrators."""
+        from bscli.database.evidence import response_chars
+        if capability is not None and (source_id is None or after_source_id is not None):
+            raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
+        if source_id is not None and after_source_id is not None:
+            raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
+        full = self.catalog(subject, source_id)
+        if capability is not None:
+            selected = next((c for c in full['capabilities'] if c['name']==capability), None)
+            if selected is None: raise DatabaseRejected('DATABASE_CAPABILITY_DENIED')
+            result = {'source_id':source_id, 'name':full['name'], 'capability':selected,
+                      'notes':full['notes'], 'requires_business_session':False}
+            if response_chars(result)>14000: raise DatabaseRejected('DATABASE_CATALOG_TOO_LARGE')
+            return result
+        items = [full] if source_id is not None else sorted(full['sources'], key=lambda s:s['source_id'])
+        if after_source_id is not None:
+            try:
+                validate_source_id(after_source_id)
+            except ValueError:
+                raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS') from None
+            items = [s for s in items if s['source_id']>after_source_id]
+        result = {'sources':[], 'has_more':False, 'next_after_source_id':None,
+                  'requires_business_session':False,
+                  'instructions':'清单不含完整参数。选择来源后以 source_id 和 capability 调用本工具获取单项 input_schema；按 next_after_source_id 翻目录。'}
+        for item in items:
+            summary = {k:item[k] for k in ('source_id','name')}
+            summary['description'] = item['description'][:160]
+            summary['capabilities'] = [{k:c[k] for k in ('name','description')} for c in item['capabilities']]
+            result['sources'].append(summary)
+            if response_chars(result)>11000 or len(result['sources'])>10:
+                result['sources'].pop()
+                result.update(has_more=True, next_after_source_id=result['sources'][-1]['source_id'])
+                break
+        result['selection_required'] = source_id is None
+        return result
 
     def catalog(self, subject, source_id=None):
         sources=Sources(self.home)

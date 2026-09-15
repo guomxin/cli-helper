@@ -59,6 +59,7 @@ FILTER_PROPERTIES = {
     'keyword_mode': {'enum': ['any', 'all'], 'default': 'any'},
 }
 PAGE_PROPERTIES = {
+    'include_diagnostics': {'type':'boolean', 'default':False, 'description':'按需返回 SQL、字段和完整组织清单；仍受容量限制，普通查询省略。'},
     'expected_revision': {'type': 'string', 'pattern': '^[0-9a-f]{64}$', 'description': '长正文续读时传前页 source_revision_hash，内容变化则停止。'},
     'text_offset': {'type': 'integer', 'minimum': 0, 'description': '仅 log_id 内容查询；按 next_text_offset 继续读取同一日志长正文。'},
     'max_chars': {'type': 'integer', 'minimum': 4000, 'maximum': 14000, 'default': 12000},
@@ -233,6 +234,8 @@ def compile_query(capability, arguments, *, source_scope=''):
                              department_roots=roots, include_descendants=descendants)
         page_size = arguments.get('page_size', 200 if capability == 'database.logs.query' else 50)
         max_chars = arguments.get('max_chars', 12000)
+        if type(arguments.get('include_diagnostics', False)) is not bool:
+            raise ValueError()
         if 'text_offset' in arguments and (not exact_log or type(arguments['text_offset']) is not int or arguments['text_offset'] < 0):
             raise ValueError()
         if 'expected_revision' in arguments and (not exact_log or not isinstance(arguments['expected_revision'], str) or not re.fullmatch('[0-9a-f]{64}', arguments['expected_revision'])):

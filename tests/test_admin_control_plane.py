@@ -940,7 +940,7 @@ class AdminHttpServerTests(unittest.TestCase):
                         self.assertEqual(status, 200)
                         self.assertFalse(saved["token_reissue_required"])
                         self.assertFalse(saved["gateway_restart_required"])
-                        self.assertEqual({item["name"] for item in call(subject, "database_capabilities", {})["capabilities"]}, set(CAPABILITIES)|{"database.report.download"})
+                        self.assertEqual({item["name"] for item in call(subject, "database_capabilities", {})["sources"][0]["capabilities"]}, set(CAPABILITIES)|{"database.report.download"})
                         for capability in (c for c in CAPABILITIES if c != "database.report.export"):
                             self.assertEqual(call(subject, "database_execute", {"capability": capability, "arguments": {}})["status"], "succeeded")
                     self.assertEqual(save("guomao", [], 0)[0], 409)
@@ -949,9 +949,9 @@ class AdminHttpServerTests(unittest.TestCase):
                     self.assertEqual(call("guomao", "database_execute", {
                         "capability": "database.free.read", "arguments": {"sql": "select 1"}})["code"], "DATABASE_CAPABILITY_DENIED")
                     self.assertEqual(execute.call_count, count)
-                    self.assertEqual(len(call("lishiyu", "database_capabilities", {})["capabilities"]), 9)
+                    self.assertEqual(len(call("lishiyu", "database_capabilities", {})["sources"][0]["capabilities"]), 9)
                     self.assertEqual(save("guomao", list(CAPABILITIES), 2)[0], 200)
-                    self.assertEqual(len(call("guomao", "database_capabilities", {})["capabilities"]), 9)
+                    self.assertEqual(len(call("guomao", "database_capabilities", {})["sources"][0]["capabilities"]), 9)
 
                 audit = [item for item in control.audit.list() if item["action"] == "database.grants.update"]
                 self.assertEqual(len(audit), 4)
