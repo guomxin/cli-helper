@@ -15,11 +15,16 @@ from bscli.core.task_plan_validation import (
     validate_and_compile_task_plan,
 )
 from bscli.core.planning_catalog import build_planning_catalog
-from bscli.core.planning_policy import compile_temporal_constraints
+from bscli.core.planning_policy import compile_temporal_constraints, COMPOSED_TASK_PLANNING_POLICY
 from bscli.core.transforms import build_transform_registry
 
 
 class TaskPlanValidationTests(unittest.TestCase):
+    def test_policy_fits_host_transport_without_losing_trailing_safety_rules(self):
+        # OpenClaw normalizePlanningPolicy slices at 6000 UTF-16 code units.
+        context = COMPOSED_TASK_PLANNING_POLICY['modelContext']
+        self.assertLessEqual(len(context.encode('utf-16-le')) // 2, 6000)
+
     def setUp(self):
         self.registry = build_central_capability_registry()
         for spec in build_taihua_capability_registry().list():
