@@ -58,9 +58,10 @@ class TransportTests(unittest.TestCase):
                 runtime.discover('reader',after_source_id='../invalid')
 
     def test_realistic_scope_envelope_at_every_budget_for_both_read_paths(self):
-        for capability in ('database.logs.query','database.logs.content_analyze'):
+        for capability, mode in [('database.logs.query', None), *[
+                ('database.logs.content_analyze', mode) for mode in ('summary', 'progress', 'issues', 'experience')]]:
             for budget in (4000,6000,12000,14000):
-                with self.subTest(capability=capability,budget=budget),tempfile.TemporaryDirectory() as root:
+                with self.subTest(capability=capability,mode=mode,budget=budget),tempfile.TemporaryDirectory() as root:
                     runtime,conn,cursor=scopes.ScopeTests().fixture(root)
                     runtime.grants.set('reader',[capability])
                     original=conn.execute.side_effect
@@ -74,6 +75,8 @@ class TransportTests(unittest.TestCase):
                         'current_department':'测试部门','content':'讨论剩余工作；计划验证。\n安全检查发现问题，尚未解决。'}],
                         [{'id':2,'log_date':'2026-09-01','fullname':'另一作者','content':'已提交资料，等待盖章。'}],[]]
                     args={**scopes.WINDOW,'department_id':'3','include_descendants':True,'max_chars':budget}
+                    if mode is not None:
+                        args['mode'] = mode
                     with patch('bscli.database.sources.connect') as connect,patch('bscli.database.sources.check_role'):
                         connect.return_value.__enter__.return_value=conn
                         result=runtime.execute('reader',capability,args)
