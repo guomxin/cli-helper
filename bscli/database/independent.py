@@ -58,9 +58,11 @@ def rejection_result(exc):
         'DATABASE_LOG_NOT_FOUND': '这条日志不存在或已删除。',
         'DATABASE_CAPABILITY_DENIED': '当前账号未获准使用此数据源能力。',
         'DATABASE_QUERY_FAILED': '数据库查询未完成，请检查数据源结构与可用性；不要据此判断没有记录。',
+        'DATABASE_FUNCTION_DENIED': 'SQL 使用了未获准的函数；请核对受支持的查询写法，不能原样重试或扩大查询范围。',
     }
     message = messages.get(code, '数据库请求未完成：' + code)
     recovery = getattr(exc, 'recovery', None) or {
+        'DATABASE_FUNCTION_DENIED': {'action':'inspect_schema', 'retry_same_request':False, 'instruction':'读取自由查询单项参数并修正函数；字面关键词可用获准标准日志 keywords。LIKE/ILIKE 的 %、_ 是通配符，改写必须保持原匹配语义；不新增权限或换源。'},
         'DATABASE_SQL_UNSUPPORTED': {'action':'unsupported', 'retry_same_request':False, 'instruction':'组织下级使用标准日志查询 include_descendants；不重复此 SQL。'},
         'INVALID_DATABASE_ARGUMENTS': {'action':'inspect_schema', 'retry_same_request':False, 'instruction':'用 database_capabilities 的 source_id、capability 获取单项参数，修正后重试。'},
         'DATABASE_CAPABILITY_DENIED': {'action':'check_authorization', 'retry_same_request':False, 'instruction':'重新检查当前授权目录；不切换数据源或能力绕过权限。'},

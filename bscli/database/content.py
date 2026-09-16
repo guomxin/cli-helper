@@ -11,9 +11,9 @@ import re
 CONTENT_MODES = {
     'summary': '归纳主要工作、明确记录的成果、后续计划与证据不足事项。',
     'topics': '归纳工作主题；主题出现次数不等于工时或投入占比。',
-    'progress': '围绕同一事项按时间梳理计划、已发生的进展和未来安排；区分项目关联与正文提及。',
-    'issues': '提取问题、影响、原文明示的责任/时间线索和后续证据；无后续写未找到后续记录。',
-    'experience': '整理类似问题、处理措施、明确结果和适用限制；不虚构成功结果或语义检索覆盖率。',
+    'progress': '围绕同一事项建立带来源的时间线，保留计划、进展、验证、复发与冲突。同项目不同故障不合并；仅相似标为疑似。分别说明发现与跟进窗口，不静默扩大范围。区分项目关联与正文提及。',
+    'issues': '提取问题、影响、原文明示的责任/时间线索和后续证据。建议不等于实施、已处理不等于复测正常；无后续写在所查范围内未找到后续记录，不推定未完成。',
+    'experience': '先说明检索词、扩展词、范围和候选覆盖，再阅读全文并剔除相邻但不同问题。按问题、措施、原文明示结果、适用条件及差异整理案例；已操作、复测正常和长期有效分开，不虚构成功或语义召回率。',
     'collaboration': '按原文整理参与方、协作与交接事项；不要自动把同名文本合并为同一人员。',
     'changes': '对照同人同事项的连续记录，说明新增和变化；相同文字不代表没有工作。',
 }
@@ -88,7 +88,8 @@ INPUT_SCHEMAS = {
         'commenter_id': ID_SCHEMA, 'mode': {'enum': list(COMMENT_MODES), 'default': 'feedback'},
         'date_basis': {'enum': ['comment_created_at', 'log_date'], 'default': 'comment_created_at'},
         'search_in': {'enum': ['comments', 'logs', 'both'], 'default': 'comments'}}, DATES),
-    'database.free.read': object_schema({'sql': {'type': 'string', 'minLength': 1, 'maxLength': 16000}}, ('sql',)),
+    'database.free.read': object_schema({'sql': {'type': 'string', 'minLength': 1, 'maxLength': 16000,
+        'description': '单条获准对象上的只读 SELECT/CTE；函数受白名单限制，不支持 strpos 或递归 CTE。文本可用 LIKE/ILIKE，但 % 和 _ 是通配符；字面关键词优先标准日志 keywords。检查 truncated；需要段落引用时按返回的日志 ID 调用现有日志查询，不能编造来源链接。'}}, ('sql',)),
 }
 for _cap in ('database.logs.query', 'database.logs.content_analyze'):
     INPUT_SCHEMAS[_cap]['required'] = []

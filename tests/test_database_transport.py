@@ -4,13 +4,28 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from bscli.database.independent import IndependentDatabase, DatabaseRejected, CAPABILITIES, rejection_result
+from bscli.database.independent import IndependentDatabase, DatabaseRejected, CAPABILITIES, rejection_result, validate_sql
 from bscli.database.evidence import response_chars
 from tests.database_fixtures import configured_source
 from tests import test_database_scope as scopes
 
 
 class TransportTests(unittest.TestCase):
+    def test_denied_text_function_can_be_rewritten_without_expanding_access(self):
+        with self.assertRaisesRegex(DatabaseRejected, 'DATABASE_FUNCTION_DENIED') as caught:
+            validate_sql("SELECT id FROM analysis.work_logs WHERE strpos(content,'无法登录') > 0")
+        failure = rejection_result(caught.exception)
+        self.assertEqual(failure['recovery']['action'], 'inspect_schema')
+        self.assertFalse(failure['recovery']['retry_same_request'])
+        self.assertTrue(validate_sql("SELECT id FROM analysis.work_logs WHERE content LIKE '%无法登录%'"))
+        with tempfile.TemporaryDirectory() as root:
+            configured_source(root)
+            runtime = IndependentDatabase(root)
+            runtime.grants.set('reader', ['database.logs.query'])
+            with self.assertRaisesRegex(DatabaseRejected, 'DATABASE_CAPABILITY_DENIED'):
+                runtime.execute('reader', 'database.free.read', {
+                    'sql': "SELECT id FROM analysis.work_logs WHERE content LIKE '%无法登录%'"})
+
     def test_discovery_is_bounded_complete_and_details_are_authorized(self):
         with tempfile.TemporaryDirectory() as root:
             runtime=IndependentDatabase(root)
