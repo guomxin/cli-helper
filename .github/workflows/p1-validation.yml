@@ -1,0 +1,36 @@
+name: P1 candidate validation
+
+on:
+  push:
+    branches: [improvements/p1-20260919]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Export exact tracked candidate
+        shell: bash
+        run: |
+          mkdir -p output/ci
+          git archive --format=tar.gz HEAD > output/ci/candidate-source.tar.gz
+          git rev-parse HEAD > output/ci/candidate-commit.txt
+          sha256sum output/ci/candidate-source.tar.gz > output/ci/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-source-${{ github.sha }}
+          path: output/ci/
+          retention-days: 3
+          if-no-files-found: error
