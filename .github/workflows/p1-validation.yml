@@ -16,7 +16,7 @@ concurrency:
 jobs:
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -28,7 +28,12 @@ jobs:
           git archive --format=tar.gz HEAD > output/ci/candidate-source.tar.gz
           git rev-parse HEAD > output/ci/candidate-commit.txt
           sha256sum output/ci/candidate-source.tar.gz > output/ci/SHA256SUMS
+      - name: Collect offline Python 3.13 validation dependencies
+        shell: bash
+        run: |
+          python3 -m pip download --dest output/ci/dependencies --only-binary=:all: --python-version 3.13 'mcp==1.23.2' 'pglast==7.18' 'psycopg[binary]==3.3.5' 'setuptools>=77' pytest
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: candidate-source-${{ github.sha }}
           path: output/ci/
