@@ -942,7 +942,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.95",
+      hostVersion: "0.4.96",
     },
     "io.agentbridge/task": {
       taskId,
@@ -1361,7 +1361,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.95",
+        hostVersion: "0.4.96",
       },
     },
   });
@@ -2601,7 +2601,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.95",
+      hostVersion: "0.4.96",
     },
   });
   assert.equal(
@@ -4844,6 +4844,85 @@ test("continues the original request once after credential login succeeds", asyn
   assert.equal(harness.systemEvents.length, 1);
   assert.equal(harness.heartbeatRuns.length, 1);
 });
+
+for (const legacyHooks of [false, true]) {
+  test(`native independent OA read owns login and resumes once (legacy hooks=${legacyHooks})`, async () => {
+    const harness = fakeApi({ autoPoll: false });
+    const sessionKey = "agent:main:agentbridge-workspace:direct:account-a";
+    const context = { sessionKey, runId: "same-turn" };
+    const calls = [];
+    const card = interaction();
+    let authenticated = false;
+    const client = {
+      async callTool(name, args, options) {
+        calls.push({ name, args, options });
+        if (name === "agentbridge_host_task_ensure") {
+          assert.equal(args.task_scope, "independent");
+          return { task: { taskId: args.host_task_key } };
+        }
+        if (name === "agentbridge_host_coordinator_lease_acquire") return coordinatorLease();
+        if (name === "oa_session_login") return { status: "requires_user_action", interaction: card };
+        if (name === "agentbridge_host_task_observe") return { status: "succeeded" };
+        if (name === "agentbridge_interaction_resume") {
+          authenticated = true;
+          return { status: "succeeded", taskStatus: "succeeded", nextAction: { type: "original_request_completed" } };
+        }
+        throw new Error(`unexpected tool: ${name}`);
+      },
+      async callToolResult(name, args, options) {
+        calls.push({ name, args, options });
+        const payload = authenticated
+          ? { status: "succeeded", operationId: "next-read", result: { items: [] } }
+          : { status: "requires_user_action", operationId: "original-read", error: { code: "LOGIN_REQUIRED" } };
+        return { structuredContent: payload, content: [{ type: "text", text: JSON.stringify(payload) }] };
+      },
+    };
+    const coordinator = registerAgentBridgeInteractions(harness.api, { mcpClient: client });
+    const tools = createAgentBridgeProxyTools({
+      context, serverName: "agentbridge",
+      identityRouter: {
+        resolveToolContext: () => ({ bound: true, binding: {}, client }),
+        endpointKeyForSession: () => "workspace:account-a",
+      },
+      taskRunRefResolver: () => "same-user-turn",
+      trustedResultHandler: (event, ctx) => captureNativeAgentBridgeResult(coordinator, event, ctx),
+    });
+    const tool = tools.find(item => item.name === "oa_workflow_pending_list");
+    const args = { keyword: "申请", limit: 50 };
+    if (legacyHooks) bindToolCall(harness, {
+      toolCallId: "read-1", runId: context.runId, sessionKey, toolName: tool.name, params: args,
+    });
+    const result = await tool.execute("read-1", args);
+    assert.match(result.content[0].text, /already opened the trusted login card/);
+    assert.equal(JSON.stringify(result).includes(card.presentation.url), false);
+    if (legacyHooks) await harness.middleware({
+      toolCallId: "read-1", toolName: tool.name,
+      result: { content: result.content, details: result.details },
+    }, { runtime: "openclaw" });
+    const record = coordinator.records.get(card.interactionId);
+    assert.ok(record);
+    assert.equal(record.taskId, `${sessionKey}|read-1`);
+    assert.deepEqual(record.readContinuation.arguments, args);
+    const login = calls.filter(call => call.name === "oa_session_login");
+    assert.equal(login.length, 1);
+    assert.equal(login[0].options.meta["io.agentbridge/task"].taskId, record.taskId);
+    assert.ok(calls.some(call => call.name === "agentbridge_host_task_observe"
+      && call.args.task_id === record.taskId && call.args.interaction_ids.includes(card.interactionId)));
+    record.interaction = { ...record.interaction, state: "completed", resume: { ...record.interaction.resume, ready: true } };
+    await coordinator.resume(record, new AbortController().signal);
+    await coordinator.resume(record, new AbortController().signal);
+    const resumes = calls.filter(call => call.name === "agentbridge_interaction_resume");
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0].options.meta["io.agentbridge/task"].taskId, record.taskId);
+    assert.equal(resumes[0].options.meta["io.agentbridge/task"].coordinatorLeaseVersion, "1");
+    assert.equal(harness.heartbeatRuns.length, 0);
+    // A later independent query must not reuse the now-terminal original task.
+    await tool.execute("read-2", {});
+    assert.deepEqual(calls.filter(call => call.name === "agentbridge_host_task_ensure")
+      .map(call => call.args.host_task_key), [`${sessionKey}|read-1`, `${sessionKey}|read-2`]);
+    assert.equal(calls.filter(call => call.name === tool.name).length, 2);
+  });
+}
 
 test("automatically opens a trusted login for an authenticated read", async () => {
   const harness = fakeApi({ autoPoll: false });

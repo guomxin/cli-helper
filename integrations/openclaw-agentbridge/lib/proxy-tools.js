@@ -442,7 +442,7 @@ function createProxyTool({
       // The embedded host forwards only content/details to result middleware.
       return trustedResultHandler
         ? await trustedResultHandler(
-            { toolCallId, toolName: descriptor.name, result: nativeResult },
+            { toolCallId, toolName: descriptor.name, params: callParams, result: nativeResult },
             context,
           )
         : nativeResult;

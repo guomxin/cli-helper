@@ -551,7 +551,21 @@ export class InteractionCoordinator {
 
   async captureNativeToolResult(event, context) {
     const processed = processToolResult(event.result, this.config.allowedCardOrigins);
-    if (!processed.sanitized) return event.result;
+    if (!processed.sanitized) {
+      const payload = trustedAgentBridgeStructuredContent(event.result, this.config.mcpServerName);
+      if (isLoginRequiredPayload(payload)) {
+        // Native hosts may never invoke the legacy result middleware. Start
+        // authentication here while the failed read still owns its task.
+        // The native proxy supplies the actual call arguments even if the
+        // host also omitted before_tool_call.
+        if (!this.toolBindings.has(normalizeToolCallId(event.toolCallId))) {
+          this.bindToolCall(event, context);
+        }
+        const captured = await this.captureToolResult(event, context);
+        return captured?.result || event.result;
+      }
+      return event.result;
+    }
     // Retain the binding for middleware handling of any non-card result data.
     const binding = this.toolBindings.get(normalizeToolCallId(event.toolCallId));
     const sessionKey = binding?.sessionKey || context.sessionKey;
