@@ -23,12 +23,74 @@ from bscli.adapters.seeyon_addressbook import (
     private_contact_search,
 )
 from bscli.adapters.seeyon_central import build_central_capability_registry
+from bscli.adapters.base import AdapterLoginRequired
+from bscli.adapters.seeyon_addressbook import _organization_nodes
+import json
+from unittest.mock import Mock
 
 
 BASE_URL = "http://oa.example.test/seeyon/main.do?method=main"
 
 
 class SeeyonAddressbookTests(unittest.TestCase):
+    def test_tree_readiness_wait_keeps_initial_observation_without_reloading(self):
+        frame=Mock(url='https://oa.invalid/tree')
+        page=Mock(url='https://oa.invalid/home')
+        frame.evaluate.side_effect=[
+            {'documentState':'loading'},
+            {'documentState':'complete','jqueryPresent':True,'pluginPresent':True,'treePresent':True},
+            [_node('1','','fixture',[],True)],
+        ]
+        nodes, observations=_organization_nodes(page,frame)
+        self.assertEqual(len(nodes),1)
+        self.assertEqual([o['treePresent'] for o in observations],[False,True])
+        page.wait_for_timeout.assert_called_once_with(250)
+        page.goto.assert_not_called()
+
+    def test_tree_missing_object_is_bounded_and_diagnostics_are_sanitized(self):
+        frame=Mock(url='https://oa.invalid/tree?secret=never-log')
+        page=Mock(url='https://oa.invalid/home')
+        frame.evaluate.return_value={'documentState':'complete','secret':'never-log','jqueryPresent':True}
+        with self.assertRaises(SeeyonAddressbookContractMismatch) as caught:
+            _organization_nodes(page,frame)
+        diagnostic=json.loads(str(caught.exception))
+        self.assertEqual(diagnostic['code'],'OA_ORG_TREE_OBJECT_MISSING')
+        self.assertEqual(len(diagnostic['observations']),4)
+        self.assertEqual(page.wait_for_timeout.call_count,3)
+        self.assertNotIn('never-log',str(caught.exception))
+
+    def test_tree_login_fallback_is_not_retried_as_missing_object(self):
+        page=Mock(url='https://oa.invalid/seeyon/login/index.jsp')
+        frame=Mock(url='https://oa.invalid/tree')
+        with self.assertRaises(AdapterLoginRequired):
+            _organization_nodes(page,frame)
+        frame.evaluate.assert_not_called()
+        page.wait_for_timeout.assert_not_called()
+
+    def test_tree_parse_failure_and_empty_visibility_are_not_guessed_as_permissions(self):
+        for nodes,code in [([None],'OA_ORG_TREE_PARSE_FAILED'),([{}],'OA_ORG_TREE_PARSE_FAILED'),([], 'OA_ORG_TREE_EMPTY_VISIBILITY_UNDETERMINED')]:
+            with self.subTest(code=code):
+                page=Mock(url='https://oa.invalid/home'); frame=Mock(url='https://oa.invalid/tree')
+                frame.evaluate.side_effect=[{'documentState':'complete','treePresent':True},nodes]
+                with self.assertRaises(SeeyonAddressbookContractMismatch) as caught:
+                    _organization_nodes(page,frame)
+                self.assertEqual(json.loads(str(caught.exception))['code'],code)
+                page.wait_for_timeout.assert_not_called()
+
+    def test_home_and_frame_failures_preserve_stage_without_browser_text(self):
+        module='bscli.adapters.seeyon_addressbook.'
+        with patch(module+'_open_home',side_effect=RuntimeError('secret-browser-url')):
+            with self.assertRaises(SeeyonAddressbookContractMismatch) as caught:
+                organization_tree(object(),base_url=BASE_URL,arguments={})
+        self.assertEqual(json.loads(str(caught.exception))['code'],'OA_ORG_HOME_UNAVAILABLE')
+        self.assertNotIn('secret',str(caught.exception))
+        with patch(module+'_open_home',return_value=(Mock(url='https://oa.invalid/home'),'1')), \
+                patch(module+'_wait_for_frame',side_effect=RuntimeError('secret-frame-url')):
+            with self.assertRaises(SeeyonAddressbookContractMismatch) as caught:
+                organization_tree(object(),base_url=BASE_URL,arguments={})
+        self.assertEqual(json.loads(str(caught.exception))['code'],'OA_ORG_FRAME_NOT_READY')
+        self.assertNotIn('secret',str(caught.exception))
+
     def test_registry_exposes_the_complete_read_only_package(self):
         registry = build_central_capability_registry()
 
@@ -349,6 +411,8 @@ class FakeFrame:
         self.nodes = nodes
 
     def evaluate(self, _script, _arguments):
+        if 'documentState:' in _script:
+            return {'documentState':'complete','jqueryPresent':True,'pluginPresent':True,'treePresent':True}
         return self.nodes
 
 

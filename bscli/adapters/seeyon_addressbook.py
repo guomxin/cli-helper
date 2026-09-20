@@ -144,6 +144,63 @@ class SeeyonAddressbookContractMismatch(RuntimeError):
     pass
 
 
+_TREE_READINESS_SCRIPT = r"""
+({treeId}) => ({
+  documentState: document.readyState,
+  jqueryPresent: Boolean(window.jQuery),
+  pluginPresent: Boolean(window.jQuery?.fn?.zTree),
+  treePresent: Boolean(window.jQuery?.fn?.zTree?.getZTreeObj?.(treeId))
+})
+"""
+
+
+def _organization_nodes(page, tree_frame):
+    """Bounded DOM readiness polling; never navigate or replay a business call."""
+    started = time.monotonic()
+    observations = []
+    for attempt in range(4):
+        _assert_not_login(str(getattr(page, "url", "")))
+        _assert_not_login(str(getattr(tree_frame, "url", "")))
+        try:
+            raw = tree_frame.evaluate(_TREE_READINESS_SCRIPT, {"treeId": "accountTree"})
+            if not isinstance(raw, dict):
+                raise ValueError("invalid readiness contract")
+            snapshot = {
+                "stage": "tree_object", "frameReady": True,
+                "documentState": raw.get("documentState") if raw.get("documentState") in ("loading", "interactive", "complete") else "unknown",
+                **{k: raw.get(k) is True for k in ("jqueryPresent", "pluginPresent", "treePresent")},
+                "elapsedMs": round((time.monotonic() - started) * 1000),
+            }
+            observations.append(snapshot)
+            if snapshot["treePresent"]:
+                nodes = tree_frame.evaluate(_TREE_SCRIPT, {"treeId": "accountTree"})
+                if not isinstance(nodes, list) or any(
+                    not isinstance(n, dict) or not str(n.get('id') or '').strip()
+                    or not str(n.get('name') or '').strip() or not isinstance(n.get('path'),list)
+                    for n in nodes
+                ):
+                    code = "OA_ORG_TREE_PARSE_FAILED"
+                elif not nodes:
+                    code = "OA_ORG_TREE_EMPTY_VISIBILITY_UNDETERMINED"
+                else:
+                    return nodes, observations
+                break
+        except Exception as exc:
+            # Do not copy browser exception text, URLs, credentials, or DOM.
+            _assert_not_login(str(getattr(page, "url", "")))
+            _assert_not_login(str(getattr(tree_frame, "url", "")))
+            code = "OA_ORG_TREE_EVALUATION_FAILED"
+            break
+        if attempt < 3:
+            page.wait_for_timeout(250)
+    else:
+        code = ("OA_ORG_TREE_PAGE_NOT_READY" if observations[-1]["documentState"] != "complete"
+                else "OA_ORG_TREE_OBJECT_MISSING")
+    raise SeeyonAddressbookContractMismatch(json.dumps({
+        "code": code, "observations": observations, "readAttempts": len(observations),
+    }, ensure_ascii=True))
+
+
 _TREE_SCRIPT = r"""
 ({treeId}) => {
   const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -266,13 +323,28 @@ def invoke_addressbook_capability(
 def organization_tree(worker, *, base_url: str, arguments: dict) -> dict:
     keyword = _optional_text(arguments.get("keyword"), "keyword", maximum=200)
     limit = _integer(arguments.get("limit"), "limit", default=200, maximum=500)
-    page, account_id = _open_home(worker, base_url=base_url, addressbook_type=1)
-    tree_frame = _wait_for_frame(page, "method=treeDept")
-    nodes = tree_frame.evaluate(_TREE_SCRIPT, {"treeId": "accountTree"})
-    if not isinstance(nodes, list) or not nodes:
-        raise SeeyonAddressbookContractMismatch(
-            "The OA organization address book did not expose its department tree."
-        )
+    started = time.monotonic()
+    try:
+        page, account_id = _open_home(worker, base_url=base_url, addressbook_type=1)
+    except AdapterLoginRequired:
+        raise
+    except Exception:
+        raise SeeyonAddressbookContractMismatch(json.dumps({
+            "code": "OA_ORG_HOME_UNAVAILABLE", "stage": "home",
+            "elapsedMs": round((time.monotonic() - started) * 1000),
+        })) from None
+    home_ms = round((time.monotonic() - started) * 1000)
+    try:
+        tree_frame = _wait_for_frame(page, "method=treeDept")
+    except AdapterLoginRequired:
+        raise
+    except Exception:
+        _assert_not_login(str(getattr(page, "url", "")))
+        raise SeeyonAddressbookContractMismatch(json.dumps({
+            "code": "OA_ORG_FRAME_NOT_READY", "stage": "tree_frame", "frameReady": False,
+            "homeElapsedMs": home_ms, "elapsedMs": round((time.monotonic() - started) * 1000),
+        })) from None
+    nodes, diagnostics = _organization_nodes(page, tree_frame)
     account_node = next(
         (node for node in nodes if str(node.get("id") or "") == account_id),
         nodes[0],
@@ -299,6 +371,9 @@ def organization_tree(worker, *, base_url: str, arguments: dict) -> dict:
     departments = departments[:limit]
     return {
         "schema_version": "bscli.oa_addressbook_organization_tree.v1",
+        "diagnostics": {"homeElapsedMs": home_ms,
+                        "totalElapsedMs": round((time.monotonic() - started) * 1000),
+                        "readinessObservations": diagnostics},
         "organization": {
             "account_id": account_id,
             "name": str(account_node.get("name") or "").strip(),
@@ -681,6 +756,7 @@ def _open_home(worker, *, base_url: str, addressbook_type: int):
 def _wait_for_frame(page, url_fragment: str, *, timeout_seconds: float = 12):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        _assert_not_login(str(getattr(page, "url", "")))
         for frame in page.frames:
             if url_fragment in str(frame.url or ""):
                 return frame
