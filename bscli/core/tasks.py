@@ -1823,7 +1823,7 @@ class TaskHubStore:
     def operation_before_interaction(
         self, *, task_id: str, user_subject: str, interaction_id: str
     ) -> dict | None:
-        """Find the persisted operation that immediately preceded this task's card."""
+        """Find the operation preceding this task's card, not a shared login's birth."""
         with self._connect() as connection:
             self._select_owned_task(connection, task_id, user_subject)
             row = connection.execute(
@@ -1835,7 +1835,9 @@ class TaskHubStore:
                 WHERE link.task_id = ? AND link.user_subject = ?
                   AND operation.user_subject = ? AND card.user_subject = ?
                   AND interaction.user_subject = ? AND card.interaction_id = ?
-                  AND link.linked_at <= interaction.created_at
+                  AND link.linked_at <= CASE
+                      WHEN interaction.interaction_type = 'credential' THEN card.linked_at
+                      ELSE interaction.created_at END
                 ORDER BY link.linked_at DESC, operation.created_at DESC LIMIT 1
                 """,
                 (task_id, user_subject, user_subject, user_subject, user_subject, interaction_id),

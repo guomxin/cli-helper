@@ -165,7 +165,8 @@ class CrossLanguageLifecycleTests(unittest.TestCase):
         self.call('reads',reads=[{'tool':'oa_workflow_pending_list','callId':f'share-{i}','arguments':{'limit':i}} for i in (4,5)])
         bindings=self.query('SELECT task_id,interaction_id FROM task_interactions ORDER BY task_id')
         self.assertEqual(len(bindings),2)
-        self.call('call',tool='agentbridge_task_cancel',arguments={'task_id':bindings[0]['task_id']})
+        canceled=self.call('call',tool='agentbridge_task_cancel',arguments={'task_id':bindings[0]['task_id']})
+        self.assertEqual(canceled['result']['status'],'succeeded',canceled)
         port=self.connection['port']; self.server.close(); self.start_server(port)
         self.host.close(); self.start_host()
         self.activate()
@@ -176,6 +177,27 @@ class CrossLanguageLifecycleTests(unittest.TestCase):
                          {'recoveries':recoveries,'operations':self.query('SELECT * FROM operations'),
                           'serverErrors':self.server.errors})
         self.assertEqual(len(self.query('SELECT * FROM fixture_calls')),1)
+
+    def _check_later_read_shares_older_login(self, cancel_index):
+        records=[self.call('read',tool='oa_workflow_pending_list',callId=f'ordered-{i}',
+                           arguments={'limit':i})['records'][-1] for i in (4,5)]
+        self.assertNotEqual(records[0]['taskId'],records[1]['taskId'])
+        self.assertEqual(len(self.query('SELECT * FROM auth_challenges')),1)
+        cancel=self.call('call',tool='agentbridge_task_cancel',arguments={'task_id':records[cancel_index]['taskId']})
+        self.assertEqual(cancel['result']['status'],'succeeded',cancel)
+        port=self.connection['port']; self.server.close(); self.start_server(port)
+        self.host.close(); self.start_host()
+        self.activate()
+        for record in records: self.call('resume',**record)
+        self.assertEqual(sorted(t['status'] for t in self.query('SELECT status FROM agent_tasks')),['canceled','succeeded'])
+        calls=self.query('SELECT arguments FROM fixture_calls')
+        self.assertEqual([json.loads(c['arguments']) for c in calls],[{'limit':5 if cancel_index==0 else 4}])
+
+    def test_later_read_resumes_against_older_shared_login_after_restart(self):
+        self._check_later_read_shares_older_login(0)
+
+    def test_later_read_can_cancel_against_older_shared_login_after_restart(self):
+        self._check_later_read_shares_older_login(1)
 
     def test_lease_renewal_expiry_takeover_rejects_stale_holder(self):
         first=self.call('read',tool='oa_workflow_pending_list',callId='lease',arguments={'limit':2})
