@@ -3921,7 +3921,7 @@ class CentralCapabilityService:
                 # A previous runtime may have stopped during the read. Never claim success.
                 response = {**response, "status": "failed", "error": {"code": "LOGIN_READ_INTERRUPTED"}}
             message = read_continuation_message(
-                self.challenges.get(record["resource_id"])["system_name"], spec.name, response,
+                self.challenges.get(self._credential_challenge_id(record))["system_name"], spec.name, response,
             )
             # Persist feedback before closing the task; retrying after a crash is deduplicated.
             self.tasks.append_timeline_message(
@@ -3960,7 +3960,7 @@ class CentralCapabilityService:
         )
         interaction_type = record["interaction_type"]
         if interaction_type == "credential":
-            resource = self.challenges.get(record["resource_id"])
+            resource = self.challenges.get(self._credential_challenge_id(record))
         elif interaction_type == "business_input":
             resource = self.field_submissions.get(record["resource_id"])
         elif interaction_type == "execution_authorization":
@@ -4027,6 +4027,12 @@ class CentralCapabilityService:
                 "individualized": True,
             },
         }
+
+    @staticmethod
+    def _credential_challenge_id(record: dict) -> str:
+        # Read both legacy records and task-scoped credentials before enabling
+        # new writers, so the next release has a compatible rollback target.
+        return record["resume_spec"].get("challengeId") or record["resource_id"]
 
     def _credential_interaction(self, challenge: dict) -> dict:
         record = self.interactions.register(

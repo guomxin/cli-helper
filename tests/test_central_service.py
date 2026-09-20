@@ -1188,6 +1188,24 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 first["interaction"]["interactionId"],
             )
 
+    def test_credential_reader_accepts_task_scoped_reference_before_writer_upgrade(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            result = service.start_login(user_subject="user-a", expected_principal_ref="Alice",
+                                         card_base_url="http://127.0.0.1:8780")
+            legacy = service.interactions.get(result["interaction"]["interactionId"], user_subject="user-a")
+            challenge_id = result["challenge"]["challengeId"]
+            scoped = service.interactions.register(
+                interaction_type="credential", user_subject="user-a", system_id="oa",
+                session_id=legacy["session_id"], operation_id=None,
+                resource_id=challenge_id+":fixture-task", title=legacy["title"], message=legacy["message"],
+                display=legacy["display"], resume_spec={"kind":"session_ready","systemId":"oa","challengeId":challenge_id},
+                created_at=legacy["created_at"], expires_at=legacy["expires_at"],
+            )
+            _, resource, envelope = service._load_interaction(user_subject="user-a", interaction_id=scoped["interaction_id"])
+            self.assertEqual(resource["challenge_id"], challenge_id)
+            self.assertEqual(envelope["presentation"]["url"], result["challenge"]["cardUrl"])
+
     def test_start_login_reuses_live_active_session_without_card(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()

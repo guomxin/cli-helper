@@ -1,6 +1,6 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
-  "compatibleFrom": ["01a7010d6512"],
+  "compatibleFrom": ["ae2afbdf3ab2"],
   "dataCompatibility": "no-migration",
-  "reason": "M3 changes deployment tooling only; application persistence code and stored-data semantics are unchanged from M2."
+  "reason": "M4 compatibility reader accepts legacy and future task-scoped credential references. This release still writes legacy records and changes no persisted schema or data semantics."
 }
