@@ -1943,6 +1943,9 @@ class TaskHubStore:
         )
         if interaction_record.get("user_subject") != user_subject:
             raise TaskIntegrityError("interaction belongs to another user")
+        scoped_task = (interaction_record.get("resume_spec") or {}).get("taskId")
+        if scoped_task and scoped_task != task_id:
+            raise TaskIntegrityError("interaction belongs to another task")
         state = str(interaction.get("state") or "")
         event_type = _event_type_for_interaction(state)
         now = _utc_now()

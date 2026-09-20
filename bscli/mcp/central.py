@@ -3174,6 +3174,7 @@ def create_central_mcp_server(
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="yuque",
+            task_id=_request_task_id(ctx),
         )
         return package_interaction_result(response)
 
@@ -3482,6 +3483,7 @@ def create_central_mcp_server(
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="taihua",
+            task_id=_request_task_id(ctx),
         )
         return package_interaction_result(response)
 
@@ -4835,6 +4837,7 @@ def create_central_mcp_server(
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
             system_id="smartlight",
+            task_id=_request_task_id(ctx),
         )
         return package_interaction_result(response)
 
@@ -4891,6 +4894,7 @@ def create_central_mcp_server(
             expected_principal_ref=None,
             card_base_url=auth_card_base_url,
             ttl_seconds=challenge_ttl_seconds,
+            task_id=_request_task_id(ctx),
         )
         return package_interaction_result(response)
 

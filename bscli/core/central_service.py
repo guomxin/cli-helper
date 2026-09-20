@@ -1146,6 +1146,7 @@ class CentralCapabilityService:
             "plan": task_plan_response(plan),
         }
 
+    @_serialize_host_task_calls
     def cancel_unsubmitted_task(self, *, user_subject: str, task_id: str) -> dict:
         task = self.tasks.get_task(task_id, user_subject=user_subject)
         plan = self.task_plans.get_for_task(parent_task_id=task_id, user_subject=user_subject)
@@ -1161,7 +1162,22 @@ class CentralCapabilityService:
         # Check and retire the pending resource in its own write transaction;
         # approval/submission that wins this race must never be called canceled.
         try:
-            if interaction["interaction_type"] == "business_input":
+            if interaction["interaction_type"] == "credential":
+                preceding = self.tasks.operation_before_interaction(
+                    task_id=task_id, user_subject=user_subject, interaction_id=interaction_id,
+                )
+                original = self.operations.get(preceding["operation_id"]) if preceding else None
+                if not original or (
+                    self.registry.get(original["capability_name"]).effect != "read"
+                    or original["status"] != "requires_user_action"
+                    or (original.get("error") or {}).get("code") != "LOGIN_REQUIRED"
+                    or task.get("current_operation_id") != original["operation_id"]
+                ):
+                    return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
+                            "message": "Only the original waiting read can be canceled during login."}}
+                # Authentication can serve other tasks. Cancel only this read;
+                # the same task lock serializes cancellation with read resume.
+            elif interaction["interaction_type"] == "business_input":
                 self.field_submissions.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
             elif interaction["interaction_type"] == "execution_authorization":
                 self.write_authorizations.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
@@ -1610,7 +1626,10 @@ class CentralCapabilityService:
         card_base_url: str,
         ttl_seconds: int = 300,
         system_id: str = "oa",
+        task_id: str | None = None,
     ) -> dict:
+        if task_id:
+            self.tasks.get_task(task_id, user_subject=user_subject)
         runtime = self._runtime_for_system(system_id)
         if runtime is None:
             raise ValueError(f"central login is not configured for {system_id}")
@@ -1650,6 +1669,7 @@ class CentralCapabilityService:
             expected_principal_ref=expected,
             card_base_url=card_base_url,
             ttl_seconds=ttl_seconds,
+            task_id=task_id,
         )
 
     def _reuse_active_session(
@@ -1910,6 +1930,7 @@ class CentralCapabilityService:
         expected_principal_ref: str,
         card_base_url: str,
         ttl_seconds: int,
+        task_id: str | None = None,
     ) -> dict:
         adapter = self.adapter_for_system(session["system_id"])
         contract = adapter.authentication_contract()
@@ -1931,7 +1952,7 @@ class CentralCapabilityService:
                 else "legacy_form_login"
             ),
         )
-        interaction = self._credential_interaction(challenge)
+        interaction = self._credential_interaction(challenge, task_id=task_id)
         return {
             "protocolVersion": "0.1",
             "status": "requires_user_action",
@@ -4034,14 +4055,14 @@ class CentralCapabilityService:
         # new writers, so the next release has a compatible rollback target.
         return record["resume_spec"].get("challengeId") or record["resource_id"]
 
-    def _credential_interaction(self, challenge: dict) -> dict:
+    def _credential_interaction(self, challenge: dict, *, task_id: str | None = None) -> dict:
         record = self.interactions.register(
             interaction_type="credential",
             user_subject=challenge["user_subject"],
             system_id=challenge["system_id"],
             session_id=challenge["session_id"],
             operation_id=None,
-            resource_id=challenge["challenge_id"],
+            resource_id=(f"{challenge['challenge_id']}:{task_id}" if task_id else challenge["challenge_id"]),
             title=f"登录{challenge['system_name']}",
             message="请在 AgentBridge 安全页面完成登录，凭据不会经过智能体。",
             display={
@@ -4051,11 +4072,16 @@ class CentralCapabilityService:
             resume_spec={
                 "kind": "session_ready",
                 "systemId": challenge["system_id"],
+                **({"challengeId": challenge["challenge_id"], "taskId": task_id} if task_id else {}),
             },
             created_at=challenge["created_at"],
             expires_at=challenge["expires_at"],
         )
-        return build_interaction_envelope(record, challenge)
+        interaction = build_interaction_envelope(record, challenge)
+        if task_id:
+            self.tasks.link_interaction(task_id=task_id, user_subject=challenge["user_subject"],
+                                        interaction_record=record, interaction=interaction)
+        return interaction
 
     def _business_input_interaction(self, submission: dict) -> dict:
         schema = submission["form_schema"]
