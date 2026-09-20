@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 
 REQUIRED = ("bscli/adapters/seeyon_page_scripts/continue_submit.js",
             "bscli/adapters/seeyon_page_scripts/launch_save_draft.js")
@@ -125,6 +126,8 @@ def build(root, output):
 
 def begin(root, receipt):
     clean(root)
+    # Remove only this run's old report; failed runs must not reuse a prior test result.
+    (receipt.parent / "pytest.xml").unlink(missing_ok=True)
     save(receipt, {"schema": "agentbridge.validation.v1", "status": "running", "inputs": inputs(root)})
 
 
@@ -133,12 +136,19 @@ def finish(root, receipt):
     current = inputs(root)
     if original["status"] != "running" or original["inputs"] != json.loads(json.dumps(current)):
         raise ValueError("Candidate inputs changed during validation")
+    suites = ET.parse(receipt.parent / "pytest.xml").getroot()
+    cases = list(suites.iter("testcase"))
+    if not cases or any(c.find("failure") is not None or c.find("error") is not None for c in cases):
+        raise ValueError("Python test report is missing tests or contains failures")
+    skipped = [{"test": c.get("classname", "") + "." + c.get("name", ""),
+                "reason": c.find("skipped").get("message", "")} for c in cases if c.find("skipped") is not None]
     output = Path(tempfile.mkdtemp(prefix="candidate-", dir=receipt.parent)) / "artifact"
     manifest = build(root, output)
     clean(root)
     if json.loads(json.dumps(inputs(root))) != original["inputs"]:
         raise ValueError("Candidate inputs changed during artifact checks")
     save(receipt, {**original, "status": "succeeded", "checks": CHECKS, "skipped": [],
+                   "pythonTests": {"cases": len(cases), "passed": len(cases) - len(skipped), "skipped": skipped},
                    "manifest": str(manifest), "manifestSha256": digest(manifest)})
 
 
