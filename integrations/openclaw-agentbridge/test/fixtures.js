@@ -1,3 +1,9 @@
+import { readFileSync } from "node:fs";
+
+export const EXPECTED_PLUGIN_VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+
 export const CARD_ORIGIN = "http://10.10.50.213:8780";
 export const CARD_URL = `${CARD_ORIGIN}/auth/opaque-card-token`;
 export const SERVER_WITHHELD_URL =

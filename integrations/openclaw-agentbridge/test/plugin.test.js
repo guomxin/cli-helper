@@ -1,3 +1,4 @@
+import { EXPECTED_PLUGIN_VERSION } from "./fixtures.js";
 import test from "node:test";
 import { AGENTBRIDGE_TOOL_CATALOG, AGENTBRIDGE_USER_TURN_SOURCE_TOOLS } from "../lib/tool-catalog.js";
 import assert from "node:assert/strict";
@@ -942,7 +943,7 @@ test("binds an explicit task follow-up to the existing task ID", async () => {
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.96",
+      hostVersion: EXPECTED_PLUGIN_VERSION,
     },
     "io.agentbridge/task": {
       taskId,
@@ -1361,7 +1362,7 @@ test("registers and enforces the one-use workspace Gateway binding", async () =>
         version: "1",
         agentHost: "openclaw",
         hostInstanceId: "openclaw-gateway",
-        hostVersion: "0.4.96",
+        hostVersion: EXPECTED_PLUGIN_VERSION,
       },
     },
   });
@@ -2601,7 +2602,7 @@ test("restores a pending interaction and its original route on gateway start", a
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.96",
+      hostVersion: EXPECTED_PLUGIN_VERSION,
     },
   });
   assert.equal(

@@ -1,3 +1,4 @@
+import { EXPECTED_PLUGIN_VERSION } from "./fixtures.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -1097,7 +1098,7 @@ test("creates and observes one host-owned task without model task arguments", as
       version: "1",
       agentHost: "openclaw",
       hostInstanceId: "openclaw-gateway",
-      hostVersion: "0.4.96",
+      hostVersion: EXPECTED_PLUGIN_VERSION,
     },
     "io.agentbridge/task": {
       taskId: "task-1234567890-abcdef",

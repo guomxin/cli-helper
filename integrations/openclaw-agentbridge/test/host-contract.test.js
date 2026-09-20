@@ -1,3 +1,4 @@
+import { EXPECTED_PLUGIN_VERSION } from "./fixtures.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -57,7 +58,7 @@ test("OpenClaw publishes the exact registered L3 runtime context", () => {
     version: "1",
     agentHost: "openclaw",
     hostInstanceId: "openclaw-gateway",
-    hostVersion: "0.4.96",
+    hostVersion: EXPECTED_PLUGIN_VERSION,
   });
   assert.equal(
     hostRegistrationMeta()[HOST_PROFILE_META_KEY],
