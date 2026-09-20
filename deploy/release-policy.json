@@ -1,6 +1,6 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
-  "compatibleFrom": ["ae2afbdf3ab2"],
+  "compatibleFrom": ["f77b0b7110e5"],
   "dataCompatibility": "no-migration",
-  "reason": "M4 compatibility reader accepts legacy and future task-scoped credential references. This release still writes legacy records and changes no persisted schema or data semantics."
+  "reason": "M4 task-scoped credential references are readable by the deployed f77b0b7110e5 compatibility reader. No SQLite schema changes; report recovery uses existing failed/expired states and process-local OS leases."
 }
