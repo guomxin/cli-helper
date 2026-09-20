@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from bscli.database.independent import IndependentDatabase, DatabaseRejected
 from bscli.database.reports import Reports
+from tests.process_helpers import kill_fixture_process
 
 ROOT=Path(__file__).resolve().parents[1]
 ARGS={'query_capability':'database.free.read','query_arguments':{'sql':'SELECT 1'},'request_key':'interrupted'}
@@ -39,7 +40,7 @@ class ReportRecoveryTests(unittest.TestCase):
                         with closing(sqlite3.connect(reports.path)) as db:
                             rid,status=db.execute('SELECT id,status FROM reports').fetchone()
                         self.assertEqual(status,'ready' if stage=='ready' else 'running')
-                        process.kill(); process.wait(timeout=10)
+                        kill_fixture_process(process)
                         reports.cleanup()
                         with closing(sqlite3.connect(reports.path)) as db:
                             status=db.execute('SELECT status FROM reports').fetchone()[0]
@@ -51,7 +52,7 @@ class ReportRecoveryTests(unittest.TestCase):
                                 with self.assertRaisesRegex(DatabaseRejected,'REPORT_FAILED'):
                                     reports.export('a','taihua_primary',ARGS)
                 finally:
-                    if process.poll() is None: process.kill(); process.wait(timeout=10)
+                    kill_fixture_process(process)
                     process.stderr.close()
 
     def test_orphan_grace_and_cleanup_failure_retry(self):

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from tests.process_helpers import kill_fixture_process
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -37,9 +38,7 @@ class Actor:
         return result
     def close(self):
         if self.process.stdin.closed: return
-        self.process.terminate()
-        try: self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired: self.process.kill(); self.process.wait(timeout=5)
+        kill_fixture_process(self.process)
         for stream in (self.process.stdin,self.process.stdout,self.process.stderr): stream.close()
 
 
