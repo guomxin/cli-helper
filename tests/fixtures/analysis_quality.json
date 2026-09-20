@@ -1,0 +1,13 @@
+{
+  "schema": "agentbridge.analysis-quality.v1",
+  "description": "Synthetic, manually labeled cases. Passing oracle/self-tests validates the evaluator, not live model quality.",
+  "cases": [
+    {"id":"same-name","question":"分别汇总甲、乙项目的接口联调进展。","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-03","department_id":"3"},"sources":[{"id":"1","paragraphs":["甲项目接口联调已完成。","乙项目接口联调正在进行。"]}],"items":[{"id":"a","state":"completed","source":"1","paragraph":1,"destination":"main"},{"id":"b","state":"in_progress","source":"1","paragraph":2,"destination":"main"}]},
+    {"id":"empty","question":"本时间窗口有哪些完成事项？","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-02"},"sources":[],"items":[]},
+    {"id":"long-text","question":"汇总全部事项，并说明有无完成依据。","scope":{"log_id":"1","max_chars":6000},"sources":[{"id":"1","paragraphs":["持续收集运行数据。","末尾事项：计划下周验收，尚无验收结果。"],"repeat_first":3000}],"items":[{"id":"collect","state":"in_progress","source":"1","paragraph":1,"destination":"main"},{"id":"acceptance","state":"planned","source":"1","paragraph":2,"destination":"main"}]},
+    {"id":"pagination","question":"汇总两个部门本周进展。","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-08","department_ids":["3","4"],"include_descendants":true},"sources":[{"id":"1","paragraphs":["甲事项已完成。"]},{"id":"2","paragraphs":["乙事项正在验证。"]}],"items":[{"id":"a","state":"completed","source":"1","paragraph":1,"destination":"main"},{"id":"b","state":"in_progress","source":"2","paragraph":1,"destination":"main"}]},
+    {"id":"adjacent-irrelevant","question":"查找 APP 登录失败的处理案例。","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-08"},"sources":[{"id":"1","paragraphs":["APP 登录失败，调整认证配置后验证恢复。","相邻记录：APP 地图标记偏移，已转研发分析。"]}],"items":[{"id":"login","state":"completed","source":"1","paragraph":1,"destination":"main"},{"id":"map","state":"in_progress","source":"1","paragraph":2,"destination":"excluded"}]},
+    {"id":"progress-not-completion","question":"这个问题处理完成了吗？","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-02"},"sources":[{"id":"1","paragraphs":["已联系厂家处理，等待反馈。"]}],"items":[{"id":"issue","state":"in_progress","source":"1","paragraph":1,"destination":"main"}]},
+    {"id":"time-window","question":"截至9月2日，验收是否完成？","scope":{"start_date":"2026-09-01","end_date_exclusive":"2026-09-03"},"sources":[{"id":"1","paragraphs":["9月2日：材料已提交，待验收。"]}],"excluded_sources":[{"id":"2","paragraphs":["9月5日：验收通过。"]}],"items":[{"id":"acceptance","state":"in_progress","source":"1","paragraph":1,"destination":"main"}]}
+  ]
+}
