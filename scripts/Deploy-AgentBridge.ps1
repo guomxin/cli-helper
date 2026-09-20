@@ -159,7 +159,7 @@ $connectionArguments = @(
     "-i", (Resolve-Path $IdentityFile).Path
 )
 $target = "$SshUser@$HostName"
-$remoteWheel = "/tmp/$releaseId-$($artifact.sha256)-$($wheel.Name)"
+$remoteWheel = "/tmp/$releaseId-$([guid]::NewGuid().ToString('N'))-$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
 $systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
 $backupSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdUnit))
@@ -190,7 +190,7 @@ $remoteTemplate = @(
     'release_id=''__RELEASE_ID__''',
     'service=''__SERVICE_NAME__''',
     'python="$root/venv/bin/python"',
-    'unit_tmp_dir="/tmp/agentbridge-systemd-$release_id"',
+    'unit_tmp_dir="$(mktemp -d "/tmp/agentbridge-systemd-$release_id.XXXXXX")"',
     'install_system_dependencies=''__INSTALL_SYSTEM_DEPENDENCIES__''',
     'trap ''rm -f -- "$wheel"; rm -rf -- "$unit_tmp_dir"'' EXIT',
     'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify xauth; fi',
@@ -198,7 +198,8 @@ $remoteTemplate = @(
     'test -d /usr/share/novnc || { printf ''noVNC web root is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0700 "$unit_tmp_dir"',
     'printf ''%s'' ''__RELEASE_RUNNER__'' | base64 --decode > "$unit_tmp_dir/release.py"',
-    '"$python" -I "$unit_tmp_dir/release.py" ''__RELEASE_CONFIG__''',
+    'printf ''%s'' ''__RELEASE_CONFIG__'' | base64 --decode > "$unit_tmp_dir/config.json"',
+    '"$python" -I "$unit_tmp_dir/release.py" "$unit_tmp_dir/config.json"',
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"

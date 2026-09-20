@@ -386,6 +386,9 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("verify --root $repoRoot", script)
         runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
         self.assertIn('hashlib.sha256(wheel.read_bytes()).hexdigest()', runner)
+        # Full receipts exceed Linux's per-argument limit; pass a filename.
+        self.assertIn('"$unit_tmp_dir/release.py" "$unit_tmp_dir/config.json"', script)
+        self.assertNotIn('"$unit_tmp_dir/release.py" \'\'__RELEASE_CONFIG__', script)
         self.assertLess(script.index("verify --root $repoRoot"), script.index("& $scp.Source"))
 
     def test_yuque_remote_login_uses_challenge_isolation_and_native_novnc(self) -> None:

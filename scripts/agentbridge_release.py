@@ -289,8 +289,7 @@ class Release:
 def main():
     import fcntl
     recovering = sys.argv[1] == "--recover"
-    config = (json.loads(Path(sys.argv[2]).read_text()) if recovering
-              else json.loads(base64.b64decode(sys.argv[1])))
+    config = json.loads(Path(sys.argv[2] if recovering else sys.argv[1]).read_text())
     root = Path(config["root"])
     with (root / ".release.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
