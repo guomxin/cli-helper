@@ -14,6 +14,19 @@ def candidate_run(runs, commit, branch):
     return max(matches, key=lambda run: (run['run_number'], run.get('run_attempt', 1)), default=None)
 
 
+def read_runs(request):
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)['workflow_runs']
+        except urllib.error.HTTPError:
+            raise  # Permission, rate-limit and HTTP failures require inspection.
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == 2:
+                raise
+            time.sleep(5 * (attempt + 1))
+
+
 def wait(commit, branch, timeout=2400):
     url = 'https://api.github.com/repos/guomxin/cli-helper/actions/runs?' + urllib.parse.urlencode(
         {'head_sha': commit, 'branch': branch, 'event': 'push', 'per_page': 100})
@@ -21,9 +34,8 @@ def wait(commit, branch, timeout=2400):
     while time.monotonic() < deadline:
         request = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
                                                      'User-Agent': 'AgentBridge-candidate-gate'})
-        # Network/auth/rate-limit errors fail closed; they are not evidence of a pass.
-        with urllib.request.urlopen(request, timeout=30) as response:
-            run = candidate_run(json.load(response)['workflow_runs'], commit, branch)
+        # A bounded transport retry is never evidence of a pass; TLS validation stays on.
+        run = candidate_run(read_runs(request), commit, branch)
         if run and run['status'] == 'completed':
             if run['conclusion'] != 'success':
                 raise RuntimeError(f"Candidate CI did not pass: {run['conclusion']} {run['html_url']}")
