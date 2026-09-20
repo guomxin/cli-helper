@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "agentbridge.release-policy.v1",
+  "compatibleFrom": ["01a7010d6512"],
+  "dataCompatibility": "no-migration",
+  "reason": "M3 changes deployment tooling only; application persistence code and stored-data semantics are unchanged from M2."
+}

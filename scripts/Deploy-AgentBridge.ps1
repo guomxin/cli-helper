@@ -164,6 +164,19 @@ $remoteDestination = $target + ":" + $remoteWheel
 $systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
 $backupSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdUnit))
 $backupSystemdTimerBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdTimer))
+$releasePolicy = Get-Content (Join-Path $repoRoot "deploy/release-policy.json") -Raw | ConvertFrom-Json
+$releaseRunnerBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot "agentbridge_release.py")))
+$releaseConfig = @{
+    root = $RemoteRoot; releaseId = $releaseId; service = $ServiceName; host = $HostName
+    wheel = $remoteWheel; wheelName = $wheel.Name; sha256 = $artifact.sha256
+    artifact = $artifactBase64; validation = $receiptBase64; policy = $releasePolicy
+    units = @{
+        "$ServiceName.service" = $systemdUnitBase64
+        "$ServiceName-backup.service" = $backupSystemdUnitBase64
+        "$ServiceName-backup.timer" = $backupSystemdTimerBase64
+    }
+} | ConvertTo-Json -Compress -Depth 10
+$releaseConfigBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($releaseConfig))
 
 & $scp.Source @connectionArguments $wheel.FullName $remoteDestination
 if ($LASTEXITCODE -ne 0) {
@@ -177,81 +190,20 @@ $remoteTemplate = @(
     'release_id=''__RELEASE_ID__''',
     'service=''__SERVICE_NAME__''',
     'python="$root/venv/bin/python"',
-    'release_dir="$root/releases/$release_id"',
-    'release_wheel="$release_dir/__WHEEL_NAME__"',
     'unit_tmp_dir="/tmp/agentbridge-systemd-$release_id"',
-    'unit_tmp="$unit_tmp_dir/$service.service"',
-    'backup_unit_tmp="$unit_tmp_dir/$service-backup.service"',
-    'backup_timer_tmp="$unit_tmp_dir/$service-backup.timer"',
-    'unit_path="/etc/systemd/system/$service.service"',
-    'backup_unit_path="/etc/systemd/system/$service-backup.service"',
-    'backup_timer_path="/etc/systemd/system/$service-backup.timer"',
-    'unit_b64=''__SYSTEMD_UNIT_BASE64__''',
-    'backup_unit_b64=''__BACKUP_SYSTEMD_UNIT_BASE64__''',
-    'backup_timer_b64=''__BACKUP_SYSTEMD_TIMER_BASE64__''',
     'install_system_dependencies=''__INSTALL_SYSTEM_DEPENDENCIES__''',
     'trap ''rm -f -- "$wheel"; rm -rf -- "$unit_tmp_dir"'' EXIT',
     'if [ "$install_system_dependencies" = "1" ]; then DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify xauth; fi',
     'for command in Xvfb x11vnc websockify xauth; do command -v "$command" >/dev/null || { printf ''%s is required; deploy once with -InstallSystemDependencies\n'' "$command" >&2; exit 1; }; done',
     'test -d /usr/share/novnc || { printf ''noVNC web root is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0700 "$unit_tmp_dir"',
-    'install -d -m 0750 -o root -g agentbridge "$release_dir"',
-    'printf ''%s  %s\n'' ''__WHEEL_SHA256__'' "$wheel" | sha256sum --check --status',
-    'printf ''%s'' ''__ARTIFACT_BASE64__'' | base64 --decode > "$release_dir/artifact.json"',
-    'printf ''%s'' ''__RECEIPT_BASE64__'' | base64 --decode > "$release_dir/validation.json"',
-    'install -d -m 0700 -o agentbridge -g agentbridge "$root/backups"',
-    'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
-    '"$python" -m pip install --disable-pip-version-check "${release_wheel}[database-analysis]"',
-    '"$python" -m pip install --disable-pip-version-check --no-deps --force-reinstall "$release_wheel"',
-    'site_dir="$(cd / && "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).parent.resolve())'')"',
-    'case "$site_dir" in "$root"/venv/lib/python*/site-packages/bscli) ;; *) printf ''unexpected installed bscli path: %s\n'' "$site_dir" >&2; exit 1 ;; esac',
-    '"$python" -m compileall -q "$site_dir"',
-    '"$python" -m pip check',
-    '(cd / && "$python" -I -c ''from bscli.adapters.page_scripts import load_seeyon_action_page_script as load; assert all(load(a)["script_source"] for a in ("ContinueSubmit", "SaveDraft"))'')',
-    'printf ''%s'' "$unit_b64" | base64 --decode > "$unit_tmp"',
-    'printf ''%s'' "$backup_unit_b64" | base64 --decode > "$backup_unit_tmp"',
-    'printf ''%s'' "$backup_timer_b64" | base64 --decode > "$backup_timer_tmp"',
-    'systemd-analyze verify "$unit_tmp" "$backup_unit_tmp" "$backup_timer_tmp"',
-    'install -m 0644 -o root -g root "$unit_tmp" "$unit_path"',
-    'install -m 0644 -o root -g root "$backup_unit_tmp" "$backup_unit_path"',
-    'install -m 0644 -o root -g root "$backup_timer_tmp" "$backup_timer_path"',
-    'install -d -m 0750 -o root -g agentbridge "$root/config"',
-    'printf ''AGENTBRIDGE_RELEASE_ID=%s\n'' "$release_id" > "$root/config/release.env"',
-    'chown root:agentbridge "$root/config/release.env"',
-    'chmod 0640 "$root/config/release.env"',
-    'systemctl daemon-reload',
-    'systemctl restart "$service"',
-    'systemctl disable --now agentbridge-xvfb.service >/dev/null 2>&1 || true',
-    'rm -f -- /etc/systemd/system/agentbridge-xvfb.service',
-    'systemctl daemon-reload',
-    'release_process_ready=0',
-    'for attempt in $(seq 1 30); do',
-    '  if systemctl is-active --quiet "$service"; then',
-    '    main_pid="$(systemctl show "$service" -p MainPID --value)"',
-    '    if [ "$main_pid" -gt 0 ] && [ -r "/proc/$main_pid/cmdline" ]; then',
-    '      process_cwd="$(readlink "/proc/$main_pid/cwd")"',
-    '      if [ "$process_cwd" = "$root" ] && tr ''\0'' ''\n'' < "/proc/$main_pid/cmdline" | grep -Fx -- ''-P'' >/dev/null; then release_process_ready=1; break; fi',
-    '    fi',
-    '  fi',
-    '  sleep 1',
-    'done',
-    'if [ "$release_process_ready" -ne 1 ]; then printf ''service did not stabilize on the release unit\n'' >&2; exit 1; fi',
-    'command -v curl >/dev/null || { printf ''curl is required for deployment readiness checks\n'' >&2; exit 1; }',
-    'governance_ready=0',
-    'for attempt in $(seq 1 30); do',
-    '  if curl --insecure --fail --silent --max-time 3 "https://__HOST_NAME__:8782/readyz" | grep -Eq ''"status"[[:space:]]*:[[:space:]]*"ready"''; then governance_ready=1; break; fi',
-    '  sleep 1',
-    'done',
-    'if [ "$governance_ready" -ne 1 ]; then printf ''service readiness did not stabilize before backup\n'' >&2; exit 1; fi',
-    'runtime_module="$(cd "$root" && runuser -u agentbridge -- env HOME="$root/data" AGENTBRIDGE_SESSION_KEY_FILE="$root/config/session.key" "$python" -P -c ''import pathlib, bscli; print(pathlib.Path(bscli.__file__).resolve())'')"',
-    'case "$runtime_module" in "$site_dir"/*) ;; *) printf ''service resolves unexpected bscli module: %s\n'' "$runtime_module" >&2; exit 1 ;; esac',
-    'systemctl enable --now "$service-backup.timer"',
-    'systemctl start "$service-backup.service"',
+    'printf ''%s'' ''__RELEASE_RUNNER__'' | base64 --decode > "$unit_tmp_dir/release.py"',
+    '"$python" -I "$unit_tmp_dir/release.py" ''__RELEASE_CONFIG__''',
     'printf ''{"status":"succeeded","service":"%s","releaseId":"%s"}\n'' "$service" "$release_id"',
     '# agentbridge-upload-end'
 ) -join "`n"
-$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__HOST_NAME__", $HostName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__BACKUP_SYSTEMD_UNIT_BASE64__", $backupSystemdUnitBase64).Replace("__BACKUP_SYSTEMD_TIMER_BASE64__", $backupSystemdTimerBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
-$remoteScript = $remoteScript.Replace("__WHEEL_SHA256__", $artifact.sha256).Replace("__ARTIFACT_BASE64__", $artifactBase64).Replace("__RECEIPT_BASE64__", $receiptBase64)
+$remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
+$remoteScript = $remoteScript.Replace("__RELEASE_RUNNER__", $releaseRunnerBase64).Replace("__RELEASE_CONFIG__", $releaseConfigBase64)
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"

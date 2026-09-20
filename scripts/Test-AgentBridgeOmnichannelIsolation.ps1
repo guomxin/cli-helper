@@ -86,7 +86,7 @@ $connectionArguments = @(
 )
 $remoteArguments = @(
     "set -euo pipefail;",
-    "'$RemoteRoot/venv/bin/python'", "-P", "-m", "bscli.cli.main",
+    "'$RemoteRoot/current/venv/bin/python'", "-P", "-m", "bscli.cli.main",
     "--home", "'$RemoteRoot/data'", "diagnostics", "omnichannel"
 )
 foreach ($expectation in $ExpectedEndpoint) {

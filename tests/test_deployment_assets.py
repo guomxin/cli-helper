@@ -30,18 +30,17 @@ class DeploymentAssetTests(unittest.TestCase):
 
     def test_deployment_installs_unit_and_checks_runtime_module_source(self) -> None:
         script = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(encoding="utf-8")
+        runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
         known_hosts = ROOT / "deploy/ssh/agentbridge_known_hosts"
 
         for marker in (
-            "systemd-analyze verify",
-            "systemctl daemon-reload",
             "service did not stabilize on the release unit",
             "service resolves unexpected bscli module",
             "UserKnownHostsFile=",
             "SSH known-hosts file was not found",
             "$smokeScript -Check Release",
         ):
-            self.assertIn(marker, script)
+            self.assertIn(marker, script + runner)
         self.assertTrue(known_hosts.is_file())
         self.assertIn(
             "10.10.50.213 ssh-ed25519 ",
@@ -101,16 +100,12 @@ class DeploymentAssetTests(unittest.TestCase):
 
         self.assertTrue(backup_service.is_file())
         self.assertTrue(backup_timer.is_file())
-        for marker in (
-            "service readiness did not stabilize before backup",
-            'systemctl enable --now "$service-backup.timer"',
-            'systemctl start "$service-backup.service"',
-        ):
-            self.assertIn(marker, deploy)
-        self.assertLess(
-            deploy.index("service readiness did not stabilize before backup"),
-            deploy.index('systemctl start "$service-backup.service"'),
-        )
+        self.assertIn("agentbridge_release.py", deploy)
+        runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
+        self.assertIn('self.run("systemd-analyze", "verify"', runner)
+        self.assertIn('self.run("systemctl", "daemon-reload")', runner)
+        self.assertIn('self.stage("confirmed")', runner)
+        self.assertIn('self.run("systemctl", "start", self.service + "-backup.service"', runner)
 
     def test_local_host_self_heal_and_restore_drill_are_bounded(self) -> None:
         installer = (
@@ -282,11 +277,9 @@ class DeploymentAssetTests(unittest.TestCase):
             "--admin-tls-key /home/guomao/agentbridge/config/tls/server.key",
         ):
             self.assertIn(marker, unit)
-        for marker in (
-            "AGENTBRIDGE_RELEASE_ID",
-            'chmod 0640 "$root/config/release.env"',
-        ):
-            self.assertIn(marker, script)
+        runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
+        self.assertIn("AGENTBRIDGE_RELEASE_ID", runner)
+        self.assertIn("def atomic_write(path, data, mode=0o640)", runner)
 
     def test_smartlight_adapter_requires_explicit_plain_http_opt_in(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(
@@ -391,7 +384,8 @@ class DeploymentAssetTests(unittest.TestCase):
 
         self.assertNotIn("-m pip wheel", script)
         self.assertIn("verify --root $repoRoot", script)
-        self.assertIn("sha256sum --check --status", script)
+        runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
+        self.assertIn('hashlib.sha256(wheel.read_bytes()).hexdigest()', runner)
         self.assertLess(script.index("verify --root $repoRoot"), script.index("& $scp.Source"))
 
     def test_yuque_remote_login_uses_challenge_isolation_and_native_novnc(self) -> None:
@@ -417,7 +411,6 @@ class DeploymentAssetTests(unittest.TestCase):
         )
         for marker in (
             "xvfb x11vnc novnc websockify xauth",
-            "systemctl disable --now agentbridge-xvfb.service",
             "test -d /usr/share/novnc",
         ):
             self.assertIn(marker, deploy)

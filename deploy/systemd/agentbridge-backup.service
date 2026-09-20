@@ -11,7 +11,7 @@ Environment=HOME=/home/guomao/agentbridge/data
 Environment=PYTHONUNBUFFERED=1
 Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
 EnvironmentFile=-/home/guomao/agentbridge/config/release.env
-ExecStart=/home/guomao/agentbridge/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data diagnostics backup-create --output-dir /home/guomao/agentbridge/backups
+ExecStart=/home/guomao/agentbridge/current/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data diagnostics backup-create --output-dir /home/guomao/agentbridge/backups
 ExecStart=/usr/bin/find /home/guomao/agentbridge/backups -maxdepth 1 -type f -mtime +30 -delete
 UMask=0077
 TimeoutStartSec=360
