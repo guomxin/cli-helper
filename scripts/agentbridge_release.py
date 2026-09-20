@@ -91,7 +91,11 @@ class Release:
         self.state["stages"].append({"stage": name, "at": time.time()})
         atomic_write(self.directory / "deployment.json",
                      json.dumps(self.state, indent=2).encode())
-        print(json.dumps({"releaseId": self.release_id, "stage": name}), flush=True)
+        try:
+            print(json.dumps({"releaseId": self.release_id, "stage": name}), flush=True)
+        except OSError:
+            # The durable receipt, not an SSH stdout pipe, defines the stage.
+            pass
 
     def active_release(self):
         for line in self.envfile.read_text().splitlines():

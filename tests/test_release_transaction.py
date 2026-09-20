@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location("release_transaction", Path(__file__).resolve().parents[1] / "scripts/agentbridge_release.py")
@@ -182,6 +183,13 @@ class ReleaseTransactionTests(unittest.TestCase):
         s.stage("switching")
         with self.assertRaisesRegex(RuntimeError, "Unfinished transaction"):
             s.prepare()
+
+    def test_lost_stdout_does_not_change_durable_stage(self):
+        s = self.subject
+        s.prepare()
+        with patch("builtins.print", side_effect=BrokenPipeError("SSH disconnected")):
+            s.stage("checking")
+        self.assertEqual(json.loads((s.directory / "deployment.json").read_text())["status"], "checking")
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink transaction is also executed on Linux")
     def test_second_release_failure_restores_previous_version_pointer(self):
