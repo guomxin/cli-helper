@@ -1,0 +1,10 @@
+[Unit]
+Description=Fetch completed AgentBridge backups every thirty minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,30:00
+Persistent=true
+Unit=agentbridge-backup-pull.service
+
+[Install]
+WantedBy=timers.target

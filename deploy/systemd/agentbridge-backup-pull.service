@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull verified AgentBridge recovery bundles from 213
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python /usr/local/libexec/agentbridge-backup-pull.py
+TimeoutStartSec=900
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
