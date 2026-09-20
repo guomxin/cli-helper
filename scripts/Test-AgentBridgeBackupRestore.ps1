@@ -36,7 +36,8 @@ $connectionArguments = @(
 )
 $remoteCommand = @(
     "set -euo pipefail",
-    "manifest=`$(find '$RemoteRoot/backups' -maxdepth 1 -type f -name 'agentbridge-*.manifest.json' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)",
+    # Consume the whole sorted stream: head may SIGPIPE sort under pipefail once history grows.
+    "manifest=`$(find '$RemoteRoot/backups' -maxdepth 1 -type f -name 'agentbridge-*.manifest.json' -printf '%T@ %p\n' | sort -nr | sed -n '1p' | cut -d' ' -f2-)",
     'test -n "$manifest"',
     "install -d -m 0700 -o agentbridge -g agentbridge '$RemoteRoot/data/restore-drills'",
     "runuser -u agentbridge -- env HOME='$RemoteRoot' AGENTBRIDGE_SESSION_KEY_FILE='$RemoteRoot/config/session.key' AGENTBRIDGE_RELEASE_ID=`$(sed -n 's/^AGENTBRIDGE_RELEASE_ID=//p' '$RemoteRoot/config/release.env' | head -n 1) '$RemoteRoot/current/venv/bin/python' -P -m bscli.cli.main --home '$RemoteRoot/data' diagnostics backup-restore-drill --manifest `"`$manifest`" --output-dir '$RemoteRoot/data/restore-drills'"
