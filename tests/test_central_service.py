@@ -355,7 +355,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 },
             }
             with patch(
-                "bscli.core.central_service.prepare_smartlight_alarm_remark_update",
+                "bscli.core.write_catalog.prepare_smartlight_alarm_remark_update",
                 return_value=prepared_payload,
             ) as prepare:
                 prepared = service.invoke(
@@ -401,7 +401,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 }
 
             with patch(
-                "bscli.core.central_service.commit_smartlight_alarm_remark_update",
+                "bscli.core.write_catalog.commit_smartlight_alarm_remark_update",
                 side_effect=commit,
             ):
                 committed = service.invoke(
@@ -462,7 +462,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 values={"remark": "相同备注"},
             )
             with patch(
-                "bscli.core.central_service.prepare_smartlight_alarm_remark_update",
+                "bscli.core.write_catalog.prepare_smartlight_alarm_remark_update",
                 side_effect=SmartlightBusinessRuleRejected("备注没有变化。"),
             ):
                 response = service.invoke(
@@ -521,7 +521,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 },
             }
             with patch(
-                "bscli.core.central_service.prepare_smartlight_alarm_work_area_submit",
+                "bscli.core.write_catalog.prepare_smartlight_alarm_work_area_submit",
                 return_value=prepared_payload,
             ) as prepare:
                 started = service.invoke(
@@ -571,7 +571,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 }
 
             with patch(
-                "bscli.core.central_service.commit_smartlight_alarm_work_area_submit",
+                "bscli.core.write_catalog.commit_smartlight_alarm_work_area_submit",
                 side_effect=commit,
             ):
                 committed = service.invoke(
@@ -646,7 +646,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             service = self._service(tmp, FakeWorker())
             self._activate(service)
             with patch(
-                "bscli.core.central_service.preflight_pending_action",
+                "bscli.core.write_catalog.preflight_pending_action",
                 side_effect=PendingActionContractMismatch(
                     "The selected pending workflow is not a registered standard_collaboration item."
                 ),
@@ -667,7 +667,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             service = self._service(tmp, FakeWorker())
             self._activate(service)
             with patch(
-                "bscli.core.central_service.preflight_pending_action",
+                "bscli.core.write_catalog.preflight_pending_action",
                 return_value={"matched": True},
             ) as preflight:
                 response = service.invoke(
@@ -1596,7 +1596,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 },
             }
             with patch(
-                "bscli.core.central_service.prepare_business_trip_draft",
+                "bscli.core.write_catalog.prepare_business_trip_draft",
                 return_value=prepared_payload,
             ) as prepare_draft:
                 started = service.invoke(
@@ -1663,7 +1663,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 }
 
             with patch(
-                "bscli.core.central_service.save_business_trip_draft",
+                "bscli.core.write_catalog.save_business_trip_draft",
                 side_effect=save,
             ):
                 committed = service.invoke(
@@ -1725,7 +1725,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 },
             }
             with patch(
-                "bscli.core.central_service.prepare_business_trip_draft",
+                "bscli.core.write_catalog.prepare_business_trip_draft",
                 return_value=prepared_payload,
             ) as prepare_draft:
                 prepared = service.resume_interaction(
@@ -1771,7 +1771,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 }
 
             with patch(
-                "bscli.core.central_service.save_business_trip_draft",
+                "bscli.core.write_catalog.save_business_trip_draft",
                 side_effect=save,
             ) as save_draft:
                 committed = service.resume_interaction(
@@ -1823,7 +1823,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "Draft", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_business_trip_draft",
+                "bscli.core.write_catalog.prepare_business_trip_draft",
                 return_value=prepared_payload,
             ) as prepare_draft:
                 resumed = service.resume_interaction(
@@ -1853,7 +1853,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "Draft", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_business_trip_draft",
+                "bscli.core.write_catalog.prepare_business_trip_draft",
                 return_value=prepared_payload,
             ):
                 started = service.invoke(
@@ -1870,7 +1870,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 )
             authorization_id = prepared["nextAction"]["authorizationId"]
 
-            with patch("bscli.core.central_service.save_business_trip_draft") as save:
+            with patch("bscli.core.write_catalog.save_business_trip_draft") as save:
                 blocked = service.invoke(
                     user_subject="user-a",
                     capability_name="oa.business_trip.save_draft",
@@ -1892,7 +1892,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 raise BusinessTripOutcomeUnknown("readback failed")
 
             with patch(
-                "bscli.core.central_service.save_business_trip_draft",
+                "bscli.core.write_catalog.save_business_trip_draft",
                 side_effect=uncertain,
             ):
                 unknown = service.invoke(
@@ -1969,7 +1969,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 raise LeaveBusinessValidationRequired(validation)
 
             with patch(
-                "bscli.core.central_service.submit_leave_request",
+                "bscli.core.write_catalog.submit_leave_request",
                 side_effect=needs_confirmation,
             ):
                 response = service.invoke(
@@ -2022,7 +2022,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 return {"workflow_submitted": True}
 
             with patch(
-                "bscli.core.central_service.submit_leave_request",
+                "bscli.core.write_catalog.submit_leave_request",
                 side_effect=completes_after_confirmation,
             ):
                 resumed = service.invoke(
@@ -2090,7 +2090,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 raise BusinessTripBusinessValidationRequired(validation)
 
             with patch(
-                "bscli.core.central_service.submit_business_trip_request",
+                "bscli.core.write_catalog.submit_business_trip_request",
                 side_effect=needs_confirmation,
             ):
                 response = service.invoke(
@@ -2168,7 +2168,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 raise BusinessTripSubmissionBlocked(reason)
 
             with patch(
-                "bscli.core.central_service.submit_business_trip_request",
+                "bscli.core.write_catalog.submit_business_trip_request",
                 side_effect=blocked,
             ):
                 response = service.invoke(
@@ -2275,7 +2275,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "审批补签申请", "system": "致远 OA", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_missed_punch_approval",
+                "bscli.core.write_catalog.prepare_missed_punch_approval",
                 return_value=prepared_payload,
             ) as prepare:
                 prepared = service.invoke(
@@ -2370,11 +2370,11 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                     return_value={"count": 3, "items": pending_items},
                 ) as list_pending,
                 patch(
-                    "bscli.core.central_service.prepare_missed_punch_approval",
+                    "bscli.core.write_catalog.prepare_missed_punch_approval",
                     side_effect=prepare,
                 ),
                 patch(
-                    "bscli.core.central_service.approve_missed_punch_request",
+                    "bscli.core.write_catalog.approve_missed_punch_request",
                     side_effect=commit,
                 ),
             ):
@@ -2482,7 +2482,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "撤销已发流程", "system": "致远 OA", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_workflow_revoke",
+                "bscli.core.write_catalog.prepare_workflow_revoke",
                 return_value=prepared_payload,
             ) as prepare:
                 prepared = service.invoke(
@@ -2515,7 +2515,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "end_time": "2026-07-20 16:00",
             }
             with patch(
-                "bscli.core.central_service.build_meeting_field_card_schema",
+                "bscli.core.write_catalog.build_meeting_field_card_schema",
                 return_value=MEETING_FIELD_CARD_SCHEMA,
             ) as build_schema:
                 started = service.invoke(
@@ -2556,7 +2556,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "创建并发送会议", "system": "致远 OA", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_meeting_create",
+                "bscli.core.write_catalog.prepare_meeting_create",
                 return_value=prepared_payload,
             ):
                 prepared = service.invoke(
@@ -2585,7 +2585,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 enter_commit_boundary()
                 return {"meeting_created": True, "meeting_sent": True, "submitted_count": 1}
 
-            with patch("bscli.core.central_service.create_meeting", side_effect=create):
+            with patch("bscli.core.write_catalog.create_meeting", side_effect=create):
                 committed = service.invoke(
                     user_subject="user-a",
                     capability_name="oa.meeting.create",
@@ -2609,7 +2609,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "end_time": "2026-09-10 15:00",
             }
             with patch(
-                "bscli.core.central_service.build_meeting_room_application_field_card_schema",
+                "bscli.core.write_catalog.build_meeting_room_application_field_card_schema",
                 return_value=MEETING_ROOM_APPLICATION_FIELD_CARD_SCHEMA,
             ) as build_schema:
                 started = service.invoke(
@@ -2650,7 +2650,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 "summary": {"title": "申请会议室", "system": "致远 OA", "fields": []},
             }
             with patch(
-                "bscli.core.central_service.prepare_meeting_room_application",
+                "bscli.core.write_catalog.prepare_meeting_room_application",
                 return_value=prepared_payload,
             ):
                 prepared = service.invoke(
@@ -2676,7 +2676,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 }
 
             with patch(
-                "bscli.core.central_service.create_meeting_room_application",
+                "bscli.core.write_catalog.create_meeting_room_application",
                 side_effect=create,
             ):
                 committed = service.invoke(

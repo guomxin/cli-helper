@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 
 REQUIRED = ("bscli/adapters/seeyon_page_scripts/continue_submit.js",
             "bscli/adapters/seeyon_page_scripts/launch_save_draft.js")
-CHECKS = ["python-full", "compileall", "pip-check", "workspace-node", "openclaw", "openclaw-pack", "installed-wheel"]
+CHECKS = ["public-content", "current-facts", "python-full", "compileall", "pip-check", "workspace-node", "openclaw", "openclaw-pack", "installed-wheel"]
 
 
 def run(args, cwd):

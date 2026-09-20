@@ -48,7 +48,7 @@ def run(tmp_path, monkeypatch):
         if "approval" in definition.get("prepare_function", "") or definition.get("prepare_function") == "prepare_weekly_report_acknowledgement":
             monkeypatch.setattr("bscli.core.central_service." + definition["prepare_function"], prepare)
             monkeypatch.setattr("bscli.core.central_service." + definition["commit_function"], commit)
-    monkeypatch.setattr("bscli.core.central_service.preflight_pending_action", lambda *_a, **_kw: None)
+    monkeypatch.setattr("bscli.core.write_catalog.preflight_pending_action", lambda *_a, **_kw: None)
     monkeypatch.setattr(service.adapter, "list_workflows", lambda *_a, **_kw: pending(rows))
     return service, tid, rows, prepared, committed
 
@@ -124,7 +124,7 @@ def test_unknown_second_item_stops_remaining_and_never_retries(run, monkeypatch)
         committed.append("unknown-second")
         raise PendingActionOutcomeUnknown("test response lost")
 
-    monkeypatch.setattr("bscli.core.central_service.approve_efficiency_data", unknown)
+    monkeypatch.setattr("bscli.core.write_catalog.approve_efficiency_data", unknown)
     auth = authorize(service, second)
     result = finish(service, auth)
     assert result["status"] == "unknown"

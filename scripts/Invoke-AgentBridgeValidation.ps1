@@ -151,6 +151,8 @@ if ($Mode -eq "Targeted" -and $PythonTests.Count -eq 0 -and -not $runOpenClaw -a
 
 if ($Mode -eq "Full") {
     if ($SkipOpenClaw) { throw "Full candidate validation cannot skip OpenClaw; use Targeted for partial checks." }
+    Invoke-External -FilePath $venvPython -Arguments @("scripts/check_public_content.py") -Label "Public content credential guard" -WorkingDirectory $repoRoot
+    Invoke-External -FilePath $venvPython -Arguments @("scripts/current_facts.py", "--check") -Label "Current code facts" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("scripts/agentbridge_artifact.py", "begin", "--root", $repoRoot) -Label "Begin candidate validation" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pytest", "-q", "--junitxml=output/release-validation/pytest.xml") -Label "Python full test suite" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "compileall", "-q", "bscli") -Label "Python compileall" -WorkingDirectory $repoRoot

@@ -12,7 +12,7 @@ import time
 
 import uvicorn
 from bscli.core.central_service import CentralCapabilityService
-import bscli.core.central_service as central_module
+import bscli.core.write_catalog as central_module
 from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.mcp.central import create_central_mcp_server, validate_central_mcp_server_config
 

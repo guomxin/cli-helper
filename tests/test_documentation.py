@@ -10,6 +10,16 @@ MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
 class DocumentationTests(unittest.TestCase):
+    def test_generated_facts_match_all_system_totals_and_plugin_source(self):
+        from scripts.current_facts import code_facts, render
+
+        facts = code_facts()
+        self.assertEqual(sum(sum(counts.values()) for counts in facts['systems'].values()), facts['capabilityTotal'])
+        text = (ROOT / 'docs/项目当前状态.md').read_text(encoding='utf-8')
+        self.assertIn(render(facts), text)
+        for field in ('deployment', 'automaticValidation', 'businessAcceptance'):
+            self.assertEqual(facts[field], 'not_asserted')
+
     def test_current_inventory_matches_constructed_capability_and_mcp_registries(self):
         from bscli.core.central_service import CentralCapabilityService
         from bscli.core.mcp_identities import McpIdentityTokenStore

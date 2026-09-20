@@ -1,3 +1,4 @@
+# Example only: supply a reviewed external environment profile for deployment.
 [Unit]
 Description=AgentBridge central MCP and trusted cards
 After=network-online.target
@@ -7,12 +8,12 @@ Wants=network-online.target
 Type=simple
 User=agentbridge
 Group=agentbridge
-WorkingDirectory=/home/guomao/agentbridge
-Environment=HOME=/home/guomao/agentbridge/data
+WorkingDirectory=/home/agentbridge/service
+Environment=HOME=/home/agentbridge/service/data
 Environment=PYTHONUNBUFFERED=1
-Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
-EnvironmentFile=-/home/guomao/agentbridge/config/release.env
-ExecStart=/home/guomao/agentbridge/current/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data mcp central-serve --host 10.10.50.213 --port 8790 --public-base-url https://10.10.50.213:8790 --tls-cert /home/guomao/agentbridge/config/tls/server.crt --tls-key /home/guomao/agentbridge/config/tls/server.key --auth-host 10.10.50.213 --auth-port 8780 --auth-public-base-url https://10.10.50.213:8780 --auth-tls-cert /home/guomao/agentbridge/config/tls/server.crt --auth-tls-key /home/guomao/agentbridge/config/tls/server.key --admin-host 10.10.50.213 --admin-port 8782 --admin-public-base-url https://10.10.50.213:8782 --admin-tls-cert /home/guomao/agentbridge/config/tls/server.crt --admin-tls-key /home/guomao/agentbridge/config/tls/server.key --workspace-host 10.10.50.213 --workspace-port 8783 --workspace-public-base-url https://10.10.50.213:8783 --workspace-tls-cert /home/guomao/agentbridge/config/tls/server.crt --workspace-tls-key /home/guomao/agentbridge/config/tls/server.key --workspace-gateway-url ws://127.0.0.1:18789 --workspace-gateway-token-file /home/guomao/agentbridge/config/openclaw-gateway.token --yuque-base-url https://tc-aiot.yuque.com --yuque-organization-id 20020375 --smartlight-base-url http://123.232.113.241:4101/smartlight --smartlight-allow-insecure-http --session-keepalive-interval 600 --session-keepalive-lease 604800
+Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/agentbridge/service/config/session.key
+EnvironmentFile=-/home/agentbridge/service/config/release.env
+ExecStart=/home/agentbridge/service/current/venv/bin/python -P -m bscli.cli.main --home /home/agentbridge/service/data mcp central-serve --base-url https://oa.example.test/seeyon/main.do?method=main --taihua-base-url https://logs.example.test --host 127.0.0.1 --port 8790 --public-base-url https://127.0.0.1:8790 --tls-cert /home/agentbridge/service/config/tls/server.crt --tls-key /home/agentbridge/service/config/tls/server.key --auth-host 127.0.0.1 --auth-port 8780 --auth-public-base-url https://127.0.0.1:8780 --auth-tls-cert /home/agentbridge/service/config/tls/server.crt --auth-tls-key /home/agentbridge/service/config/tls/server.key --admin-host 127.0.0.1 --admin-port 8782 --admin-public-base-url https://127.0.0.1:8782 --admin-tls-cert /home/agentbridge/service/config/tls/server.crt --admin-tls-key /home/agentbridge/service/config/tls/server.key --workspace-host 127.0.0.1 --workspace-port 8783 --workspace-public-base-url https://127.0.0.1:8783 --workspace-tls-cert /home/agentbridge/service/config/tls/server.crt --workspace-tls-key /home/agentbridge/service/config/tls/server.key --workspace-gateway-url ws://127.0.0.1:18789 --workspace-gateway-token-file /home/agentbridge/service/config/openclaw-gateway.token --yuque-base-url https://knowledge.example.test --yuque-organization-id 1 --smartlight-base-url https://lighting.example.test/smartlight --session-keepalive-interval 600 --session-keepalive-lease 604800
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -20,8 +21,8 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadOnlyPaths=/home/guomao/agentbridge/config
-ReadWritePaths=/home/guomao/agentbridge/data
+ReadOnlyPaths=/home/agentbridge/service/config
+ReadWritePaths=/home/agentbridge/service/data
 
 [Install]
 WantedBy=multi-user.target

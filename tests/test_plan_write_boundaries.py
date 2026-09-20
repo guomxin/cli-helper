@@ -196,7 +196,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
             self.assertEqual(self.cancel_from_other_thread()["status"], "canceled")
             enter_commit_boundary()
             effects.append(True)
-        with patch("bscli.core.central_service.commit_taihua_work_log_create", side_effect=commit):
+        with patch("bscli.core.write_catalog.commit_taihua_work_log_create", side_effect=commit):
             result = self.resume(self.authorization)
         self.assertEqual(result["status"], "canceled")
         self.assertEqual(effects, [])
@@ -212,7 +212,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
             canceled = self.cancel_from_other_thread()
             self.assertEqual(canceled["error"]["code"], "PLAN_COMMIT_IN_PROGRESS")
             return {"status": "created", "verification": {"matched": True}}
-        with patch("bscli.core.central_service.commit_taihua_work_log_create", side_effect=commit):
+        with patch("bscli.core.write_catalog.commit_taihua_work_log_create", side_effect=commit):
             result = self.resume(self.authorization)
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(self.service.write_authorizations.get(self.auth_id)["state"], "consumed")
@@ -266,7 +266,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
             self.tokens.revoke(self.origin["token_id"])
             enter_commit_boundary()
             self.fail("revoked authority crossed the effect boundary")
-        with patch("bscli.core.central_service.commit_taihua_work_log_create", side_effect=commit):
+        with patch("bscli.core.write_catalog.commit_taihua_work_log_create", side_effect=commit):
             result = self.resume(self.authorization)
         self.assertEqual(result["error"]["code"], "PLAN_AUTHORITY_INVALID")
         self.assertNotEqual(self.service.write_authorizations.get(self.auth_id)["state"], "consumed")
@@ -294,7 +294,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         def commit(*_, enter_commit_boundary):
             enter_commit_boundary()
             raise ConnectionError("response lost")
-        with patch("bscli.core.central_service.commit_taihua_work_log_create", side_effect=commit) as call:
+        with patch("bscli.core.write_catalog.commit_taihua_work_log_create", side_effect=commit) as call:
             result = self.resume(self.authorization)
             self.assertEqual(result["status"], "outcome_unknown")
             self.assertEqual(result["error"]["code"], "RESULT_UNKNOWN")

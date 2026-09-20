@@ -6131,6 +6131,9 @@ def serve_central_mcp(
             ssl_certfile=str(mcp_config.tls_cert) if mcp_config.tls_cert else None,
             ssl_keyfile=str(mcp_config.tls_key) if mcp_config.tls_key else None,
             access_log=False,
+            limit_concurrency=128,
+            backlog=64,
+            timeout_keep_alive=5,
         )
     finally:
         governance.stop()

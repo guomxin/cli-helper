@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [string]$EnvironmentProfile = $env:AGENTBRIDGE_ENVIRONMENT_PROFILE,
     [string]$HostName = "10.10.50.213",
     [string]$SshUser = "root",
     [string]$IdentityFile = "",
@@ -40,17 +41,19 @@ if ($ServiceName -notmatch '^[A-Za-z0-9_.@-]+$') {
 if ($RemoteRoot -notmatch '^/home/[A-Za-z0-9._/-]+$' -or $RemoteRoot.Contains("..")) {
     throw "RemoteRoot must be a fixed path below /home"
 }
-$systemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName.service"
-$backupSystemdUnit = Join-Path $repoRoot "deploy\systemd\$ServiceName-backup.service"
-$backupSystemdTimer = Join-Path $repoRoot "deploy\systemd\$ServiceName-backup.timer"
+Import-Module (Join-Path $PSScriptRoot 'AgentBridgeEnvironment.psm1') -Force
+$environmentConfig = Read-AgentBridgeEnvironment -Path $EnvironmentProfile -RepoRoot $repoRoot -HostName $HostName -RemoteRoot $RemoteRoot
+$systemdUnit = $environmentConfig.Units["$ServiceName.service"].Path
+$backupSystemdUnit = $environmentConfig.Units["$ServiceName-backup.service"].Path
+$backupSystemdTimer = $environmentConfig.Units["$ServiceName-backup.timer"].Path
 if (-not (Test-Path -LiteralPath $systemdUnit -PathType Leaf)) {
-    throw "Version-controlled systemd unit was not found: $systemdUnit"
+    throw "Selected environment systemd unit was not found: $systemdUnit"
 }
 if (-not (Test-Path -LiteralPath $backupSystemdUnit -PathType Leaf)) {
-    throw "Version-controlled backup systemd unit was not found: $backupSystemdUnit"
+    throw "Selected environment backup systemd unit was not found: $backupSystemdUnit"
 }
 if (-not (Test-Path -LiteralPath $backupSystemdTimer -PathType Leaf)) {
-    throw "Version-controlled backup systemd timer was not found: $backupSystemdTimer"
+    throw "Selected environment backup systemd timer was not found: $backupSystemdTimer"
 }
 
 if (-not $IdentityFile) {
@@ -107,6 +110,8 @@ $plan = [ordered]@{
     openClawWarmup = [bool]$RestartOpenClaw -or (Test-Path -LiteralPath $gatewayWarmupPendingPath)
     installSystemDependencies = [bool]$InstallSystemDependencies
     systemdUnits = @($systemdUnit, $backupSystemdUnit, $backupSystemdTimer)
+    environmentProfile = $environmentConfig.Path
+    unitHashes = @($environmentConfig.Units.Values | ForEach-Object { $_.Hash })
 }
 if ($PlanOnly) {
     $plan | ConvertTo-Json -Compress
@@ -161,9 +166,9 @@ $connectionArguments = @(
 $target = "$SshUser@$HostName"
 $remoteWheel = "/tmp/$releaseId-$([guid]::NewGuid().ToString('N'))-$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
-$systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
-$backupSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdUnit))
-$backupSystemdTimerBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdTimer))
+$systemdUnitBase64 = [Convert]::ToBase64String($environmentConfig.Units["$ServiceName.service"].Bytes)
+$backupSystemdUnitBase64 = [Convert]::ToBase64String($environmentConfig.Units["$ServiceName-backup.service"].Bytes)
+$backupSystemdTimerBase64 = [Convert]::ToBase64String($environmentConfig.Units["$ServiceName-backup.timer"].Bytes)
 $releasePolicy = Get-Content (Join-Path $repoRoot "deploy/release-policy.json") -Raw | ConvertFrom-Json
 $releaseRunnerBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot "agentbridge_release.py")))
 $releaseConfig = @{

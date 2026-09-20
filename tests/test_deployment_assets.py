@@ -24,8 +24,8 @@ class DeploymentAssetTests(unittest.TestCase):
     def test_systemd_service_cannot_import_legacy_app_source(self) -> None:
         unit = (ROOT / "deploy/systemd/agentbridge.service").read_text(encoding="utf-8")
 
-        self.assertIn("WorkingDirectory=/home/guomao/agentbridge\n", unit)
-        self.assertNotIn("WorkingDirectory=/home/guomao/agentbridge/app", unit)
+        self.assertIn("WorkingDirectory=/home/agentbridge/service\n", unit)
+        self.assertNotIn("WorkingDirectory=/home/agentbridge/service/app", unit)
         self.assertIn("venv/bin/python -P -m bscli.cli.main", unit)
 
     def test_deployment_installs_unit_and_checks_runtime_module_source(self) -> None:
@@ -269,12 +269,12 @@ class DeploymentAssetTests(unittest.TestCase):
         )
 
         for marker in (
-            "EnvironmentFile=-/home/guomao/agentbridge/config/release.env",
-            "--admin-host 10.10.50.213",
+            "EnvironmentFile=-/home/agentbridge/service/config/release.env",
+            "--admin-host 127.0.0.1",
             "--admin-port 8782",
-            "--admin-public-base-url https://10.10.50.213:8782",
-            "--admin-tls-cert /home/guomao/agentbridge/config/tls/server.crt",
-            "--admin-tls-key /home/guomao/agentbridge/config/tls/server.key",
+            "--admin-public-base-url https://127.0.0.1:8782",
+            "--admin-tls-cert /home/agentbridge/service/config/tls/server.crt",
+            "--admin-tls-key /home/agentbridge/service/config/tls/server.key",
         ):
             self.assertIn(marker, unit)
         runner = (ROOT / "scripts/agentbridge_release.py").read_text(encoding="utf-8")
@@ -287,10 +287,10 @@ class DeploymentAssetTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "--smartlight-base-url http://123.232.113.241:4101/smartlight",
+            "--smartlight-base-url https://lighting.example.test/smartlight",
             unit,
         )
-        self.assertIn("--smartlight-allow-insecure-http", unit)
+        self.assertNotIn("--smartlight-allow-insecure-http", unit)
     def test_openclaw_restart_has_recovery_guardrails_and_warmup_gate(self) -> None:
         deploy = (ROOT / "scripts/Deploy-AgentBridge.ps1").read_text(
             encoding="utf-8"

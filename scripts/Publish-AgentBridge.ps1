@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [string]$EnvironmentProfile = $env:AGENTBRIDGE_ENVIRONMENT_PROFILE,
     [string]$RemoteName = "origin",
     [string]$BranchName = "main",
     [string]$ExpectedRemoteUrl = "git@github.com:guomxin/cli-helper.git",
@@ -27,6 +28,8 @@ $validationScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeValidation.ps1"
 $runtimeGovernanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeRuntimeGovernance.ps1"
 $releaseAcceptanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeReleaseAcceptance.ps1"
 $gitArguments = @("--git-dir=$gitDir", "--work-tree=$repoRoot")
+Import-Module (Join-Path $PSScriptRoot 'AgentBridgeEnvironment.psm1') -Force
+$environmentConfig = Read-AgentBridgeEnvironment -Path $EnvironmentProfile -RepoRoot $repoRoot -HostName '10.10.50.213' -RemoteRoot '/home/guomao/agentbridge'
 
 function Invoke-GitRead {
     param(
@@ -139,6 +142,8 @@ $plan = [ordered]@{
     openClawChangedInputs = @($restartPlan.changedInputs)
     resumeAcceptance = [bool]$ResumeAcceptance
     push = "$RemoteName/$BranchName"
+    environmentProfile = $environmentConfig.Path
+    unitHashes = @($environmentConfig.Units.Values | ForEach-Object { $_.Hash })
 }
 if ($PlanOnly) {
     $plan | ConvertTo-Json -Compress
@@ -179,12 +184,15 @@ if (-not $SkipValidation) {
 $artifactPython = Join-Path $env:LOCALAPPDATA "AgentBridge/test-venv-py312/Scripts/python.exe"
 & $artifactPython (Join-Path $repoRoot "scripts/agentbridge_artifact.py") verify --root $repoRoot
 if ($LASTEXITCODE -ne 0) { throw "No matching complete candidate validation is available" }
+& (Join-Path $PSScriptRoot 'Test-AgentBridgeCandidate.ps1') -Commit $commit -IdentityFile $GitHubIdentityFile -KnownHostsFile $GitHubKnownHostsFile -Python $artifactPython
+if ($LASTEXITCODE -ne 0) { throw 'Candidate CI gate failed before deployment' }
 & $runtimeGovernanceScript
 if ($LASTEXITCODE -ne 0) {
     throw "Runtime-governance fault-injection validation failed"
 }
 
 $deployParameters = @{
+    EnvironmentProfile = $environmentConfig.Path
     IdentityFile = (Resolve-Path $AgentBridgeIdentityFile).Path
     KnownHostsFile = (Resolve-Path $AgentBridgeKnownHostsFile).Path
     SkipValidation = $true

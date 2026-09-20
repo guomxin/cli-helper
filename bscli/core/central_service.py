@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from functools import wraps
 import hashlib
 import json
 import os
 from pathlib import Path
 import threading
-from typing import Callable, Iterator
+from typing import (
+    Callable,
+    Iterator,
+)
 from uuid import uuid4
 
 from bscli.adapters.seeyon_pending_batch import (
@@ -32,43 +39,15 @@ from bscli.adapters.base import (
 from bscli.adapters.taihua import (
     TAIHUA_ADAPTER_ID,
     TAIHUA_SYSTEM_ID,
-    TAIHUA_WORK_LOG_CREATE_CAPABILITY,
-    TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY,
-    TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA,
     TaihuaCentralAdapter,
-    TaihuaWorkLogContractMismatch,
-    TaihuaWorkLogOutcomeUnknown,
     build_taihua_capability_registry,
-    commit_taihua_work_log_create,
-    prepare_taihua_work_log_create,
 )
 from bscli.adapters.smartlight import (
     SMARTLIGHT_ADAPTER_ID,
-    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
-    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY,
-    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
-    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY,
-    SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
-    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
-    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY,
     SMARTLIGHT_REPORT_EXPORT_CAPABILITY,
-    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
-    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY,
     SMARTLIGHT_SYSTEM_ID,
-    SmartlightAlarmActionContractMismatch,
-    SmartlightAlarmActionOutcomeUnknown,
-    SmartlightAlarmRemarkContractMismatch,
-    SmartlightAlarmRemarkOutcomeUnknown,
     SmartlightCentralAdapter,
     build_smartlight_capability_registry,
-    commit_smartlight_alarm_work_area_revoke,
-    commit_smartlight_alarm_work_area_submit,
-    commit_smartlight_alarm_remark_update,
-    commit_smartlight_rtu_alarm_dispose,
-    prepare_smartlight_alarm_work_area_revoke,
-    prepare_smartlight_alarm_work_area_submit,
-    prepare_smartlight_alarm_remark_update,
-    prepare_smartlight_rtu_alarm_dispose,
 )
 from bscli.adapters.yuque import (
     YUQUE_ADAPTER_ID,
@@ -76,152 +55,19 @@ from bscli.adapters.yuque import (
     YuqueCentralAdapter,
     build_yuque_capability_registry,
 )
-from bscli.adapters.seeyon_business_trip import (
-    BUSINESS_TRIP_FIELD_CARD_SCHEMA,
-    BUSINESS_TRIP_PREPARE_CAPABILITY,
-    BUSINESS_TRIP_SAVE_CAPABILITY,
-    BusinessTripContractMismatch,
-    BusinessTripOutcomeUnknown,
-    prepare_business_trip_draft,
-    save_business_trip_draft,
-)
-from bscli.adapters.seeyon_business_trip_submit import (
-    BUSINESS_TRIP_SUBMIT_CAPABILITY,
-    BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA,
-    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY,
-    prepare_business_trip_submission,
-    submit_business_trip_request,
-)
-from bscli.adapters.seeyon_leave import (
-    LEAVE_FIELD_CARD_SCHEMA,
-    LEAVE_PREPARE_CAPABILITY,
-    LEAVE_SAVE_CAPABILITY,
-    LeaveContractMismatch,
-    LeaveOutcomeUnknown,
-    prepare_leave_draft,
-    save_leave_draft,
-)
-from bscli.adapters.seeyon_leave_submit import (
-    LEAVE_SUBMIT_CAPABILITY,
-    LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
-    LEAVE_SUBMIT_PREPARE_CAPABILITY,
-    prepare_leave_submission,
-    submit_leave_request,
-)
-from bscli.adapters.seeyon_meeting import (
-    MEETING_CREATE_CAPABILITY,
-    MEETING_FIELD_CARD_SCHEMA,
-    MEETING_PREPARE_CAPABILITY,
-    MeetingContractMismatch,
-    MeetingOutcomeUnknown,
-    build_meeting_field_card_schema,
-    create_meeting,
-    prepare_meeting_create,
-)
-from bscli.adapters.seeyon_meeting_room_application import (
-    MEETING_ROOM_APPLICATION_CANCEL_CAPABILITY,
-    MEETING_ROOM_APPLICATION_CANCEL_FIELD_CARD_SCHEMA,
-    MEETING_ROOM_APPLICATION_CANCEL_PREPARE_CAPABILITY,
-    MEETING_ROOM_APPLICATION_CREATE_CAPABILITY,
-    MEETING_ROOM_APPLICATION_FIELD_CARD_SCHEMA,
-    MEETING_ROOM_APPLICATION_PREPARE_CAPABILITY,
-    MeetingRoomApplicationContractMismatch,
-    MeetingRoomApplicationOutcomeUnknown,
-    build_meeting_room_application_field_card_schema,
-    cancel_meeting_room_application,
-    create_meeting_room_application,
-    prepare_meeting_room_application,
-    prepare_meeting_room_application_cancel,
-)
 from bscli.adapters.seeyon_missed_punch import (
     MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY,
-    MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
-    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
     MISSED_PUNCH_APPROVE_CAPABILITY,
-    MISSED_PUNCH_FIELD_CARD_SCHEMA,
-    MISSED_PUNCH_PREPARE_CAPABILITY,
-    MISSED_PUNCH_SAVE_CAPABILITY,
-    MissedPunchContractMismatch,
-    MissedPunchOutcomeUnknown,
-    approve_missed_punch_request,
-    build_missed_punch_approval_batch_field_schema,
-    prepare_missed_punch_approval,
-    prepare_missed_punch_draft,
-    save_missed_punch_draft,
     select_missed_punch_approval_batch_items,
-)
-from bscli.adapters.seeyon_pending_actions import (
-    ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
-    ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
-    ATTENDANCE_CONFIRM_CAPABILITY,
-    EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
-    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
-    EFFICIENCY_DATA_APPROVE_CAPABILITY,
-    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA,
-    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
-    INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
-    LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA,
-    LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
-    LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
-    OVERTIME_APPROVAL_FIELD_CARD_SCHEMA,
-    OVERTIME_APPROVAL_PREPARE_CAPABILITY,
-    OVERTIME_APPROVE_CAPABILITY,
-    RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA,
-    WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA,
-    RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
-    WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
-    RESIGNATION_APPROVE_CAPABILITY,
-    WORK_HANDOVER_APPROVE_CAPABILITY,
-    STANDARD_COLLABORATION_APPROVAL_FIELD_CARD_SCHEMA,
-    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
-    STANDARD_COLLABORATION_APPROVE_CAPABILITY,
-    TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA,
-    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
-    TRAVEL_EXPENSE_APPROVE_CAPABILITY,
-    WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA,
-    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY,
-    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
-    PendingActionContractMismatch,
-    PendingActionOutcomeUnknown,
-    acknowledge_weekly_report,
-    confirm_attendance,
-    approve_efficiency_data,
-    approve_intellectual_property_declaration,
-    approve_labor_contract_renewal,
-    approve_overtime,
-    approve_resignation,
-    approve_work_handover,
-    approve_standard_collaboration,
-    approve_travel_expense,
-    prepare_efficiency_data_approval,
-    prepare_intellectual_property_declaration_approval,
-    prepare_attendance_confirmation,
-    prepare_labor_contract_renewal_approval,
-    prepare_overtime_approval,
-    prepare_resignation_approval,
-    prepare_work_handover_approval,
-    prepare_standard_collaboration_approval,
-    prepare_travel_expense_approval,
-    prepare_weekly_report_acknowledgement,
-    preflight_pending_action,
-)
-from bscli.adapters.seeyon_submit_phases import (
-    SeeyonBusinessValidationRequired,
-)
-from bscli.adapters.seeyon_workflow_revoke import (
-    WORKFLOW_REVOKE_CAPABILITY,
-    WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
-    WORKFLOW_REVOKE_PREPARE_CAPABILITY,
-    WorkflowRevokeContractMismatch,
-    WorkflowRevokeOutcomeUnknown,
-    prepare_workflow_revoke,
-    revoke_workflow,
 )
 from bscli.admin.stores import (
     GovernancePolicyDenied,
     GovernancePolicyStore,
 )
-from bscli.browser.central import AttachedCentralBrowserWorker, CentralBrowserWorker
+from bscli.browser.central import (
+    AttachedCentralBrowserWorker,
+    CentralBrowserWorker,
+)
 from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
@@ -229,11 +75,18 @@ from bscli.core.capability_runtime import (
     CapabilityRejected,
     CapabilityContext,
     CapabilityEngine,
-    OutcomeUnknown,
     RequiresUserAction,
 )
 from bscli.core.operations import OperationStore
-from bscli.core.login_continuation import read_continuation_message
+from bscli.core.login_recovery import resume_login_read
+from bscli.core.controlled_write_executor import ControlledWriteExecutor
+from bscli.core.write_catalog import (
+    _TRUSTED_WRITE_DEFINITIONS,
+    _TRUSTED_WRITE_COMMITS,
+    _CAPABILITY_SCOPES,
+    capability_required_scopes,
+    resolve_write_function,
+)
 from bscli.core.runtime_governance import (
     RuntimeGovernanceStore,
     classify_runtime_error,
@@ -264,9 +117,6 @@ from bscli.core.report_exports import (
 )
 from bscli.core.timeline_attachments import TimelineAttachmentStore
 from bscli.core.field_submissions import (
-    FieldSubmissionAccessDenied,
-    FieldSubmissionIntegrityError,
-    FieldSubmissionNotFound,
     FieldSubmissionStateError,
     FieldSubmissionStore,
 )
@@ -283,7 +133,6 @@ from bscli.core.session_secrets import (
 )
 from bscli.core.sessions import SessionRegistry
 from bscli.core.tasks import (
-    ACTIVE_TASK_STATUSES,
     TaskHubStore,
     TaskIntegrityError,
     TaskNotFound,
@@ -308,8 +157,6 @@ from bscli.core.task_plans import (
 )
 from bscli.core.transforms import build_transform_registry
 from bscli.core.write_authorizations import (
-    WriteAuthorizationAccessDenied,
-    WriteAuthorizationNotFound,
     WriteAuthorizationStateError,
     WriteAuthorizationStore,
 )
@@ -317,460 +164,7 @@ from bscli.workspace.stores import WorkspaceStore
 
 
 WorkerFactory = Callable[[dict, object], object]
-TRUSTED_WRITE_INTERACTION_TTL_SECONDS = 1800
 ACTIVITY_GATED_CLIENT_TYPES = {"openclaw-weixin", "wechat", "weixin"}
-
-_TRUSTED_WRITE_DEFINITIONS = {
-    BUSINESS_TRIP_PREPARE_CAPABILITY: {
-        "commit_capability": BUSINESS_TRIP_SAVE_CAPABILITY,
-        "field_schema": BUSINESS_TRIP_FIELD_CARD_SCHEMA,
-        "context_fields": (),
-        "prepare_function": "prepare_business_trip_draft",
-        "commit_function": "save_business_trip_draft",
-        "contract_error": BusinessTripContractMismatch,
-        "outcome_error": BusinessTripOutcomeUnknown,
-        "field_message": "Business-trip fields must be entered in the trusted field card.",
-        "authorization_message": "The business-trip draft plan requires confirmation in the trusted action card.",
-    },
-    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY: {
-        "commit_capability": BUSINESS_TRIP_SUBMIT_CAPABILITY,
-        "field_schema": BUSINESS_TRIP_SUBMIT_FIELD_CARD_SCHEMA,
-        "context_fields": (),
-        "prepare_function": "prepare_business_trip_submission",
-        "commit_function": "submit_business_trip_request",
-        "contract_error": BusinessTripContractMismatch,
-        "outcome_error": BusinessTripOutcomeUnknown,
-        "field_message": "Business-trip fields must be entered in the trusted field card.",
-        "authorization_message": "The business-trip submission plan requires confirmation in the trusted action card.",
-    },
-    LEAVE_PREPARE_CAPABILITY: {
-        "commit_capability": LEAVE_SAVE_CAPABILITY,
-        "field_schema": LEAVE_FIELD_CARD_SCHEMA,
-        "context_fields": (),
-        "prepare_function": "prepare_leave_draft",
-        "commit_function": "save_leave_draft",
-        "contract_error": LeaveContractMismatch,
-        "outcome_error": LeaveOutcomeUnknown,
-        "field_message": "Leave-request fields must be entered in the trusted field card.",
-        "authorization_message": "The leave draft plan requires confirmation in the trusted action card.",
-    },
-    LEAVE_SUBMIT_PREPARE_CAPABILITY: {
-        "commit_capability": LEAVE_SUBMIT_CAPABILITY,
-        "field_schema": LEAVE_SUBMIT_FIELD_CARD_SCHEMA,
-        "context_fields": (),
-        "prepare_function": "prepare_leave_submission",
-        "commit_function": "submit_leave_request",
-        "contract_error": LeaveContractMismatch,
-        "outcome_error": LeaveOutcomeUnknown,
-        "field_message": "Leave-request fields must be entered in the trusted field card.",
-        "authorization_message": "The leave submission plan requires confirmation in the trusted action card.",
-    },
-    MISSED_PUNCH_PREPARE_CAPABILITY: {
-        "commit_capability": MISSED_PUNCH_SAVE_CAPABILITY,
-        "field_schema": MISSED_PUNCH_FIELD_CARD_SCHEMA,
-        "context_fields": (),
-        "prepare_function": "prepare_missed_punch_draft",
-        "commit_function": "save_missed_punch_draft",
-        "contract_error": MissedPunchContractMismatch,
-        "outcome_error": MissedPunchOutcomeUnknown,
-        "field_message": "Missed-punch fields must be entered in the trusted field card.",
-        "authorization_message": "The missed-punch draft plan requires confirmation in the trusted action card.",
-    },
-    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: {
-        "commit_capability": MISSED_PUNCH_APPROVE_CAPABILITY,
-        "field_schema": MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
-        "context_fields": ("affair_id",),
-        "prepare_function": "prepare_missed_punch_approval",
-        "commit_function": "approve_missed_punch_request",
-        "contract_error": MissedPunchContractMismatch,
-        "outcome_error": MissedPunchOutcomeUnknown,
-        "field_message": "The missed-punch approval opinion must be entered in the trusted field card.",
-        "authorization_message": "The missed-punch approval plan requires confirmation in the trusted action card.",
-    },
-    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY: {
-        "commit_capability": MISSED_PUNCH_APPROVE_CAPABILITY,
-        "field_schema": MISSED_PUNCH_APPROVAL_FIELD_CARD_SCHEMA,
-        "field_schema_function": "build_missed_punch_approval_batch_field_schema",
-        "context_fields": ("batch_id", "affair_id"),
-        "prepare_function": "prepare_missed_punch_approval",
-        "commit_function": "approve_missed_punch_request",
-        "contract_error": MissedPunchContractMismatch,
-        "outcome_error": MissedPunchOutcomeUnknown,
-        "field_message": "The current missed-punch opinion must be entered in the trusted field card.",
-        "authorization_message": "The current missed-punch approval plan requires confirmation in the trusted action card.",
-    },
-    MEETING_PREPARE_CAPABILITY: {
-        "commit_capability": MEETING_CREATE_CAPABILITY,
-        "field_schema": MEETING_FIELD_CARD_SCHEMA,
-        "field_schema_function": "build_meeting_field_card_schema",
-        "context_fields": (),
-        "prepare_function": "prepare_meeting_create",
-        "commit_function": "create_meeting",
-        "contract_error": MeetingContractMismatch,
-        "outcome_error": MeetingOutcomeUnknown,
-        "field_message": "Meeting fields must be entered in the trusted field card.",
-        "authorization_message": "The meeting-create plan requires confirmation in the trusted action card.",
-    },
-    MEETING_ROOM_APPLICATION_PREPARE_CAPABILITY: {
-        "commit_capability": MEETING_ROOM_APPLICATION_CREATE_CAPABILITY,
-        "field_schema": MEETING_ROOM_APPLICATION_FIELD_CARD_SCHEMA,
-        "field_schema_function": "build_meeting_room_application_field_card_schema",
-        "context_fields": (),
-        "prepare_function": "prepare_meeting_room_application",
-        "commit_function": "create_meeting_room_application",
-        "contract_error": MeetingRoomApplicationContractMismatch,
-        "outcome_error": MeetingRoomApplicationOutcomeUnknown,
-        "field_message": "会议室申请字段必须在可信字段卡中核对。",
-        "authorization_message": "会议室申请计划需要在可信授权卡中确认。",
-    },
-    MEETING_ROOM_APPLICATION_CANCEL_PREPARE_CAPABILITY: {
-        "commit_capability": MEETING_ROOM_APPLICATION_CANCEL_CAPABILITY,
-        "field_schema": MEETING_ROOM_APPLICATION_CANCEL_FIELD_CARD_SCHEMA,
-        "context_fields": ("application_id",),
-        "prepare_function": "prepare_meeting_room_application_cancel",
-        "commit_function": "cancel_meeting_room_application",
-        "contract_error": MeetingRoomApplicationContractMismatch,
-        "outcome_error": MeetingRoomApplicationOutcomeUnknown,
-        "field_message": "会议室申请撤销原因必须在可信字段卡中核对。",
-        "authorization_message": "会议室申请撤销计划需要在可信授权卡中确认。",
-    },
-    WORKFLOW_REVOKE_PREPARE_CAPABILITY: {
-        "commit_capability": WORKFLOW_REVOKE_CAPABILITY,
-        "field_schema": WORKFLOW_REVOKE_FIELD_CARD_SCHEMA,
-        "context_fields": ("affair_id",),
-        "prepare_function": "prepare_workflow_revoke",
-        "commit_function": "revoke_workflow",
-        "contract_error": WorkflowRevokeContractMismatch,
-        "outcome_error": WorkflowRevokeOutcomeUnknown,
-        "field_message": "The workflow revoke comment must be entered in the trusted field card.",
-        "authorization_message": "The workflow revoke plan requires confirmation in the trusted action card.",
-    },
-}
-
-_TRUSTED_WRITE_DEFINITIONS.update(
-    {
-        EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": EFFICIENCY_DATA_APPROVE_CAPABILITY,
-            "field_schema": EFFICIENCY_DATA_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_efficiency_data_approval",
-            "commit_function": "approve_efficiency_data",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The efficiency-data opinion must be entered in the trusted field card.",
-            "authorization_message": "The efficiency-data approval requires trusted confirmation.",
-        },
-        TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": TRAVEL_EXPENSE_APPROVE_CAPABILITY,
-            "field_schema": TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_travel_expense_approval",
-            "commit_function": "approve_travel_expense",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The travel-expense opinion must be entered in the trusted field card.",
-            "authorization_message": "The travel-expense approval requires trusted confirmation.",
-        },
-        LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
-            "field_schema": LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_labor_contract_renewal_approval",
-            "commit_function": "approve_labor_contract_renewal",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The labor-contract renewal opinion must be entered in the trusted field card.",
-            "authorization_message": "The labor-contract renewal approval requires trusted confirmation.",
-        },
-        INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": (
-                INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY
-            ),
-            "field_schema": (
-                INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_FIELD_CARD_SCHEMA
-            ),
-            "context_fields": ("affair_id",),
-            "prepare_function": (
-                "prepare_intellectual_property_declaration_approval"
-            ),
-            "commit_function": "approve_intellectual_property_declaration",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": (
-                "The intellectual-property declaration opinion must be entered "
-                "in the trusted field card."
-            ),
-            "authorization_message": (
-                "The intellectual-property declaration approval requires trusted "
-                "confirmation."
-            ),
-        },
-        OVERTIME_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": OVERTIME_APPROVE_CAPABILITY,
-            "field_schema": OVERTIME_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_overtime_approval",
-            "commit_function": "approve_overtime",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The overtime approval opinion must be entered in the trusted field card.",
-            "authorization_message": "The overtime approval requires trusted confirmation.",
-        },
-        RESIGNATION_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": RESIGNATION_APPROVE_CAPABILITY,
-            "field_schema": RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_resignation_approval",
-            "commit_function": "approve_resignation",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": (
-                "The resignation approval opinion must be entered in the trusted field card."
-            ),
-            "authorization_message": (
-                "The resignation approval requires trusted confirmation."
-            ),
-        },
-        WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": WORK_HANDOVER_APPROVE_CAPABILITY,
-            "field_schema": WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_work_handover_approval",
-            "commit_function": "approve_work_handover",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": (
-                "The work-handover approval opinion must be entered in the trusted field card."
-            ),
-            "authorization_message": (
-                "The work-handover approval requires trusted confirmation."
-            ),
-        },
-        ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: {
-            "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
-            "field_schema": ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_attendance_confirmation",
-            "commit_function": "confirm_attendance",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The attendance-confirmation opinion must be entered in the trusted field card.",
-            "authorization_message": "The attendance confirmation requires trusted confirmation.",
-        },
-        WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: {
-            "commit_capability": WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY,
-            "field_schema": WEEKLY_REPORT_ACKNOWLEDGEMENT_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_weekly_report_acknowledgement",
-            "commit_function": "acknowledge_weekly_report",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The weekly-report opinion must be entered in the trusted field card.",
-            "authorization_message": "The weekly-report acknowledgement requires trusted confirmation.",
-        },
-        STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY: {
-            "commit_capability": STANDARD_COLLABORATION_APPROVE_CAPABILITY,
-            "field_schema": STANDARD_COLLABORATION_APPROVAL_FIELD_CARD_SCHEMA,
-            "context_fields": ("affair_id",),
-            "prepare_function": "prepare_standard_collaboration_approval",
-            "commit_function": "approve_standard_collaboration",
-            "contract_error": PendingActionContractMismatch,
-            "outcome_error": PendingActionOutcomeUnknown,
-            "field_message": "The collaboration opinion must be entered in the trusted field card.",
-            "authorization_message": "The collaboration approval requires trusted confirmation.",
-        },
-    }
-)
-
-for _pending_profile, _pending_prepare_capability in (
-    ("efficiency_data", EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY),
-    ("travel_expense", TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY),
-    ("labor_contract_renewal", LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY),
-    (
-        "intellectual_property_declaration",
-        INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
-    ),
-    ("overtime", OVERTIME_APPROVAL_PREPARE_CAPABILITY),
-    ("resignation", RESIGNATION_APPROVAL_PREPARE_CAPABILITY),
-    ("work_handover", WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY),
-    ("attendance_confirmation", ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY),
-    ("weekly_report", WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY),
-    ("standard_collaboration", STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY),
-):
-    _TRUSTED_WRITE_DEFINITIONS[_pending_prepare_capability].update(
-        {
-            "preflight_function": "preflight_pending_action",
-            "preflight_profile": _pending_profile,
-        }
-    )
-
-_TRUSTED_WRITE_DEFINITIONS.update(
-    {
-        TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY: {
-            "commit_capability": TAIHUA_WORK_LOG_CREATE_CAPABILITY,
-            "field_schema": TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA,
-            "context_fields": (),
-            "prepare_function": "prepare_taihua_work_log_create",
-            "commit_function": "commit_taihua_work_log_create",
-            "contract_error": TaihuaWorkLogContractMismatch,
-            "outcome_error": TaihuaWorkLogOutcomeUnknown,
-            "field_message": "工作日志字段必须在可信字段卡中核对。",
-            "authorization_message": "泰华工作日志提交计划需要在可信授权卡中确认。",
-        },
-        SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY: {
-            "commit_capability": SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,
-            "field_schema": SMARTLIGHT_ALARM_REMARK_FIELD_CARD_SCHEMA,
-            "context_fields": ("alarm_id",),
-            "prepare_function": "prepare_smartlight_alarm_remark_update",
-            "commit_function": "commit_smartlight_alarm_remark_update",
-            "contract_error": SmartlightAlarmRemarkContractMismatch,
-            "outcome_error": SmartlightAlarmRemarkOutcomeUnknown,
-            "field_message": "请在可信字段卡中核对告警备注。",
-            "authorization_message": "照明告警备注修改计划需要在可信授权卡中确认。",
-        },
-        SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY: {
-            "commit_capability": SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY,
-            "field_schema": None,
-            "context_fields": ("alarm_id",),
-            "prepare_function": "prepare_smartlight_alarm_work_area_submit",
-            "commit_function": "commit_smartlight_alarm_work_area_submit",
-            "contract_error": SmartlightAlarmActionContractMismatch,
-            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
-            "authorization_message": "请在可信授权卡中确认把该 RTU 告警提交工区。",
-        },
-        SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY: {
-            "commit_capability": SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY,
-            "field_schema": None,
-            "context_fields": ("alarm_id",),
-            "prepare_function": "prepare_smartlight_alarm_work_area_revoke",
-            "commit_function": "commit_smartlight_alarm_work_area_revoke",
-            "contract_error": SmartlightAlarmActionContractMismatch,
-            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
-            "authorization_message": "请在可信授权卡中确认撤回该 RTU 告警的工区提交。",
-        },
-        SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY: {
-            "commit_capability": SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY,
-            "field_schema": None,
-            "context_fields": ("alarm_id",),
-            "prepare_function": "prepare_smartlight_rtu_alarm_dispose",
-            "commit_function": "commit_smartlight_rtu_alarm_dispose",
-            "contract_error": SmartlightAlarmActionContractMismatch,
-            "outcome_error": SmartlightAlarmActionOutcomeUnknown,
-            "authorization_message": "该 RTU 告警处置不可撤销，请在可信授权卡中明确确认。",
-        },
-    }
-)
-
-_TRUSTED_WRITE_DEFINITIONS[PENDING_BATCH_PREPARE_CAPABILITY] = {
-    **_TRUSTED_WRITE_DEFINITIONS[MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY],
-}
-
-_TRUSTED_WRITE_COMMITS = {
-
-    definition["commit_capability"]: (prepare_capability, definition)
-    for prepare_capability, definition in _TRUSTED_WRITE_DEFINITIONS.items()
-}
-_TRUSTED_WRITE_COMMITS[MISSED_PUNCH_APPROVE_CAPABILITY] = (
-    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY,
-    _TRUSTED_WRITE_DEFINITIONS[MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY],
-)
-
-_CAPABILITY_SCOPES = {
-    PENDING_BATCH_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    BUSINESS_TRIP_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
-    BUSINESS_TRIP_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
-    BUSINESS_TRIP_SUBMIT_PREPARE_CAPABILITY: frozenset({"oa:write:submit"}),
-    BUSINESS_TRIP_SUBMIT_CAPABILITY: frozenset({"oa:write:submit"}),
-    LEAVE_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
-    LEAVE_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
-    LEAVE_SUBMIT_PREPARE_CAPABILITY: frozenset({"oa:write:submit"}),
-    LEAVE_SUBMIT_CAPABILITY: frozenset({"oa:write:submit"}),
-    MISSED_PUNCH_PREPARE_CAPABILITY: frozenset({"oa:write:draft"}),
-    MISSED_PUNCH_SAVE_CAPABILITY: frozenset({"oa:write:draft"}),
-    MISSED_PUNCH_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    MISSED_PUNCH_APPROVAL_BATCH_PREPARE_CAPABILITY: frozenset(
-        {"oa:write:approval"}
-    ),
-    MISSED_PUNCH_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    MEETING_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
-    MEETING_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
-    MEETING_ROOM_APPLICATION_PREPARE_CAPABILITY: frozenset({"oa:write:meeting"}),
-    MEETING_ROOM_APPLICATION_CREATE_CAPABILITY: frozenset({"oa:write:meeting"}),
-    MEETING_ROOM_APPLICATION_CANCEL_PREPARE_CAPABILITY: frozenset(
-        {"oa:write:meeting"}
-    ),
-    MEETING_ROOM_APPLICATION_CANCEL_CAPABILITY: frozenset({"oa:write:meeting"}),
-    EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    EFFICIENCY_DATA_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    TRAVEL_EXPENSE_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY: frozenset(
-        {"oa:write:approval"}
-    ),
-    INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY: frozenset(
-        {"oa:write:approval"}
-    ),
-    OVERTIME_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    OVERTIME_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    RESIGNATION_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    RESIGNATION_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    WORK_HANDOVER_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    ATTENDANCE_CONFIRM_CAPABILITY: frozenset({"oa:write:approval"}),
-    WEEKLY_REPORT_ACKNOWLEDGEMENT_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    WEEKLY_REPORT_ACKNOWLEDGE_CAPABILITY: frozenset({"oa:write:approval"}),
-    STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY: frozenset({"oa:write:approval"}),
-    STANDARD_COLLABORATION_APPROVE_CAPABILITY: frozenset({"oa:write:approval"}),
-    WORKFLOW_REVOKE_PREPARE_CAPABILITY: frozenset({"oa:write:revoke"}),
-    WORKFLOW_REVOKE_CAPABILITY: frozenset({"oa:write:revoke"}),
-    TAIHUA_WORK_LOG_CREATE_PREPARE_CAPABILITY: frozenset({"taihua:write:worklog"}),
-    TAIHUA_WORK_LOG_CREATE_CAPABILITY: frozenset({"taihua:write:worklog"}),
-    SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_remark"}
-    ),
-    SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_remark"}
-    ),
-    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_PREPARE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_work_area_submit"}
-    ),
-    SMARTLIGHT_ALARM_WORK_AREA_SUBMIT_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_work_area_submit"}
-    ),
-    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_PREPARE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_work_area_revoke"}
-    ),
-    SMARTLIGHT_ALARM_WORK_AREA_REVOKE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_work_area_revoke"}
-    ),
-    SMARTLIGHT_RTU_ALARM_DISPOSE_PREPARE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_disposition"}
-    ),
-    SMARTLIGHT_RTU_ALARM_DISPOSE_CAPABILITY: frozenset(
-        {"smartlight:write:alarm_disposition"}
-    ),
-}
-
-
-def _prefill_trusted_field_schema(schema: dict, arguments: dict) -> dict:
-    selected = deepcopy(schema)
-    for field in selected.get("fields") or []:
-        if not isinstance(field, dict) or "value" in field:
-            continue
-        name = str(field.get("name") or "")
-        if name and name in arguments and arguments[name] is not None:
-            field["value"] = arguments[name]
-    return selected
-
-
-def capability_required_scopes(capability_name: str) -> frozenset[str]:
-    try:
-        return _CAPABILITY_SCOPES[capability_name]
-    except KeyError as exc:
-        raise KeyError(f"write capability has no MCP scope policy: {capability_name}") from exc
 
 
 def _serialize_host_task_calls(method):
@@ -785,7 +179,7 @@ def _serialize_host_task_calls(method):
     return wrapped
 
 
-class CentralCapabilityService:
+class CentralCapabilityService(ControlledWriteExecutor):
     def __init__(
         self,
         *,
@@ -3893,81 +3287,7 @@ class CentralCapabilityService:
         }
 
     def _resume_login_read(self, *, user_subject: str, record: dict) -> dict | None:
-        task_id = self.tasks.task_id_for_interaction(
-            record["interaction_id"], user_subject=user_subject,
-        )
-        if not task_id or self.tasks.get_batch_for_task(
-            parent_task_id=task_id, user_subject=user_subject,
-        ):
-            return None
-        with self._task_call_lock(task_id):
-            task = self.tasks.get_task(task_id, user_subject=user_subject)
-            if task["status"] not in ACTIVE_TASK_STATUSES:
-                return {
-                    "status": "ignored", "taskId": task_id,
-                    "taskStatus": task["status"],
-                    "nextAction": {"type": "original_request_completed"},
-                }
-            if task.get("current_interaction_id") != record["interaction_id"]:
-                return None
-            preceding = self.tasks.operation_before_interaction(
-                task_id=task_id, user_subject=user_subject,
-                interaction_id=record["interaction_id"],
-            )
-            if preceding is None:
-                return None
-            original = self.operations.get(preceding["operation_id"])
-            spec = self.registry.get(original["capability_name"])
-            key = f"login-read:{record['interaction_id']}:{original['operation_id']}"
-            current_id = task.get("current_operation_id")
-            current = self.operations.get(current_id) if current_id else {}
-            if (
-                spec.effect != "read" or spec.system != record["system_id"]
-                or original["status"] != "requires_user_action"
-                or (original.get("error") or {}).get("code") != "LOGIN_REQUIRED"
-                or (current_id != original["operation_id"] and current.get("idempotency_key") != key)
-            ):
-                return None
-            # The ledger holds exact read arguments, unlike redacted write inputs.
-            try:
-                response = self.invoke(
-                    user_subject=user_subject, capability_name=spec.name,
-                    arguments=original["input_summary"], idempotency_key=key,
-                    task_id=task_id, host_type="interaction_resume",
-                    host_run_id=record["interaction_id"],
-                )
-            except (ValueError, KeyError):
-                response = {"status": "failed", "error": {"code": "LOGIN_READ_INPUT_INVALID"}}
-            if response["status"] in {"pending", "running"}:
-                # A previous runtime may have stopped during the read. Never claim success.
-                response = {**response, "status": "failed", "error": {"code": "LOGIN_READ_INTERRUPTED"}}
-            message = read_continuation_message(
-                self.challenges.get(self._credential_challenge_id(record))["system_name"], spec.name, response,
-            )
-            # Persist feedback before closing the task; retrying after a crash is deduplicated.
-            self.tasks.append_timeline_message(
-                user_subject=user_subject, source_endpoint_id=task["origin_endpoint_id"],
-                task_id=task_id, message_key=key, role="assistant", text=message,
-                payload={"operationId": response.get("operationId"), "continuation": "login_read"},
-                notify_source=True,
-            )
-            if response.get("operationId"):
-                self.observe_host_task(
-                    user_subject=user_subject, task_id=task_id,
-                    operation_ids=[response["operationId"]],
-                )
-            if response["status"] != "succeeded":
-                self.fail_host_task(
-                    user_subject=user_subject, task_id=task_id,
-                    error_code=(response.get("error") or {}).get("code") or "LOGIN_READ_FAILED",
-                    message=message, causation_ref=key,
-                )
-            return {
-                **response, "interaction": None,
-                "resumedFromInteractionId": record["interaction_id"], "taskId": task_id,
-                "taskStatus": self.tasks.get_task(task_id, user_subject=user_subject)["status"],
-                "nextAction": {"type": "original_request_completed"},
-            }
+        return resume_login_read(self, user_subject=user_subject, record=record)
 
     def _load_interaction(
         self,
@@ -4324,7 +3644,7 @@ class CentralCapabilityService:
                             "preflight_function"
                         )
                         if preflight_function_name:
-                            preflight_function = globals().get(
+                            preflight_function = resolve_write_function(
                                 str(preflight_function_name)
                             )
                             if not callable(preflight_function):
@@ -4347,7 +3667,7 @@ class CentralCapabilityService:
                             "field_schema_function"
                         )
                         if schema_function_name:
-                            schema_function = globals().get(
+                            schema_function = resolve_write_function(
                                 str(schema_function_name)
                             )
                             if not callable(schema_function):
@@ -5315,475 +4635,6 @@ class CentralCapabilityService:
             **_batch_item_card_context(batch, current),
         }, None
 
-    def _prepare_trusted_write(
-        self,
-        *,
-        context: CapabilityContext,
-        session: dict,
-        adapter: object,
-        worker: object,
-        arguments: dict,
-        field_submission: dict | None,
-        definition: dict,
-    ) -> dict:
-        prepare_function = globals().get(str(definition["prepare_function"]))
-        if not callable(prepare_function):
-            raise RuntimeError("trusted write prepare function is unavailable")
-        self._assert_write_allowed(context=context, system_id=session["system_id"])
-        prepared = prepare_function(adapter, worker, arguments)
-        if field_submission is None:
-            resume_arguments = {
-                name: arguments[name]
-                for name in definition.get("context_fields") or ()
-                if name in arguments
-            }
-            if len(resume_arguments) != len(definition.get("context_fields") or ()):
-                raise ValueError("trusted write is missing its target context")
-        else:
-            resume_arguments = dict(
-                field_submission.get("form_schema", {}).get(
-                    "_agentbridge_resume_arguments"
-                )
-                or {}
-            )
-        plan = {
-            **prepared["plan"],
-            "user_subject": session["user_subject"],
-            "prepare_capability": context.spec.name,
-            "resume_arguments": resume_arguments,
-            "session_binding": {
-                "session_id": session["session_id"],
-                "expected_principal_ref": session.get("expected_principal_ref"),
-                "downstream_principal_ref": session.get("downstream_principal_ref"),
-                "last_verified_at": session.get("last_verified_at"),
-            },
-        }
-        summary = {
-            **prepared["summary"],
-            "system": (definition.get("field_schema") or {}).get("system")
-            or prepared["summary"].get("system")
-            or session["system_id"],
-            "principal": session.get("downstream_principal_ref")
-            or session.get("expected_principal_ref")
-            or session["user_subject"],
-        }
-        if context.spec.name == PENDING_BATCH_PREPARE_CAPABILITY:
-            batch = self.tasks.get_batch_for_task(
-                parent_task_id=context.task_id, user_subject=session["user_subject"],
-            )
-            summary["title"] = f"{summary['title']}（第 {batch['current_ordinal']}/{batch['total_count']} 条）"
-        commit_spec = self.registry.get(str(definition["commit_capability"]))
-        authorization = self.write_authorizations.create(
-            user_subject=session["user_subject"],
-            system_id=session["system_id"],
-            session_id=session["session_id"],
-            capability_name=commit_spec.name,
-            capability_version=commit_spec.version,
-            prepare_operation_id=context.operation_id,
-            supersession_key=_trusted_write_supersession_key(resume_arguments),
-            plan=plan,
-            summary=summary,
-            card_base_url=self.trusted_card_base_url,
-            ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
-        )
-        interaction = self._execution_authorization_interaction(authorization)
-        if field_submission is not None:
-            try:
-                self.field_submissions.consume(
-                    field_submission["submission_id"],
-                    user_subject=session["user_subject"],
-                    system_id=session["system_id"],
-                    session_id=session["session_id"],
-                    capability_name=context.spec.name,
-                    capability_version=context.spec.version,
-                    consume_operation_id=context.operation_id,
-                )
-            except (
-                FieldSubmissionAccessDenied,
-                FieldSubmissionIntegrityError,
-                FieldSubmissionStateError,
-            ) as exc:
-                raise ValueError(str(exc)) from exc
-        raise RequiresUserAction(
-            "WRITE_AUTHORIZATION_REQUIRED",
-            str(definition["authorization_message"]),
-            next_action={
-                "type": "open_write_authorization_card",
-                "interactionId": interaction["interactionId"],
-                "authorizationId": authorization["authorization_id"],
-                "cardUrl": authorization["card_url"],
-                "planHash": authorization["plan_hash"],
-                "expiresAt": authorization["expires_at"],
-                "display": {
-                    "title": summary.get("title"),
-                    "effect": summary.get("effect"),
-                    "fieldCount": len(summary.get("fields") or []),
-                },
-                "then": {
-                    "capability": commit_spec.name,
-                    "arguments": {"authorization_id": authorization["authorization_id"]},
-                },
-                "interaction": interaction,
-            },
-        )
-
-    def _resolve_trusted_field_input(
-        self,
-        *,
-        context: CapabilityContext,
-        session: dict,
-        arguments: dict,
-        definition: dict,
-        form_schema: dict | None = None,
-    ) -> tuple[dict, dict]:
-        submission_id = str(arguments.get("input_submission_id") or "").strip()
-        context_arguments = {
-            name: arguments[name]
-            for name in definition.get("context_fields") or ()
-            if name in arguments
-        }
-        if len(context_arguments) != len(definition.get("context_fields") or ()):
-            raise ValueError("trusted field input is missing its workflow target context")
-        if not submission_id:
-            selected_schema = (
-                form_schema if form_schema is not None else definition["field_schema"]
-            )
-            submission_schema = {
-                **_prefill_trusted_field_schema(selected_schema, arguments),
-                "_agentbridge_resume_arguments": context_arguments,
-            }
-            submission = self.field_submissions.create(
-                user_subject=session["user_subject"],
-                system_id=session["system_id"],
-                session_id=session["session_id"],
-                capability_name=context.spec.name,
-                capability_version=context.spec.version,
-                create_operation_id=context.operation_id,
-                supersession_key=_trusted_write_supersession_key(context_arguments),
-                form_schema=submission_schema,
-                card_base_url=self.trusted_card_base_url,
-                ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
-            )
-            raise self._field_input_required(submission, definition)
-        try:
-            submission = self.field_submissions.get(submission_id, include_values=True)
-        except (FieldSubmissionNotFound, FieldSubmissionIntegrityError) as exc:
-            raise self._field_input_unavailable(
-                "not_found",
-                context.spec.name,
-                context_arguments,
-            ) from exc
-        bindings_match = all(
-            (
-                submission["user_subject"] == session["user_subject"],
-                submission["system_id"] == session["system_id"],
-                submission["session_id"] == session["session_id"],
-                submission["capability_name"] == context.spec.name,
-                submission["capability_version"] == context.spec.version,
-                submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
-                == context_arguments,
-            )
-        )
-        if not bindings_match:
-            raise self._field_input_unavailable(
-                "binding_mismatch",
-                context.spec.name,
-                context_arguments,
-            )
-        if submission["state"] == "pending":
-            raise self._field_input_required(submission, definition)
-        if submission["state"] != "submitted" or not isinstance(submission.get("values"), dict):
-            raise self._field_input_unavailable(
-                submission["state"],
-                context.spec.name,
-                context_arguments,
-            )
-        return submission, {**context_arguments, **submission["values"]}
-
-    def _field_input_required(self, submission: dict, definition: dict) -> RequiresUserAction:
-        interaction = self._business_input_interaction(submission)
-        resume_arguments = {
-            **dict(
-                submission.get("form_schema", {}).get("_agentbridge_resume_arguments")
-                or {}
-            ),
-            "input_submission_id": submission["submission_id"],
-        }
-        return RequiresUserAction(
-            "FIELD_INPUT_REQUIRED",
-            str(definition["field_message"]),
-            next_action={
-                "type": "open_field_input_card",
-                "interactionId": interaction["interactionId"],
-                "inputSubmissionId": submission["submission_id"],
-                "cardUrl": submission["card_url"],
-                "expiresAt": submission["expires_at"],
-                "then": {
-                    "capability": submission["capability_name"],
-                    "arguments": resume_arguments,
-                },
-                "interaction": interaction,
-            },
-        )
-
-    @staticmethod
-    def _field_input_unavailable(
-        state: str,
-        prepare_capability: str,
-        resume_arguments: dict,
-    ) -> RequiresUserAction:
-        return RequiresUserAction(
-            "FIELD_INPUT_UNAVAILABLE",
-            f"The trusted field submission is unavailable: {state}.",
-            next_action={
-                "type": "prepare_again",
-                "capability": prepare_capability,
-                "arguments": dict(resume_arguments),
-            },
-        )
-
-    def _commit_trusted_write(
-        self,
-        *,
-        context: CapabilityContext,
-        session: dict,
-        adapter: object,
-        worker: object,
-        arguments: dict,
-        prepare_capability: str,
-        definition: dict,
-    ) -> dict:
-        authorization_id = str(arguments.get("authorization_id") or "").strip()
-        if not authorization_id:
-            raise ValueError("authorization_id is required")
-        try:
-            authorization = self.write_authorizations.get(
-                authorization_id,
-                include_plan=True,
-            )
-        except WriteAuthorizationNotFound as exc:
-            raise KeyError("write authorization not found") from exc
-        if authorization["user_subject"] != session["user_subject"]:
-            raise KeyError("write authorization not found")
-        if authorization["state"] == "pending":
-            interaction = self._execution_authorization_interaction(authorization)
-            raise RequiresUserAction(
-                "WRITE_AUTHORIZATION_REQUIRED",
-                "The trusted action card has not been approved.",
-                next_action={
-                    "type": "open_write_authorization_card",
-                    "interactionId": interaction["interactionId"],
-                    "authorizationId": authorization_id,
-                    "cardUrl": authorization["card_url"],
-                    "planHash": authorization["plan_hash"],
-                    "expiresAt": authorization["expires_at"],
-                    "interaction": interaction,
-                },
-            )
-        plan = authorization["plan"]
-        trusted_prepare_capability = str(
-            plan.get("prepare_capability") or prepare_capability
-        )
-        if trusted_prepare_capability == PENDING_BATCH_PREPARE_CAPABILITY:
-            batch_task_id = self.tasks.task_id_for_operation(
-                authorization["prepare_operation_id"], user_subject=session["user_subject"],
-            )
-            checked = self._pending_batch_definition(
-                task_id=batch_task_id, user_subject=session["user_subject"],
-                arguments=plan.get("resume_arguments") or {},
-            )
-            if checked["commit_capability"] != context.spec.name:
-                raise CapabilityRejected("BATCH_CAPABILITY_MISMATCH", "授权能力与冻结批次条目不一致。")
-        if authorization["state"] != "approved":
-            raise RequiresUserAction(
-                "WRITE_AUTHORIZATION_UNAVAILABLE",
-                f"The write authorization is {authorization['state']}.",
-                next_action={
-                    "type": "prepare_again",
-                    "capability": trusted_prepare_capability,
-                    "arguments": dict(plan.get("resume_arguments") or {}),
-                },
-            )
-        if not self._trusted_write_session_binding_matches(plan, session):
-            raise ValueError(
-                "the downstream session changed after the write plan was authorized"
-            )
-
-        self._assert_write_allowed(context=context, system_id=session["system_id"])
-
-        boundary_entered = False
-
-        def enter_commit_boundary() -> None:
-            nonlocal boundary_entered
-            self.write_authorizations.consume(
-                authorization_id,
-                user_subject=session["user_subject"],
-                system_id=session["system_id"],
-                session_id=session["session_id"],
-                capability_name=context.spec.name,
-                capability_version=context.spec.version,
-                commit_operation_id=context.operation_id,
-                before_consume=lambda connection: self.task_plans.guard_authorization_consumption(
-                    connection, authorization_id=authorization_id,
-                    user_subject=session["user_subject"], operation_id=context.operation_id,
-                    validate=self.validate_task_plan_execution,
-                ),
-            )
-            boundary_entered = True
-
-        commit_function = globals().get(str(definition["commit_function"]))
-        if not callable(commit_function):
-            raise RuntimeError("trusted write commit function is unavailable")
-        try:
-            return commit_function(
-                adapter,
-                worker,
-                plan,
-                enter_commit_boundary=enter_commit_boundary,
-            )
-        except SeeyonBusinessValidationRequired as exc:
-            validation = exc.validation
-            continued_plan = deepcopy(plan)
-            existing_validations = continued_plan.get("business_validation_overrides")
-            if not isinstance(existing_validations, list):
-                legacy_validation = continued_plan.get("business_validation_override")
-                existing_validations = (
-                    [dict(legacy_validation)]
-                    if isinstance(legacy_validation, dict)
-                    else []
-                )
-            existing_validations = [
-                dict(item) for item in existing_validations if isinstance(item, dict)
-            ]
-            if validation["fingerprint"] in {
-                item.get("fingerprint") for item in existing_validations
-            }:
-                raise ValueError("the OA confirmation was already authorized") from exc
-            if len(existing_validations) >= 5:
-                raise ValueError("too many chained OA confirmations") from exc
-            continued_plan.pop("business_validation_override", None)
-            continued_plan["business_validation_overrides"] = [
-                *existing_validations,
-                dict(validation),
-            ]
-            continued_summary = deepcopy(authorization["summary"])
-            original_title = str(
-                continued_summary.get("title") or "OA 写操作"
-            ).strip()
-            continued_summary.update(
-                {
-                    "title": f"确认 OA 提示并继续{original_title}",
-                    "effect": "仅在再次出现完全相同的 OA 提示时继续执行已授权操作",
-                    "authorization_notice": (
-                        "OA 返回了一条可继续的提交提示。授权后，AgentBridge "
-                        "仅在再次出现完全相同的提示时点击“继续”并完成正式提交。"
-                    ),
-                    "authorize_label": "确认警告并继续提交",
-                }
-            )
-            continued_summary["fields"] = [
-                *list(continued_summary.get("fields") or []),
-                {"label": "OA 提交提示", "value": validation["message"]},
-            ]
-            continued_authorization = self.write_authorizations.create(
-                user_subject=session["user_subject"],
-                system_id=session["system_id"],
-                session_id=session["session_id"],
-                capability_name=context.spec.name,
-                capability_version=context.spec.version,
-                prepare_operation_id=context.operation_id,
-                supersession_key=_trusted_write_supersession_key(
-                    dict(continued_plan.get("resume_arguments") or {})
-                ),
-                plan=continued_plan,
-                summary=continued_summary,
-                card_base_url=self.trusted_card_base_url,
-                ttl_seconds=TRUSTED_WRITE_INTERACTION_TTL_SECONDS,
-            )
-            interaction = self._execution_authorization_interaction(
-                continued_authorization
-            )
-            raise RequiresUserAction(
-                "OA_BUSINESS_VALIDATION_CONFIRMATION_REQUIRED",
-                "OA returned a continuable business-validation warning.",
-                next_action={
-                    "type": "open_write_authorization_card",
-                    "interactionId": interaction["interactionId"],
-                    "authorizationId": continued_authorization["authorization_id"],
-                    "cardUrl": continued_authorization["card_url"],
-                    "planHash": continued_authorization["plan_hash"],
-                    "expiresAt": continued_authorization["expires_at"],
-                    "display": {
-                        "title": continued_summary["title"],
-                        "effect": continued_summary["effect"],
-                        "fieldCount": len(continued_summary["fields"]),
-                        "validationCode": validation["code"],
-                    },
-                    "then": {
-                        "capability": context.spec.name,
-                        "arguments": {
-                            "authorization_id": continued_authorization[
-                                "authorization_id"
-                            ]
-                        },
-                    },
-                    "interaction": interaction,
-                },
-            ) from exc
-        except definition["outcome_error"] as exc:
-            raise OutcomeUnknown("RESULT_UNKNOWN", str(exc)) from exc
-        except AdapterBusinessRuleRejected as exc:
-            raise CapabilityRejected(
-                exc.error_code,
-                str(exc),
-            ) from exc
-        except definition["contract_error"] as exc:
-            if boundary_entered:
-                raise OutcomeUnknown("RESULT_UNKNOWN", "写入已进入提交边界，但结果契约不匹配；请先对账。") from exc
-            raise ValueError(str(exc)) from exc
-        except (WriteAuthorizationAccessDenied, WriteAuthorizationStateError) as exc:
-            raise ValueError(str(exc)) from exc
-        except PlanValidationError as exc:
-            raise CapabilityRejected(exc.code, exc.message) from exc
-        except Exception as exc:
-            if boundary_entered:
-                raise OutcomeUnknown(
-                    "RESULT_UNKNOWN",
-                    f"写入已进入提交边界，但未取得权威结果（{type(exc).__name__}）；请先对账，不能自动重试。",
-                ) from exc
-            raise
-
-    def _assert_write_allowed(self, *, context: CapabilityContext, system_id: str) -> None:
-        if context.spec.effect == "read":
-            return
-        try:
-            self.governance_policies.assert_write_allowed(
-                system_id=system_id,
-                user_subject=context.user_subject,
-                capability_name=context.spec.name,
-                capability_version=context.spec.version,
-            )
-        except GovernancePolicyDenied as exc:
-            policy = exc.policy
-            raise CapabilityRejected(
-                "WRITE_PAUSED",
-                "Write operation is paused by governance policy "
-                f"{policy['scope_type']}:{policy['scope_value']}. "
-                f"Reason: {policy['reason']}",
-            ) from exc
-    @staticmethod
-    def _trusted_write_session_binding_matches(plan: dict, session: dict) -> bool:
-        binding = plan.get("session_binding") if isinstance(plan.get("session_binding"), dict) else {}
-        return all(
-            (
-                plan.get("user_subject") == session["user_subject"],
-                binding.get("session_id") == session["session_id"],
-                binding.get("expected_principal_ref") == session.get("expected_principal_ref"),
-                binding.get("downstream_principal_ref") == session.get("downstream_principal_ref"),
-                binding.get("last_verified_at") == session.get("last_verified_at"),
-            )
-        )
-
     @contextmanager
     def _task_call_lock(self, task_id: str) -> Iterator[None]:
         digest = hashlib.sha256(task_id.encode("utf-8")).digest()
@@ -6276,16 +5127,6 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _trusted_write_supersession_key(arguments: dict) -> str:
-    canonical = json.dumps(
-        arguments,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def operation_response(operation: dict) -> dict:

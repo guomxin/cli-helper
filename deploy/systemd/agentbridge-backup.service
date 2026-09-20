@@ -1,3 +1,4 @@
+# Example only: supply a reviewed external environment profile for deployment.
 [Unit]
 Description=AgentBridge consistent runtime-state backup
 After=agentbridge.service
@@ -6,17 +7,17 @@ After=agentbridge.service
 Type=oneshot
 User=agentbridge
 Group=agentbridge
-WorkingDirectory=/home/guomao/agentbridge
-Environment=HOME=/home/guomao/agentbridge/data
+WorkingDirectory=/home/agentbridge/service
+Environment=HOME=/home/agentbridge/service/data
 Environment=PYTHONUNBUFFERED=1
-Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/guomao/agentbridge/config/session.key
-EnvironmentFile=-/home/guomao/agentbridge/config/release.env
-ExecStart=/home/guomao/agentbridge/current/venv/bin/python -P -m bscli.cli.main --home /home/guomao/agentbridge/data diagnostics backup-create --output-dir /home/guomao/agentbridge/backups
-ExecStart=/usr/bin/find /home/guomao/agentbridge/backups -maxdepth 1 -type f -mtime +30 -delete
+Environment=AGENTBRIDGE_SESSION_KEY_FILE=/home/agentbridge/service/config/session.key
+EnvironmentFile=-/home/agentbridge/service/config/release.env
+ExecStart=/home/agentbridge/service/current/venv/bin/python -P -m bscli.cli.main --home /home/agentbridge/service/data diagnostics backup-create --output-dir /home/agentbridge/service/backups
+ExecStart=/usr/bin/find /home/agentbridge/service/backups -maxdepth 1 -type f -mtime +30 -delete
 UMask=0077
 TimeoutStartSec=360
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadOnlyPaths=/home/guomao/agentbridge/config
-ReadWritePaths=/home/guomao/agentbridge/data /home/guomao/agentbridge/backups
+ReadOnlyPaths=/home/agentbridge/service/config
+ReadWritePaths=/home/agentbridge/service/data /home/agentbridge/service/backups

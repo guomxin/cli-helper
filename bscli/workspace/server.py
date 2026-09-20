@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 import hashlib
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler
@@ -36,6 +37,7 @@ ENROLLMENT_COOKIE = "agentbridge_workspace_enrollment"
 STATIC_ROOT = Path(__file__).with_name("static")
 ASSET_VERSION_PLACEHOLDER = "__WORKSPACE_ASSET_VERSION__"
 _CLIENT_DISCONNECT_ERRORS = (
+    TimeoutError,
     BrokenPipeError,
     ConnectionResetError,
     ssl.SSLEOFError,
@@ -68,7 +70,39 @@ class WorkspaceServerConfig:
 
 
 class WorkspaceHTTPServer(ThreadedTLSHTTPServer):
-    pass
+    def __init__(self, *args, **kwargs):
+        self._stream_counts: dict[str, int] = {}
+        self._stream_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def acquire_stream(self, subject: str) -> bool:
+        with self._stream_lock:
+            if self._stream_counts.get(subject, 0) >= 6:
+                return False
+            self._stream_counts[subject] = self._stream_counts.get(subject, 0) + 1
+            return True
+
+    def release_stream(self, subject: str) -> None:
+        with self._stream_lock:
+            count = self._stream_counts[subject] - 1
+            if count:
+                self._stream_counts[subject] = count
+            else:
+                del self._stream_counts[subject]
+
+
+def _bounded_user_stream(method):
+    @wraps(method)
+    def wrapped(self, account, *args, **kwargs):
+        subject = account['user_subject']
+        if not self.server.acquire_stream(subject):
+            self._json(429, {'error': {'code': 'STREAM_LIMIT_REACHED'}})
+            return
+        try:
+            return method(self, account, *args, **kwargs)
+        finally:
+            self.server.release_stream(subject)
+    return wrapped
 
 
 class _RateLimiter:
@@ -610,6 +644,7 @@ def create_workspace_http_server(
                 )
             return account
 
+        @_bounded_user_stream
         def _event_stream(
             self,
             account: dict,
@@ -663,6 +698,7 @@ def create_workspace_http_server(
             except _CLIENT_DISCONNECT_ERRORS:
                 return
 
+        @_bounded_user_stream
         def _timeline_stream(
             self,
             account: dict,
@@ -720,6 +756,7 @@ def create_workspace_http_server(
             except _CLIENT_DISCONNECT_ERRORS:
                 return
 
+        @_bounded_user_stream
         def _chat_send_stream(self, account: dict, body: dict) -> None:
             message = _required_string(body, "message")
             idempotency_key = _optional_string(body, "idempotencyKey")
