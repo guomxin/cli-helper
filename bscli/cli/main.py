@@ -41,7 +41,6 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 from bscli.core.network_security import INSECURE_PRIVATE_HTTP_WARNING
 from bscli.core.operations import OperationConflictError, OperationStore
 from bscli.core.runtime_backup import (
-    create_runtime_backup,
     run_runtime_restore_drill,
     validate_backup_manifest,
     validate_runtime_backup,
@@ -378,8 +377,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def handle_diagnostics(args: argparse.Namespace, home: Path) -> int:
     if args.action == "backup-create":
-        report = create_runtime_backup(
-            _central_db_path(home),
+        from bscli.core.recovery_bundle import create_recovery_bundle
+        report = create_recovery_bundle(
+            home,
             Path(args.output_dir),
             release_id=args.release_id or os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development",
         )

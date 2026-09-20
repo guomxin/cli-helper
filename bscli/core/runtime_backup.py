@@ -96,6 +96,9 @@ def validate_runtime_backup(backup_path: Path | str) -> dict[str, Any]:
 def validate_backup_manifest(manifest_path: Path | str) -> dict[str, Any]:
     path = Path(manifest_path)
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schemaVersion") == "agentbridge.recovery-bundle.v2":
+        from bscli.core.recovery_bundle import validate_recovery_bundle
+        return validate_recovery_bundle(path)
     database_file = str(manifest.get("databaseFile") or "")
     if not database_file or Path(database_file).name != database_file:
         raise ValueError("backup manifest databaseFile is invalid")
@@ -120,6 +123,9 @@ def run_runtime_restore_drill(
     """Restore one backup into an isolated read-only probe directory."""
 
     source_manifest = Path(manifest_path)
+    if json.loads(source_manifest.read_text(encoding="utf-8")).get("schemaVersion") == "agentbridge.recovery-bundle.v2":
+        from bscli.core.recovery_bundle import restore_recovery_bundle
+        return restore_recovery_bundle(source_manifest, output_dir)
     manifest_validation = validate_backup_manifest(source_manifest)
     if not manifest_validation["passed"]:
         raise RuntimeError("backup manifest did not pass validation")
