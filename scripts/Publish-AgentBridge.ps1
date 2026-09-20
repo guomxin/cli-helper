@@ -173,10 +173,15 @@ if (-not $SkipValidation) {
     if ($LASTEXITCODE -ne 0) {
         throw "Full AgentBridge validation failed"
     }
-    & $runtimeGovernanceScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "Runtime-governance fault-injection validation failed"
-    }
+}
+
+# SkipValidation reuses only a complete candidate receipt. Governance remains mandatory.
+$artifactPython = Join-Path $env:LOCALAPPDATA "AgentBridge/test-venv-py312/Scripts/python.exe"
+& $artifactPython (Join-Path $repoRoot "scripts/agentbridge_artifact.py") verify --root $repoRoot
+if ($LASTEXITCODE -ne 0) { throw "No matching complete candidate validation is available" }
+& $runtimeGovernanceScript
+if ($LASTEXITCODE -ne 0) {
+    throw "Runtime-governance fault-injection validation failed"
 }
 
 $deployParameters = @{

@@ -113,6 +113,10 @@ if ($PlanOnly) {
     exit 0
 }
 
+if ($isDirty) {
+    throw "Dirty deployment is no longer supported: commit the candidate in an isolated checkout. -AllowDirty cannot bypass artifact validation."
+}
+
 if (-not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
     throw "SSH identity file was not found"
 }
@@ -125,37 +129,21 @@ if (-not $SkipValidation) {
         Mode = "Full"
         VenvPath = $VenvPath
     }
-    if (-not $RestartOpenClaw) {
-        $validationParameters["SkipOpenClaw"] = $true
-    }
     & $validationScript @validationParameters
+    if ($LASTEXITCODE -ne 0) { throw "Candidate validation failed" }
 }
 
 if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
     throw "Persistent validation environment is missing; run validation first"
 }
 
-$releaseDirectory = Join-Path $repoRoot ("output\release\{0}-{1}" -f $releaseId, (Get-Date -Format "yyyyMMddHHmmss"))
-New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
-$buildDirectory = [IO.Path]::GetFullPath((Join-Path $repoRoot "build"))
-$buildParent = [IO.Directory]::GetParent($buildDirectory)
-if ($null -eq $buildParent -or -not [String]::Equals(
-    $buildParent.FullName, [IO.Path]::GetFullPath($repoRoot),
-    [StringComparison]::OrdinalIgnoreCase
-)) {
-    throw "Refusing to clean a build directory outside the repository"
-}
-if (Test-Path -LiteralPath $buildDirectory) {
-    Remove-Item -LiteralPath $buildDirectory -Recurse -Force
-}
-& $venvPython -m pip wheel --disable-pip-version-check --no-deps --no-build-isolation --wheel-dir $releaseDirectory $repoRoot
-if ($LASTEXITCODE -ne 0) {
-    throw "Building the AgentBridge wheel failed"
-}
-$wheel = Get-ChildItem -LiteralPath $releaseDirectory -Filter "cli_helper-*.whl" -File | Select-Object -Last 1
-if (-not $wheel) {
-    throw "The AgentBridge wheel was not produced"
-}
+$artifactRaw = & $venvPython (Join-Path $repoRoot "scripts/agentbridge_artifact.py") verify --root $repoRoot
+if ($LASTEXITCODE -ne 0) { throw "A matching validated candidate is required before deployment" }
+$artifact = ($artifactRaw | Out-String) | ConvertFrom-Json
+$wheel = Get-Item -LiteralPath $artifact.wheel
+$releaseDirectory = Split-Path -Parent $artifact.manifest
+$artifactBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($artifact.manifest))
+$receiptBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $repoRoot "output/release-validation/full.json")))
 if ($wheel.Name -notmatch '^[A-Za-z0-9_.+-]+\.whl$') {
     throw "The AgentBridge wheel filename is unsafe"
 }
@@ -171,7 +159,7 @@ $connectionArguments = @(
     "-i", (Resolve-Path $IdentityFile).Path
 )
 $target = "$SshUser@$HostName"
-$remoteWheel = "/tmp/$($wheel.Name)"
+$remoteWheel = "/tmp/$releaseId-$($artifact.sha256)-$($wheel.Name)"
 $remoteDestination = $target + ":" + $remoteWheel
 $systemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($systemdUnit))
 $backupSystemdUnitBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($backupSystemdUnit))
@@ -208,6 +196,9 @@ $remoteTemplate = @(
     'test -d /usr/share/novnc || { printf ''noVNC web root is required; deploy once with -InstallSystemDependencies\n'' >&2; exit 1; }',
     'install -d -m 0700 "$unit_tmp_dir"',
     'install -d -m 0750 -o root -g agentbridge "$release_dir"',
+    'printf ''%s  %s\n'' ''__WHEEL_SHA256__'' "$wheel" | sha256sum --check --status',
+    'printf ''%s'' ''__ARTIFACT_BASE64__'' | base64 --decode > "$release_dir/artifact.json"',
+    'printf ''%s'' ''__RECEIPT_BASE64__'' | base64 --decode > "$release_dir/validation.json"',
     'install -d -m 0700 -o agentbridge -g agentbridge "$root/backups"',
     'install -m 0644 -o root -g agentbridge "$wheel" "$release_wheel"',
     '"$python" -m pip install --disable-pip-version-check "${release_wheel}[database-analysis]"',
@@ -216,6 +207,7 @@ $remoteTemplate = @(
     'case "$site_dir" in "$root"/venv/lib/python*/site-packages/bscli) ;; *) printf ''unexpected installed bscli path: %s\n'' "$site_dir" >&2; exit 1 ;; esac',
     '"$python" -m compileall -q "$site_dir"',
     '"$python" -m pip check',
+    '(cd / && "$python" -I -c ''from bscli.adapters.page_scripts import load_seeyon_action_page_script as load; assert all(load(a)["script_source"] for a in ("ContinueSubmit", "SaveDraft"))'')',
     'printf ''%s'' "$unit_b64" | base64 --decode > "$unit_tmp"',
     'printf ''%s'' "$backup_unit_b64" | base64 --decode > "$backup_unit_tmp"',
     'printf ''%s'' "$backup_timer_b64" | base64 --decode > "$backup_timer_tmp"',
@@ -259,6 +251,7 @@ $remoteTemplate = @(
     '# agentbridge-upload-end'
 ) -join "`n"
 $remoteScript = $remoteTemplate.Replace("__REMOTE_WHEEL__", $remoteWheel).Replace("__REMOTE_ROOT__", $RemoteRoot).Replace("__RELEASE_ID__", $releaseId).Replace("__SERVICE_NAME__", $ServiceName).Replace("__HOST_NAME__", $HostName).Replace("__WHEEL_NAME__", $wheel.Name).Replace("__SYSTEMD_UNIT_BASE64__", $systemdUnitBase64).Replace("__BACKUP_SYSTEMD_UNIT_BASE64__", $backupSystemdUnitBase64).Replace("__BACKUP_SYSTEMD_TIMER_BASE64__", $backupSystemdTimerBase64).Replace("__INSTALL_SYSTEM_DEPENDENCIES__", $(if ($InstallSystemDependencies) { "1" } else { "0" }))
+$remoteScript = $remoteScript.Replace("__WHEEL_SHA256__", $artifact.sha256).Replace("__ARTIFACT_BASE64__", $artifactBase64).Replace("__RECEIPT_BASE64__", $receiptBase64)
 $remoteScript | & $ssh.Source -T @connectionArguments $target "bash -s"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote AgentBridge deployment failed"

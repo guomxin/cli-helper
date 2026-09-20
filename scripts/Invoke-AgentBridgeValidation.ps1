@@ -150,6 +150,8 @@ if ($Mode -eq "Targeted" -and $PythonTests.Count -eq 0 -and -not $runOpenClaw -a
 }
 
 if ($Mode -eq "Full") {
+    if ($SkipOpenClaw) { throw "Full candidate validation cannot skip OpenClaw; use Targeted for partial checks." }
+    Invoke-External -FilePath $venvPython -Arguments @("scripts/agentbridge_artifact.py", "begin", "--root", $repoRoot) -Label "Begin candidate validation" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pytest", "-q") -Label "Python full test suite" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "compileall", "-q", "bscli") -Label "Python compileall" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pip", "check") -Label "Python dependency check" -WorkingDirectory $repoRoot
@@ -203,6 +205,9 @@ if ($McpApp) {
     Invoke-NpmExternal -FilePath $npm.Source -Arguments @("run", "build") -Label "MCP App build" -WorkingDirectory $appRoot
 }
 
+if ($Mode -eq "Full") {
+    Invoke-External -FilePath $venvPython -Arguments @("scripts/agentbridge_artifact.py", "finish", "--root", $repoRoot) -Label "Fixed-commit installed wheel validation" -WorkingDirectory $repoRoot
+}
 $stopwatch.Stop()
 [ordered]@{
     status = "succeeded"
