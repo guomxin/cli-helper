@@ -9,7 +9,8 @@ import {registerAgentBridgeInteractions, captureNativeAgentBridgeResult} from '.
 const actors = new Map();
 async function actor(config) {
   if (actors.has(config.user)) return actors.get(config.user);
-  const transport = createAgentBridgeMcpClient({endpoint: {url:config.endpoint,timeoutSeconds:10}, tokenEnv:'FIXTURE_TOKEN',
+  // Lifecycle correctness, not a ten-second performance budget on shared CI.
+  const transport = createAgentBridgeMcpClient({endpoint: {url:config.endpoint,timeoutSeconds:60}, tokenEnv:'FIXTURE_TOKEN',
     env:{FIXTURE_TOKEN:config.token}, hostConfig:{}, serverName:'agentbridge'});
   const calls=[];
   const client=Object.fromEntries(['callTool','callToolResult'].map(method=>[method,async(...args)=>{

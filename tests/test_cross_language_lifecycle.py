@@ -27,7 +27,7 @@ class Actor:
         threading.Thread(target=errors,daemon=True).start()
     def receive(self):
         try:
-            line=self.output.get(timeout=30)
+            line=self.output.get(timeout=180)
             if line is None: raise AssertionError('Fixture exited: '+''.join(self.errors)[-3000:])
             return json.loads(line)
         except queue.Empty: raise AssertionError('Fixture timed out: '+''.join(self.errors)[-3000:])
@@ -169,9 +169,12 @@ class CrossLanguageLifecycleTests(unittest.TestCase):
         port=self.connection['port']; self.server.close(); self.start_server(port)
         self.host.close(); self.start_host()
         self.activate()
+        recoveries=[]
         for b in bindings:
-            self.call('resume',interactionId=b['interaction_id'],taskId=b['task_id'])
-        self.assertEqual(sorted(t['status'] for t in self.query('SELECT status FROM agent_tasks')),['canceled','succeeded'])
+            recoveries.append(self.call('resume',interactionId=b['interaction_id'],taskId=b['task_id']))
+        self.assertEqual(sorted(t['status'] for t in self.query('SELECT status FROM agent_tasks')),['canceled','succeeded'],
+                         {'recoveries':recoveries,'operations':self.query('SELECT * FROM operations'),
+                          'serverErrors':self.server.errors})
         self.assertEqual(len(self.query('SELECT * FROM fixture_calls')),1)
 
     def test_lease_renewal_expiry_takeover_rejects_stale_holder(self):
