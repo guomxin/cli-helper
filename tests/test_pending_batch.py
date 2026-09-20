@@ -46,8 +46,8 @@ def run(tmp_path, monkeypatch):
 
     for definition in _TRUSTED_WRITE_DEFINITIONS.values():
         if "approval" in definition.get("prepare_function", "") or definition.get("prepare_function") == "prepare_weekly_report_acknowledgement":
-            monkeypatch.setattr("bscli.core.central_service." + definition["prepare_function"], prepare)
-            monkeypatch.setattr("bscli.core.central_service." + definition["commit_function"], commit)
+            monkeypatch.setattr("bscli.core.write_catalog." + definition["prepare_function"], prepare)
+            monkeypatch.setattr("bscli.core.write_catalog." + definition["commit_function"], commit)
     monkeypatch.setattr("bscli.core.write_catalog.preflight_pending_action", lambda *_a, **_kw: None)
     monkeypatch.setattr(service.adapter, "list_workflows", lambda *_a, **_kw: pending(rows))
     return service, tid, rows, prepared, committed
