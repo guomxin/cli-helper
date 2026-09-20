@@ -13,6 +13,8 @@ from uuid import uuid4
 from bscli.core.data_source_secrets import ProtectedJsonStore
 from bscli.database.independent import DatabaseRejected, _SLOTS, _SOURCE_LOCK, _SOURCE_SLOTS
 import threading
+import time
+from bscli.database.report_lease import report_lease
 
 
 class Reports:
@@ -25,13 +27,52 @@ class Reports:
 
     def cleanup(self):
         now=datetime.now(timezone.utc).isoformat()
-        with closing(sqlite3.connect(self.path)) as c,c:
-            for (rid,) in c.execute("SELECT id FROM reports WHERE expires<? AND status!='expired'",(now,)).fetchall():
-                self.payloads.delete(rid)
-                c.execute("UPDATE reports SET status='expired' WHERE id=?",(rid,))
+        with closing(sqlite3.connect(self.path)) as c:
+            candidates=c.execute("SELECT id FROM reports WHERE status IN ('running','failed','expired') OR expires<?",(now,)).fetchall()
+        active=False
+        for (rid,) in candidates:
+            with report_lease(self._lease_path(rid)) as acquired:
+                if not acquired:
+                    active=True
+                    continue
+                with closing(sqlite3.connect(self.path)) as c,c:
+                    c.execute('BEGIN IMMEDIATE')
+                    status,expires=c.execute('SELECT status,expires FROM reports WHERE id=?',(rid,)).fetchone()
+                    if expires<now or status in ('running','failed','expired'):
+                        # A free OS lease proves no executor owns this running row.
+                        # Even a complete file is discarded: never guess that
+                        # post-query authorization checks or final commit finished.
+                        self.payloads.delete(rid)
+                        c.execute('UPDATE reports SET status=? WHERE id=?',
+                                  ('expired' if expires<now or status=='expired' else 'failed',rid))
+        with closing(sqlite3.connect(self.path)) as c:
+            known={self.payloads.path(rid).name for (rid,) in c.execute('SELECT id FROM reports')}
+        cutoff=time.time()-3600
+        for path in self.payloads.root.glob('*'):
+            if path.is_symlink() or not path.is_file(): continue
+            orphan=(path.suffix=='.bin' and path.name not in known) or (path.suffix=='.tmp' and not active)
+            try:
+                if orphan and path.stat().st_mtime<cutoff: path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass  # Another cleanup cycle already removed the orphan.
+
+    def _lease_path(self, rid):
+        return self.path.parent/'report-leases'/(self.payloads.path(rid).stem+'.lock')
 
     def export(self, owner, sid, args):
         self.cleanup()
+        rid=uuid4().hex
+        # Acquire before publishing running, hold through payload + terminal row.
+        try:
+            with report_lease(self._lease_path(rid),blocking=True):
+                return self._export(owner,sid,args,rid)
+        finally:
+            with closing(sqlite3.connect(self.path)) as c:
+                published=c.execute('SELECT 1 FROM reports WHERE id=?',(rid,)).fetchone()
+            if not published:
+                self._lease_path(rid).unlink(missing_ok=True)
+
+    def _export(self, owner, sid, args, rid):
         if not isinstance(args,dict) or set(args)-{'query_capability','query_arguments','request_key','format'} or args.get('format','csv')!='csv':
             raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
         cap=args.get('query_capability'); query=args.get('query_arguments'); key=args.get('request_key')
@@ -41,7 +82,6 @@ class Reports:
         grant,record=self.runtime.snapshot(owner,cap,sid)
         export_grant,_=self.runtime.snapshot(owner,'database.report.export',sid)
         fingerprint=hashlib.sha256(json.dumps(args,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
-        rid=uuid4().hex
         now=datetime.now(timezone.utc)
         expires=(now+timedelta(hours=24)).isoformat()
         with closing(sqlite3.connect(self.path)) as c,c:
@@ -107,6 +147,12 @@ class Reports:
 
     def download(self,owner,sid,args):
         if not isinstance(args,dict) or set(args)!={'report_id'}: raise DatabaseRejected('INVALID_DATABASE_ARGUMENTS')
+        rid=args['report_id']
+        if not isinstance(rid,str) or not re.fullmatch('[0-9a-f]{32}',rid): raise DatabaseRejected('DATABASE_REPORT_DENIED')
+        with report_lease(self._lease_path(rid),blocking=True):
+            return self._download(owner,sid,args)
+
+    def _download(self,owner,sid,args):
         value=self._load(owner,sid,args['report_id'])
         value['download_expires_at']=min(value['expires_at'],(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat())
         self.payloads.save(value['report_id'],value)
