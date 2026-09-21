@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: validation-${{ github.ref }}
   cancel-in-progress: true
@@ -18,19 +19,44 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Select validation scope from verified history
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci_validation_plan.py
       - uses: actions/setup-node@v4
+        if: steps.plan.outputs.profile != 'reuse'
         with:
           node-version: '22.22.3'
       - name: Validate fixed candidate without production credentials
+        if: steps.plan.outputs.profile != 'reuse'
         shell: pwsh
+        env:
+          VALIDATION_PROFILE: ${{ steps.plan.outputs.profile }}
         run: |
           python -m venv "$env:RUNNER_TEMP/agentbridge-tests"
           & "$env:RUNNER_TEMP/agentbridge-tests/Scripts/python.exe" -m pip install 'setuptools>=77' pytest
           if ($LASTEXITCODE -ne 0) { throw 'Test environment bootstrap failed' }
-          ./scripts/Invoke-AgentBridgeValidation.ps1 -Mode Full -VenvPath "$env:RUNNER_TEMP/agentbridge-tests"
+          if ($env:VALIDATION_PROFILE -eq 'full') {
+            ./scripts/Invoke-AgentBridgeValidation.ps1 -Mode Full -VenvPath "$env:RUNNER_TEMP/agentbridge-tests"
+          } elseif ($env:VALIDATION_PROFILE -in @('docs', 'release')) {
+            $tests = @('tests/test_documentation.py')
+            if ($env:VALIDATION_PROFILE -eq 'release') {
+              $tests += @('tests/test_deployment_assets.py', 'tests/test_release_transaction.py', 'tests/test_release_artifact.py')
+            }
+            ./scripts/Invoke-AgentBridgeValidation.ps1 -Mode Targeted -PythonTests $tests -VenvPath "$env:RUNNER_TEMP/agentbridge-tests"
+            if ($LASTEXITCODE -ne 0) { throw 'Scoped validation failed' }
+            & "$env:RUNNER_TEMP/agentbridge-tests/Scripts/python.exe" scripts/check_public_content.py
+            if ($LASTEXITCODE -ne 0) { throw 'Public content check failed' }
+            & "$env:RUNNER_TEMP/agentbridge-tests/Scripts/python.exe" scripts/current_facts.py --check
+            if ($LASTEXITCODE -ne 0) { throw 'Current facts check failed' }
+          } else {
+            throw 'Unknown validation profile'
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
