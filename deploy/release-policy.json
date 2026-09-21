@@ -1,6 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
-  "compatibleFrom": ["1a4fe29e165b"],
+  "compatibleFrom": [
+    "28ce6ee3989e"
+  ],
   "dataCompatibility": "no-migration",
-  "reason": "M5 preserves M4 task references, authorization consumption and all SQLite schemas. Module extraction, bounded connection admission, current facts and explicit external unit selection do not change stored business-data semantics. The preceding M4 reader remains the program rollback target."
+  "reason": "M5 capacity hardening preserves the deployed M5 SQLite schemas, persisted task and authorization semantics. MCP protocol admission, in-memory identity budgets and asynchronous identity-store waits require no data migration. The deployed M5 release remains the program rollback target."
 }
