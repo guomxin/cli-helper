@@ -113,7 +113,7 @@ python -m bscli.cli.main --home .bscli capability describe oa.business_trip.prep
 - `oa.meeting_room.application.prepare` / `application.create`
 - `oa.meeting_room.application.cancel.prepare` / `application.cancel`
 
-写入能力按具体业务流程组织，已覆盖出差、请假、补签、效能数据、差旅费、劳动合同续签、
+写入能力按具体业务流程组织，已覆盖出差、请假发起与请假待办审批、补签、效能数据、差旅费、劳动合同续签、
 知识产权申报、加班、考勤确认、周报、普通协同、会议和流程撤销。智能体只调用每个流程的
 准备入口；最终提交能力由可信授权续办，不作为普通模型工具公开。
 

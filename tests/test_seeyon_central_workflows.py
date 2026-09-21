@@ -48,6 +48,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.intellectual_property_declaration.approve",
                 "oa.labor_contract_renewal.approval.prepare",
                 "oa.labor_contract_renewal.approve",
+                "oa.leave.approval.prepare",
+                "oa.leave.approve",
                 "oa.leave.prepare",
                 "oa.leave.save_draft",
                 "oa.leave.submit",
@@ -103,6 +105,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.leave.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.leave.submit.prepare"], "controlled_write")
         self.assertEqual(effects["oa.leave.submit"], "controlled_write")
+        self.assertEqual(effects["oa.leave.approval.prepare"], "controlled_write")
+        self.assertEqual(effects["oa.leave.approve"], "controlled_write")
         self.assertEqual(
             effects["oa.missed_punch.approval.batch.prepare"],
             "controlled_write",

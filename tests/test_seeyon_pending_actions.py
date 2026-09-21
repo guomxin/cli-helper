@@ -6,6 +6,7 @@ from bscli.adapters.seeyon_pending_actions import (
     approve_efficiency_data,
     approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
+    approve_leave_request,
     approve_overtime,
     approve_resignation,
     confirm_attendance,
@@ -15,6 +16,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_efficiency_data_approval,
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
+    prepare_leave_approval,
     prepare_overtime_approval,
     prepare_resignation_approval,
     prepare_standard_collaboration_approval,
@@ -217,6 +219,52 @@ class PendingActionTests(unittest.TestCase):
         self.assertTrue(result["workflow_approved"])
         self.assertEqual(result["workflow_profile"], "overtime")
 
+    def test_leave_approval_freezes_read_only_hr_fields_and_confirms(self):
+        fixture = _fixture("leave")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_leave_approval(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertEqual(fields["申请人"], "韩志平")
+        self.assertEqual(fields["请假类型"], "年休")
+        self.assertEqual(fields["开始时间"], "2026-09-28 08:30")
+        self.assertEqual(fields["请假天数"], "3.00")
+        self.assertEqual(fields["事由"], "回老家探亲。")
+        self.assertTrue(
+            prepared["plan"]["target"]["business_snapshot"][
+                "business_fields_browse_only"
+            ]
+        )
+
+        result = approve_leave_request(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(result["workflow_profile"], "leave")
+
+    def test_leave_business_change_blocks_before_boundary(self):
+        fixture = _fixture("leave")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        plan = prepare_leave_approval(adapter, worker, _inputs())["plan"]
+        fixture["business_snapshot"]["leave_days"] = "4.00"
+        boundary = []
+
+        with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
+            approve_leave_request(
+                adapter,
+                worker,
+                plan,
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+        self.assertEqual(boundary, [])
+
     def test_resignation_approval_freezes_read_only_hr_fields_and_confirms(self):
         fixture = _fixture("resignation")
         worker = FakeWorker(fixture)
@@ -400,13 +448,14 @@ class PendingActionTests(unittest.TestCase):
                 "labor_contract_renewal",
                 "intellectual_property_declaration",
                 "overtime",
+                "leave",
                 "resignation",
                 "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 9)
+        self.assertEqual(len(fingerprints), 10)
 
 
 class FakeAdapter:
@@ -501,6 +550,7 @@ class FakeBusinessFrame:
         expected_by_profile = {
             "attendance_confirmation": "#field0097_id",
             "intellectual_property_declaration": "#field0010_id",
+            "leave": "#field0023_id",
             "resignation": "#field0006_id",
         }
         expected = expected_by_profile.get(
@@ -683,6 +733,50 @@ def _fixture(profile):
             "node_policy": "考勤审批",
             "node_policy_name": "考勤审批",
             "attitudes": ["agree", "disagree"],
+        },
+        "leave": {
+            "title": "【HR】请假申请单-韩志平-年休",
+            "fields": [
+                {
+                    "name": "姓名",
+                    "value": "韩志平 TH1193 人工智能研发中心 发起日期 2026-09-20",
+                },
+                {
+                    "name": "请假类型",
+                    "value": "年休 剩余年休 5.88天 剩余调休 61.41小时",
+                },
+                {
+                    "name": "开始时间",
+                    "value": "2026-09-28 08:30 结束时间 2026-09-30 17:30 3.00天 22.50小时",
+                },
+                {"name": "事由", "value": "回老家探亲。"},
+                {"name": "证明材料", "value": ""},
+                {
+                    "name": "是否存在有非部门经理的直接上级（组负责人）",
+                    "value": "否",
+                },
+            ],
+            "template_id": "-7765568933726502821",
+            "form_app_id": "6773919591095560889",
+            "node_policy": "approve",
+            "node_policy_name": "审批",
+            "attitudes": ["agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "applicant": "韩志平",
+                "employee_number": "TH1193",
+                "department": "人工智能研发中心",
+                "application_date": "2026-09-20",
+                "leave_type": "年休",
+                "remaining_annual_leave_days": "5.88",
+                "remaining_compensatory_leave_hours": "61.41",
+                "start_time": "2026-09-28 08:30",
+                "end_time": "2026-09-30 17:30",
+                "leave_days": "3.00",
+                "leave_hours": "22.50",
+                "reason": "回老家探亲。",
+                "has_direct_supervisor": "否",
+            },
         },
         "resignation": {
             "title": "【HR】离职申请单-杨芮杰-人工智能研发中心-实习生",

@@ -150,6 +150,12 @@ def test_selection_limits_filters_and_fail_closed(tmp_path):
     selected = select_pending_batch_items(pending(rows), {"affair_ids": ["affair-3", "affair-1"]}, registry)
     assert [i["resource_ref"] for i in selected] == ["affair-3", "affair-1"]
     assert not select_pending_batch_items(pending(rows), {"workflow_types": ["weekly_report"]}, registry)
+    leave = select_pending_batch_items(
+        pending([row(24, "【HR】请假申请单-韩志平-年休")]),
+        {"workflow_types": ["leave"]},
+        registry,
+    )
+    assert leave[0]["display_summary"]["profile"] == "leave"
     assert len(select_pending_batch_items(pending(rows[:5]), {"keyword": "研发中心", "workflow_types": ["efficiency_data"]}, registry)) == 5
     cases = [
         (pending(rows), {}, "BATCH_LIMIT_EXCEEDED"),

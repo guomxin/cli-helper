@@ -12,6 +12,7 @@ from bscli.adapters.seeyon_pending_actions import (
     prepare_efficiency_data_approval,
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
+    prepare_leave_approval,
     prepare_overtime_approval,
     prepare_resignation_approval,
     prepare_work_handover_approval,
@@ -32,6 +33,7 @@ _PREPARE_FUNCTIONS = {
         prepare_intellectual_property_declaration_approval
     ),
     "labor_contract_renewal": prepare_labor_contract_renewal_approval,
+    "leave": prepare_leave_approval,
     "overtime": prepare_overtime_approval,
     "resignation": prepare_resignation_approval,
     "work_handover": prepare_work_handover_approval,

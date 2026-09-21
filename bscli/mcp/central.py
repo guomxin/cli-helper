@@ -71,6 +71,8 @@ from bscli.adapters.seeyon_pending_actions import (
     INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
     LABOR_CONTRACT_RENEWAL_APPROVE_CAPABILITY,
+    LEAVE_APPROVAL_PREPARE_CAPABILITY,
+    LEAVE_APPROVE_CAPABILITY,
     OVERTIME_APPROVAL_PREPARE_CAPABILITY,
     OVERTIME_APPROVE_CAPABILITY,
     RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
@@ -238,6 +240,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
         {"oa:write:approval"}
     ),
     "oa_overtime_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_leave_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_resignation_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_work_handover_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_attendance_confirmation_prepare": frozenset(
@@ -1140,6 +1143,24 @@ def create_central_mcp_server(
                 "resignation request leaves the pending collection."
             ),
             "commit_capability": RESIGNATION_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_leave_approval_prepare",
+            "prepare_title": "Prepare OA Leave-Request Approval",
+            "prepare_description": (
+                "Bind one exact pending leave request. AgentBridge validates the "
+                "registered HR template and freezes applicant, leave type, time range, "
+                "duration, remaining balances, reason, and supervisor field; pass any "
+                "opinion already supplied by the user."
+            ),
+            "prepare_capability": LEAVE_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_leave_approve",
+            "commit_title": "Approve Authorized OA Leave Request",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "leave request leaves the pending collection."
+            ),
+            "commit_capability": LEAVE_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_work_handover_approval_prepare",

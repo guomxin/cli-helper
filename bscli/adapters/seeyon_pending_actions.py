@@ -32,6 +32,8 @@ INTELLECTUAL_PROPERTY_DECLARATION_APPROVE_CAPABILITY = (
 )
 OVERTIME_APPROVAL_PREPARE_CAPABILITY = "oa.overtime.approval.prepare"
 OVERTIME_APPROVE_CAPABILITY = "oa.overtime.approve"
+LEAVE_APPROVAL_PREPARE_CAPABILITY = "oa.leave.approval.prepare"
+LEAVE_APPROVE_CAPABILITY = "oa.leave.approve"
 RESIGNATION_APPROVAL_PREPARE_CAPABILITY = "oa.resignation.approval.prepare"
 RESIGNATION_APPROVE_CAPABILITY = "oa.resignation.approve"
 WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY = "oa.work_handover.approval.prepare"
@@ -128,6 +130,12 @@ OVERTIME_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_overtime_approval_fields.v1",
     title="填写加班申请审批意见",
     effect="审批通过一条加班申请审核单",
+    submit_label="提交审批意见",
+)
+LEAVE_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_leave_approval_fields.v1",
+    title="填写请假申请审批意见",
+    effect="审批通过一条请假申请单",
     submit_label="提交审批意见",
 )
 RESIGNATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
@@ -315,6 +323,38 @@ _PROFILES = {
         "summary_title": "审批加班申请审核单",
         "summary_effect": "审批通过后该加班申请将离开待办列表",
         "authorize_label": "授权审批通过",
+    },
+    "leave": {
+        "prepare_capability": LEAVE_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": LEAVE_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-leave-approval-v1",
+        "plan_schema": "agentbridge.oa_leave_approval_plan.v1",
+        "result_schema": "agentbridge.oa_leave_approval_result.v1",
+        "business_intent": "approve_leave_request",
+        "title_rule": {
+            "kind": "prefix",
+            "value": "【HR】请假申请单-",
+        },
+        "required_fields": {
+            "姓名",
+            "请假类型",
+            "开始时间",
+            "事由",
+            "证明材料",
+            "是否存在有非部门经理的直接上级（组负责人）",
+        },
+        "allowed_fields": None,
+        "template_id": "-7765568933726502821",
+        "form_app_id": "6773919591095560889",
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批请假申请单",
+        "summary_effect": "审批通过后该请假申请将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "leave_approval_v1",
     },
     "resignation": {
         "prepare_capability": RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
@@ -601,6 +641,26 @@ def approve_resignation(
         worker,
         plan,
         profile_key="resignation",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_leave_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "leave")
+
+
+def approve_leave_request(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="leave",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -1018,6 +1078,9 @@ def _validate_target(
     elif profile.get("business_snapshot_policy") == "resignation_v1":
         signals = dict(signals)
         signals["business_snapshot"] = _resignation_business_snapshot(page)
+    elif profile.get("business_snapshot_policy") == "leave_approval_v1":
+        signals = dict(signals)
+        signals["business_snapshot"] = _leave_business_snapshot(page)
     elif profile.get("business_snapshot_policy") == "work_handover_v1":
         if node_policy not in profile["node_policies"] or node_policy_name not in profile["node_policy_names"]:
             raise PendingActionContractMismatch("The OA work-handover approval node identity is inconsistent.")
@@ -1258,6 +1321,102 @@ def _intellectual_property_declaration_business_snapshot(
     return result
 
 
+def _leave_business_snapshot(page) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0023_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA leave-request CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = (id) => document.querySelector(`#${id}`);
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const value = (id) => clean(field(id)?.innerText);
+          const selected = (id) => {
+            const wrapper = field(id);
+            const items = Array.from(wrapper?.querySelectorAll('.cap4-radio__item') || []);
+            const chosen = items.filter((item) => item.querySelector(
+              '.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong'
+            ));
+            return chosen.length === 1
+              ? clean(chosen[0].querySelector('.cap4-radio__text')?.textContent)
+              : '';
+          };
+          const ids = [
+            'field0001_id', 'field0002_id', 'field0003_id', 'field0004_id',
+            'field0008_id', 'field0019_id', 'field0020_id', 'field0006_id',
+            'field0007_id', 'field0022_id', 'field0023_id', 'field0009_id',
+            'field0010_id'
+          ];
+          const browseOnly = ids.every((id) => {
+            const section = field(id)?.querySelector('section');
+            return Boolean(section?.classList.contains('is-none'));
+          });
+          return {
+            browse_only: browseOnly,
+            applicant: value('field0001_id'),
+            employee_number: value('field0002_id'),
+            department: value('field0003_id'),
+            application_date: value('field0004_id'),
+            leave_type: value('field0008_id'),
+            remaining_annual_leave_days: value('field0019_id'),
+            remaining_compensatory_leave_hours: value('field0020_id'),
+            start_time: value('field0006_id'),
+            end_time: value('field0007_id'),
+            leave_days: value('field0022_id'),
+            leave_hours: value('field0023_id'),
+            reason: value('field0009_id'),
+            has_direct_supervisor: selected('field0010_id'),
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA leave-request business fields are editable at this node; "
+            "a separate field-entry contract is required."
+        )
+    required = (
+        "applicant",
+        "employee_number",
+        "department",
+        "application_date",
+        "leave_type",
+        "start_time",
+        "end_time",
+        "leave_days",
+        "leave_hours",
+        "reason",
+        "has_direct_supervisor",
+    )
+    for name in required:
+        if not str(snapshot.get(name) or "").strip():
+            raise PendingActionContractMismatch(
+                f"The OA leave-request {name} value is unavailable."
+            )
+    if str(snapshot.get("has_direct_supervisor") or "").strip() not in {"是", "否"}:
+        raise PendingActionContractMismatch(
+            "The OA leave-request direct-supervisor selection is unsupported."
+        )
+    result = {
+        name: re.sub(r"\s+", " ", str(value or "")).strip()[:1000]
+        for name, value in snapshot.items()
+        if name != "browse_only"
+    }
+    result["business_fields_browse_only"] = True
+    return result
+
+
 def _resignation_business_snapshot(page) -> dict:
     frame = None
     for candidate in list(page.frames):
@@ -1481,6 +1640,25 @@ def _summary(
         ):
             if values.get(name):
                 fields.append({"label": name, "value": values[name]})
+    elif profile_key == "leave":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("applicant", "申请人"),
+            ("employee_number", "工号"),
+            ("department", "所属部门"),
+            ("application_date", "发起日期"),
+            ("leave_type", "请假类型"),
+            ("remaining_annual_leave_days", "剩余年休天数"),
+            ("remaining_compensatory_leave_hours", "剩余调休小时"),
+            ("start_time", "开始时间"),
+            ("end_time", "结束时间"),
+            ("leave_days", "请假天数"),
+            ("leave_hours", "请假小时"),
+            ("reason", "事由"),
+            ("has_direct_supervisor", "是否有非部门经理直接上级"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
     elif profile_key == "resignation":
         snapshot = target.get("business_snapshot") or {}
         for name, label in (

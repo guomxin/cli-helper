@@ -459,7 +459,7 @@ class HostContractStore:
                 "shared-contract-h01-h29-native-login-read-continuation-v1",
             ),
             (
-                "openclaw", "0.4.98", "L3",
+                "openclaw", "0.4.99", "L3",
                 "shared-contract-h01-h29-modular-read-continuation-v1",
             ),
         )
