@@ -1,10 +1,13 @@
 """Prove that scope reduction cannot hide code changes or stale CI failures."""
 import subprocess
+import io
+import json
 from unittest.mock import patch
 
 import pytest
 
 from scripts.ci_validation_plan import classify, latest_trusted, plan
+from scripts import ci_validation_plan
 
 SHA = 'a' * 40
 BASE = 'b' * 40
@@ -124,3 +127,21 @@ def test_real_history_detects_code_before_document_and_rename(tmp_path):
     result = plan(tmp_path, environment(GITHUB_SHA=git('rev-parse', 'HEAD')), {}, lambda *_: [run(sha)])
     assert result['profile'] == 'full'
     assert set(result['changedPaths']) == {'runtime.py', 'renamed.md'}
+
+
+def test_entrypoint_handles_chinese_paths_on_english_windows(tmp_path, monkeypatch):
+    event_path = tmp_path / 'event.json'
+    event_path.write_text('{}')
+    monkeypatch.setenv('GITHUB_EVENT_PATH', str(event_path))
+    monkeypatch.setenv('GITHUB_OUTPUT', str(tmp_path / 'output.txt'))
+    monkeypatch.setenv('GITHUB_STEP_SUMMARY', str(tmp_path / 'summary.md'))
+    monkeypatch.setattr(ci_validation_plan, '__file__', str(tmp_path / 'scripts/ci_validation_plan.py'))
+    result = {'profile': 'docs', 'changedPaths': ['docs/验收记录.md']}
+    console = io.BytesIO()
+    with io.TextIOWrapper(console, encoding='cp1252') as stdout:
+        with patch.object(ci_validation_plan, 'plan', return_value=result), patch('sys.stdout', stdout):
+            ci_validation_plan.main()
+        stdout.flush()
+        assert json.loads(console.getvalue().decode('cp1252')) == result
+    assert json.loads((tmp_path / 'output/release-validation/ci-plan.json').read_text(encoding='utf-8')) == result
+    assert '验收记录' in (tmp_path / 'summary.md').read_text(encoding='utf-8')
