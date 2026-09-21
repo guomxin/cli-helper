@@ -146,6 +146,11 @@ export class TimelinePublisher {
   messageKey({ sessionKey, role, text, event, context }) {
     const now = this.now();
     this.prune(now);
+    // Successful delivery IDs distinguish repeated identical messages and remain
+    // stable across duplicate callbacks even beyond the short fingerprint cache.
+    const deliveredId = event.success === true
+      ? safeText(event.messageId || context.messageId, 256) : null;
+    if (deliveredId) return `${role}:${sessionKey}:sent:${deliveredId}`.slice(0, 768);
     const fingerprint = createHash("sha256")
       .update(`${role}\0${sessionKey}\0${text}`, "utf8")
       .digest("hex");

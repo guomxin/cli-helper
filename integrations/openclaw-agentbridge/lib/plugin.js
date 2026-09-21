@@ -22,7 +22,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.97";
+export const PLUGIN_VERSION = "0.4.98";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -232,6 +232,29 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     });
   });
 
+  // Telegram tool sends and normal replies both emit this post-delivery hook.
+  // Resolve the destination route, never attribute a cross-chat send to its caller.
+  api.on("message_sent", (event, context) => {
+    if (context.channelId !== "telegram" || event.success !== true) return;
+    const sessionKey = coordinator.deliverySessionKeyForRoute({
+      channel: context.channelId,
+      to: event.to || context.conversationId,
+      accountId: context.accountId,
+    });
+    if (!sessionKey || coordinator.isDirectDeliveryActive(sessionKey)) return;
+    const sourceSession = event.sessionKey || context.sessionKey;
+    void timelinePublisher?.capture({
+      sessionKey,
+      role: "assistant",
+      text: event.content,
+      event,
+      context,
+      taskId: sourceSession === sessionKey
+        ? coordinator.activeTaskForSession(sessionKey)
+        : null,
+    });
+  });
+
   api.on("message_sending", (event, context) => {
     const routeChannel = context.channelId;
     const sessionKey =
@@ -292,18 +315,20 @@ export function registerAgentBridgeInteractions(api, dependencies = {}) {
     if (coordinator.isDirectDeliveryActive(sessionKey)) {
       return undefined;
     }
-    void timelinePublisher?.capture({
-      sessionKey,
-      role: "assistant",
-      text: event.payload?.text,
-      event,
-      context,
-      taskId: coordinator.activeTaskForSession(sessionKey),
-    });
     const channel =
       coordinator.deliveryChannelForSession(sessionKey) ||
       routeChannel ||
       channelFromPrivateSessionKey(sessionKey);
+    if (channel !== "telegram") {
+      void timelinePublisher?.capture({
+        sessionKey,
+        role: "assistant",
+        text: event.payload?.text,
+        event,
+        context,
+        taskId: coordinator.activeTaskForSession(sessionKey),
+      });
+    }
     if (routeChannel === "openclaw-weixin") {
       api.logger.info(
         `AgentBridge WeChat reply delivery check (private=${isPrivateSessionKey(sessionKey)}, channel=${channel || "unknown"}, pending=${coordinator.pendingForSession(sessionKey).length})`,

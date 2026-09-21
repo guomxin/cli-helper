@@ -4217,6 +4217,59 @@ test("retries timeline publication with one stable idempotency key", async () =>
   assert.equal(harness.logs.warn.length, 0);
 });
 
+test("Telegram successful sends cover tool and normal replies without failures, duplicates or identity crossover", async () => {
+  const requests = [];
+  const harness = fakeApi({ autoPoll: false, syncTimeline: true,
+    mcpUrl: "https://bridge.test/mcp",
+    identityBindings: [{ channel: "telegram", senderId: "1001", accountId: "default", tokenEnv: "USER_TOKEN" }],
+  });
+  const coordinator = registerAgentBridgeInteractions(harness.api, {
+    env: { USER_TOKEN: "token-a" },
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body.params.arguments);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id,
+        result: { structuredContent: { status: "succeeded" } } }),
+      { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const sessionKey = "agent:main:telegram:direct:1001";
+  const context = { channelId: "telegram", accountId: "default", conversationId: "1001", sessionKey };
+  harness.hooks.message_received({ from: "1001", content: "OA pending", messageId: "in-1" }, context);
+  await coordinator.waitForIdle();
+  requests.length = 0;
+  const sent = { to: "1001", content: "Five pending items", success: true, messageId: "2555" };
+  // Normal reply preparation must not publish until delivery succeeds.
+  harness.hooks.reply_payload_sending({ kind: "final", payload: { text: sent.content } }, context);
+  harness.hooks.message_sent({ ...sent, success: false }, context);
+  await coordinator.waitForIdle();
+  assert.equal(requests.length, 0);
+  harness.hooks.message_sent(sent, context);
+  harness.hooks.message_sent(sent, context);
+  await coordinator.waitForIdle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].text, sent.content);
+  // Tool delivery may omit sessionKey; use the unique, already bound route.
+  const { sessionKey: ignored, ...routeContext } = context;
+  harness.hooks.message_sent({ ...sent, messageId: "2556" }, routeContext);
+  await coordinator.waitForIdle();
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[0].message_key, requests[1].message_key);
+  assert.equal(requests[1].conversation_ref, sessionKey);
+  assert.equal(requests[1].task_id, null);
+  // Caller session must not grant authority over an unbound destination/account.
+  harness.hooks.message_sent({ ...sent, to: "2002" }, context);
+  harness.hooks.message_sent(sent, { ...context, accountId: "other" });
+  coordinator.directDeliveries.set(sessionKey, 1);
+  harness.hooks.message_sent({ ...sent, messageId: "2557" }, context);
+  coordinator.directDeliveries.delete(sessionKey);
+  coordinator.bindDeliveryRoute({ sessionKey: "agent:other:telegram:direct:1001", channel: "telegram", to: "1001", accountId: "default" });
+  harness.hooks.message_sent({ ...sent, messageId: "2558" }, routeContext);
+  await coordinator.waitForIdle();
+  assert.equal(requests.length, 2);
+  coordinator.stopAll();
+});
+
 test("synchronizes user and assistant text once across duplicate WeChat hooks", async () => {
   const requests = [];
   const senderId = "wechat-user-a";
