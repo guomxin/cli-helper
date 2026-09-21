@@ -119,6 +119,12 @@ if (-not $AgentBridgeKnownHostsFile) {
     $AgentBridgeKnownHostsFile = Join-Path $repoRoot "deploy\ssh\agentbridge_known_hosts"
 }
 
+Import-Module (Join-Path $PSScriptRoot "AgentBridgeReleasePreflight.psm1") -Force
+$releasePreflight = Get-AgentBridgeReleasePreflight -HostName '10.10.50.213' -SshUser 'root' `
+    -RemoteRoot '/home/guomao/agentbridge' -IdentityFile $AgentBridgeIdentityFile `
+    -KnownHostsFile $AgentBridgeKnownHostsFile -CandidateRelease $commit.Substring(0, 12) `
+    -PolicyPath (Join-Path $repoRoot 'deploy/release-policy.json') -ResumeAcceptance:$ResumeAcceptance
+
 Import-Module (Join-Path $PSScriptRoot "AgentBridgeOpenClawRestartPolicy.psm1") -Force
 $restartPlan = if ($ResumeAcceptance) {
     [pscustomobject]@{ required = $false; reason = "acceptance_only"; changedInputs = @() }
@@ -129,6 +135,7 @@ $plan = [ordered]@{
     status = "planned"
     commit = $commit
     trackedFilesClean = -not $isDirty
+    releasePreflight = $releasePreflight
     branch = $BranchName
     remote = $RemoteName
     remoteUrl = $remoteUrl

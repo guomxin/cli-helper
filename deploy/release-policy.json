@@ -1,7 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "9260e8102512"
+    "9260e8102512",
+    "35e5bb52af7b"
   ],
   "dataCompatibility": "no-migration",
   "reason": "Reviewed against deployed 9260e8102512: changes are CI/documentation updates, the OpenClaw 0.4.98 host version baseline, and successful Telegram message publication using the existing timeline append contract. No SQLite schema, authorization, business operation or persisted data interpretation changes require migration. The deployed release can still read all existing and newly appended timeline rows and remains the program rollback target."

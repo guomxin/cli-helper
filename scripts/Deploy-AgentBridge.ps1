@@ -89,6 +89,11 @@ if ($isDirty -and -not $AllowDirty -and -not $PlanOnly) {
 }
 $releaseId = if ($isDirty) { "$commit-dirty" } else { $commit }
 
+Import-Module (Join-Path $PSScriptRoot "AgentBridgeReleasePreflight.psm1") -Force
+$releasePreflight = Get-AgentBridgeReleasePreflight -HostName $HostName -SshUser $SshUser `
+    -RemoteRoot $RemoteRoot -IdentityFile $IdentityFile -KnownHostsFile $KnownHostsFile `
+    -CandidateRelease $commit -PolicyPath (Join-Path $repoRoot 'deploy/release-policy.json')
+
 Import-Module (Join-Path $PSScriptRoot "AgentBridgeOpenClawRestartPolicy.psm1") -Force
 # RestartOpenClaw is retained as a compatible request for conditional restart.
 # The input baseline, not a carried-over command-line flag, decides necessity.
@@ -98,6 +103,7 @@ $gatewayRestartPerformed = $false
 $plan = [ordered]@{
     status = "planned"
     releaseId = $releaseId
+    releasePreflight = $releasePreflight
     target = "$SshUser@$HostName"
     remoteRoot = $RemoteRoot
     validation = -not $SkipValidation
