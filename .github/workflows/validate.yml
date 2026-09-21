@@ -46,7 +46,7 @@ jobs:
           } elseif ($env:VALIDATION_PROFILE -in @('docs', 'release')) {
             $tests = @('tests/test_documentation.py')
             if ($env:VALIDATION_PROFILE -eq 'release') {
-              $tests += @('tests/test_deployment_assets.py', 'tests/test_release_transaction.py', 'tests/test_release_artifact.py')
+              $tests += @('tests/test_release_policy.py', 'tests/test_deployment_assets.py', 'tests/test_release_transaction.py', 'tests/test_release_artifact.py')
             }
             ./scripts/Invoke-AgentBridgeValidation.ps1 -Mode Targeted -PythonTests $tests -VenvPath "$env:RUNNER_TEMP/agentbridge-tests"
             if ($LASTEXITCODE -ne 0) { throw 'Scoped validation failed' }
