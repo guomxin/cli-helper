@@ -2460,7 +2460,8 @@ class CentralMcpTests(unittest.TestCase):
         )
         auth_server = MagicMock()
         mcp = MagicMock()
-        app = object()
+        from starlette.applications import Starlette
+        app = Starlette()
         mcp.streamable_http_app.return_value = app
 
         with (

@@ -22,6 +22,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 import uvicorn
+from bscli.mcp.resource_budget import BoundedMcpProtocol, bounded_mcp_app
 
 
 from bscli.adapters.seeyon_business_trip import (
@@ -638,7 +639,7 @@ class StoredIdentityTokenVerifier(TokenVerifier):
         self.resource = resource
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        identity = self.store.verify(token)
+        identity = await asyncio.to_thread(self.store.verify, token)
         if identity is None:
             return None
         expires_at = int(datetime.fromisoformat(identity["expires_at"]).timestamp())
@@ -6125,7 +6126,9 @@ def serve_central_mcp(
             workspace_base_url=workspace_config.public_base_url if workspace_config else '',
         )
         uvicorn.run(
-            mcp.streamable_http_app(),
+            bounded_mcp_app(mcp, identity_store),
+            http=BoundedMcpProtocol,
+            ws="none",
             host=mcp_config.host,
             port=mcp_config.port,
             ssl_certfile=str(mcp_config.tls_cert) if mcp_config.tls_cert else None,
