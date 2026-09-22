@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "bef1229771d8"
+    "01dfd176c128"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed bef1229771d8: this release adds a governed OA business-trip approval profile, single-item and batch routing, tool registration, and OpenClaw 0.4.100 catalog entries using the existing trusted field, authorization, pending-action, and persistence contracts. No SQLite schema or stored-data interpretation changes are required, so the deployed release remains a compatible rollback target."
+  "reason": "Reviewed against deployed 01dfd176c128: this release changes only local validation orchestration, GitHub Actions scheduling, release documentation, and tests. It does not change the AgentBridge runtime, OpenClaw integration, SQLite schema, or stored-data interpretation, so the deployed release remains a compatible rollback target."
 }

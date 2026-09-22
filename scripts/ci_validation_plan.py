@@ -1,4 +1,4 @@
-"""Conservative CI scope selection backed by successful, immutable GitHub runs."""
+"""Conservative main/PR CI scope selection backed by successful GitHub runs."""
 from __future__ import annotations
 
 import json
@@ -27,13 +27,12 @@ def classify(paths):
     return 'release' if 'release' in profiles else 'docs'
 
 
-def latest_trusted(runs, sha, repository, exclude_id=None, candidate_only=False):
+def latest_trusted(runs, sha, repository, exclude_id=None):
     matches = [r for r in runs
                if r.get('id') != exclude_id and r.get('head_sha') == sha
                and r.get('event') == 'push' and r.get('path') == WORKFLOW
                and r.get('head_repository', {}).get('full_name') == repository
-               and r.get('head_branch') in (
-                   [f'candidate/{sha}'] if candidate_only else ['main', f'candidate/{sha}'])]
+               and r.get('head_branch') == 'main']
     # Never search backwards past a newer failed, cancelled or pending attempt.
     run = max(matches, key=lambda r: (r['run_number'], r.get('run_attempt', 1)), default=None)
     return run if run and run.get('status') == 'completed' and run.get('conclusion') == 'success' else None
@@ -70,12 +69,7 @@ def plan(root, env, event, fetch=github_runs):
     repository = env['GITHUB_REPOSITORY']
     current_id = int(env['GITHUB_RUN_ID'])
     try:
-        # Only the main push can reuse a candidate run; no PR merge SHA or other commit reuse.
         if env['GITHUB_EVENT_NAME'] == 'push' and env.get('GITHUB_REF') == 'refs/heads/main':
-            run = latest_trusted(fetch(repository, sha), sha, repository, current_id, candidate_only=True)
-            if run:
-                return {**result, 'profile': 'reuse', 'reason': 'same_commit_candidate_success',
-                        'evidenceRun': run['html_url']}
             base = event.get('before', '')
         elif env['GITHUB_EVENT_NAME'] == 'pull_request':
             base = git(root, 'merge-base', sha, event['pull_request']['base']['sha'])

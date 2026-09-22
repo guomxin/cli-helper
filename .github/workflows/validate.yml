@@ -1,7 +1,7 @@
-name: Candidate validation
+name: Repository validation
 on:
   push:
-    branches: [main, 'candidate/**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -11,8 +11,8 @@ concurrency:
   group: validation-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  candidate:
-    name: candidate-validation
+  validation:
+    name: repository-validation
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -29,11 +29,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/ci_validation_plan.py
       - uses: actions/setup-node@v4
-        if: steps.plan.outputs.profile != 'reuse'
         with:
           node-version: '22.22.3'
-      - name: Validate fixed candidate without production credentials
-        if: steps.plan.outputs.profile != 'reuse'
+      - name: Validate repository revision without production credentials
         shell: pwsh
         env:
           VALIDATION_PROFILE: ${{ steps.plan.outputs.profile }}
@@ -60,6 +58,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: candidate-${{ github.sha }}
+          name: validation-${{ github.sha }}
           path: output/release-validation/
           retention-days: 14

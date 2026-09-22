@@ -11,6 +11,10 @@ class DeploymentAssetTests(unittest.TestCase):
         acceptance = (ROOT / "scripts/Test-AgentBridgeReleaseAcceptance.ps1").read_text(encoding="utf-8")
         lifecycle = (ROOT / "scripts/Restart-AgentBridgeOpenClawGateway.ps1").read_text(encoding="utf-8")
         self.assertIn("if (-not $ResumeAcceptance)", publish)
+        self.assertIn("$reuseValidation = [bool]$SkipValidation -or [bool]$ResumeAcceptance", publish)
+        self.assertIn('validationMode = if ($reuseValidation) { "reuse_receipt" } else { "full" }', publish)
+        self.assertIn("if (-not $reuseValidation)", publish)
+        self.assertNotIn("Test-AgentBridgeCandidate.ps1", publish)
         self.assertIn("ExpectedReleaseId = $commit.Substring(0, 12)", publish)
         self.assertIn("$ResumeAcceptance -and ($RestartOpenClaw -or $IncludeLoginReuseSmoke)", publish)
         self.assertIn("$remote.releaseId -ne $ExpectedReleaseId", acceptance)
@@ -89,6 +93,22 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn(
             "github.com ssh-ed25519 ",
             github_known_hosts.read_text(encoding="ascii"),
+        )
+
+    def test_full_validation_parallelizes_python_without_weakening_receipt(self) -> None:
+        script = (ROOT / "scripts/Invoke-AgentBridgeValidation.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"pytest-xdist"', script)
+        self.assertIn('"-n", "4", "--dist", "loadscope"', script)
+        self.assertIn('"--junitxml=output/release-validation/pytest.xml"', script)
+        self.assertLess(
+            script.index('scripts/agentbridge_artifact.py", "begin"'),
+            script.index('"-n", "4", "--dist", "loadscope"'),
+        )
+        self.assertLess(
+            script.index('"-n", "4", "--dist", "loadscope"'),
+            script.index('scripts/agentbridge_artifact.py", "finish"'),
         )
 
     def test_backup_units_are_installed_only_after_runtime_readiness(self) -> None:

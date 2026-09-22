@@ -61,7 +61,12 @@ def test_preflight_runs_before_plan_output_and_expensive_validation():
         source = (root / 'scripts' / filename).read_text(encoding='utf-8')
         preflight = source.index('$releasePreflight = Get-AgentBridgeReleasePreflight')
         assert preflight < source.index('if ($PlanOnly)')
-        assert preflight < source.index('if (-not $SkipValidation)')
+        validation_guard = (
+            'if (-not $reuseValidation)'
+            if filename == 'Publish-AgentBridge.ps1'
+            else 'if (-not $SkipValidation)'
+        )
+        assert preflight < source.index(validation_guard)
     # Early checks are advisory snapshots, not replacements for the locked check.
     runner = (root / 'scripts/agentbridge_release.py').read_text(encoding='utf-8')
     assert 'previous not in policy["compatibleFrom"]' in runner

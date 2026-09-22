@@ -105,6 +105,7 @@ $trackedChanges = Invoke-GitRead `
     -Arguments @("status", "--porcelain", "--untracked-files=no") `
     -FailureMessage "Unable to inspect the repository state"
 $isDirty = [bool]$trackedChanges
+$reuseValidation = [bool]$SkipValidation -or [bool]$ResumeAcceptance
 
 if (-not $GitHubIdentityFile) {
     $GitHubIdentityFile = Join-Path $env:USERPROFILE ".ssh\id_ed25519_guomxin"
@@ -139,7 +140,8 @@ $plan = [ordered]@{
     branch = $BranchName
     remote = $RemoteName
     remoteUrl = $remoteUrl
-    validation = -not $SkipValidation
+    validation = -not $reuseValidation
+    validationMode = if ($reuseValidation) { "reuse_receipt" } else { "full" }
     deployment = "root@10.10.50.213:/home/guomao/agentbridge"
     governanceAcceptance = $true
     openClawAcceptance = -not [bool]$SkipOpenClawAcceptance
@@ -180,19 +182,18 @@ if ($githubKnownHostsText -notmatch '(?m)^github\.com ssh-ed25519 ') {
 Assert-PrivateKeyReadable -Path $GitHubIdentityFile -Label "GitHub"
 Assert-PrivateKeyReadable -Path $AgentBridgeIdentityFile -Label "AgentBridge"
 
-if (-not $SkipValidation) {
+if (-not $reuseValidation) {
     & $validationScript -Mode Full
     if ($LASTEXITCODE -ne 0) {
         throw "Full AgentBridge validation failed"
     }
 }
 
-# SkipValidation reuses only a complete candidate receipt. Governance remains mandatory.
+# Explicit reuse and acceptance resumption both require the same complete receipt.
+# ResumeAcceptance must never start a new validation and invalidate that receipt.
 $artifactPython = Join-Path $env:LOCALAPPDATA "AgentBridge/test-venv-py312/Scripts/python.exe"
 & $artifactPython (Join-Path $repoRoot "scripts/agentbridge_artifact.py") verify --root $repoRoot
 if ($LASTEXITCODE -ne 0) { throw "No matching complete candidate validation is available" }
-& (Join-Path $PSScriptRoot 'Test-AgentBridgeCandidate.ps1') -Commit $commit -IdentityFile $GitHubIdentityFile -KnownHostsFile $GitHubKnownHostsFile -Python $artifactPython
-if ($LASTEXITCODE -ne 0) { throw 'Candidate CI gate failed before deployment' }
 & $runtimeGovernanceScript
 if ($LASTEXITCODE -ne 0) {
     throw "Runtime-governance fault-injection validation failed"

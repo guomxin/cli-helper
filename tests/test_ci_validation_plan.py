@@ -15,7 +15,7 @@ REPO = 'guomxin/cli-helper'
 
 
 def run(sha=BASE, **overrides):
-    return dict(dict(id=10, head_sha=sha, head_branch=f'candidate/{sha}', event='push',
+    return dict(dict(id=10, head_sha=sha, head_branch='main', event='push',
                      path='.github/workflows/validate.yml', head_repository={'full_name': REPO},
                      run_number=10, run_attempt=1, status='completed', conclusion='success',
                      html_url='https://example.test/run/10'), **overrides)
@@ -23,7 +23,7 @@ def run(sha=BASE, **overrides):
 
 def environment(**overrides):
     return dict(dict(GITHUB_SHA=SHA, GITHUB_EVENT_NAME='push', GITHUB_REPOSITORY=REPO,
-                     GITHUB_RUN_ID='20', GITHUB_REF=f'refs/heads/candidate/{SHA}'), **overrides)
+                     GITHUB_RUN_ID='20', GITHUB_REF='refs/heads/main'), **overrides)
 
 
 @pytest.mark.parametrize('paths,expected', [
@@ -56,33 +56,35 @@ def test_newer_failed_attempt_blocks_old_green():
     assert latest_trusted([run(), run(id=11, run_number=11, status='in_progress')], BASE, REPO) is None
 
 
-def test_main_reuses_only_identical_candidate_and_manual_rerun_does_not(tmp_path):
-    fetch = lambda *_: [run(SHA)]
-    env = environment(GITHUB_REF='refs/heads/main')
-    assert plan(tmp_path, env, {}, fetch)['profile'] == 'reuse'
-    assert plan(tmp_path, {**env, 'GITHUB_RUN_ATTEMPT': '2'}, {}, fetch)['profile'] == 'full'
-    assert plan(tmp_path, {**env, 'GITHUB_EVENT_NAME': 'workflow_dispatch'}, {}, fetch)['profile'] == 'full'
-    with patch('scripts.ci_validation_plan.git', return_value=BASE):
-        assert plan(tmp_path, environment(), {}, fetch)['profile'] == 'full'
+def test_main_uses_only_a_verified_previous_main_run(tmp_path):
+    event = {'before': BASE}
+    with patch('scripts.ci_validation_plan.git', side_effect=[BASE, 'README.md\0']):
+        result = plan(tmp_path, environment(), event, lambda *_: [run(BASE)])
+    assert result['profile'] == 'docs'
+    assert result['baseline'] == BASE
+    assert plan(tmp_path, {**environment(), 'GITHUB_RUN_ATTEMPT': '2'}, event,
+                lambda *_: [run(BASE)])['profile'] == 'full'
+    assert plan(tmp_path, {**environment(), 'GITHUB_EVENT_NAME': 'workflow_dispatch'}, event,
+                lambda *_: [run(BASE)])['profile'] == 'full'
 
 
 def test_entire_baseline_diff_includes_earlier_code_commit(tmp_path):
-    with patch('scripts.ci_validation_plan.git', side_effect=[BASE, BASE, 'docs/latest.md\0bscli/core/tasks.py\0']) as git:
-        result = plan(tmp_path, environment(), {}, lambda *_: [run()])
+    with patch('scripts.ci_validation_plan.git', side_effect=[BASE, 'docs/latest.md\0bscli/core/tasks.py\0']) as git:
+        result = plan(tmp_path, environment(), {'before': BASE}, lambda *_: [run()])
     assert result['profile'] == 'full'
     assert git.call_args.args[1:] == ('diff', '--no-renames', '--name-only', '-z', BASE, SHA)
 
 
 def test_scoped_check_requires_verified_ancestor(tmp_path):
     for files, expected in [('docs/latest.md\0', 'docs'), ('deploy/release-policy.json\0', 'release')]:
-        with patch('scripts.ci_validation_plan.git', side_effect=[BASE, BASE, files]):
-            result = plan(tmp_path, environment(), {}, lambda *_: [run()])
+        with patch('scripts.ci_validation_plan.git', side_effect=[BASE, files]):
+            result = plan(tmp_path, environment(), {'before': BASE}, lambda *_: [run()])
         assert result['profile'] == expected
         assert result['baseline'] == BASE
-    with patch('scripts.ci_validation_plan.git', side_effect=[BASE, SHA]):
-        assert plan(tmp_path, environment(), {}, lambda *_: [run()])['profile'] == 'full'
-    with patch('scripts.ci_validation_plan.git', side_effect=[BASE, BASE]):
-        assert plan(tmp_path, environment(), {}, lambda *_: [])['profile'] == 'full'
+    with patch('scripts.ci_validation_plan.git', return_value=SHA):
+        assert plan(tmp_path, environment(), {'before': BASE}, lambda *_: [run()])['profile'] == 'full'
+    with patch('scripts.ci_validation_plan.git', return_value=BASE):
+        assert plan(tmp_path, environment(), {'before': BASE}, lambda *_: [])['profile'] == 'full'
 
 
 def test_api_and_missing_history_fail_to_full(tmp_path):
@@ -118,13 +120,18 @@ def test_real_history_detects_code_before_document_and_rename(tmp_path):
     git('add', '.')
     git('commit', '-qm', 'later docs')
     sha = git('rev-parse', 'HEAD')
-    result = plan(tmp_path, environment(GITHUB_SHA=sha), {}, lambda *_: [run(base)])
+    result = plan(tmp_path, environment(GITHUB_SHA=sha), {'before': base}, lambda *_: [run(base)])
     assert result['profile'] == 'full'
     assert set(result['changedPaths']) == {'runtime.py', 'README.md'}
     git('update-ref', 'refs/remotes/origin/main', sha)
     git('mv', 'runtime.py', 'renamed.md')
     git('commit', '-qm', 'rename code')
-    result = plan(tmp_path, environment(GITHUB_SHA=git('rev-parse', 'HEAD')), {}, lambda *_: [run(sha)])
+    result = plan(
+        tmp_path,
+        environment(GITHUB_SHA=git('rev-parse', 'HEAD')),
+        {'before': sha},
+        lambda *_: [run(sha)],
+    )
     assert result['profile'] == 'full'
     assert set(result['changedPaths']) == {'runtime.py', 'renamed.md'}
 

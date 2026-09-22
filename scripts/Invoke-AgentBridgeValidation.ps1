@@ -126,7 +126,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $projectHash = (Get-FileHash -LiteralPath (Join-Path $repoRoot "pyproject.toml") -Algorithm SHA256).Hash
 $newline = [Environment]::NewLine
-$dependencyStamp = "schema=2" + $newline + "python=$pythonVersion" + $newline + "pyproject=$projectHash" + $newline
+$dependencyStamp = "schema=3" + $newline + "python=$pythonVersion" + $newline + "pyproject=$projectHash" + $newline
 $stampPath = Join-Path $VenvPath ".agentbridge-dependencies"
 $currentStamp = if (Test-Path -LiteralPath $stampPath) {
     [IO.File]::ReadAllText($stampPath)
@@ -138,7 +138,7 @@ if ($currentStamp -ne $dependencyStamp) {
     Invoke-External -FilePath $venvPython -Arguments @(
         "-m", "pip", "install", "--disable-pip-version-check",
         "--no-build-isolation",
-        "-e", "${repoRoot}[database-analysis]", "pytest", "setuptools>=77"
+        "-e", "${repoRoot}[database-analysis]", "pytest", "pytest-xdist", "setuptools>=77"
     ) -Label "Install validation dependencies" -WorkingDirectory $repoRoot
     [IO.File]::WriteAllText($stampPath, $dependencyStamp, [Text.UTF8Encoding]::new($false))
     $dependenciesUpdated = $true
@@ -155,7 +155,10 @@ if ($Mode -eq "Full") {
     Invoke-External -FilePath $venvPython -Arguments @("scripts/check_public_content.py") -Label "Public content credential guard" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("scripts/current_facts.py", "--check") -Label "Current code facts" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("scripts/agentbridge_artifact.py", "begin", "--root", $repoRoot) -Label "Begin candidate validation" -WorkingDirectory $repoRoot
-    Invoke-External -FilePath $venvPython -Arguments @("-m", "pytest", "-q", "--junitxml=output/release-validation/pytest.xml") -Label "Python full test suite" -WorkingDirectory $repoRoot
+    Invoke-External -FilePath $venvPython -Arguments @(
+        "-m", "pytest", "-q", "-n", "4", "--dist", "loadscope",
+        "--junitxml=output/release-validation/pytest.xml"
+    ) -Label "Python full test suite" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "compileall", "-q", "bscli") -Label "Python compileall" -WorkingDirectory $repoRoot
     Invoke-External -FilePath $venvPython -Arguments @("-m", "pip", "check") -Label "Python dependency check" -WorkingDirectory $repoRoot
     $node = Get-Command node -ErrorAction Stop
@@ -219,6 +222,7 @@ $stopwatch.Stop()
     pythonVersion = $pythonVersion
     dependenciesUpdated = $dependenciesUpdated
     pythonTestCount = $PythonTests.Count
+    pythonWorkers = $(if ($Mode -eq "Full") { 4 } else { 1 })
     openClaw = [bool]$runOpenClaw
     packCheck = [bool]($runOpenClaw -and ($Mode -eq "Full" -or $PackCheck))
     mcpApp = [bool]$McpApp
