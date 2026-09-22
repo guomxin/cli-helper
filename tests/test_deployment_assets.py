@@ -60,6 +60,10 @@ class DeploymentAssetTests(unittest.TestCase):
         for marker in (
             '"git@github.com:guomxin/cli-helper.git"',
             'Join-Path $repoRoot ".gitrepo"',
+            'Join-Path $repoRoot ".git"',
+            '"The repository metadata directory was not found"',
+            'symbolic-ref --short -q HEAD',
+            '"Detached release worktree must point to refs/heads/$BranchName"',
             '"Tracked files are modified. Commit the tested candidate before publishing."',
             "Assert-PrivateKeyReadable -Path $GitHubIdentityFile",
             "Assert-PrivateKeyReadable -Path $AgentBridgeIdentityFile",

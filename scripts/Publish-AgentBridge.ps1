@@ -22,7 +22,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$gitDir = Join-Path $repoRoot ".gitrepo"
+$gitDir = if (Test-Path -LiteralPath (Join-Path $repoRoot ".gitrepo")) {
+    Join-Path $repoRoot ".gitrepo"
+} else {
+    Join-Path $repoRoot ".git"
+}
 $deployScript = Join-Path $PSScriptRoot "Deploy-AgentBridge.ps1"
 $validationScript = Join-Path $PSScriptRoot "Invoke-AgentBridgeValidation.ps1"
 $runtimeGovernanceScript = Join-Path $PSScriptRoot "Test-AgentBridgeRuntimeGovernance.ps1"
@@ -61,8 +65,8 @@ function Assert-PrivateKeyReadable {
     }
 }
 
-if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) {
-    throw "The repository-local .gitrepo directory was not found"
+if (-not (Test-Path -LiteralPath $gitDir)) {
+    throw "The repository metadata directory was not found"
 }
 if (-not (Test-Path -LiteralPath $deployScript -PathType Leaf)) {
     throw "The AgentBridge deployment script was not found"
@@ -83,10 +87,11 @@ if ($BranchName -notmatch '^[A-Za-z0-9._/-]+$' -or $BranchName.Contains("..")) {
     throw "BranchName contains unsupported characters"
 }
 
-$currentBranch = Invoke-GitRead `
-    -Arguments @("symbolic-ref", "--short", "HEAD") `
-    -FailureMessage "Unable to resolve the current branch"
-if ($currentBranch -ne $BranchName) {
+$currentBranch = ((& git @gitArguments symbolic-ref --short -q HEAD) | Out-String).Trim()
+if ($LASTEXITCODE -notin @(0, 1)) {
+    throw "Unable to resolve the current branch"
+}
+if ($currentBranch -and $currentBranch -ne $BranchName) {
     throw "Release branch mismatch: expected $BranchName, found $currentBranch"
 }
 $remoteUrl = Invoke-GitRead `
@@ -100,6 +105,12 @@ $commit = Invoke-GitRead `
     -FailureMessage "Unable to resolve the release commit"
 if ($commit -notmatch '^[0-9a-f]{40}$') {
     throw "The release commit is invalid"
+}
+$branchCommit = Invoke-GitRead `
+    -Arguments @("rev-parse", "refs/heads/$BranchName") `
+    -FailureMessage "Unable to resolve the release branch"
+if (-not $currentBranch -and $commit -ne $branchCommit) {
+    throw "Detached release worktree must point to refs/heads/$BranchName"
 }
 $trackedChanges = Invoke-GitRead `
     -Arguments @("status", "--porcelain", "--untracked-files=no") `
