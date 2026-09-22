@@ -3,6 +3,7 @@ import unittest
 from bscli.adapters.seeyon_pending_actions import (
     PendingActionContractMismatch,
     acknowledge_weekly_report,
+    approve_business_trip_request,
     approve_efficiency_data,
     approve_intellectual_property_declaration,
     approve_labor_contract_renewal,
@@ -13,6 +14,7 @@ from bscli.adapters.seeyon_pending_actions import (
     pending_action_contract_fingerprint,
     preflight_pending_action,
     prepare_attendance_confirmation,
+    prepare_business_trip_approval,
     prepare_efficiency_data_approval,
     prepare_intellectual_property_declaration_approval,
     prepare_labor_contract_renewal_approval,
@@ -265,6 +267,52 @@ class PendingActionTests(unittest.TestCase):
             )
         self.assertEqual(boundary, [])
 
+    def test_business_trip_approval_freezes_read_only_hr_fields_and_confirms(self):
+        fixture = _fixture("business_trip")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+
+        prepared = prepare_business_trip_approval(adapter, worker, _inputs())
+        fields = {
+            item["label"]: item["value"] for item in prepared["summary"]["fields"]
+        }
+        self.assertEqual(fields["申请人"], "郑其荣")
+        self.assertEqual(fields["出差工具"], "飞机")
+        self.assertEqual(fields["出差目的地"], "北京")
+        self.assertEqual(fields["出差天数"], "2.00")
+        self.assertEqual(fields["直接上级"], "马述杰")
+        self.assertTrue(
+            prepared["plan"]["target"]["business_snapshot"][
+                "business_fields_browse_only"
+            ]
+        )
+
+        result = approve_business_trip_request(
+            adapter,
+            worker,
+            prepared["plan"],
+            enter_commit_boundary=lambda: None,
+        )
+        self.assertTrue(result["workflow_approved"])
+        self.assertEqual(result["workflow_profile"], "business_trip")
+
+    def test_business_trip_change_blocks_before_boundary(self):
+        fixture = _fixture("business_trip")
+        worker = FakeWorker(fixture)
+        adapter = FakeAdapter(worker)
+        plan = prepare_business_trip_approval(adapter, worker, _inputs())["plan"]
+        fixture["business_snapshot"]["destination"] = "上海"
+        boundary = []
+
+        with self.assertRaisesRegex(PendingActionContractMismatch, "business_snapshot"):
+            approve_business_trip_request(
+                adapter,
+                worker,
+                plan,
+                enter_commit_boundary=lambda: boundary.append("consumed"),
+            )
+        self.assertEqual(boundary, [])
+
     def test_resignation_approval_freezes_read_only_hr_fields_and_confirms(self):
         fixture = _fixture("resignation")
         worker = FakeWorker(fixture)
@@ -445,6 +493,7 @@ class PendingActionTests(unittest.TestCase):
             for profile in (
                 "efficiency_data",
                 "travel_expense",
+                "business_trip",
                 "labor_contract_renewal",
                 "intellectual_property_declaration",
                 "overtime",
@@ -455,7 +504,7 @@ class PendingActionTests(unittest.TestCase):
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 10)
+        self.assertEqual(len(fingerprints), 11)
 
 
 class FakeAdapter:
@@ -549,6 +598,7 @@ class FakeBusinessFrame:
     def locator(self, selector):
         expected_by_profile = {
             "attendance_confirmation": "#field0097_id",
+            "business_trip": "#field0027_id",
             "intellectual_property_declaration": "#field0010_id",
             "leave": "#field0023_id",
             "resignation": "#field0006_id",
@@ -776,6 +826,50 @@ def _fixture(profile):
                 "leave_hours": "22.50",
                 "reason": "回老家探亲。",
                 "has_direct_supervisor": "否",
+            },
+        },
+        "business_trip": {
+            "title": "【HR】出差申请单-郑其荣-2026-09-22 05:35-2026-09-23 17:35",
+            "fields": [
+                {
+                    "name": "姓名",
+                    "value": "郑其荣 TH809 人工智能研发中心 发起日期 2026-09-21",
+                },
+                {
+                    "name": "出差开始时间",
+                    "value": "2026-09-22 05:35 出差结束时间 2026-09-23 17:35 出差工具 飞机",
+                },
+                {
+                    "name": "出差始发地",
+                    "value": "济南 出差目的地 北京 出差天数 2.00 出差小时数 15.00",
+                },
+                {"name": "事由", "value": "项目沟通"},
+                {
+                    "name": "是否存在有非部门经理的直接上级（组负责人）",
+                    "value": "是 直接上级 马述杰",
+                },
+            ],
+            "template_id": "2668910351205287097",
+            "form_app_id": "4948077657800057670",
+            "node_policy": "approve",
+            "node_policy_name": "直接上级",
+            "attitudes": ["agree", "disagree"],
+            "business_snapshot": {
+                "browse_only": True,
+                "applicant": "郑其荣",
+                "employee_number": "TH809",
+                "department": "人工智能研发中心",
+                "application_date": "2026-09-21",
+                "start_time": "2026-09-22 05:35",
+                "end_time": "2026-09-23 17:35",
+                "travel_mode": "飞机",
+                "origin": "济南",
+                "destination": "北京",
+                "trip_days": "2.00",
+                "trip_hours": "15.00",
+                "reason": "项目沟通",
+                "has_direct_supervisor": "是",
+                "direct_supervisor": "马述杰",
             },
         },
         "resignation": {

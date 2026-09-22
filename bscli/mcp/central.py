@@ -65,6 +65,8 @@ from bscli.adapters.seeyon_missed_punch import (
 from bscli.adapters.seeyon_pending_actions import (
     ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
     ATTENDANCE_CONFIRM_CAPABILITY,
+    BUSINESS_TRIP_APPROVAL_PREPARE_CAPABILITY,
+    BUSINESS_TRIP_APPROVE_CAPABILITY,
     EFFICIENCY_DATA_APPROVAL_PREPARE_CAPABILITY,
     EFFICIENCY_DATA_APPROVE_CAPABILITY,
     INTELLECTUAL_PROPERTY_DECLARATION_APPROVAL_PREPARE_CAPABILITY,
@@ -233,6 +235,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_session_login": frozenset({"oa:read"}),
     "oa_efficiency_data_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_travel_expense_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_business_trip_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_labor_contract_renewal_approval_prepare": frozenset(
         {"oa:write:approval"}
     ),
@@ -1063,6 +1066,24 @@ def create_central_mcp_server(
                 "travel-expense reimbursement leaves the pending collection."
             ),
             "commit_capability": TRAVEL_EXPENSE_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_business_trip_approval_prepare",
+            "prepare_title": "Prepare OA Business-Trip Approval",
+            "prepare_description": (
+                "Bind one exact pending business-trip request. AgentBridge validates "
+                "the registered HR template and freezes applicant, time range, route, "
+                "travel mode, duration, reason, and supervisor field; pass any opinion "
+                "already supplied by the user."
+            ),
+            "prepare_capability": BUSINESS_TRIP_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_business_trip_approve",
+            "commit_title": "Approve Authorized OA Business-Trip Request",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "business-trip request leaves the pending collection."
+            ),
+            "commit_capability": BUSINESS_TRIP_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_labor_contract_renewal_approval_prepare",
@@ -2607,7 +2628,7 @@ def create_central_mcp_server(
         meta=interaction_tool_meta(),
         description=(
             "处理多条或全部OA待办时调用一次本工具，不要仅调用单条prepare后口头承诺继续。"
-            "支持补签、效能、差旅费、劳动合同、知识产权、加班、离职、考勤、周报和普通协同。"
+            "支持补签、效能、差旅费、出差申请、劳动合同、知识产权、加班、请假、离职、考勤、周报和普通协同。"
             "用户说上面的/选中的事项时，传已读取清单中的精确affair_ids；不能扩大为所有待办。"
             "也可用workflow_types和标题keyword选择当前待办，两者同时提供取交集。"
             "冻结清单后逐项独立填写和授权，核验成功才自动推进；新待办不加入。"
@@ -2621,8 +2642,9 @@ def create_central_mcp_server(
         ctx: Context,
         affair_ids: Annotated[list[str] | None, Field(min_length=1, max_length=100)] = None,
         workflow_types: list[Literal[
-            "missed_punch", "efficiency_data", "travel_expense", "labor_contract_renewal",
-            "intellectual_property_declaration", "overtime", "resignation", "work_handover", "attendance_confirmation",
+            "missed_punch", "efficiency_data", "travel_expense", "business_trip",
+            "labor_contract_renewal", "intellectual_property_declaration", "overtime",
+            "leave", "resignation", "work_handover", "attendance_confirmation",
             "weekly_report", "standard_collaboration",
         ]] | None = None,
         keyword: Annotated[str | None, Field(max_length=200)] = None,

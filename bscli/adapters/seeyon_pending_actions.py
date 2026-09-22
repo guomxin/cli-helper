@@ -7,6 +7,11 @@ import time
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from bscli.adapters.seeyon_business_trip import (
+    BUSINESS_TRIP_FORM_APP_ID,
+    BUSINESS_TRIP_TEMPLATE_ID,
+    BUSINESS_TRIP_TRAVEL_MODES,
+)
 from bscli.adapters.seeyon_work_handover import (
     work_handover_business_snapshot, work_handover_summary_fields,
 )
@@ -20,6 +25,10 @@ TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY = (
     "oa.travel_expense.approval.prepare"
 )
 TRAVEL_EXPENSE_APPROVE_CAPABILITY = "oa.travel_expense.approve"
+BUSINESS_TRIP_APPROVAL_PREPARE_CAPABILITY = (
+    "oa.business_trip.approval.prepare"
+)
+BUSINESS_TRIP_APPROVE_CAPABILITY = "oa.business_trip.approve"
 LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY = (
     "oa.labor_contract_renewal.approval.prepare"
 )
@@ -112,6 +121,12 @@ TRAVEL_EXPENSE_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_travel_expense_approval_fields.v1",
     title="填写差旅费审批意见",
     effect="审批通过一条差旅费审批报销单",
+    submit_label="提交审批意见",
+)
+BUSINESS_TRIP_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_business_trip_approval_fields.v1",
+    title="填写出差申请审批意见",
+    effect="审批通过一条出差申请单",
     submit_label="提交审批意见",
 )
 LABOR_CONTRACT_RENEWAL_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
@@ -221,6 +236,37 @@ _PROFILES = {
         "summary_title": "审批差旅费报销单",
         "summary_effect": "审批通过后该报销事项将离开待办列表",
         "authorize_label": "授权审批通过",
+    },
+    "business_trip": {
+        "prepare_capability": BUSINESS_TRIP_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": BUSINESS_TRIP_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-business-trip-approval-v1",
+        "plan_schema": "agentbridge.oa_business_trip_approval_plan.v1",
+        "result_schema": "agentbridge.oa_business_trip_approval_result.v1",
+        "business_intent": "approve_business_trip_request",
+        "title_rule": {
+            "kind": "prefix",
+            "value": "【HR】出差申请单-",
+        },
+        "required_fields": {
+            "姓名",
+            "出差开始时间",
+            "出差始发地",
+            "事由",
+            "是否存在有非部门经理的直接上级（组负责人）",
+        },
+        "allowed_fields": None,
+        "template_id": BUSINESS_TRIP_TEMPLATE_ID,
+        "form_app_id": BUSINESS_TRIP_FORM_APP_ID,
+        "node_policies": {"approve", "审批"},
+        "node_policy_names": {"审批", "直接上级"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批出差申请单",
+        "summary_effect": "审批通过后该出差申请将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "business_trip_approval_v1",
     },
     "labor_contract_renewal": {
         "prepare_capability": LABOR_CONTRACT_RENEWAL_APPROVAL_PREPARE_CAPABILITY,
@@ -555,6 +601,26 @@ def approve_travel_expense(
         worker,
         plan,
         profile_key="travel_expense",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_business_trip_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "business_trip")
+
+
+def approve_business_trip_request(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="business_trip",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -1081,6 +1147,9 @@ def _validate_target(
     elif profile.get("business_snapshot_policy") == "leave_approval_v1":
         signals = dict(signals)
         signals["business_snapshot"] = _leave_business_snapshot(page)
+    elif profile.get("business_snapshot_policy") == "business_trip_approval_v1":
+        signals = dict(signals)
+        signals["business_snapshot"] = _business_trip_business_snapshot(page)
     elif profile.get("business_snapshot_policy") == "work_handover_v1":
         if node_policy not in profile["node_policies"] or node_policy_name not in profile["node_policy_names"]:
             raise PendingActionContractMismatch("The OA work-handover approval node identity is inconsistent.")
@@ -1417,6 +1486,118 @@ def _leave_business_snapshot(page) -> dict:
     return result
 
 
+def _business_trip_business_snapshot(page) -> dict:
+    frame = None
+    for candidate in list(page.frames):
+        if "/cap4/" not in str(candidate.url or ""):
+            continue
+        try:
+            if candidate.locator("#field0027_id").count() == 1:
+                frame = candidate
+                break
+        except Exception:
+            continue
+    if frame is None:
+        raise PendingActionContractMismatch(
+            "The OA business-trip request CAP4 form is unavailable."
+        )
+    snapshot = frame.evaluate(
+        r"""
+        () => {
+          const field = (id) => document.querySelector(`#${id}`);
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const value = (id) => clean(field(id)?.innerText);
+          const selected = (id) => {
+            const wrapper = field(id);
+            const items = Array.from(wrapper?.querySelectorAll('.cap4-radio__item') || []);
+            const chosen = items.filter((item) => item.querySelector(
+              '.cap4-radio-xuanzhong, .cap-icon-danxuan-xuanzhong'
+            ));
+            return chosen.length === 1
+              ? clean(chosen[0].querySelector('.cap4-radio__text')?.textContent)
+              : '';
+          };
+          const ids = [
+            'field0001_id', 'field0002_id', 'field0003_id', 'field0004_id',
+            'field0006_id', 'field0007_id', 'field0027_id', 'field0023_id',
+            'field0026_id', 'field0029_id', 'field0022_id', 'field0009_id',
+            'field0010_id', 'field0011_id'
+          ];
+          const browseOnly = ids.every((id) => {
+            const section = field(id)?.querySelector('section');
+            return Boolean(section?.classList.contains('is-none'));
+          });
+          return {
+            browse_only: browseOnly,
+            applicant: value('field0001_id'),
+            employee_number: value('field0002_id'),
+            department: value('field0003_id'),
+            application_date: value('field0004_id'),
+            start_time: value('field0006_id'),
+            end_time: value('field0007_id'),
+            travel_mode: value('field0027_id'),
+            origin: value('field0023_id'),
+            destination: value('field0026_id'),
+            trip_days: value('field0029_id'),
+            trip_hours: value('field0022_id'),
+            reason: value('field0009_id'),
+            has_direct_supervisor: selected('field0010_id'),
+            direct_supervisor: value('field0011_id'),
+          };
+        }
+        """
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("browse_only") is not True:
+        raise PendingActionContractMismatch(
+            "The OA business-trip request fields are editable at this node; "
+            "a separate field-entry contract is required."
+        )
+    required = (
+        "applicant",
+        "employee_number",
+        "department",
+        "application_date",
+        "start_time",
+        "end_time",
+        "travel_mode",
+        "origin",
+        "destination",
+        "trip_days",
+        "trip_hours",
+        "reason",
+        "has_direct_supervisor",
+    )
+    for name in required:
+        if not str(snapshot.get(name) or "").strip():
+            raise PendingActionContractMismatch(
+                f"The OA business-trip request {name} value is unavailable."
+            )
+    if str(snapshot.get("travel_mode") or "").strip() not in set(
+        BUSINESS_TRIP_TRAVEL_MODES
+    ):
+        raise PendingActionContractMismatch(
+            "The OA business-trip request travel mode is unsupported."
+        )
+    supervisor_selection = str(snapshot.get("has_direct_supervisor") or "").strip()
+    if supervisor_selection not in {"是", "否"}:
+        raise PendingActionContractMismatch(
+            "The OA business-trip request direct-supervisor selection is unsupported."
+        )
+    if supervisor_selection == "是" and not str(
+        snapshot.get("direct_supervisor") or ""
+    ).strip():
+        raise PendingActionContractMismatch(
+            "The OA business-trip request direct supervisor is unavailable."
+        )
+    result = {
+        name: re.sub(r"\s+", " ", str(value or "")).strip()[:1000]
+        for name, value in snapshot.items()
+        if name != "browse_only"
+    }
+    result["business_fields_browse_only"] = True
+    return result
+
+
 def _resignation_business_snapshot(page) -> dict:
     frame = None
     for candidate in list(page.frames):
@@ -1656,6 +1837,26 @@ def _summary(
             ("leave_hours", "请假小时"),
             ("reason", "事由"),
             ("has_direct_supervisor", "是否有非部门经理直接上级"),
+        ):
+            if snapshot.get(name):
+                fields.append({"label": label, "value": snapshot[name]})
+    elif profile_key == "business_trip":
+        snapshot = target.get("business_snapshot") or {}
+        for name, label in (
+            ("applicant", "申请人"),
+            ("employee_number", "工号"),
+            ("department", "所属部门"),
+            ("application_date", "发起日期"),
+            ("start_time", "出差开始时间"),
+            ("end_time", "出差结束时间"),
+            ("travel_mode", "出差工具"),
+            ("origin", "出差始发地"),
+            ("destination", "出差目的地"),
+            ("trip_days", "出差天数"),
+            ("trip_hours", "出差小时数"),
+            ("reason", "出差事由"),
+            ("has_direct_supervisor", "是否有非部门经理直接上级"),
+            ("direct_supervisor", "直接上级"),
         ):
             if snapshot.get(name):
                 fields.append({"label": label, "value": snapshot[name]})

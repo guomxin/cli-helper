@@ -37,6 +37,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.addressbook.private_contact.search",
                 "oa.attendance_confirmation.confirm",
                 "oa.attendance_confirmation.prepare",
+                "oa.business_trip.approval.prepare",
+                "oa.business_trip.approve",
                 "oa.business_trip.prepare",
                 "oa.business_trip.save_draft",
                 "oa.business_trip.submit",
@@ -99,6 +101,10 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
         self.assertEqual(effects["oa.business_trip.save_draft"], "reversible_write")
         self.assertEqual(effects["oa.business_trip.submit.prepare"], "controlled_write")
         self.assertEqual(effects["oa.business_trip.submit"], "controlled_write")
+        self.assertEqual(
+            effects["oa.business_trip.approval.prepare"], "controlled_write"
+        )
+        self.assertEqual(effects["oa.business_trip.approve"], "controlled_write")
         self.assertEqual(effects["oa.attendance_confirmation.prepare"], "controlled_write")
         self.assertEqual(effects["oa.attendance_confirmation.confirm"], "controlled_write")
         self.assertEqual(effects["oa.leave.prepare"], "reversible_write")
