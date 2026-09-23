@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "01dfd176c128"
+    "355f9a628062"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed 01dfd176c128: this release changes only local validation orchestration, GitHub Actions scheduling, release documentation, and tests. It does not change the AgentBridge runtime, OpenClaw integration, SQLite schema, or stored-data interpretation, so the deployed release remains a compatible rollback target."
+  "reason": "Reviewed against deployed 355f9a628062: this release adds read-only approval context to trusted field cards, warns when that context changes before authorization, and removes duplicate ancestor text from OA opinion parsing. It does not change the SQLite schema or stored-data interpretation, so the deployed release remains a compatible rollback target."
 }
