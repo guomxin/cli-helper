@@ -53,7 +53,7 @@ def validate(value):
     if not isinstance(relations,list) or not 1 <= len(relations) <= 100 or any(not isinstance(r,str) or not re.fullmatch(r'[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*',r) or r.split('.')[0] in ('pg_catalog','information_schema') for r in relations):
         raise ValueError('请填写完整限定的开放表或视图（schema.table）')
     if value['template_pack']=='taihua_logs' and not set(TAIHUA_RELATIONS).issubset(relations):
-        raise ValueError('泰华日志包需要五个 analysis 视图')
+        raise ValueError('日志系统能力包需要五个 analysis 视图')
     return {**value, 'allowed_relations':sorted(set(relations))}
 
 
@@ -75,7 +75,7 @@ class Sources:
         from bscli.database.legacy_source import LegacySourceConfig
         old=LegacySourceConfig.load(path)
         old.validate()
-        value=validate(dict(source_id=LEGACY,name='泰华日志库',description='日志、人员、部门、项目及评论',engine='postgresql',
+        value=validate(dict(source_id=LEGACY,name='日志库',description='日志、人员、部门、项目及评论',engine='postgresql',
             host=old.host,port=old.port,dbname=old.dbname,username=old.username,sslmode=old.sslmode,
             allowed_relations=TAIHUA_RELATIONS,template_pack='taihua_logs',statement_timeout_ms=10000,export_rows=10000,export_bytes=10485760))
         ref=f'{LEGACY}:{uuid4().hex}'

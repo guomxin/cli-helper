@@ -7,6 +7,43 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 
 
 class McpIdentityTokenStoreTests(unittest.TestCase):
+    def test_renew_expired_token_keeps_secret_and_revocation_cannot_be_reversed(self):
+        from bscli.core.mcp_identities import TokenEditConflict
+
+        now = datetime(2026, 9, 23, tzinfo=timezone.utc)
+        clock = [now]
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db", clock=lambda: clock[0])
+            issued = store.issue(
+                user_subject="user-a", expected_principal_ref="Alice",
+                scopes=["oa:read"], ttl_seconds=300,
+            )
+            clock[0] = now + timedelta(minutes=6)
+            self.assertIsNone(store.verify(issued["token"]))
+            new_expiry = (clock[0] + timedelta(days=30)).isoformat()
+            renewed = store.renew(
+                issued["token_id"], new_expires_at=new_expiry,
+                expected_revision=0, request_id="renew-1", actor="admin", reason="scheduled renewal",
+            )
+            self.assertEqual(renewed["token_id"], issued["token_id"])
+            self.assertEqual(renewed["edit_revision"], 1)
+            self.assertIsNotNone(store.verify(issued["token"]))
+            self.assertEqual(store.renew(
+                issued["token_id"], new_expires_at=new_expiry,
+                expected_revision=0, request_id="renew-1", actor="admin", reason="scheduled renewal",
+            )["edit_revision"], 1)
+            with self.assertRaises(TokenEditConflict):
+                store.renew(
+                    issued["token_id"], new_expires_at=(clock[0] + timedelta(days=40)).isoformat(),
+                    expected_revision=0, request_id="renew-2", actor="admin", reason="retry",
+                )
+            store.revoke(issued["token_id"])
+            with self.assertRaises(PermissionError):
+                store.renew(
+                    issued["token_id"], new_expires_at=(clock[0] + timedelta(days=40)).isoformat(),
+                    expected_revision=2, request_id="renew-3", actor="admin", reason="retry",
+                )
+
     def test_stored_retired_scopes_are_neither_displayed_nor_authorized(self):
         import json
         import sqlite3

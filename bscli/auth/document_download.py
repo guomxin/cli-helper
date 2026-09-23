@@ -16,6 +16,7 @@ from bscli.core.document_downloads import (
     DocumentDownloadStore,
     SUPPORTED_DOCUMENT_CONTENT_TYPES,
 )
+from bscli.core.user_grants import UserGrants
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
@@ -93,11 +94,22 @@ class TrustedDocumentDownloadApplication:
     def get_file(self, download_id: str) -> AuthCardResponse:
         try:
             payload = self.download_store.ready_payload(download_id)
+            grants = UserGrants(self.download_store.db_path)
+            if grants.get(payload["user_subject"]) is not None:
+                grants.require(payload["user_subject"], "oa.certificate.download")
+                grants.require(payload["user_subject"], "oa.certificate.read")
         except DocumentDownloadNotFound:
             return _message_response(
                 status=404,
                 title="下载链接不存在",
                 message="请返回智能体重新生成文件。",
+                tone="error",
+            )
+        except PermissionError:
+            return _message_response(
+                status=403,
+                title="当前无权下载该文件",
+                message="请联系管理员核对证照下载权限。",
                 tone="error",
             )
         except (

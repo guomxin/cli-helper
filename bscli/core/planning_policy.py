@@ -31,7 +31,7 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- 相似案例先在明确范围内扩展少量同义词/别名，再读完候选正文，剔除相邻但不同问题；同篇多事项拆开、同一事件多日记录归并并保留引用。输出问题、措施、明确结果、适用条件和差异；原文只说已处理时不能写已验证有效。说明词语命中与截断不代表语义全量，无命中不虚构案例。",
             "- 自由 SQL 先读 schema 与单项参数；函数受白名单限制，不用 strpos 或递归 CTE。LIKE/ILIKE 中 %、_ 为通配符，用户要求字面匹配时优先标准 keywords，不能改变匹配语义。自由SQL结果不自带标准段落来源，需要引用的日志按返回ID用现有日志查询核对全文及版本；不得编造原文URL。",
             "- 数据库先选 source_id；多个库不猜来源。比较两段时间用获准的 database.free.read 一次 SQL，不建立专用计划。CSV 使用 database_execute 的 database.report.export，参数 query_capability/query_arguments/request_key；这是重新查询，结果可能变化，再用 database.report.download(report_id) 交付附件。文件为短期交付，不存在历史结果读取；不得输出 base64 或编造链接。",
-            "- 泰华日报类型与日期范围不能混淆：用户说‘周报’时，先澄清是 WEEKLY 周报还是一周 DAILY 日报汇总，不猜测类型。独立 database_execute 可以筛选 WEEKLY，但无记录时不得改查 DAILY 或称已有周报口径。不得把日报结果标为周报。",
+            "- 日志系统日报类型与日期范围不能混淆：用户说‘周报’时，先澄清是 WEEKLY 周报还是一周 DAILY 日报汇总，不猜测类型。独立 database_execute 可以筛选 WEEKLY，但无记录时不得改查 DAILY 或称已有周报口径。不得把日报结果标为周报。",
             "- 用户指定‘数据库分析/数据库统计’时，先使用 database_capabilities，再按获准能力调用 database_execute；独立数据库无需业务系统登录或 API，不映射本人。本人含义不明时请用户明确人员条件；不得默认套用旧的本人七天限制，不得转到普通日志 API。旧数据库分析入口已退役，全部使用 database.*；不读取历史结果。",
             "- 独立数据库的目录、结构、人员消歧、查询和分析是原子只读探索调用链，不进入 durable task plan，不编造转换。先读取所选来源与能力的单项 input_schema；正文总结、主题、进展、问题、经验、协作和变化使用 database.logs.content_analyze；评论反馈使用独立授权的 database.comments.analyze。evidence_ready 是证据准备好，由当前智能体按 instructions 完成语义回答，每项结论关联来源，面向用户使用作者、日期与段落原文链接。",
             "- 数据库分页保持筛选和模式，使用 next_cursor 作为 after 读到 has_more=false，按来源 ID 去重并核对 total_matching；没有读完或范围/数量变化，明确部分覆盖。最后一页不代表已读取此前各页。跨请求不是冻结快照，不能声称某时刻的全量一致性。聚合或自由 SQL 截断时保持总体范围分批或重新聚合；确需缩小业务范围时先说明并获得用户选择。跨表或周期比较可在获准的 database.free.read 中完成，不得因标准能力未授权就尝试绕过。",

@@ -152,7 +152,7 @@ def build_planning_catalog(
             examples.append(
                 {
                     "schemaVersion": "agentbridge.task-plan.proposal.v2",
-                    "title": "读取 OA 已办和已发、生成草稿并打开泰华可信填单",
+                    "title": "读取 OA 已办和已发、生成草稿并打开日志系统可信填单",
                     "goal": "汇总 2026 年 7 月 OA 已办和已发并准备填写 3 小时工作日志",
                     "constraints": {
                         "temporal": {

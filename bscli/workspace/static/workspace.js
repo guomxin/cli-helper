@@ -1921,7 +1921,7 @@ function displayTaskTitle(value) {
       "Prepare and Deliver OA Certificate Scans": "OA 证书文件批量交付",
       "Search OA Certificate Scans": "OA 证书查询与下载",
       "导出照明系统 CSV 报告": "照明系统报告导出",
-      "Prepare Taihua Work Log": "泰华工作日志提交",
+      "Prepare Taihua Work Log": "工作日志提交",
     }[title] ||
     title ||
     "AgentBridge 任务"

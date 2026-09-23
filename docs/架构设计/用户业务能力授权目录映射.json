@@ -1,0 +1,1086 @@
+{
+  "status": "design_not_runtime_policy",
+  "date": "2026-09-23",
+  "permissions": [
+    {
+      "id": "oa.workflow.read",
+      "label": "流程查询",
+      "capabilities": [
+        "oa.workflow.detail.get",
+        "oa.workflow.done.list",
+        "oa.workflow.opinions.list",
+        "oa.workflow.pending.list",
+        "oa.workflow.sent.list",
+        "oa.workflow.tracked.list"
+      ],
+      "tools": [
+        "oa_workflow_pending_list",
+        "oa_workflow_sent_list",
+        "oa_workflow_done_list",
+        "oa_workflow_tracked_list",
+        "oa_workflow_detail_get",
+        "oa_workflow_opinions_list"
+      ],
+      "legacy_scopes": [
+        "oa:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.addressbook.read",
+      "label": "组织通讯录查询",
+      "capabilities": [
+        "oa.addressbook.department.members",
+        "oa.addressbook.organization.tree",
+        "oa.addressbook.person.get",
+        "oa.addressbook.person.search"
+      ],
+      "tools": [
+        "oa_addressbook_organization_tree",
+        "oa_addressbook_department_members",
+        "oa_addressbook_person_search",
+        "oa_addressbook_person_get"
+      ],
+      "legacy_scopes": [
+        "oa:read:addressbook"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.addressbook.private.read",
+      "label": "私人通讯录查询",
+      "capabilities": [
+        "oa.addressbook.private_contact.get",
+        "oa.addressbook.private_contact.search"
+      ],
+      "tools": [
+        "oa_addressbook_private_contact_search",
+        "oa_addressbook_private_contact_get"
+      ],
+      "legacy_scopes": [
+        "oa:read:addressbook"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.addressbook.export",
+      "label": "通讯录导出",
+      "capabilities": [
+        "oa.addressbook.export"
+      ],
+      "tools": [
+        "oa_addressbook_export"
+      ],
+      "legacy_scopes": [
+        "oa:read:addressbook"
+      ],
+      "dependencies": "按 source 加组织或私人通讯录查询",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.certificate.read",
+      "label": "证照查询",
+      "capabilities": [
+        "oa.document.certificate.search"
+      ],
+      "tools": [
+        "oa_certificate_search"
+      ],
+      "legacy_scopes": [
+        "oa:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.certificate.download",
+      "label": "证照下载",
+      "capabilities": [],
+      "tools": [
+        "oa_certificate_prepare_download",
+        "oa_certificate_prepare_downloads"
+      ],
+      "legacy_scopes": [
+        "oa:read"
+      ],
+      "dependencies": "oa.certificate.read；绑定原始文档与所有者",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.meeting_room.read",
+      "label": "会议室查询",
+      "capabilities": [
+        "oa.meeting_room.availability.list",
+        "oa.meeting_room.my_applications.list"
+      ],
+      "tools": [
+        "oa_meeting_room_availability_list",
+        "oa_meeting_room_my_applications_list"
+      ],
+      "legacy_scopes": [
+        "oa:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.meeting_room.apply",
+      "label": "会议室申请",
+      "capabilities": [
+        "oa.meeting_room.application.prepare",
+        "oa.meeting_room.application.create"
+      ],
+      "tools": [
+        "oa_meeting_room_application_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:meeting"
+      ],
+      "dependencies": "目标会议室检查；推荐搭配会议室查询",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_meeting_room_application_create"
+      ]
+    },
+    {
+      "id": "oa.meeting_room.cancel",
+      "label": "取消会议室申请",
+      "capabilities": [
+        "oa.meeting_room.application.cancel.prepare",
+        "oa.meeting_room.application.cancel"
+      ],
+      "tools": [
+        "oa_meeting_room_application_cancel_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:meeting"
+      ],
+      "dependencies": "目标申请归属检查；推荐搭配会议室查询",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_meeting_room_application_cancel"
+      ]
+    },
+    {
+      "id": "oa.meeting.create",
+      "label": "创建会议",
+      "capabilities": [
+        "oa.meeting.create",
+        "oa.meeting.create.prepare"
+      ],
+      "tools": [
+        "oa_meeting_create_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:meeting"
+      ],
+      "dependencies": "选人流程如调用通讯录，另检查通讯录查询",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_meeting_create"
+      ]
+    },
+    {
+      "id": "oa.business_trip.draft",
+      "label": "出差草稿",
+      "capabilities": [
+        "oa.business_trip.prepare",
+        "oa.business_trip.save_draft"
+      ],
+      "tools": [
+        "oa_business_trip_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:draft"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_business_trip_save_draft"
+      ]
+    },
+    {
+      "id": "oa.business_trip.submit",
+      "label": "出差提交",
+      "capabilities": [
+        "oa.business_trip.submit.prepare",
+        "oa.business_trip.submit"
+      ],
+      "tools": [
+        "oa_business_trip_submit_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:submit"
+      ],
+      "dependencies": "目标及提交确认检查；不自动授予独立草稿操作",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_business_trip_submit"
+      ]
+    },
+    {
+      "id": "oa.leave.draft",
+      "label": "请假草稿",
+      "capabilities": [
+        "oa.leave.prepare",
+        "oa.leave.save_draft"
+      ],
+      "tools": [
+        "oa_leave_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:draft"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_leave_save_draft"
+      ]
+    },
+    {
+      "id": "oa.leave.submit",
+      "label": "请假提交",
+      "capabilities": [
+        "oa.leave.submit.prepare",
+        "oa.leave.submit"
+      ],
+      "tools": [
+        "oa_leave_submit_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:submit"
+      ],
+      "dependencies": "目标及提交确认检查；不自动授予独立草稿操作",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_leave_submit"
+      ]
+    },
+    {
+      "id": "oa.missed_punch.draft",
+      "label": "补签草稿",
+      "capabilities": [
+        "oa.missed_punch.prepare",
+        "oa.missed_punch.save_draft"
+      ],
+      "tools": [
+        "oa_missed_punch_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:draft"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_missed_punch_save_draft"
+      ]
+    },
+    {
+      "id": "oa.efficiency_data.approve",
+      "label": "效能数据审批",
+      "capabilities": [
+        "oa.efficiency_data.approval.prepare",
+        "oa.efficiency_data.approve"
+      ],
+      "tools": [
+        "oa_efficiency_data_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.travel_expense.approve",
+      "label": "差旅报销审批",
+      "capabilities": [
+        "oa.travel_expense.approval.prepare",
+        "oa.travel_expense.approve"
+      ],
+      "tools": [
+        "oa_travel_expense_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.business_trip.approve",
+      "label": "出差审批",
+      "capabilities": [
+        "oa.business_trip.approval.prepare",
+        "oa.business_trip.approve"
+      ],
+      "tools": [
+        "oa_business_trip_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.labor_contract_renewal.approve",
+      "label": "劳动合同续签审批",
+      "capabilities": [
+        "oa.labor_contract_renewal.approval.prepare",
+        "oa.labor_contract_renewal.approve"
+      ],
+      "tools": [
+        "oa_labor_contract_renewal_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.intellectual_property_declaration.approve",
+      "label": "知识产权申报审批",
+      "capabilities": [
+        "oa.intellectual_property_declaration.approval.prepare",
+        "oa.intellectual_property_declaration.approve"
+      ],
+      "tools": [
+        "oa_intellectual_property_declaration_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.overtime.approve",
+      "label": "加班审批",
+      "capabilities": [
+        "oa.overtime.approval.prepare",
+        "oa.overtime.approve"
+      ],
+      "tools": [
+        "oa_overtime_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.leave.approve",
+      "label": "请假审批",
+      "capabilities": [
+        "oa.leave.approval.prepare",
+        "oa.leave.approve"
+      ],
+      "tools": [
+        "oa_leave_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.resignation.approve",
+      "label": "离职审批",
+      "capabilities": [
+        "oa.resignation.approval.prepare",
+        "oa.resignation.approve"
+      ],
+      "tools": [
+        "oa_resignation_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.work_handover.approve",
+      "label": "工作交接审批",
+      "capabilities": [
+        "oa.work_handover.approval.prepare",
+        "oa.work_handover.approve"
+      ],
+      "tools": [
+        "oa_work_handover_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.flight_application.approve",
+      "label": "乘机申请审批",
+      "capabilities": [
+        "oa.flight_application.approval.prepare",
+        "oa.flight_application.approve"
+      ],
+      "tools": [
+        "oa_flight_application_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.attendance_confirmation.approve",
+      "label": "考勤确认",
+      "capabilities": [
+        "oa.attendance_confirmation.confirm",
+        "oa.attendance_confirmation.prepare"
+      ],
+      "tools": [
+        "oa_attendance_confirmation_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.weekly_report.approve",
+      "label": "周报阅知",
+      "capabilities": [
+        "oa.weekly_report.acknowledge",
+        "oa.weekly_report.acknowledgement.prepare"
+      ],
+      "tools": [
+        "oa_weekly_report_acknowledgement_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.standard_collaboration.approve",
+      "label": "普通协同审批",
+      "capabilities": [
+        "oa.standard_collaboration.approval.prepare",
+        "oa.standard_collaboration.approve"
+      ],
+      "tools": [
+        "oa_standard_collaboration_approval_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "oa.missed_punch.approve",
+      "label": "补签审批",
+      "capabilities": [
+        "oa.missed_punch.approval.batch.prepare",
+        "oa.missed_punch.approval.prepare",
+        "oa.missed_punch.approve"
+      ],
+      "tools": [
+        "oa_missed_punch_approval_prepare",
+        "oa_missed_punch_approval_batch_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:approval"
+      ],
+      "dependencies": "可信表单/流程类型核验；查列表或详情另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_missed_punch_approve"
+      ]
+    },
+    {
+      "id": "oa.workflow.revoke",
+      "label": "撤回流程",
+      "capabilities": [
+        "oa.workflow.revoke",
+        "oa.workflow.revoke.prepare"
+      ],
+      "tools": [
+        "oa_workflow_revoke_prepare"
+      ],
+      "legacy_scopes": [
+        "oa:write:revoke"
+      ],
+      "dependencies": "目标归属及状态检查；查询另需 oa.workflow.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "oa_workflow_revoke"
+      ]
+    },
+    {
+      "id": "taihua.work_log.my.read",
+      "label": "本人日志查询",
+      "capabilities": [
+        "taihua.work_log.my.list"
+      ],
+      "tools": [
+        "taihua_work_log_my_list"
+      ],
+      "legacy_scopes": [
+        "taihua:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "taihua.work_log.team.read",
+      "label": "团队日志查询",
+      "capabilities": [
+        "taihua.work_log.team.list"
+      ],
+      "tools": [
+        "taihua_work_log_team_list"
+      ],
+      "legacy_scopes": [
+        "taihua:read"
+      ],
+      "dependencies": "沿用下游团队可见范围，不包含独立数据库授权",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "taihua.project.read",
+      "label": "项目检索",
+      "capabilities": [
+        "taihua.project.search"
+      ],
+      "tools": [
+        "taihua_project_search"
+      ],
+      "legacy_scopes": [
+        "taihua:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "taihua.work_log.create",
+      "label": "创建工作日志",
+      "capabilities": [
+        "taihua.work_log.create",
+        "taihua.work_log.create.prepare"
+      ],
+      "tools": [
+        "taihua_work_log_create_prepare"
+      ],
+      "legacy_scopes": [
+        "taihua:write:worklog"
+      ],
+      "dependencies": "项目检索若对用户输出候选，另需 taihua.project.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "taihua_work_log_create"
+      ]
+    },
+    {
+      "id": "smartlight.status.read",
+      "label": "运行状态与电测查询",
+      "capabilities": [
+        "smartlight.runtime.overview",
+        "smartlight.rtu.status.list",
+        "smartlight.lamp.status.list",
+        "smartlight.rtu.survey.records",
+        "smartlight.lamp.survey.records",
+        "smartlight.rtu.off_hours_current.list"
+      ],
+      "tools": [
+        "smartlight_runtime_overview",
+        "smartlight_rtu_status_list",
+        "smartlight_lamp_status_list",
+        "smartlight_rtu_survey_records",
+        "smartlight_lamp_survey_records",
+        "smartlight_off_hours_current_list"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.alarm.read",
+      "label": "告警查询与分析",
+      "capabilities": [
+        "smartlight.alarm.list",
+        "smartlight.alarm.analysis",
+        "smartlight.alarm.remark.get",
+        "smartlight.lamp.alarm.list",
+        "smartlight.lamp.alarm.analysis",
+        "smartlight.rtu.leakage_alarm.list",
+        "smartlight.rtu.leakage_alarm.analysis",
+        "smartlight.leakage.summary",
+        "smartlight.leakage.analysis"
+      ],
+      "tools": [
+        "smartlight_lamp_alarm_list",
+        "smartlight_lamp_alarm_analysis",
+        "smartlight_rtu_leakage_alarm_list",
+        "smartlight_rtu_leakage_analysis",
+        "smartlight_alarm_list",
+        "smartlight_alarm_remark_get",
+        "smartlight_leakage_summary",
+        "smartlight_alarm_analysis",
+        "smartlight_leakage_analysis"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.energy.read",
+      "label": "能耗查询与分析",
+      "capabilities": [
+        "smartlight.energy_record.list",
+        "smartlight.energy.analysis"
+      ],
+      "tools": [
+        "smartlight_energy_record_list",
+        "smartlight_energy_analysis"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.asset.read",
+      "label": "资产查询",
+      "capabilities": [
+        "smartlight.system.overview",
+        "smartlight.lamppost.list",
+        "smartlight.asset.search",
+        "smartlight.asset.detail"
+      ],
+      "tools": [
+        "smartlight_system_overview",
+        "smartlight_lamppost_list",
+        "smartlight_asset_search",
+        "smartlight_asset_detail"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.inspection.read",
+      "label": "巡检查询",
+      "capabilities": [
+        "smartlight.inspection_task.list",
+        "smartlight.inspection_task.detail",
+        "smartlight.inspection_log.list"
+      ],
+      "tools": [
+        "smartlight_inspection_log_list",
+        "smartlight_inspection_task_list",
+        "smartlight_inspection_task_detail"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.maintenance.read",
+      "label": "维修记录查询",
+      "capabilities": [
+        "smartlight.maintenance_record.list"
+      ],
+      "tools": [
+        "smartlight_maintenance_record_list"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.report.export",
+      "label": "照明报表导出",
+      "capabilities": [
+        "smartlight.report.export"
+      ],
+      "tools": [
+        "smartlight_report_export"
+      ],
+      "legacy_scopes": [
+        "smartlight:read"
+      ],
+      "dependencies": "按 report_type 检查对应查询权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "smartlight.alarm.remark.write",
+      "label": "修改告警备注",
+      "capabilities": [
+        "smartlight.alarm.remark.update",
+        "smartlight.alarm.remark.update.prepare"
+      ],
+      "tools": [
+        "smartlight_alarm_remark_update_prepare"
+      ],
+      "legacy_scopes": [
+        "smartlight:write:alarm_remark"
+      ],
+      "dependencies": "写入核对目标；查询告警另需 smartlight.alarm.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "smartlight_alarm_remark_update"
+      ]
+    },
+    {
+      "id": "smartlight.alarm.work_area.submit",
+      "label": "告警提交工区",
+      "capabilities": [
+        "smartlight.alarm.work_area.submit",
+        "smartlight.alarm.work_area.submit.prepare"
+      ],
+      "tools": [
+        "smartlight_alarm_work_area_submit_prepare"
+      ],
+      "legacy_scopes": [
+        "smartlight:write:alarm_work_area_submit"
+      ],
+      "dependencies": "写入核对目标；查询告警另需 smartlight.alarm.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "smartlight_alarm_work_area_submit"
+      ]
+    },
+    {
+      "id": "smartlight.alarm.work_area.revoke",
+      "label": "告警工区撤回",
+      "capabilities": [
+        "smartlight.alarm.work_area.revoke",
+        "smartlight.alarm.work_area.revoke.prepare"
+      ],
+      "tools": [
+        "smartlight_alarm_work_area_revoke_prepare"
+      ],
+      "legacy_scopes": [
+        "smartlight:write:alarm_work_area_revoke"
+      ],
+      "dependencies": "写入核对目标；查询告警另需 smartlight.alarm.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "smartlight_alarm_work_area_revoke"
+      ]
+    },
+    {
+      "id": "smartlight.alarm.dispose",
+      "label": "RTU告警处置",
+      "capabilities": [
+        "smartlight.alarm.dispose",
+        "smartlight.alarm.dispose.prepare"
+      ],
+      "tools": [
+        "smartlight_rtu_alarm_dispose_prepare"
+      ],
+      "legacy_scopes": [
+        "smartlight:write:alarm_disposition"
+      ],
+      "dependencies": "写入核对目标；查询告警另需 smartlight.alarm.read",
+      "resource": "绑定下游账号实际可见范围",
+      "private_tools": [
+        "smartlight_rtu_alarm_dispose"
+      ]
+    },
+    {
+      "id": "yuque.content.read",
+      "label": "语雀知识读取",
+      "capabilities": [
+        "yuque.document.catalog",
+        "yuque.document.read",
+        "yuque.document.search",
+        "yuque.public_books.list"
+      ],
+      "tools": [
+        "yuque_public_books_list",
+        "yuque_document_catalog",
+        "yuque_document_search",
+        "yuque_document_read"
+      ],
+      "legacy_scopes": [
+        "yuque:read"
+      ],
+      "dependencies": "无额外业务权限",
+      "resource": "绑定下游账号实际可见范围"
+    },
+    {
+      "id": "database.schema",
+      "label": "数据库结构与口径",
+      "capabilities": [
+        "database.schema"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.directory",
+      "label": "人员、部门和项目检索（用于消歧及选择查询条件）",
+      "capabilities": [
+        "database.directory"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.logs.query",
+      "label": "日志正文检索（日期、人员、当前部门、项目、字面关键词，支持分页与来源）",
+      "capabilities": [
+        "database.logs.query"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.logs.analyze",
+      "label": "日志统计分析（按日、月、人员、部门或项目）",
+      "capabilities": [
+        "database.logs.analyze"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.logs.content_analyze",
+      "label": "日志内容分析（总结、主题、进展、问题、经验、协作、变化；返回证据，由当前智能体归纳）",
+      "capabilities": [
+        "database.logs.content_analyze"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.comments.analyze",
+      "label": "日志评论分析（评论及关联日志正文；反馈、问答与跟进证据）",
+      "capabilities": [
+        "database.comments.analyze"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.free.read",
+      "label": "高级：自由只读查询分析（此数据源全部开放对象，支持两时间窗口比较）",
+      "capabilities": [
+        "database.free.read"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "按源授权；不隐式授予其他 database.* 能力",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    },
+    {
+      "id": "database.report.export",
+      "label": "导出 CSV 并下载（需同时具备原查询能力，重新执行查询）",
+      "capabilities": [
+        "database.report.export",
+        "database.report.download"
+      ],
+      "tools": [],
+      "legacy_scopes": [],
+      "dependencies": "原查询能力 + 导出；下载复核相同来源",
+      "resource": "明确 source_id；受开放对象及数据库账号限制"
+    }
+  ],
+  "dynamic_capabilities": {
+    "oa.template.list": "辅助：按可用草稿/提交能力过滤模板，不独立授权",
+    "oa.workflow.pending.batch.prepare": "动态：oa.workflow.read + 所有选中事项对应审批权限；逐项提交复核",
+    "oa.addressbook.group.list": "动态：private 用 oa.addressbook.private.read；personal/system/project 用 oa.addressbook.read；列表省略类型时仅查询已授权类型",
+    "oa.addressbook.group.members": "动态：private 用 oa.addressbook.private.read；personal/system/project 用 oa.addressbook.read；列表省略类型时仅查询已授权类型"
+  },
+  "special_public_tools": {
+    "database_capabilities": "动态：目录过滤或按 capability + source_id 分派",
+    "database_execute": "动态：目录过滤或按 capability + source_id 分派",
+    "agentbridge_server_profile": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_task_plan_catalog": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_task_plan_prepare": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_task_plan_get": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_task_plan_cancel": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_task_cancel": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_interaction_get": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_operation_get": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "agentbridge_operation_list": "平台：身份/对象归属/任务绑定；实际执行或交付时复核原业务权限",
+    "oa_template_list": "辅助：按可用草稿/提交能力过滤模板，不独立授权",
+    "oa_session_status": "辅助：当前用户会话；不授予业务权限",
+    "oa_session_login": "辅助：当前用户会话；不授予业务权限",
+    "oa_workflow_pending_batch_prepare": "动态：oa.workflow.read + 所有选中事项对应审批权限；逐项提交复核",
+    "taihua_session_status": "辅助：当前用户会话；不授予业务权限",
+    "taihua_session_login": "辅助：当前用户会话；不授予业务权限",
+    "smartlight_session_status": "辅助：当前用户会话；不授予业务权限",
+    "smartlight_session_login": "辅助：当前用户会话；不授予业务权限",
+    "yuque_session_status": "辅助：当前用户会话；不授予业务权限",
+    "yuque_session_login": "辅助：当前用户会话；不授予业务权限",
+    "oa_addressbook_group_list": "动态：显式 group_type 按类型授权；省略类型会查询全部，要求组织和私人两项读取权限",
+    "oa_addressbook_group_members": "动态：private 用 oa.addressbook.private.read；personal/system/project 用 oa.addressbook.read；列表省略类型时仅查询已授权类型"
+  },
+  "private_tools": [
+    "agentbridge_host_artifact_delivery_report",
+    "agentbridge_host_artifact_reissue",
+    "agentbridge_host_coordinator_lease_acquire",
+    "agentbridge_host_coordinator_lease_get",
+    "agentbridge_host_coordinator_lease_release",
+    "agentbridge_host_cross_endpoint_context",
+    "agentbridge_host_identity_profile",
+    "agentbridge_host_interaction_present",
+    "agentbridge_host_notification_ack",
+    "agentbridge_host_notification_claim",
+    "agentbridge_host_register",
+    "agentbridge_host_runtime_snapshot",
+    "agentbridge_host_task_continuation_resolve",
+    "agentbridge_host_task_ensure",
+    "agentbridge_host_task_finish",
+    "agentbridge_host_task_list",
+    "agentbridge_host_task_observe",
+    "agentbridge_host_task_recovery_list",
+    "agentbridge_host_task_snapshot",
+    "agentbridge_host_timeline_append",
+    "agentbridge_host_workspace_link_confirm",
+    "agentbridge_host_workspace_session_bind",
+    "agentbridge_host_workspace_session_resolve",
+    "agentbridge_interaction_resume",
+    "oa_business_trip_save_draft",
+    "oa_business_trip_submit",
+    "oa_leave_save_draft",
+    "oa_leave_submit",
+    "oa_meeting_create",
+    "oa_meeting_room_application_cancel",
+    "oa_meeting_room_application_create",
+    "oa_missed_punch_approve",
+    "oa_missed_punch_save_draft",
+    "oa_workflow_revoke",
+    "smartlight_alarm_remark_update",
+    "smartlight_alarm_work_area_revoke",
+    "smartlight_alarm_work_area_submit",
+    "smartlight_rtu_alarm_dispose",
+    "taihua_work_log_create"
+  ],
+  "report_dependencies": {
+    "alarm_analysis": "smartlight.alarm.read",
+    "lamp_alarm_analysis": "smartlight.alarm.read",
+    "leakage_analysis": "smartlight.alarm.read",
+    "asset_inventory": "smartlight.asset.read",
+    "inspection_progress": "smartlight.inspection.read",
+    "energy_records": "smartlight.energy.read",
+    "energy_analysis": "smartlight.energy.read",
+    "lamp_survey_records": "smartlight.status.read",
+    "rtu_leakage_alarms": "smartlight.alarm.read",
+    "rtu_leakage_analysis": "smartlight.alarm.read",
+    "inspection_logs": "smartlight.inspection.read",
+    "maintenance_records": "smartlight.maintenance.read"
+  },
+  "counts": {
+    "permissions": 54,
+    "registered_capabilities": 110,
+    "public_tools": 103,
+    "private_tools": 39
+  },
+  "private_tool_policies": {
+    "agentbridge_host_artifact_delivery_report": "platform.original_authority",
+    "agentbridge_host_artifact_reissue": "platform.original_authority",
+    "agentbridge_host_coordinator_lease_acquire": "platform.original_authority",
+    "agentbridge_host_coordinator_lease_get": "platform.original_authority",
+    "agentbridge_host_coordinator_lease_release": "platform.original_authority",
+    "agentbridge_host_cross_endpoint_context": "platform.original_authority",
+    "agentbridge_host_identity_profile": "platform.original_authority",
+    "agentbridge_host_interaction_present": "platform.original_authority",
+    "agentbridge_host_notification_ack": "platform.original_authority",
+    "agentbridge_host_notification_claim": "platform.original_authority",
+    "agentbridge_host_register": "platform.original_authority",
+    "agentbridge_host_runtime_snapshot": "platform.original_authority",
+    "agentbridge_host_task_continuation_resolve": "platform.original_authority",
+    "agentbridge_host_task_ensure": "platform.original_authority",
+    "agentbridge_host_task_finish": "platform.original_authority",
+    "agentbridge_host_task_list": "platform.original_authority",
+    "agentbridge_host_task_observe": "platform.original_authority",
+    "agentbridge_host_task_recovery_list": "platform.original_authority",
+    "agentbridge_host_task_snapshot": "platform.original_authority",
+    "agentbridge_host_timeline_append": "platform.original_authority",
+    "agentbridge_host_workspace_link_confirm": "platform.original_authority",
+    "agentbridge_host_workspace_session_bind": "platform.original_authority",
+    "agentbridge_host_workspace_session_resolve": "platform.original_authority",
+    "agentbridge_interaction_resume": "platform.original_authority",
+    "oa_business_trip_save_draft": "oa.business_trip.draft",
+    "oa_business_trip_submit": "oa.business_trip.submit",
+    "oa_leave_save_draft": "oa.leave.draft",
+    "oa_leave_submit": "oa.leave.submit",
+    "oa_meeting_create": "oa.meeting.create",
+    "oa_meeting_room_application_cancel": "oa.meeting_room.cancel",
+    "oa_meeting_room_application_create": "oa.meeting_room.apply",
+    "oa_missed_punch_approve": "oa.missed_punch.approve",
+    "oa_missed_punch_save_draft": "oa.missed_punch.draft",
+    "oa_workflow_revoke": "oa.workflow.revoke",
+    "smartlight_alarm_remark_update": "smartlight.alarm.remark.write",
+    "smartlight_alarm_work_area_revoke": "smartlight.alarm.work_area.revoke",
+    "smartlight_alarm_work_area_submit": "smartlight.alarm.work_area.submit",
+    "smartlight_rtu_alarm_dispose": "smartlight.alarm.dispose",
+    "taihua_work_log_create": "taihua.work_log.create"
+  },
+  "parameter_policies": {
+    "oa.addressbook.group.list": {
+      "private": "oa.addressbook.private.read",
+      "personal": "oa.addressbook.read",
+      "system": "oa.addressbook.read",
+      "project": "oa.addressbook.read",
+      "omitted": "要求 oa.addressbook.read 与 oa.addressbook.private.read，覆盖全部类型"
+    },
+    "oa.addressbook.group.members": {
+      "private": "oa.addressbook.private.read",
+      "personal": "oa.addressbook.read",
+      "system": "oa.addressbook.read",
+      "project": "oa.addressbook.read"
+    },
+    "oa.addressbook.export": {
+      "private_contacts": [
+        "oa.addressbook.export",
+        "oa.addressbook.private.read"
+      ],
+      "group_members": "oa.addressbook.export + 按 group_type 分派",
+      "person_search": [
+        "oa.addressbook.export",
+        "oa.addressbook.read"
+      ],
+      "department_members": [
+        "oa.addressbook.export",
+        "oa.addressbook.read"
+      ]
+    }
+  }
+}

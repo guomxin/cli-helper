@@ -528,7 +528,7 @@ _TRUSTED_WRITE_DEFINITIONS.update(
             "contract_error": TaihuaWorkLogContractMismatch,
             "outcome_error": TaihuaWorkLogOutcomeUnknown,
             "field_message": "工作日志字段必须在可信字段卡中核对。",
-            "authorization_message": "泰华工作日志提交计划需要在可信授权卡中确认。",
+            "authorization_message": "工作日志提交计划需要在可信授权卡中确认。",
         },
         SMARTLIGHT_ALARM_REMARK_UPDATE_PREPARE_CAPABILITY: {
             "commit_capability": SMARTLIGHT_ALARM_REMARK_UPDATE_CAPABILITY,

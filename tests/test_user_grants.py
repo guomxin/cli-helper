@@ -1,0 +1,79 @@
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from bscli.core.user_grants import UserGrantConflict, UserGrants
+
+
+class UserGrantTests(unittest.TestCase):
+    def test_service_execution_and_plan_catalog_follow_current_user_grant(self):
+        from bscli.core.central_service import CentralCapabilityService
+
+        with TemporaryDirectory() as temporary:
+            service = CentralCapabilityService(
+                home=temporary, base_url="http://127.0.0.1:8000/seeyon",
+            )
+            service.user_grants.save(
+                "user-a", ["oa.workflow.read"], expected_revision=0,
+                actor="admin", reason="workflow only",
+            )
+            catalog = service.planning_catalog(
+                granted_scopes={"oa:read", "oa:read:addressbook"},
+                user_subject="user-a",
+            )
+            names = {item["name"] for item in catalog["capabilities"]}
+            self.assertIn("oa.workflow.pending.list", names)
+            self.assertNotIn("oa.addressbook.person.search", names)
+            with self.assertRaises(PermissionError):
+                service.invoke(
+                    user_subject="user-a", capability_name="oa.addressbook.person.search",
+                    arguments={"query": "Alice"},
+                )
+
+    def test_user_permissions_apply_to_all_tokens_and_exports_require_source(self):
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            self.assertIsNone(grants.get("user-a"))
+            saved = grants.save(
+                "user-a", ["oa.addressbook.read", "oa.addressbook.export"],
+                expected_revision=0, actor="admin", reason="test migration",
+            )
+            self.assertEqual(saved["revision"], 1)
+            grants.require_tool("user-a", "oa_addressbook_person_search", {"query": "A"})
+            grants.require_tool("user-a", "oa_addressbook_export", {"source": "person_search"})
+            with self.assertRaises(PermissionError):
+                grants.require_tool("user-a", "oa_addressbook_private_contact_search", {})
+            with self.assertRaises(PermissionError):
+                grants.require_tool("user-a", "oa_addressbook_export", {"source": "private_contacts"})
+            with self.assertRaises(PermissionError):
+                grants.require_tool("user-a", "oa_addressbook_group_list", {})
+            with self.assertRaises(UserGrantConflict):
+                grants.save(
+                    "user-a", [], expected_revision=0, actor="admin", reason="stale",
+                )
+            self.assertEqual(grants.get("user-a")["permissions"], saved["permissions"])
+
+    def test_report_export_requires_matching_read_domain(self):
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            grants.save(
+                "user-a", ["smartlight.report.export", "smartlight.energy.read"],
+                expected_revision=0, actor="admin", reason="energy reports",
+            )
+            grants.require_tool("user-a", "smartlight_report_export", {"report_type": "energy_records"})
+            with self.assertRaises(PermissionError):
+                grants.require_tool("user-a", "smartlight_report_export", {"report_type": "alarm_analysis"})
+
+    def test_certificate_download_requires_read_as_well_as_download(self):
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            grants.save(
+                "user-a", ["oa.certificate.download"], expected_revision=0,
+                actor="admin", reason="download only",
+            )
+            with self.assertRaises(PermissionError):
+                grants.require_tool("user-a", "oa_certificate_prepare_download", {})
+            self.assertNotIn(
+                "oa_certificate_prepare_download",
+                grants.available_tools("user-a", ["oa_certificate_prepare_download"]),
+            )

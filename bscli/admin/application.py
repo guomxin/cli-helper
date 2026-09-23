@@ -14,6 +14,7 @@ from bscli.admin.stores import (
 )
 from bscli.core.central_service import CentralCapabilityService, session_response
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.user_grants import PERMISSIONS, UserGrants
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
 from bscli.workspace.gateway import OpenClawGatewayClient
@@ -21,6 +22,7 @@ from bscli.database.independent import DatabaseGrants, CAPABILITIES as DATABASE_
 
 
 MCP_SCOPES = (
+    "agentbridge:connect",
     "oa:read",
     "oa:read:addressbook",
     "oa:write:draft",
@@ -39,7 +41,7 @@ MCP_SCOPES = (
 )
 SYSTEM_LABELS = {
     "oa": "致远 OA",
-    "taihua": "泰华日志",
+    "taihua": "日志系统",
     "yuque": "部门信息库",
     "smartlight": "照明实验室测试系统",
 }
@@ -65,6 +67,7 @@ class AdminControlPlane:
         self.started_at = started_at or _utc_now()
         self.release_id = os.environ.get("AGENTBRIDGE_RELEASE_ID") or "development"
         self.database_grants = DatabaseGrants(service.home / 'database' / 'grants.sqlite3')
+        self.user_grants = service.user_grants
 
     def list_admin_accounts(self) -> list[dict]:
         return self.accounts.list()
@@ -611,6 +614,54 @@ class AdminControlPlane:
                               for name,description in DATABASE_CAPABILITIES.items() if name in available],
                 'effective': 'next_call', 'token_reissue_required': False, 'gateway_restart_required': False}
 
+    def user_grant_config(self, user_subject: str) -> dict:
+        if not isinstance(user_subject, str) or not any(
+            user["user_subject"] == user_subject for user in self.users()
+        ):
+            raise KeyError("中央账号不存在")
+        saved = self.user_grants.get(user_subject)
+        tokens = self.identity_store.list(user_subject=user_subject, limit=1000)
+        legacy = [
+            {"token_id": item["token_id"], "scopes": item["scopes"],
+             "state": item["state"], "expires_at": item["expires_at"]}
+            for item in tokens
+        ]
+        return {
+            "user_subject": user_subject,
+            "permissions": saved["permissions"] if saved else [],
+            "revision": saved["revision"] if saved else 0,
+            "migration_state": "configured" if saved else "legacy_scopes",
+            "available": [
+                {"id": item["id"], "label": item["label"],
+                 "system": item["id"].split(".", 1)[0],
+                 "legacy_scopes": item["legacy_scopes"],
+                 "grantable": item["id"] != "oa.standard_collaboration.approve"}
+                for item in PERMISSIONS.values()
+            ],
+            "legacy_tokens": legacy,
+        }
+
+    def save_user_grants(
+        self, *, actor: dict, request_ip: str, user_subject: str,
+        permissions: list[str], expected_revision: int, reason: str,
+    ) -> dict:
+        _require_admin(actor)
+        if "oa.standard_collaboration.approve" in permissions:
+            raise ValueError("普通协同审批待可信表单类型校验后开放")
+        before = self.user_grant_config(user_subject)
+        after = self.user_grants.save(
+            user_subject, permissions, expected_revision=expected_revision,
+            actor=str(actor.get("username") or actor.get("account_id") or ""), reason=reason,
+        )
+        self.audit.append(
+            actor=actor, action="user.business_grants.update", target_type="central_user",
+            target_id=user_subject, request_ip=request_ip, reason=reason,
+            before={"permissions": before["permissions"], "revision": before["revision"]},
+            after=after, result="succeeded",
+        )
+        return {**after, "effective": "next_call", "token_reissue_required": False,
+                "gateway_restart_required": False}
+
     def save_database_grants(self, *, actor: dict, request_ip: str, user_subject: str,
                              capabilities: list[str], expected_revision: int, reason: str, source_id='taihua_primary') -> dict:
         _require_admin(actor)
@@ -674,7 +725,11 @@ class AdminControlPlane:
         _require_admin(actor)
         if ttl_hours < 1 or ttl_hours > 90 * 24:
             raise ValueError("token lifetime must be between 1 hour and 90 days")
-        normalized_scopes = set(scopes)
+        grant = self.user_grants.get(user_subject)
+        if grant is not None:
+            normalized_scopes = set(self.user_grants.effective_legacy_scopes(user_subject) or [])
+        else:
+            normalized_scopes = set(scopes)
         if not normalized_scopes or not normalized_scopes.issubset(MCP_SCOPES):
             raise ValueError("MCP identity token contains an unsupported scope")
         if any(scope.startswith("oa:") for scope in normalized_scopes):
@@ -690,19 +745,23 @@ class AdminControlPlane:
             for scope in normalized_scopes
             if scope.startswith(("oa:", "taihua:", "yuque:", "smartlight:"))
         }
+        if grant is not None:
+            system_ids = {permission.split(".", 1)[0] for permission in grant["permissions"]}
         try:
-            resolved_bindings = self.service.sessions.ensure_principal_bindings(
-                user_subject=user_subject,
-                system_ids=system_ids,
-                principal_bindings=principal_bindings,
-                fallback_principal_ref=expected_principal_ref,
+            resolved_bindings = (
+                self.service.sessions.ensure_principal_bindings(
+                    user_subject=user_subject,
+                    system_ids=system_ids,
+                    principal_bindings=principal_bindings,
+                    fallback_principal_ref=expected_principal_ref,
+                ) if system_ids else {}
             )
         except SessionPrincipalMismatch as exc:
             raise ValueError(str(exc)) from exc
         token_principal = (
             str(expected_principal_ref or "").strip()
             or resolved_bindings.get("oa")
-            or resolved_bindings[sorted(resolved_bindings)[0]]
+            or (resolved_bindings[sorted(resolved_bindings)[0]] if resolved_bindings else user_subject)
         )
         issued = self.identity_store.issue(
             user_subject=user_subject,
@@ -748,6 +807,30 @@ class AdminControlPlane:
             result="succeeded",
         )
         return after
+
+    def renew_token(
+        self, *, actor: dict, request_ip: str, token_id: str,
+        new_expires_at: str, expected_revision: int, request_id: str, reason: str,
+    ) -> dict:
+        _require_admin(actor)
+        before = self.identity_store.get(token_id)
+        after = self.identity_store.renew(
+            token_id,
+            new_expires_at=new_expires_at,
+            expected_revision=expected_revision,
+            request_id=request_id,
+            actor=str(actor.get("username") or actor.get("account_id") or ""),
+            reason=reason,
+        )
+        if after["edit_revision"] != before["edit_revision"]:
+            self.audit.append(
+                actor=actor, action="mcp.token.renew", target_type="mcp_token",
+                target_id=token_id, request_ip=request_ip, reason=reason,
+                before={"expires_at": before["expires_at"], "edit_revision": before["edit_revision"]},
+                after={"expires_at": after["expires_at"], "edit_revision": after["edit_revision"]},
+                result="succeeded",
+            )
+        return {**after, "token_reissue_required": False, "gateway_restart_required": False}
 
     def sessions(self) -> list[dict]:
         return [self._session_projection(item) for item in self.service.sessions.list(limit=1000)]

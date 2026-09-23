@@ -146,6 +146,32 @@ class DocumentDownloadStoreTests(unittest.TestCase):
 
 
 class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
+    def test_prepared_file_rechecks_current_user_download_grant(self):
+        from bscli.core.user_grants import UserGrants
+
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            created = _create(store)
+            store.claim_for_prepare(created["download_id"], user_subject="user-a")
+            store.mark_ready(
+                created["download_id"], body=b"%PDF-1.7\ncertificate",
+                content_type="application/pdf",
+            )
+            application = TrustedDocumentDownloadApplication(
+                download_store=store, fetcher=lambda record: {},
+            )
+            grants = UserGrants(store.db_path)
+            grants.save(
+                "user-a", ["oa.certificate.read", "oa.certificate.download"],
+                expected_revision=0, actor="admin", reason="allow certificate download",
+            )
+            self.assertEqual(application.get_file(created["download_id"]).status, 200)
+            grants.save(
+                "user-a", ["oa.certificate.download"], expected_revision=1,
+                actor="admin", reason="revoke certificate read",
+            )
+            self.assertEqual(application.get_file(created["download_id"]).status, 403)
+
     def test_card_fetches_pdf_only_after_csrf_bound_confirmation(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")

@@ -134,7 +134,7 @@ function toolLabel(value) {
     return "正在调用 OA 能力";
   }
   if (name.startsWith("taihua_")) {
-    return "正在调用泰华日志系统";
+    return "正在调用日志系统";
   }
   if (name.startsWith("yuque_")) {
     return "正在查询部门信息库";

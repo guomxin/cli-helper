@@ -18,7 +18,7 @@ from bscli.core.capability import CapabilityRegistry, CapabilitySpec
 
 TAIHUA_SYSTEM_ID = "taihua"
 TAIHUA_ADAPTER_ID = "taihua-central"
-TAIHUA_SYSTEM_NAME = "泰华日志系统"
+TAIHUA_SYSTEM_NAME = "日志系统"
 _TAIHUA_CLIENT_HEADERS = {"X-Sisyphus-Client": "pc-web"}
 _TAIHUA_REFRESH_WINDOW = timedelta(minutes=15)
 
@@ -93,7 +93,7 @@ TAIHUA_WORK_LOG_FIELD_CARD_SCHEMA = {
     "system": TAIHUA_SYSTEM_NAME,
     "effect": "创建并正式提交一条个人工作日志",
     "submit_label": "提交字段",
-    "notice": "字段提交后还需单独授权；授权前不会向泰华日志系统写入任何内容。",
+    "notice": "字段提交后还需单独授权；授权前不会向日志系统写入任何内容。",
     "fields": [
         {
             "name": "log_date",
@@ -185,7 +185,7 @@ class TaihuaCentralAdapter:
             "fields": [
                 {
                     "name": "username",
-                    "label": "泰华日志系统用户名",
+                    "label": "日志系统用户名",
                     "input_type": "text",
                     "autocomplete": "username",
                     "required": True,
@@ -224,7 +224,7 @@ class TaihuaCentralAdapter:
         payload = _json_object(response, authentication=True)
         if payload.get("mustChangePassword"):
             raise TaihuaUnsupportedAuthMethod(
-                "首次登录必须先在泰华日志系统中修改初始密码。"
+                "首次登录必须先在日志系统中修改初始密码。"
             )
         token = str(payload.get("token") or "").strip()
         refresh_token = str(payload.get("refreshToken") or "").strip()
@@ -490,7 +490,7 @@ class TaihuaCentralAdapter:
         state = worker.get_http_state()
         authorization = str(state.get("authorization") or "")
         if not authorization:
-            raise TaihuaLoginRequired("泰华日志系统会话不存在。")
+            raise TaihuaLoginRequired("日志系统会话不存在。")
         proactive_refresh_error = None
         if _access_token_refresh_due(state):
             try:
@@ -521,21 +521,21 @@ class TaihuaCentralAdapter:
                 body=body,
             )
         if response["status"] in {401, 403} or _token_invalid(response):
-            raise TaihuaLoginRequired("泰华日志系统登录已过期。")
+            raise TaihuaLoginRequired("日志系统登录已过期。")
         if response["status"] < 200 or response["status"] >= 300:
             message = _response_message(response)
             if business_write and response["status"] in {400, 409, 422}:
                 raise TaihuaBusinessRuleRejected(message)
             if business_write:
                 raise TaihuaWorkLogOutcomeUnknown(
-                    f"泰华工作日志提交返回异常状态（HTTP {response['status']}）：{message}"
+                    f"工作日志提交返回异常状态（HTTP {response['status']}）：{message}"
                 )
             raise TaihuaSessionCheckUnavailable(message)
         if response["json"] is None:
             if business_write:
                 return {}
             raise TaihuaSessionCheckUnavailable(
-                f"泰华接口未返回 JSON（HTTP {response['status']}）。"
+                f"日志系统接口未返回 JSON（HTTP {response['status']}）。"
             )
         return response["json"]
 
@@ -543,7 +543,7 @@ class TaihuaCentralAdapter:
         state = worker.get_http_state()
         refresh_token = str(state.get("refresh_token") or "")
         if not refresh_token:
-            raise TaihuaLoginRequired("泰华日志系统刷新令牌不存在。")
+            raise TaihuaLoginRequired("日志系统刷新令牌不存在。")
         response = worker.request(
             "POST",
             self._url("/api/authenticates/refresh"),
@@ -552,17 +552,17 @@ class TaihuaCentralAdapter:
         )
         if response["status"] in {401, 403} or _token_invalid(response):
             raise TaihuaLoginRequired(
-                "泰华日志系统刷新令牌已失效"
+                "日志系统刷新令牌已失效"
                 f"（HTTP {response['status']}）：{_response_message(response)}"
             )
         if response["status"] < 200 or response["status"] >= 300:
             raise TaihuaSessionCheckUnavailable(
-                "泰华日志系统暂时无法刷新会话"
+                "日志系统暂时无法刷新会话"
                 f"（HTTP {response['status']}）：{_response_message(response)}"
             )
         payload = _json_object(response)
         if not payload.get("token") or not payload.get("refreshToken"):
-            raise TaihuaSessionCheckUnavailable("泰华日志系统刷新响应无效。")
+            raise TaihuaSessionCheckUnavailable("日志系统刷新响应无效。")
         worker.set_http_state(_token_state(payload))
 
     def _url(self, path: str) -> str:
@@ -654,7 +654,7 @@ def prepare_taihua_work_log_create(adapter, worker, arguments: dict) -> dict:
             },
         },
         "summary": {
-            "title": "提交泰华工作日志",
+            "title": "提交工作日志",
             "system": TAIHUA_SYSTEM_NAME,
             "effect": "正式创建一条个人工作日志",
             "fields": [
@@ -678,10 +678,10 @@ def commit_taihua_work_log_create(
     enter_commit_boundary,
 ) -> dict:
     if plan.get("schema_version") != "agentbridge.taihua_work_log_create_plan.v1":
-        raise TaihuaWorkLogContractMismatch("泰华日志写入计划版本不受支持。")
+        raise TaihuaWorkLogContractMismatch("日志写入计划版本不受支持。")
     inputs = deepcopy(plan.get("exact_input"))
     if not isinstance(inputs, dict):
-        raise TaihuaWorkLogContractMismatch("泰华日志写入计划缺少冻结字段。")
+        raise TaihuaWorkLogContractMismatch("日志写入计划缺少冻结字段。")
     existing = adapter.work_logs_for_date(worker, inputs["log_date"])
     if _matching_work_log(existing, inputs) is not None:
         raise TaihuaBusinessRuleRejected(
@@ -705,17 +705,17 @@ def commit_taihua_work_log_create(
         matched = _matching_work_log(readback, inputs, created_id=created_id)
     except TaihuaBusinessRuleRejected as exc:
         if submission_returned:
-            raise TaihuaWorkLogOutcomeUnknown("泰华日志提交后回读被拒绝，无法确认结果；请先对账。") from exc
+            raise TaihuaWorkLogOutcomeUnknown("日志提交后回读被拒绝，无法确认结果；请先对账。") from exc
         raise
     except TaihuaWorkLogOutcomeUnknown:
         raise
     except Exception as exc:
         raise TaihuaWorkLogOutcomeUnknown(
-            f"泰华日志已进入提交边界，但提交应答或权威回读异常（{type(exc).__name__}）；请先对账。"
+            f"日志提交已进入提交边界，但提交应答或权威回读异常（{type(exc).__name__}）；请先对账。"
         ) from exc
     if matched is None:
         raise TaihuaWorkLogOutcomeUnknown(
-            "泰华接口已接受日志提交，但权威回读未找到对应记录。"
+            "日志系统接口已接受日志提交，但权威回读未找到对应记录。"
         )
     return {
         "status": "created",
@@ -1004,7 +1004,7 @@ def _json_object(response: dict, *, authentication: bool = False) -> dict:
         if authentication
         else TaihuaSessionCheckUnavailable
     )
-    raise error(f"泰华接口未返回 JSON 对象（HTTP {response.get('status')}）。")
+    raise error(f"日志系统接口未返回 JSON 对象（HTTP {response.get('status')}）。")
 
 
 def _token_state(payload: dict) -> dict:
@@ -1066,7 +1066,7 @@ def _response_message(response: dict) -> str:
     text = str(response.get("text") or "").strip()
     if text:
         return text[:500]
-    return f"泰华接口调用失败（HTTP {response.get('status')}）。"
+    return f"日志系统接口调用失败（HTTP {response.get('status')}）。"
 
 
 def _normalize_principal(payload: dict) -> dict:

@@ -71,6 +71,7 @@ from bscli.browser.central import (
 from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
+from bscli.core.user_grants import UserGrants
 from bscli.core.capability_runtime import (
     CapabilityRejected,
     CapabilityContext,
@@ -198,6 +199,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
     ) -> None:
         self.home = Path(home)
         self.db_path = self.home / "agentbridge.db"
+        self.user_grants = UserGrants(self.db_path)
         if registry is None:
             self.registry = build_central_capability_registry()
             for spec in build_taihua_capability_registry().list():
@@ -305,8 +307,10 @@ class CentralCapabilityService(ControlledWriteExecutor):
             return frozenset({"oa:read:addressbook"})
         return frozenset({f"{spec.system}:read"})
 
-    def planning_catalog(self, *, granted_scopes: list[str] | set[str]) -> dict:
-        return build_planning_catalog(
+    def planning_catalog(
+        self, *, granted_scopes: list[str] | set[str], user_subject: str | None = None,
+    ) -> dict:
+        catalog = build_planning_catalog(
             registry=self.registry,
             transforms=self.transforms,
             trusted_write_prepares=_TRUSTED_WRITE_DEFINITIONS,
@@ -314,6 +318,16 @@ class CentralCapabilityService(ControlledWriteExecutor):
             scope_resolver=self.planning_required_scopes,
             granted_scopes=granted_scopes,
         )
+        grant = self.user_grants.get(user_subject) if user_subject else None
+        if grant is not None:
+            allowed = set(grant["permissions"])
+            from bscli.core.user_grants import CAPABILITY_PERMISSIONS
+            catalog["capabilities"] = [
+                item for item in catalog.get("capabilities", [])
+                if CAPABILITY_PERMISSIONS.get(item["name"]) in allowed
+            ]
+            catalog["examples"] = []
+        return catalog
 
     def task_plan_required_scopes(self, proposal: dict) -> frozenset[str]:
         compiled = validate_and_compile_task_plan(
@@ -534,6 +548,11 @@ class CentralCapabilityService(ControlledWriteExecutor):
 
     def get_task_plan(self, *, user_subject: str, plan_id: str) -> dict:
         plan = self.task_plans.get(plan_id, user_subject=user_subject)
+        if self.user_grants.get(user_subject) is not None:
+            for step in plan["steps"]:
+                capability = step.get("capability_name")
+                if capability:
+                    self.user_grants.require_capability(user_subject, capability)
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -649,6 +668,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
         if capability_name.startswith('taihua.analytics.'):
             return {'status':'rejected','result':None,'error':{'code':'CAPABILITY_RETIRED','message':'旧数据库分析已退役，请使用 database_capabilities/database_execute。'}}
 
+        self.user_grants.require_capability(user_subject, capability_name, arguments)
+        grant_before = self.user_grants.get(user_subject)
+
         engine = CapabilityEngine(registry=self.registry, operation_store=self.operations)
         spec = self.registry.get(capability_name)
         planning_control = self.planning_gate_for_call(
@@ -734,6 +756,16 @@ class CentralCapabilityService(ControlledWriteExecutor):
             )
             raise
         operation = self.operations.get(response["operationId"])
+        grant_after = self.user_grants.get(user_subject)
+        if grant_before is not None and (
+            grant_after is None or grant_after["revision"] != grant_before["revision"]
+        ) and spec.effect == "read":
+            return {
+                **response,
+                "status": "rejected", "result": None,
+                "error": {"code": "AUTHORIZATION_CHANGED", "message": "User permissions changed during this read."},
+                "evidenceRefs": [], "nextAction": None, "interaction": None,
+            }
         self.runtime_governance.observe_operation(
             trace_id=trace["trace_id"],
             operation=operation,
@@ -1367,6 +1399,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         operation = self.operations.get(operation_id)
         if operation["user_subject"] != user_subject:
             raise KeyError(f"operation not found: {operation_id}")
+        self.user_grants.require_capability(user_subject, operation["capability_name"])
         task_id = self.tasks.task_id_for_operation(
             operation_id,
             user_subject=user_subject,
@@ -1381,6 +1414,15 @@ class CentralCapabilityService(ControlledWriteExecutor):
 
     def list_operations(self, *, user_subject: str, limit: int = 100) -> dict:
         operations = self.operations.list(user_subject=user_subject, limit=limit)
+        if self.user_grants.get(user_subject) is not None:
+            visible = []
+            for operation in operations:
+                try:
+                    self.user_grants.require_capability(user_subject, operation["capability_name"])
+                except PermissionError:
+                    continue
+                visible.append(operation)
+            operations = visible
         return {
             "protocolVersion": "0.1",
             "count": len(operations),
@@ -1401,6 +1443,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
+        if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
+            operation = self.operations.get(record["operation_id"])
+            self.user_grants.require_capability(user_subject, operation["capability_name"])
         task_id = self.tasks.task_id_for_interaction(
             interaction_id,
             user_subject=user_subject,
@@ -1482,6 +1527,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
+        if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
+            operation = self.operations.get(record["operation_id"])
+            self.user_grants.require_capability(user_subject, operation["capability_name"])
         task_id = self.tasks.task_id_for_interaction(
             interaction_id,
             user_subject=user_subject,
@@ -4498,6 +4546,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         display = current["display_summary"]
         for kind in ("prepare", "commit"):
             spec = self.registry.get(display[f"{kind}_capability"])
+            self.user_grants.require_capability(user_subject, spec.name)
             if spec.version != display[f"{kind}_version"]:
                 raise CapabilityRejected("BATCH_VERSION_CHANGED", "事项能力版本已变化，批次已停止，请重新核对。")
             try:
@@ -4565,6 +4614,11 @@ class CentralCapabilityService(ControlledWriteExecutor):
                     "BATCH_ITEM_MISSING",
                     "The current approval batch item is unavailable.",
                 )
+            if generic:
+                for kind in ("prepare", "commit"):
+                    self.user_grants.require_capability(
+                        session["user_subject"], current["display_summary"][f"{kind}_capability"]
+                    )
             supplied_affair_id = str(arguments.get("affair_id") or "").strip()
             if supplied_affair_id and supplied_affair_id != current["resource_ref"]:
                 raise CapabilityRejected(
@@ -4591,6 +4645,11 @@ class CentralCapabilityService(ControlledWriteExecutor):
                 raise CapabilityRejected(exc.code, str(exc)) from exc
             if not selected:
                 return {}, {"status": "empty", "frozen_count": 0, "message": "当前待办没有符合指定范围的事项，未执行任何审批。"}
+            for item in selected:
+                for kind in ("prepare", "commit"):
+                    self.user_grants.require_capability(
+                        session["user_subject"], item["display_summary"][f"{kind}_capability"]
+                    )
             try:
                 batch, _reused = self.tasks.create_batch(
                     parent_task_id=task_id, user_subject=session["user_subject"], system_id=session["system_id"],
@@ -5361,7 +5420,7 @@ _TASK_TITLE_LABELS = {
     "Prepare All Pending OA Missed-Punch Approvals": "批量处理 OA 补签申请",
     "Prepare OA Meeting Creation": "OA 会议创建",
     "Prepare and Deliver One OA Certificate Scan": "OA 证书文件交付",
-    "Prepare Taihua Work Log": "泰华工作日志提交",
+    "Prepare Taihua Work Log": "工作日志提交",
 }
 
 

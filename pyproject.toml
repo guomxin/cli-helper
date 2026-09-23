@@ -25,6 +25,7 @@ database-analysis = ["psycopg[binary]==3.3.5", "pglast==7.18"]
 include = ["bscli*"]
 
 [tool.setuptools.package-data]
+"bscli.core" = ["user_permission_catalog.json"]
 "bscli.adapters" = ["seeyon_page_scripts/*.js"]
 "bscli.mcp" = ["static/*.html"]
 "bscli.admin" = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg", "static/*LICENSE.txt"]

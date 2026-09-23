@@ -674,6 +674,63 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertNotIn("token_secret", control.list_tokens()[0])
             self.assertNotIn(issued["token_secret"], json.dumps(control.audit.list()))
 
+    def test_admin_renews_original_token_and_changes_user_permissions(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp, base_url="http://127.0.0.1:8000/seeyon",
+            )
+            identities = McpIdentityTokenStore(service.db_path)
+            control = AdminControlPlane(service=service, identity_store=identities)
+            actor = {"account_id": "a", "username": "admin", "role": "admin"}
+            issued = control.issue_token(
+                actor=actor, request_ip="127.0.0.1", user_subject="user-a",
+                expected_principal_ref="Alice", label="OpenClaw",
+                scopes=["oa:read"], ttl_hours=1, reason="client onboarding",
+            )
+            saved = control.save_user_grants(
+                actor=actor, request_ip="127.0.0.1", user_subject="user-a",
+                permissions=["oa.workflow.read"], expected_revision=0,
+                reason="limit to workflow queries",
+            )
+            self.assertEqual(saved["permissions"], ["oa.workflow.read"])
+            renewed = control.renew_token(
+                actor=actor, request_ip="127.0.0.1", token_id=issued["token_id"],
+                new_expires_at=(datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+                expected_revision=0, request_id="renew-admin-1", reason="continue access",
+            )
+            self.assertEqual(renewed["token_id"], issued["token_id"])
+            self.assertEqual(renewed["edit_revision"], 1)
+            self.assertFalse(renewed["gateway_restart_required"])
+            self.assertNotIn("token_secret", renewed)
+            self.assertEqual(identities.verify(issued["token_secret"])["token_id"], issued["token_id"])
+
+    def test_migrated_user_can_hold_identity_token_with_only_database_grants(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(
+                home=tmp, base_url="http://127.0.0.1:8000/seeyon",
+            )
+            identities = McpIdentityTokenStore(service.db_path)
+            control = AdminControlPlane(service=service, identity_store=identities)
+            actor = {"account_id": "a", "username": "admin", "role": "admin"}
+            control.issue_token(
+                actor=actor, request_ip="127.0.0.1", user_subject="user-a",
+                expected_principal_ref="Alice", label="initial", scopes=["oa:read"],
+                ttl_hours=1, reason="initial access",
+            )
+            control.save_user_grants(
+                actor=actor, request_ip="127.0.0.1", user_subject="user-a",
+                permissions=[], expected_revision=0, reason="database access only",
+            )
+            issued = control.issue_token(
+                actor=actor, request_ip="127.0.0.1", user_subject="user-a",
+                expected_principal_ref=None, label="database client", scopes=[],
+                ttl_hours=24, reason="database access",
+            )
+            self.assertEqual(issued["scopes"], ["agentbridge:connect"])
+            self.assertEqual(
+                identities.verify(issued["token_secret"])["user_subject"], "user-a",
+            )
+
     def test_token_issue_supports_distinct_system_principal_bindings(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
@@ -869,6 +926,74 @@ class AdminControlPlaneTests(unittest.TestCase):
 
 
 class AdminHttpServerTests(unittest.TestCase):
+    def test_user_grants_and_token_renewal_http_require_admin_and_revision(self) -> None:
+        with TemporaryDirectory() as tmp:
+            service = CentralCapabilityService(home=tmp, base_url="http://127.0.0.1:1/seeyon")
+            identities = McpIdentityTokenStore(service.db_path)
+            control = AdminControlPlane(service=service, identity_store=identities)
+            issued = control.issue_token(
+                actor={"account_id": "a", "username": "admin", "role": "admin"},
+                request_ip="127.0.0.1", user_subject="user-a",
+                expected_principal_ref="Alice", label="initial", scopes=["oa:read"],
+                ttl_hours=1, reason="initial access",
+            )
+            for role in ("admin", "auditor"):
+                control.accounts.create(
+                    username=role, password=PASSWORD, role=role, must_change_password=False,
+                )
+            port = _free_port()
+            origin = f"http://127.0.0.1:{port}"
+            server = create_admin_http_server(
+                control_plane=control,
+                config=validate_admin_server_config(
+                    host="127.0.0.1", port=port, public_base_url=origin,
+                    tls_cert=None, tls_key=None,
+                ),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                cookies = {}
+                for role in ("admin", "auditor"):
+                    status, headers, _ = _request(
+                        port, "POST", "/api/login", origin=origin,
+                        body={"username": role, "password": PASSWORD},
+                    )
+                    self.assertEqual(status, 200)
+                    cookies[role] = _cookies(headers)
+                status, _, config = _request(
+                    port, "GET", "/api/user-grants?user=user-a",
+                    cookies=cookies["auditor"],
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(config["revision"], 0)
+                body = {
+                    "user_subject": "user-a", "permissions": ["oa.workflow.read"],
+                    "expected_revision": 0, "reason": "workflow only",
+                }
+                def post(path, payload, role="admin"):
+                    return _request(
+                        port, "POST", path, origin=origin, cookies=cookies[role],
+                        csrf=cookies[role]["agentbridge_admin_csrf"], body=payload,
+                    )
+                self.assertEqual(post("/api/user-grants", body, "auditor")[0], 403)
+                self.assertEqual(post("/api/user-grants", body)[0], 200)
+                conflict = post("/api/user-grants", body)
+                self.assertEqual(conflict[0], 409)
+                self.assertEqual(conflict[2]["error"]["code"], "USER_GRANT_CONFLICT")
+                renewed = post(f"/api/tokens/{issued['token_id']}/renew", {
+                    "new_expires_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+                    "expected_revision": 0, "request_id": "http-renew-1",
+                    "reason": "continued access",
+                })
+                self.assertEqual(renewed[0], 200)
+                self.assertEqual(renewed[2]["token_id"], issued["token_id"])
+                self.assertNotIn("token_secret", renewed[2])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_database_grants_http_change_existing_mcp_tokens_immediately(self) -> None:
         from starlette.testclient import TestClient
         from bscli.database.independent import CAPABILITIES, IndependentDatabase

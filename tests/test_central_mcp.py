@@ -967,6 +967,56 @@ class CentralMcpTests(unittest.TestCase):
             "oa_addressbook_person_search",
             agent_facing_tools_for_scopes(["oa:read"]),
         )
+
+    def test_configured_user_grant_overrides_old_token_scope_for_business_tools(self):
+        from bscli.core.user_grants import UserGrants
+
+        with self._server() as (service, store, read_token, client):
+            UserGrants(store.db_path).save(
+                "user-a", ["oa.addressbook.read"], expected_revision=0,
+                actor="admin", reason="granular migration",
+            )
+            service.invoke.return_value = {
+                "protocolVersion": "0.1", "operationId": "op-1", "requestId": "req-1",
+                "status": "succeeded", "result": {"items": []}, "error": None,
+                "evidenceRefs": [], "nextAction": None, "interaction": None,
+                "reused": False,
+            }
+            addressbook = self._request(
+                client, "tools/call", request_id=800, token=read_token,
+                params={"name": "oa_addressbook_person_search", "arguments": {"query": "Alice"}},
+            )
+            workflow = self._request(
+                client, "tools/call", request_id=801, token=read_token,
+                params={"name": "oa_workflow_pending_list", "arguments": {}},
+            )
+        self.assertFalse(addressbook.json()["result"]["isError"])
+        self.assertTrue(workflow.json()["result"]["isError"])
+
+    def test_expired_token_renews_on_same_mcp_server_and_client(self):
+        from datetime import datetime, timedelta, timezone
+
+        with self._server() as (service, store, token, client):
+            service.invoke.return_value = {
+                "protocolVersion": "0.1", "operationId": "op-1", "requestId": "req-1",
+                "status": "succeeded", "result": {"items": []}, "error": None,
+                "evidenceRefs": [], "nextAction": None, "interaction": None,
+                "reused": False,
+            }
+            now = datetime.now(timezone.utc)
+            store.clock = lambda: now + timedelta(hours=2)
+            params = {"name": "oa_workflow_pending_list", "arguments": {}}
+            expired = self._request(client, "tools/call", request_id=810, token=token, params=params)
+            self.assertEqual(expired.status_code, 401)
+            old = store.list(user_subject="user-a")[0]
+            store.renew(
+                old["token_id"],
+                new_expires_at=(now + timedelta(days=30)).isoformat(),
+                expected_revision=0, request_id="renew-hot-1",
+                actor="admin", reason="continue access",
+            )
+            resumed = self._request(client, "tools/call", request_id=811, token=token, params=params)
+            self.assertFalse(resumed.json()["result"]["isError"])
         self.assertIn(
             "oa_addressbook_person_search",
             agent_facing_tools_for_scopes(["oa:read", "oa:read:addressbook"]),

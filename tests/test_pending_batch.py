@@ -143,6 +143,19 @@ def test_frozen_selection_rejects_target_and_scope_changes(run):
     assert start(service, tid, {"batch_id": field["batch"]["batchId"], "affair_id": "affair-1"})["error"]["code"] == "BATCH_TARGET_MISMATCH"
 
 
+def test_migrated_user_batch_checks_each_selected_business_approval(run):
+    service, tid, _rows, _prepared, _committed = run
+    service.user_grants.save(
+        "user-a", ["oa.workflow.read", "oa.efficiency_data.approve"],
+        expected_revision=0, actor="admin", reason="efficiency approval only",
+    )
+    denied = start(service, tid, {"affair_ids": ["affair-3"]})
+    assert denied["status"] == "failed"
+    assert "permission" in denied["error"]["message"]
+    field = start(service, tid, {"affair_ids": ["affair-1"]})
+    assert field["batch"]["totalCount"] == 1
+
+
 def test_selection_limits_filters_and_fail_closed(tmp_path):
     registry = make_service(tmp_path).registry
     rows = [row(i) for i in range(1, 24)]

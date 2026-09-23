@@ -13,6 +13,7 @@ from uuid import uuid4
 
 _ALLOWED_SCOPES = frozenset(
     {
+        "agentbridge:connect",
         "oa:read",
         "oa:read:addressbook",
         "oa:write:draft",
@@ -30,6 +31,10 @@ _ALLOWED_SCOPES = frozenset(
         "smartlight:write:alarm_disposition",
     }
 )
+
+
+class TokenEditConflict(RuntimeError):
+    pass
 
 
 class McpIdentityTokenStore:
@@ -73,7 +78,9 @@ class McpIdentityTokenStore:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     last_used_at TEXT,
-                    revoked_at TEXT
+                    revoked_at TEXT,
+                    edit_revision INTEGER NOT NULL DEFAULT 0,
+                    last_renewed_at TEXT
                 )
                 """
             )
@@ -82,6 +89,24 @@ class McpIdentityTokenStore:
                 CREATE INDEX IF NOT EXISTS mcp_identity_tokens_subject_state
                 ON mcp_identity_tokens (user_subject, state, created_at)
                 """
+            )
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(mcp_identity_tokens)")
+            }
+            if "edit_revision" not in columns:
+                connection.execute(
+                    "ALTER TABLE mcp_identity_tokens ADD COLUMN edit_revision INTEGER NOT NULL DEFAULT 0"
+                )
+            if "last_renewed_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE mcp_identity_tokens ADD COLUMN last_renewed_at TEXT"
+                )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS mcp_token_renewals (
+                    request_id TEXT PRIMARY KEY, token_id TEXT NOT NULL,
+                    new_expires_at TEXT NOT NULL, edit_revision INTEGER NOT NULL,
+                    actor TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL
+                )"""
             )
 
     def issue(
@@ -140,6 +165,11 @@ class McpIdentityTokenStore:
             record = _record_from_row(row)
             if record["state"] != "active" or _parse_time(record["expires_at"]) <= now:
                 return None
+            grants = getattr(self, "user_grants", None)
+            if grants is not None:
+                projected = grants.effective_legacy_scopes(record["user_subject"])
+                if projected is not None:
+                    record["scopes"] = projected
             if required_scopes and not required_scopes.issubset(set(record["scopes"])):
                 return None
             connection.execute(
@@ -154,6 +184,11 @@ class McpIdentityTokenStore:
         now = _as_utc(self.clock())
         if record["state"] != "active" or _parse_time(record["expires_at"]) <= now:
             raise PermissionError("MCP identity token is inactive or expired")
+        grants = getattr(self, "user_grants", None)
+        if grants is not None:
+            projected = grants.effective_legacy_scopes(record["user_subject"])
+            if projected is not None:
+                record["scopes"] = projected
         if required_scopes and not required_scopes.issubset(set(record["scopes"])):
             raise PermissionError("MCP identity token does not grant the required scope")
         return record
@@ -188,7 +223,7 @@ class McpIdentityTokenStore:
             cursor = connection.execute(
                 """
                 UPDATE mcp_identity_tokens
-                SET state = 'revoked', revoked_at = ?
+                SET state = 'revoked', revoked_at = ?, edit_revision = edit_revision + 1
                 WHERE token_id = ? AND state = 'active'
                 """,
                 (_format_time(now), token_id),
@@ -200,6 +235,64 @@ class McpIdentityTokenStore:
                 ).fetchone()
                 if existing is None:
                     raise KeyError(f"MCP identity token not found: {token_id}")
+        return self.get(token_id)
+
+    def renew(
+        self, token_id: str, *, new_expires_at: str, expected_revision: int,
+        request_id: str, actor: str, reason: str,
+    ) -> dict:
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("invalid token edit revision")
+        if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+            raise ValueError("invalid renewal request id")
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValueError("renewal actor is required")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise ValueError("renewal reason is required")
+        try:
+            requested = _parse_time(new_expires_at)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid token expiry") from exc
+        now = _as_utc(self.clock())
+        if not now + timedelta(minutes=5) <= requested <= now + timedelta(days=90):
+            raise ValueError("token expiry must be between 5 minutes and 90 days from now")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT token_id, new_expires_at FROM mcp_token_renewals WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if prior is not None:
+                if prior["token_id"] != token_id or prior["new_expires_at"] != _format_time(requested):
+                    raise TokenEditConflict("renewal request id was used for another change")
+                return self.get(token_id)
+            row = connection.execute(
+                "SELECT * FROM mcp_identity_tokens WHERE token_id = ?", (token_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"MCP identity token not found: {token_id}")
+            record = _record_from_row(row)
+            if record["state"] != "active":
+                raise PermissionError("revoked token cannot be renewed")
+            if record["edit_revision"] != expected_revision:
+                raise TokenEditConflict("token edit revision conflict")
+            if requested <= _parse_time(record["expires_at"]):
+                raise ValueError("new expiry must extend the current expiry")
+            cursor = connection.execute(
+                """UPDATE mcp_identity_tokens
+                   SET expires_at = ?, last_renewed_at = ?, edit_revision = edit_revision + 1
+                   WHERE token_id = ? AND state = 'active' AND edit_revision = ?""",
+                (_format_time(requested), _format_time(now), token_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise TokenEditConflict("token edit revision conflict")
+            connection.execute(
+                """INSERT INTO mcp_token_renewals
+                   (request_id, token_id, new_expires_at, edit_revision, actor, reason, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (request_id, token_id, _format_time(requested), expected_revision + 1,
+                 actor.strip(), reason.strip(), _format_time(now)),
+            )
         return self.get(token_id)
 
 
@@ -256,6 +349,8 @@ def _record_from_row(row: sqlite3.Row) -> dict:
         "expires_at": row["expires_at"],
         "last_used_at": row["last_used_at"],
         "revoked_at": row["revoked_at"],
+        "edit_revision": row["edit_revision"],
+        "last_renewed_at": row["last_renewed_at"],
     }
 
 

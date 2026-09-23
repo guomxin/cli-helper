@@ -373,6 +373,11 @@ class ControlledWriteExecutor:
 
         def enter_commit_boundary() -> None:
             nonlocal boundary_entered
+            grants = getattr(self, "user_grants", None)
+            if grants is not None:
+                grants.require_capability(
+                    context.user_subject, context.spec.name, arguments
+                )
             self.write_authorizations.consume(
                 authorization_id,
                 user_subject=session["user_subject"],

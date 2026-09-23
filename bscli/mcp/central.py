@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from functools import wraps
+import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import ipaddress
@@ -178,6 +180,7 @@ from bscli.core.host_contract import (
     normalize_host_runtime_context,
 )
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from bscli.core.user_grants import UserGrants
 from bscli.core.network_security import validate_insecure_private_http_endpoint
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.tasks import TERMINAL_TASK_STATUSES
@@ -787,6 +790,8 @@ def create_central_mcp_server(
     auth_card_base_url: str,
     workspace_base_url: str = '',
 ) -> FastMCP:
+    user_grants = UserGrants(identity_store.db_path)
+    identity_store.user_grants = user_grants
     service.set_task_plan_authority_resolver(
         lambda token_id, required_scopes: identity_store.resolve_client(
             token_id,
@@ -820,6 +825,30 @@ def create_central_mcp_server(
             allowed_origins=[origin],
         ),
     )
+    register_tool = mcp.tool
+
+    def permission_checked_tool(*decorator_args: Any, **decorator_kwargs: Any):
+        tool_name = decorator_kwargs.get("name")
+        register = register_tool(*decorator_args, **decorator_kwargs)
+
+        def wrap_tool(function: Any):
+            signature = inspect.signature(function)
+
+            @wraps(function)
+            async def guarded(*args: Any, **kwargs: Any):
+                identity = _request_identity(identity_store)
+                bound = signature.bind_partial(*args, **kwargs)
+                user_grants.require_tool(
+                    identity["user_subject"], str(tool_name or function.__name__),
+                    dict(bound.arguments),
+                )
+                return await function(*args, **kwargs)
+
+            return register(guarded)
+
+        return wrap_tool
+
+    mcp.tool = permission_checked_tool
     read_annotations = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -1306,7 +1335,9 @@ def create_central_mcp_server(
                 "mustReregisterOnVersionChange": True,
             }
         response["negotiation"] = negotiation
-        allowed_tools = agent_facing_tools_for_scopes(identity["scopes"])
+        allowed_tools = user_grants.available_tools(
+            identity["user_subject"], agent_facing_tools_for_scopes(identity["scopes"])
+        )
         response["agentToolAccess"] = {
             "allowedToolNames": allowed_tools,
             "allowedToolCount": len(allowed_tools),
@@ -1350,6 +1381,7 @@ def create_central_mcp_server(
         return await asyncio.to_thread(
             service.planning_catalog,
             granted_scopes=identity["scopes"],
+            user_subject=identity["user_subject"],
         )
 
     @mcp.tool(
@@ -5298,7 +5330,9 @@ def create_central_mcp_server(
             agent_host=agent_host,
             minimum_level="L1",
         )
-        allowed_tools = agent_facing_tools_for_scopes(identity["scopes"])
+        allowed_tools = user_grants.available_tools(
+            identity["user_subject"], agent_facing_tools_for_scopes(identity["scopes"])
+        )
         return {
             "schemaVersion": "agentbridge.host-identity-profile.v1",
             "status": "succeeded",
@@ -6230,10 +6264,12 @@ def _request_identity(
     access_token = get_access_token()
     if access_token is None:
         raise PermissionError("MCP request is not authenticated")
-    return store.resolve_client(
-        access_token.client_id,
-        required_scopes=required_scopes,
-    )
+    grants = getattr(store, "user_grants", None)
+    if grants is not None:
+        current = store.resolve_client(access_token.client_id)
+        if grants.get(current["user_subject"]) is not None:
+            return current
+    return store.resolve_client(access_token.client_id, required_scopes=required_scopes)
 
 
 def _request_meta(ctx: Context) -> Mapping[str, Any]:

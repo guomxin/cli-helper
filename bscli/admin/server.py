@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 
 from bscli.admin.application import AdminControlPlane, MCP_SCOPES
 from bscli.auth.server import validate_auth_server_config
+from bscli.core.mcp_identities import TokenEditConflict
+from bscli.core.user_grants import UserGrantConflict
 from bscli.core.tls_http import ThreadedTLSHTTPServer
 from bscli.database.independent import DatabaseGrantConflict
 from bscli.database.sources import SourceConflict
@@ -216,6 +218,8 @@ def create_admin_http_server(
                     self._json(200, {"items": control_plane.users()})
                 elif route.path == "/api/database-grants":
                     self._json(200, control_plane.database_grant_config(_query_value(query, "user"),_query_value(query,"source") or 'taihua_primary'))
+                elif route.path == "/api/user-grants":
+                    self._json(200, control_plane.user_grant_config(_query_value(query, "user")))
                 elif route.path == "/api/database-sources":
                     self._json(200, control_plane.database_sources())
                 elif route.path == "/api/tokens":
@@ -346,6 +350,18 @@ def create_admin_http_server(
                         expected_revision=body['expected_revision'], reason=_required_string(body, 'reason'), source_id=body.get('source_id','taihua_primary'))
                     self._json(200, result)
                     return
+                if route.path == "/api/user-grants":
+                    if set(body) != {"user_subject", "permissions", "expected_revision", "reason"}:
+                        raise ValueError("invalid user grant fields")
+                    result = control_plane.save_user_grants(
+                        actor=actor, request_ip=self.client_address[0],
+                        user_subject=_required_string(body, "user_subject"),
+                        permissions=body["permissions"],
+                        expected_revision=body["expected_revision"],
+                        reason=_required_string(body, "reason"),
+                    )
+                    self._json(200, result)
+                    return
                 if route.path == "/api/tokens":
                     issued = control_plane.issue_token(
                         actor=actor,
@@ -354,11 +370,25 @@ def create_admin_http_server(
                         expected_principal_ref=_optional_string(body, "expected_principal_ref"),
                         principal_bindings=_optional_string_map(body, "principal_bindings"),
                         label=_optional_string(body, "label"),
-                        scopes=_required_string_list(body, "scopes"),
+                        scopes=_required_string_list(body, "scopes") if body.get("scopes") else [],
                         ttl_hours=int(body.get("ttl_hours") or 0),
                         reason=_required_string(body, "reason"),
                     )
                     self._json(201, issued)
+                    return
+                token_renew_match = re.fullmatch(r"/api/tokens/([0-9a-f-]{36})/renew", route.path)
+                if token_renew_match:
+                    if set(body) != {"new_expires_at", "expected_revision", "request_id", "reason"}:
+                        raise ValueError("invalid token renewal fields")
+                    renewed = control_plane.renew_token(
+                        actor=actor, request_ip=self.client_address[0],
+                        token_id=token_renew_match.group(1),
+                        new_expires_at=_required_string(body, "new_expires_at"),
+                        expected_revision=body["expected_revision"],
+                        request_id=_required_string(body, "request_id"),
+                        reason=_required_string(body, "reason"),
+                    )
+                    self._json(200, renewed)
                     return
                 token_match = re.fullmatch(r"/api/tokens/([0-9a-f-]{36})/revoke", route.path)
                 if token_match:
@@ -643,7 +673,11 @@ def create_admin_http_server(
                 self.send_header("Strict-Transport-Security", "max-age=31536000")
 
         def _handle_error(self, exc: Exception) -> None:
-            if isinstance(exc, (DatabaseGrantConflict, SourceConflict)):
+            if isinstance(exc, TokenEditConflict):
+                status, code = 409, "TOKEN_EDIT_CONFLICT"
+            elif isinstance(exc, UserGrantConflict):
+                status, code = 409, "USER_GRANT_CONFLICT"
+            elif isinstance(exc, (DatabaseGrantConflict, SourceConflict)):
                 status, code = 409, 'DATABASE_GRANT_CONFLICT'
             elif isinstance(exc, PermissionError):
                 status, code = 403, "ADMIN_FORBIDDEN"
