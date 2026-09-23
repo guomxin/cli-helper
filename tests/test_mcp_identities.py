@@ -7,6 +7,23 @@ from bscli.core.mcp_identities import McpIdentityTokenStore
 
 
 class McpIdentityTokenStoreTests(unittest.TestCase):
+    def test_renewal_audit_failure_rolls_back_and_late_replay_is_idempotent(self):
+        now = [datetime(2026, 9, 23, tzinfo=timezone.utc)]
+        with TemporaryDirectory() as tmp:
+            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db", clock=lambda: now[0])
+            token = store.issue(user_subject="a", expected_principal_ref="A", ttl_seconds=300)
+            kwargs = dict(new_expires_at=(now[0] + timedelta(days=1)).isoformat(), expected_revision=0,
+                          request_id="request", actor="admin", reason="test")
+            def fail(*args):
+                raise RuntimeError("audit unavailable")
+            with self.assertRaisesRegex(RuntimeError, "audit unavailable"):
+                store.renew(token["token_id"], **kwargs, audit_callback=fail)
+            self.assertEqual(store.get(token["token_id"])["edit_revision"], 0)
+            store.renew(token["token_id"], **kwargs)
+            now[0] += timedelta(days=2)
+            self.assertEqual(store.renew(token["token_id"], **kwargs)["edit_revision"], 1)
+            self.assertIsNone(store.verify(token["token"]))
+
     def test_renew_expired_token_keeps_secret_and_revocation_cannot_be_reversed(self):
         from bscli.core.mcp_identities import TokenEditConflict
 

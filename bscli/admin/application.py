@@ -635,10 +635,11 @@ class AdminControlPlane:
                 {"id": item["id"], "label": item["label"],
                  "system": item["id"].split(".", 1)[0],
                  "legacy_scopes": item["legacy_scopes"],
-                 "grantable": item["id"] != "oa.standard_collaboration.approve"}
+                 "grantable": True}
                 for item in PERMISSIONS.values()
             ],
             "legacy_tokens": legacy,
+            "migration_preview": self.user_grants.migration_preview(tokens),
         }
 
     def save_user_grants(
@@ -646,18 +647,15 @@ class AdminControlPlane:
         permissions: list[str], expected_revision: int, reason: str,
     ) -> dict:
         _require_admin(actor)
-        if "oa.standard_collaboration.approve" in permissions:
-            raise ValueError("普通协同审批待可信表单类型校验后开放")
-        before = self.user_grant_config(user_subject)
+        self.user_grant_config(user_subject)
         after = self.user_grants.save(
             user_subject, permissions, expected_revision=expected_revision,
             actor=str(actor.get("username") or actor.get("account_id") or ""), reason=reason,
-        )
-        self.audit.append(
-            actor=actor, action="user.business_grants.update", target_type="central_user",
-            target_id=user_subject, request_ip=request_ip, reason=reason,
-            before={"permissions": before["permissions"], "revision": before["revision"]},
-            after=after, result="succeeded",
+            audit_callback=lambda connection, before, after: self.audit.append(
+                actor=actor, action="user.business_grants.update", target_type="central_user",
+                target_id=user_subject, request_ip=request_ip, reason=reason,
+                before=before, after=after, result="succeeded", connection=connection,
+            ),
         )
         return {**after, "effective": "next_call", "token_reissue_required": False,
                 "gateway_restart_required": False}
@@ -813,7 +811,6 @@ class AdminControlPlane:
         new_expires_at: str, expected_revision: int, request_id: str, reason: str,
     ) -> dict:
         _require_admin(actor)
-        before = self.identity_store.get(token_id)
         after = self.identity_store.renew(
             token_id,
             new_expires_at=new_expires_at,
@@ -821,15 +818,14 @@ class AdminControlPlane:
             request_id=request_id,
             actor=str(actor.get("username") or actor.get("account_id") or ""),
             reason=reason,
-        )
-        if after["edit_revision"] != before["edit_revision"]:
-            self.audit.append(
+            audit_callback=lambda connection, before, after: self.audit.append(
                 actor=actor, action="mcp.token.renew", target_type="mcp_token",
                 target_id=token_id, request_ip=request_ip, reason=reason,
                 before={"expires_at": before["expires_at"], "edit_revision": before["edit_revision"]},
                 after={"expires_at": after["expires_at"], "edit_revision": after["edit_revision"]},
-                result="succeeded",
-            )
+                result="succeeded", connection=connection,
+            ),
+        )
         return {**after, "token_reissue_required": False, "gateway_restart_required": False}
 
     def sessions(self) -> list[dict]:

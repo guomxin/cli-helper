@@ -29,6 +29,23 @@ class UserGrantConflict(RuntimeError):
 
 
 class UserGrants:
+    @staticmethod
+    def migration_preview(tokens: list[dict]) -> dict:
+        candidates = []
+        for token in tokens:
+            if token["state"] != "active":
+                continue
+            scopes = set(token["scopes"])
+            permissions = sorted(name for name, item in PERMISSIONS.items()
+                                 if item["legacy_scopes"] and set(item["legacy_scopes"]).issubset(scopes))
+            candidates.append({"token_id": token["token_id"], "permissions": permissions})
+        common = set(candidates[0]["permissions"]) if candidates else set()
+        for candidate in candidates[1:]:
+            common.intersection_update(candidate["permissions"])
+        return {"tokens": candidates, "recommended_permissions": sorted(common),
+                "consistent": bool(candidates) and all(set(item["permissions"]) == common for item in candidates),
+                "rule": "intersection_of_unrevoked_tokens_including_expired"}
+
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +72,7 @@ class UserGrants:
 
     def save(
         self, subject: str, permissions: list[str], *, expected_revision: int,
-        actor: str, reason: str,
+        actor: str, reason: str, audit_callback=None,
     ) -> dict:
         import datetime
         import uuid
@@ -96,6 +113,9 @@ class UserGrants:
                 (str(uuid.uuid4()), subject, actor.strip(), reason.strip(),
                  json.dumps(old), json.dumps(normalized), revision + 1, now),
             )
+            if audit_callback:
+                audit_callback(db, {"permissions": old, "revision": revision},
+                               {"user_subject": subject, "permissions": normalized, "revision": revision + 1})
         return {"user_subject": subject, "permissions": normalized, "revision": revision + 1}
 
     def require(self, subject: str, permission: str) -> None:
@@ -107,16 +127,11 @@ class UserGrants:
         grant = self.get(subject)
         if grant is None:
             return
-        if capability in {
-            "oa.standard_collaboration.approval.prepare",
-            "oa.standard_collaboration.approve",
-        }:
-            raise PermissionError("standard collaboration requires trusted form classification")
         permission = CAPABILITY_PERMISSIONS.get(capability)
         if permission:
             self.require(subject, permission)
         elif capability == "oa.template.list":
-            raise PermissionError("template list requires permission-aware filtering")
+            self.require_tool(subject, "oa_template_list")
         elif capability == "oa.workflow.pending.batch.prepare":
             self.require(subject, "oa.workflow.read")
         elif capability in {"oa.addressbook.group.list", "oa.addressbook.group.members"}:
@@ -205,7 +220,30 @@ class UserGrants:
                 available.append(tool)
             elif tool == "oa_workflow_pending_batch_prepare" and "oa.workflow.read" in selected:
                 available.append(tool)
-        return sorted(set(available))
+            elif tool == "oa_template_list" and any(
+                item.endswith((".draft", ".submit")) and item.startswith("oa.") for item in selected
+            ):
+                available.append(tool)
+        from bscli.mcp.central import AGENT_FACING_TOOL_SCOPE_REQUIREMENTS
+        return sorted(set(available).intersection(AGENT_FACING_TOOL_SCOPE_REQUIREMENTS))
+
+    def filter_templates(self, subject: str, result: dict) -> dict:
+        grant = self.get(subject)
+        if grant is None:
+            return result
+        from bscli.adapters.seeyon_business_trip import BUSINESS_TRIP_TEMPLATE_ID, BUSINESS_TRIP_FORM_APP_ID
+        from bscli.adapters.seeyon_leave import LEAVE_TEMPLATE_ID, LEAVE_FORM_APP_ID
+        from bscli.adapters.seeyon_missed_punch import MISSED_PUNCH_TEMPLATE_ID, MISSED_PUNCH_FORM_APP_ID
+        known = {
+            (BUSINESS_TRIP_TEMPLATE_ID, BUSINESS_TRIP_FORM_APP_ID): {"oa.business_trip.draft", "oa.business_trip.submit"},
+            (LEAVE_TEMPLATE_ID, LEAVE_FORM_APP_ID): {"oa.leave.draft", "oa.leave.submit"},
+            (MISSED_PUNCH_TEMPLATE_ID, MISSED_PUNCH_FORM_APP_ID): {"oa.missed_punch.draft"},
+        }
+        selected = set(grant["permissions"])
+        items = [item for item in result.get("items", []) if selected.intersection(
+            known.get((str(item.get("template_id", "")), str(item.get("form_app_id", ""))), set())
+        )]
+        return {"items": items, "count": len(items), "total": len(items), "permission_filtered": True}
 
     def effective_legacy_scopes(self, subject: str) -> list[str] | None:
         grant = self.get(subject)

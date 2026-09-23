@@ -16,6 +16,31 @@ from bscli.core.document_downloads import (
 
 
 class DocumentDownloadStoreTests(unittest.TestCase):
+    def test_report_download_checks_its_source_and_cached_certificate_obeys_revocation(self):
+        from bscli.core.user_grants import UserGrants
+        from bscli.core.document_downloads import ADDRESSBOOK_REPORT_DOCUMENT_TYPE, SMARTLIGHT_REPORT_DOCUMENT_TYPE
+        with TemporaryDirectory() as tmp:
+            store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grants = UserGrants(store.db_path)
+            grants.save("user-a", ["oa.addressbook.read", "oa.addressbook.export", "smartlight.report.export", "smartlight.energy.read"],
+                        expected_revision=0, actor="admin", reason="reports only")
+            record = {"user_subject": "user-a", "document_type": ADDRESSBOOK_REPORT_DOCUMENT_TYPE,
+                      "document": {"arguments": {"source": "person_search"}}}
+            store.require_access(record)
+            with self.assertRaises(PermissionError):
+                store.require_access({**record, "document": {"arguments": {"source": "private_contacts"}}})
+            store.require_access({**record, "document_type": SMARTLIGHT_REPORT_DOCUMENT_TYPE,
+                                  "document": {"arguments": {"report_type": "energy_records"}}})
+            grants.save("user-a", ["oa.certificate.read", "oa.certificate.download"],
+                        expected_revision=1, actor="admin", reason="certificates")
+            created = _create(store)
+            store.claim_for_prepare(created["download_id"], user_subject="user-a")
+            store.mark_ready(created["download_id"], body=b"%PDF-1.7\ndata", content_type="application/pdf")
+            app = TrustedDocumentDownloadApplication(download_store=store, fetcher=lambda _: {})
+            self.assertEqual(app.get_file(created["download_id"]).status, 200)
+            grants.save("user-a", [], expected_revision=2, actor="admin", reason="revoke")
+            self.assertEqual(app.get_file(created["download_id"]).status, 403)
+
     def test_download_is_bound_to_immutable_reference_and_consumed_once(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")

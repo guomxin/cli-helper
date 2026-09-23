@@ -14,9 +14,13 @@ function Assert-AgentBridgeReleaseCompatibility {
     }
     $policy = Get-Content -LiteralPath $PolicyPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if ($policy.schemaVersion -ne 'agentbridge.release-policy.v1' -or
-        $policy.dataCompatibility -ne 'no-migration' -or
+        $policy.dataCompatibility -notin @('no-migration', 'reviewed-schema-transition') -or
         $CurrentRelease -cnotin @($policy.compatibleFrom)) {
-        throw "Release preflight: deployed $CurrentRelease is not an authorized no-migration predecessor of $CandidateRelease. Review deploy/release-policy.json before running validation."
+        throw "Release preflight: deployed $CurrentRelease is not an authorized predecessor of $CandidateRelease. Review deploy/release-policy.json before running validation."
+    }
+    if ($policy.dataCompatibility -eq 'reviewed-schema-transition' -and
+        (-not $policy.PSObject.Properties['schemaTransitions'] -or @($policy.schemaTransitions.PSObject.Properties).Count -eq 0)) {
+        throw 'Reviewed schema transition requires explicit before/after schema fingerprints'
     }
     return [pscustomobject]@{ status = 'compatible'; currentRelease = $CurrentRelease; candidateRelease = $CandidateRelease }
 }

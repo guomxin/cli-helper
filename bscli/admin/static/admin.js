@@ -615,14 +615,14 @@ async function renderAudit() {
 async function openUserGrants(userSubject) {
   const config = await api(`/api/user-grants?user=${encodeURIComponent(userSubject)}`);
   const editable = state.account.role === "admin";
-  const selected = new Set(config.permissions);
+  const selected = new Set(config.migration_state === "legacy_scopes" ? config.migration_preview.recommended_permissions : config.permissions);
   const groups = ["oa", "smartlight", "taihua", "yuque"].map(system => {
     const labels = { oa: "致远 OA", smartlight: "照明系统", taihua: "日志系统", yuque: "语雀" };
     const items = config.available.filter(item => item.system === system);
     return `<fieldset class="scope-group"><legend>${labels[system]}</legend><div class="checkbox-grid">${items.map(item => `<label class="check"><input type="checkbox" name="business_permission" value="${escapeHtml(item.id)}" ${selected.has(item.id) ? "checked" : ""} ${editable && item.grantable ? "" : "disabled"}><span><strong>${escapeHtml(item.label)}${item.grantable ? "" : "（待开放）"}</strong><small>${escapeHtml(item.id)}</small></span></label>`).join("")}</div></fieldset>`;
   }).join("");
   const oldScopes = [...new Set(config.legacy_tokens.map(item => item.scopes.join(", ")))];
-  const migrationNote = config.migration_state === "legacy_scopes" ? `<p class="muted">此用户尚未切换。保存后，所有有效令牌使用同一用户权限。当前令牌历史 Scope 有 ${oldScopes.length} 种配置，请核对差异后再保存；数据库授权继续单独管理。</p>` : `<p class="muted">保存后所有有效令牌下次调用生效，无需换发或重启。</p>`;
+  const migrationNote = config.migration_state === "legacy_scopes" ? `<p class="muted">此用户尚未切换。已按全部未吊销令牌（含已到期令牌）的共同权限预选 ${selected.size} 项，避免合并时扩大权限。${config.migration_preview.consistent ? "各令牌权限一致。" : "各令牌权限不一致或无可迁移令牌，请核对后保存。"}保存后所有有效令牌使用同一用户权限；数据库授权继续单独管理。</p><details><summary>查看各令牌迁移依据（历史 Scope 共 ${oldScopes.length} 种）</summary>${config.migration_preview.tokens.map(item => `<p><strong>${escapeHtml(item.token_id)}</strong><br>${item.permissions.map(id => escapeHtml(config.available.find(p => p.id === id)?.label || id)).join("、") || "无业务权限"}</p>`).join("")}</details>` : `<p class="muted">保存后所有有效令牌下次调用生效，无需换发或重启。</p>`;
   openModal({ title: `${userSubject} · 业务能力`, submit: editable ? "保存用户授权" : "关闭", body: `${migrationNote}${groups}<p class="muted">当前版本：${config.revision}。空列表撤销此用户全部非数据库业务能力。</p>${editable ? reasonField() : ""}`,
     action: async form => { if (!editable) { closeModal(); return; } await api("/api/user-grants", { method: "POST", body: JSON.stringify({ user_subject: config.user_subject, permissions: form.getAll("business_permission"), expected_revision: config.revision, reason: form.get("reason") }) }); closeModal(); toast("用户业务授权已保存"); await loadView("users"); }
   });
@@ -678,13 +678,14 @@ function openIssueToken() {
   });
 }
 function openRenewToken(target) {
+  const requestId = crypto.randomUUID();
   const tokenId = target.dataset.renewToken;
   const priorExpiry = target.dataset.expiresAt;
   const revision = Number(target.dataset.editRevision);
   const defaultExpiry = new Date(Math.min(Date.now() + 89 * 86400000, Math.max(Date.now() + 30 * 86400000, new Date(priorExpiry).getTime() + 86400000)));
   const localValue = new Date(defaultExpiry.getTime() - defaultExpiry.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   openModal({ title: "管理员续期", submit: "续期", body: `<p>当前到期：${escapeHtml(fmtTime(priorExpiry))}。原 Token 密钥不变，客户端无需重新配置。</p><label>新的到期时间<input name="new_expires_at" type="datetime-local" value="${localValue}" required></label>${reasonField()}`,
-    action: async form => { const value = String(form.get("new_expires_at") || ""); await api(`/api/tokens/${tokenId}/renew`, { method: "POST", body: JSON.stringify({ new_expires_at: new Date(value).toISOString(), expected_revision: revision, request_id: crypto.randomUUID(), reason: form.get("reason") }) }); closeModal(); toast("Token 已续期，原凭证继续使用"); await loadView("users"); }
+    action: async form => { const value = String(form.get("new_expires_at") || ""); await api(`/api/tokens/${tokenId}/renew`, { method: "POST", body: JSON.stringify({ new_expires_at: new Date(value).toISOString(), expected_revision: revision, request_id: requestId, reason: form.get("reason") }) }); closeModal(); toast("Token 已续期，原凭证继续使用"); await loadView("users"); }
   });
 }
 function openRebindSession(target) {

@@ -1176,6 +1176,11 @@ def _validate_target(
     identity = signals.get("identity")
     if not isinstance(identity, dict):
         raise PendingActionContractMismatch("The OA workflow identity is unavailable.")
+    if profile_key == "standard_collaboration" and (
+        str(identity.get("body_type") or "").upper() not in {"10", "HTML"}
+        or str(identity.get("form_record_id") or "")
+    ):
+        raise PendingActionContractMismatch("Standard collaboration requires an explicit non-form HTML body identity.")
     if not str(identity.get("summary_id") or "") or not str(
         identity.get("process_id") or ""
     ):
@@ -1789,6 +1794,7 @@ def _frozen_target(
         "template_id": str(identity.get("template_id") or ""),
         "form_app_id": str(identity.get("form_app_id") or ""),
         "form_record_id": str(identity.get("form_record_id") or ""),
+        "body_type": str(identity.get("body_type") or ""),
         "title": str(source.get("title") or ""),
         "sender": str(source.get("sender") or ""),
         "date": str(source.get("date") or ""),
@@ -1811,6 +1817,7 @@ def _assert_frozen_target(expected: dict, actual: dict) -> None:
         "template_id",
         "form_app_id",
         "form_record_id",
+        "body_type",
         "title",
         "sender",
         "date",
@@ -2153,6 +2160,7 @@ _PAGE_CONTRACT_SCRIPT = r"""
       template_id: read(['templeteId', 'templateId']),
       form_app_id: read(['formAppId']),
       form_record_id: read(['formRecordid', 'formRecordId']),
+      body_type: read(['bodyType']),
     },
   };
 }

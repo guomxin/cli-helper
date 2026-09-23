@@ -400,6 +400,12 @@ class PendingActionTests(unittest.TestCase):
             )
 
     def test_standard_collaboration_rejects_specialist_titles_and_fields(self):
+        for body_type in (None, "", "20", "FORM"):
+            unknown = _fixture("standard_collaboration")
+            unknown["signals"]["identity"]["body_type"] = body_type
+            worker = FakeWorker(unknown)
+            with self.assertRaises(PendingActionContractMismatch):
+                prepare_standard_collaboration_approval(FakeAdapter(worker), worker, _inputs())
         specialist = _fixture("standard_collaboration")
         specialist["source"]["title"] = "【报销】其他报销单-Alice"
         worker = FakeWorker(specialist)
@@ -952,6 +958,7 @@ def _fixture(profile):
             "identity": {
                 "summary_id": "summary-1",
                 "process_id": "process-1",
+                "body_type": "20" if selected["form_app_id"] else "10",
                 "template_id": selected["template_id"],
                 "form_app_id": selected["form_app_id"],
                 "form_record_id": "record-1" if selected["form_app_id"] else "",

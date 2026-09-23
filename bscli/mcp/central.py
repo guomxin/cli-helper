@@ -838,11 +838,19 @@ def create_central_mcp_server(
             async def guarded(*args: Any, **kwargs: Any):
                 identity = _request_identity(identity_store)
                 bound = signature.bind_partial(*args, **kwargs)
+                bound.apply_defaults()
                 user_grants.require_tool(
                     identity["user_subject"], str(tool_name or function.__name__),
                     dict(bound.arguments),
                 )
-                return await function(*args, **kwargs)
+                before = user_grants.get(identity["user_subject"])
+                result = await function(*args, **kwargs)
+                annotations = decorator_kwargs.get("annotations")
+                if annotations and annotations.readOnlyHint:
+                    _request_identity(identity_store)
+                    if before != user_grants.get(identity["user_subject"]):
+                        raise PermissionError("User permissions changed during this read; retry the request")
+                return result
 
             return register(guarded)
 

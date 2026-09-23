@@ -552,7 +552,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
             for step in plan["steps"]:
                 capability = step.get("capability_name")
                 if capability:
-                    self.user_grants.require_capability(user_subject, capability)
+                    self.user_grants.require_capability(user_subject, capability, step.get("arguments"))
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -757,9 +757,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
             raise
         operation = self.operations.get(response["operationId"])
         grant_after = self.user_grants.get(user_subject)
-        if grant_before is not None and (
-            grant_after is None or grant_after["revision"] != grant_before["revision"]
-        ) and spec.effect == "read":
+        if grant_before != grant_after and spec.effect == "read":
             return {
                 **response,
                 "status": "rejected", "result": None,
@@ -1399,7 +1397,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
         operation = self.operations.get(operation_id)
         if operation["user_subject"] != user_subject:
             raise KeyError(f"operation not found: {operation_id}")
-        self.user_grants.require_capability(user_subject, operation["capability_name"])
+        self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
+        if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
+            operation = {**operation, "result": self.user_grants.filter_templates(user_subject, operation["result"])}
         task_id = self.tasks.task_id_for_operation(
             operation_id,
             user_subject=user_subject,
@@ -1418,7 +1418,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
             visible = []
             for operation in operations:
                 try:
-                    self.user_grants.require_capability(user_subject, operation["capability_name"])
+                    self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
+                    if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
+                        operation = {**operation, "result": self.user_grants.filter_templates(user_subject, operation["result"])}
                 except PermissionError:
                     continue
                 visible.append(operation)
@@ -1445,7 +1447,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         )
         if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
             operation = self.operations.get(record["operation_id"])
-            self.user_grants.require_capability(user_subject, operation["capability_name"])
+            self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
         task_id = self.tasks.task_id_for_interaction(
             interaction_id,
             user_subject=user_subject,
@@ -1529,7 +1531,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         )
         if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
             operation = self.operations.get(record["operation_id"])
-            self.user_grants.require_capability(user_subject, operation["capability_name"])
+            self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
         task_id = self.tasks.task_id_for_interaction(
             interaction_id,
             user_subject=user_subject,
@@ -2534,6 +2536,17 @@ class CentralCapabilityService(ControlledWriteExecutor):
             "tasks": [task_response(task) for task in tasks],
         }
 
+    def require_task_result_access(self, *, user_subject: str, task_id: str) -> None:
+        if self.user_grants.get(user_subject) is None:
+            return
+        for operation_id in self.tasks.operation_ids_for_task(task_id=task_id, user_subject=user_subject):
+            operation = self.operations.get(operation_id)
+            self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
+            if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
+                visible = self.user_grants.filter_templates(user_subject, operation["result"])
+                if visible.get("items") != operation["result"].get("items", []):
+                    raise PermissionError("Historical task contains templates outside current permissions")
+
     def get_host_task_snapshot(
         self,
         *,
@@ -2552,6 +2565,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         task = self.tasks.get_task(task_id, user_subject=user_subject)
         if task["agent_host"] != agent_host:
             raise TaskIntegrityError("task belongs to another agent host")
+        self.require_task_result_access(user_subject=user_subject, task_id=task_id)
         events = self.tasks.list_events(
             task_id=task_id,
             user_subject=user_subject,
@@ -3795,6 +3809,8 @@ class CentralCapabilityService(ControlledWriteExecutor):
                             worker,
                             arguments,
                         )
+                        if capability_name == "oa.template.list":
+                            result = self.user_grants.filter_templates(user_subject, result)
                         if capability_name == DOCUMENT_CERTIFICATE_SEARCH_CAPABILITY:
                             result = self._materialize_document_downloads(
                                 session=session,
@@ -3861,6 +3877,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
             return []
         session = self.sessions.get(records[0]["session_id"])
         for record in records:
+            self.document_downloads.require_access(record)
             if any(
                 (
                     record["session_id"] != session["session_id"],
@@ -3910,6 +3927,8 @@ class CentralCapabilityService(ControlledWriteExecutor):
                         raise ValueError(
                             "document download batch returned an invalid result count"
                         )
+                    for record in records:
+                        self.document_downloads.require_access(record)
                     return payloads
             except AdapterLoginRequired:
                 self.sessions.mark_expired(
@@ -4117,6 +4136,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
                 raise DocumentDownloadAccessDenied(
                     "document download belongs to another user"
                 )
+            self.document_downloads.require_access(existing)
             if existing["state"] == "ready":
                 ready = existing
             else:
@@ -4210,6 +4230,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
                     raise DocumentDownloadAccessDenied(
                         "document download belongs to another user"
                     )
+                self.document_downloads.require_access(existing)
                 if existing["state"] == "ready":
                     ready_by_id[download_id] = existing
                 else:
@@ -4368,8 +4389,6 @@ class CentralCapabilityService(ControlledWriteExecutor):
                     "ARTIFACT_REISSUE_UNSUPPORTED",
                     retryable=False,
                 )
-            if artifact["state"] == "ready":
-                return _reissued_document_delivery(artifact, reused=True)
             source = self.document_downloads.get(
                 artifact["source_ref"],
                 include_document=True,
@@ -4378,6 +4397,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
                 raise DocumentDownloadAccessDenied(
                     "document download belongs to another user"
                 )
+            self.document_downloads.require_access(source)
+            if artifact["state"] == "ready":
+                return _reissued_document_delivery(artifact, reused=True)
             session = self.sessions.find(
                 user_subject=user_subject,
                 system_id=source["system_id"],

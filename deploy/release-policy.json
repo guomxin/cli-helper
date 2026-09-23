@@ -1,8 +1,14 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "355f9a628062"
+    "f33494101802"
   ],
-  "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed 355f9a628062: this release adds read-only approval context to trusted field cards, warns when that context changes before authorization, and removes duplicate ancestor text from OA opinion parsing. It does not change the SQLite schema or stored-data interpretation, so the deployed release remains a compatible rollback target."
+  "dataCompatibility": "reviewed-schema-transition",
+  "schemaTransitions": {
+    "agentbridge.db": {
+      "beforeSha256": "af50193f59bfa5f5586fe58620b0ee02b1ce6caaeb205ad44eaea640709bb894",
+      "afterSha256": "668dc3ebf0c3d73003c5e96acee8867ca10730e92de18a8dc25f741d886b4e55"
+    }
+  },
+  "reason": "Reviewed against deployed f33494101802: additive user_business_grants, user_business_grant_events and mcp_token_renewals tables plus edit_revision and last_renewed_at token columns. Existing rows and database grants stay unchanged. Exact complete schema fingerprints constrain this migration; other databases must remain unchanged. Automatic rollback is forbidden after any schema change because old programs ignore user grants. Preserve the recovery point and require forward repair on failure."
 }

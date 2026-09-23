@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
@@ -444,10 +444,12 @@ class AdminAuditStore(_SqliteStore):
         before: Any = None,
         after: Any = None,
         error: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> dict:
         event_id = str(uuid4())
         created_at = _format_time(self._now())
-        with self._connect() as connection:
+        external_connection = connection is not None
+        with (nullcontext(connection) if external_connection else self._connect()) as connection:
             connection.execute(
                 """
                 INSERT INTO admin_audit_events (
@@ -473,7 +475,7 @@ class AdminAuditStore(_SqliteStore):
                     created_at,
                 ),
             )
-        return self.get(event_id)
+        return {"event_id": event_id} if external_connection else self.get(event_id)
 
     def get(self, event_id: str) -> dict:
         with self._connect() as connection:

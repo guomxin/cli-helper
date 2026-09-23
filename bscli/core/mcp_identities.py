@@ -48,6 +48,8 @@ class McpIdentityTokenStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._initialize()
+        from bscli.core.user_grants import UserGrants
+        self.user_grants = UserGrants(self.db_path)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -239,7 +241,7 @@ class McpIdentityTokenStore:
 
     def renew(
         self, token_id: str, *, new_expires_at: str, expected_revision: int,
-        request_id: str, actor: str, reason: str,
+        request_id: str, actor: str, reason: str, audit_callback=None,
     ) -> dict:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ValueError("invalid token edit revision")
@@ -254,8 +256,6 @@ class McpIdentityTokenStore:
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid token expiry") from exc
         now = _as_utc(self.clock())
-        if not now + timedelta(minutes=5) <= requested <= now + timedelta(days=90):
-            raise ValueError("token expiry must be between 5 minutes and 90 days from now")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             prior = connection.execute(
@@ -266,6 +266,8 @@ class McpIdentityTokenStore:
                 if prior["token_id"] != token_id or prior["new_expires_at"] != _format_time(requested):
                     raise TokenEditConflict("renewal request id was used for another change")
                 return self.get(token_id)
+            if not now + timedelta(minutes=5) <= requested <= now + timedelta(days=90):
+                raise ValueError("token expiry must be between 5 minutes and 90 days from now")
             row = connection.execute(
                 "SELECT * FROM mcp_identity_tokens WHERE token_id = ?", (token_id,)
             ).fetchone()
@@ -293,6 +295,9 @@ class McpIdentityTokenStore:
                 (request_id, token_id, _format_time(requested), expected_revision + 1,
                  actor.strip(), reason.strip(), _format_time(now)),
             )
+            if audit_callback:
+                updated = connection.execute("SELECT * FROM mcp_identity_tokens WHERE token_id = ?", (token_id,)).fetchone()
+                audit_callback(connection, record, _record_from_row(updated))
         return self.get(token_id)
 
 

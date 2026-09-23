@@ -67,6 +67,26 @@ def schemas(home):
     return json.loads(json.dumps(result))
 
 
+def schema_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def authorized_schema_transition(policy, before, after):
+    if policy["dataCompatibility"] == "no-migration":
+        return before == after
+    if policy["dataCompatibility"] != "reviewed-schema-transition":
+        return False
+    transitions = policy.get("schemaTransitions", {})
+    if not transitions or set(before) != set(after) or not set(transitions).issubset(before):
+        return False
+    return all(
+        (schema_digest(before[name]) == transitions[name].get("beforeSha256")
+         and schema_digest(after[name]) == transitions[name].get("afterSha256"))
+        if name in transitions else before[name] == after[name]
+        for name in before
+    )
+
+
 class Release:
     def __init__(self, config, *, runner=subprocess.run, unit_root=Path("/etc/systemd/system")):
         self.config = config
@@ -132,8 +152,14 @@ class Release:
         previous = self.active_release()
         self.run("systemctl", "is-active", "--quiet", self.service)
         policy = self.config["policy"]
-        if previous not in policy["compatibleFrom"] or policy["dataCompatibility"] != "no-migration":
-            raise RuntimeError("Release policy does not authorize this predecessor without data migration")
+        if previous not in policy["compatibleFrom"] or policy["dataCompatibility"] not in {"no-migration", "reviewed-schema-transition"}:
+            raise RuntimeError("Release policy does not authorize this predecessor")
+        if policy["dataCompatibility"] == "reviewed-schema-transition":
+            before = schemas(self.root / "data")
+            transitions = policy.get("schemaTransitions", {})
+            if not transitions or any(name not in before or schema_digest(before[name]) != transition.get("beforeSha256")
+                                      for name, transition in transitions.items()):
+                raise RuntimeError("Reviewed migration baseline does not match current SQLite schema")
         if self.current.exists() and not self.current.is_symlink():
             raise RuntimeError("current must be a symlink")
         if self.current.is_symlink() and not self.current.resolve().is_relative_to(self.root / "releases"):
@@ -242,8 +268,8 @@ class Release:
         self.run("systemctl", "start", self.service)
         self.stage("checking")
         self.ready()
-        if schemas(self.root / "data") != self.state["schemaBefore"]:
-            raise RuntimeError("No-migration contract violated: SQLite schema changed")
+        if not authorized_schema_transition(self.config["policy"], self.state["schemaBefore"], schemas(self.root / "data")):
+            raise RuntimeError("Release schema contract violated: SQLite schema changed unexpectedly")
         self.stage("confirmed")
 
     def recover(self):

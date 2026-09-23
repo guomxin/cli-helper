@@ -6,6 +6,40 @@ from bscli.core.user_grants import UserGrantConflict, UserGrants
 
 
 class UserGrantTests(unittest.TestCase):
+    def test_migration_preview_includes_expired_not_revoked_and_never_unions(self):
+        preview = UserGrants.migration_preview([
+            {"token_id": "a", "state": "active", "scopes": ["oa:read", "oa:read:addressbook"], "expires_at": "2099-01-01"},
+            {"token_id": "b", "state": "active", "scopes": ["oa:read"], "expires_at": "2000-01-01"},
+            {"token_id": "c", "state": "revoked", "scopes": []},
+        ])
+        self.assertFalse(preview["consistent"])
+        self.assertEqual([t["token_id"] for t in preview["tokens"]], ["a", "b"])
+        self.assertIn("oa.workflow.read", preview["recommended_permissions"])
+        self.assertNotIn("oa.addressbook.read", preview["recommended_permissions"])
+
+    def test_audit_failure_rolls_back_grant_and_revision(self):
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            def broken_audit(*args):
+                raise RuntimeError("audit unavailable")
+            with self.assertRaisesRegex(RuntimeError, "audit unavailable"):
+                grants.save("user-a", ["oa.workflow.read"], expected_revision=0,
+                            actor="admin", reason="test", audit_callback=broken_audit)
+            self.assertIsNone(grants.get("user-a"))
+
+    def test_template_filter_uses_exact_contract_and_no_private_tool_discovery(self):
+        from bscli.adapters.seeyon_leave import LEAVE_TEMPLATE_ID, LEAVE_FORM_APP_ID
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            grants.save("user-a", ["oa.leave.draft"], expected_revision=0, actor="admin", reason="test")
+            good = {"template_id": LEAVE_TEMPLATE_ID, "form_app_id": LEAVE_FORM_APP_ID}
+            filtered = grants.filter_templates("user-a", {"items": [good, {**good, "form_app_id": "other"}], "raw": "secret"})
+            self.assertEqual(filtered["items"], [good])
+            self.assertNotIn("raw", filtered)
+            tools = grants.available_tools("user-a", [])
+            self.assertIn("oa_template_list", tools)
+            self.assertNotIn("oa_leave_save_draft", tools)
+
     def test_service_execution_and_plan_catalog_follow_current_user_grant(self):
         from bscli.core.central_service import CentralCapabilityService
 

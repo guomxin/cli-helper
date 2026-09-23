@@ -1820,6 +1820,14 @@ class TaskHubStore:
             row = self._select_task(connection, task_id)
         return _task_from_row(row)
 
+    def operation_ids_for_task(self, *, task_id: str, user_subject: str) -> list[str]:
+        with self._connect() as connection:
+            self._select_owned_task(connection, task_id, user_subject)
+            return [row[0] for row in connection.execute(
+                "SELECT operation_id FROM task_operations WHERE task_id = ? AND user_subject = ?",
+                (task_id, user_subject),
+            )]
+
     def operation_before_interaction(
         self, *, task_id: str, user_subject: str, interaction_id: str
     ) -> dict | None:

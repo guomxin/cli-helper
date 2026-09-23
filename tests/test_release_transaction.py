@@ -57,6 +57,17 @@ class FixtureRelease(release.Release):
 
 
 class ReleaseTransactionTests(unittest.TestCase):
+    def test_reviewed_transition_requires_exact_before_and_after(self):
+        before = {"agentbridge.db": {"schema": ["old"]}, "other.db": {"schema": []}}
+        after = {"agentbridge.db": {"schema": ["new"]}, "other.db": {"schema": []}}
+        policy = {"dataCompatibility": "reviewed-schema-transition", "schemaTransitions": {
+            "agentbridge.db": {"beforeSha256": release.schema_digest(before["agentbridge.db"]),
+                              "afterSha256": release.schema_digest(after["agentbridge.db"])}}}
+        self.assertTrue(release.authorized_schema_transition(policy, before, after))
+        self.assertFalse(release.authorized_schema_transition(policy, after, after))
+        self.assertFalse(release.authorized_schema_transition(policy, before, before))
+        self.assertFalse(release.authorized_schema_transition(policy, before, {**after, "other.db": {"schema": ["bad"]}}))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -400,6 +400,7 @@ class DocumentDownloadStore:
                 raise DocumentDownloadStateError(
                     f"document download is not ready: {row['state']}"
                 )
+        self.require_access(_record(row, include_document=True))
         cache_path = self._cache_path(download_id)
         try:
             body = cache_path.read_bytes()
@@ -411,10 +412,28 @@ class DocumentDownloadStore:
             raise DocumentDownloadIntegrityError(
                 "prepared document size verification failed"
             )
+        self.require_access(_record(row, include_document=True))
         return {
             **_record(row, include_document=False),
             "body": body,
         }
+
+    def require_access(self, record: dict) -> None:
+        from bscli.core.user_grants import UserGrants
+        grants = UserGrants(self.db_path)
+        subject = record["user_subject"]
+        if grants.get(subject) is None:
+            return
+        kind = record["document_type"]
+        if kind in {"patent_certificate", "software_copyright_certificate"}:
+            grants.require(subject, "oa.certificate.read")
+            grants.require(subject, "oa.certificate.download")
+        elif kind == ADDRESSBOOK_REPORT_DOCUMENT_TYPE:
+            grants.require_tool(subject, "oa_addressbook_export", record["document"]["arguments"])
+        elif kind == SMARTLIGHT_REPORT_DOCUMENT_TYPE:
+            grants.require_tool(subject, "smartlight_report_export", record["document"]["arguments"])
+        else:
+            raise PermissionError("unknown download permission mapping")
 
     def _cache_path(self, download_id: str) -> Path:
         normalized = str(download_id or "")

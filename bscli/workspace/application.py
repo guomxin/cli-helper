@@ -174,6 +174,7 @@ class WorkspaceApplication:
         ]
 
     def task_detail(self, account: dict, task_id: str) -> dict:
+        self.service.require_task_result_access(user_subject=account["user_subject"], task_id=task_id)
         task = self.service.tasks.get_task(
             task_id,
             user_subject=account["user_subject"],

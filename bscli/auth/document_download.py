@@ -16,7 +16,6 @@ from bscli.core.document_downloads import (
     DocumentDownloadStore,
     SUPPORTED_DOCUMENT_CONTENT_TYPES,
 )
-from bscli.core.user_grants import UserGrants
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
@@ -40,7 +39,13 @@ class TrustedDocumentDownloadApplication:
 
     def get_card(self, download_id: str, *, secure_cookie: bool) -> AuthCardResponse:
         try:
-            record = self.download_store.get(download_id)
+            record = self.download_store.get(download_id, include_document=True)
+            self.download_store.require_access(record)
+        except PermissionError:
+            return _message_response(
+                status=403, title="当前无权下载该文件",
+                message="请联系管理员核对该文件及其来源的访问权限。", tone="error",
+            )
         except DocumentDownloadNotFound:
             return _message_response(
                 status=404,
@@ -94,10 +99,6 @@ class TrustedDocumentDownloadApplication:
     def get_file(self, download_id: str) -> AuthCardResponse:
         try:
             payload = self.download_store.ready_payload(download_id)
-            grants = UserGrants(self.download_store.db_path)
-            if grants.get(payload["user_subject"]) is not None:
-                grants.require(payload["user_subject"], "oa.certificate.download")
-                grants.require(payload["user_subject"], "oa.certificate.read")
         except DocumentDownloadNotFound:
             return _message_response(
                 status=404,
@@ -109,7 +110,7 @@ class TrustedDocumentDownloadApplication:
             return _message_response(
                 status=403,
                 title="当前无权下载该文件",
-                message="请联系管理员核对证照下载权限。",
+                message="请联系管理员核对该文件及其来源的访问权限。",
                 tone="error",
             )
         except (
@@ -197,7 +198,9 @@ class TrustedDocumentDownloadApplication:
             )
 
         try:
+            self.download_store.require_access(record)
             payload = self.fetcher(record)
+            self.download_store.require_access(record)
             file_body = payload["body"]
             filename = str(payload.get("filename") or record["filename"])
             content_type = str(payload.get("content_type") or "application/pdf")
@@ -206,6 +209,12 @@ class TrustedDocumentDownloadApplication:
             if content_type not in SUPPORTED_DOCUMENT_CONTENT_TYPES:
                 raise TypeError("document fetcher returned an unsupported content type")
             self.download_store.complete(download_id)
+        except PermissionError:
+            self.download_store.release(download_id)
+            return _message_response(
+                status=403, title="当前无权下载该文件",
+                message="请联系管理员核对该文件及其来源的访问权限。", tone="error",
+            )
         except Exception as exc:
             error_code = _safe_error_code(exc)
             _LOGGER.warning(
