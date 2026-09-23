@@ -13,9 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class OpenClawRestartPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.shell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        # Exercise the same PowerShell 7 runtime required by the release entrypoints.
+        # Windows also has 5.1 installed; choosing it first made CI use a different host.
+        cls.shell = shutil.which("pwsh")
         if not cls.shell:
-            raise unittest.SkipTest("PowerShell is required")
+            raise unittest.SkipTest("PowerShell 7 is required")
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -61,7 +63,9 @@ function Decide($snapshot) {
             env={**os.environ, "POLICY_ROOT": str(self.root),
                  "POLICY_MODULE": str(ROOT / "scripts/AgentBridgeOpenClawRestartPolicy.psm1")},
             stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, encoding="utf-8", timeout=40,
+            # Shared Windows runners can be heavily contended under pytest-xdist.
+            # This is a correctness check, not a 40-second performance contract.
+            capture_output=True, text=True, encoding="utf-8", timeout=120,
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout.strip().splitlines()[-1])
