@@ -629,6 +629,8 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             "oa.work_handover.approval.prepare",
             "oa.resignation.approve",
             "oa.work_handover.approve",
+            "oa.flight_application.approval.prepare",
+            "oa.flight_application.approve",
             "oa.attendance_confirmation.prepare",
             "oa.attendance_confirmation.confirm",
             "oa.weekly_report.acknowledgement.prepare",

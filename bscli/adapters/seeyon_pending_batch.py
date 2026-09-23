@@ -15,6 +15,7 @@ PENDING_BATCH_TYPES = (
     "missed_punch", "efficiency_data", "travel_expense", "business_trip",
     "labor_contract_renewal",
     "intellectual_property_declaration", "overtime", "leave", "resignation", "work_handover",
+    "flight_application",
     "attendance_confirmation", "weekly_report", "standard_collaboration",
 )
 PENDING_BATCH_INPUT_SCHEMA = {

@@ -12,6 +12,9 @@ from bscli.adapters.seeyon_business_trip import (
     BUSINESS_TRIP_TEMPLATE_ID,
     BUSINESS_TRIP_TRAVEL_MODES,
 )
+from bscli.adapters.seeyon_flight_application import (
+    flight_application_business_snapshot, flight_application_summary_fields,
+)
 from bscli.adapters.seeyon_work_handover import (
     work_handover_business_snapshot, work_handover_summary_fields,
 )
@@ -47,6 +50,8 @@ RESIGNATION_APPROVAL_PREPARE_CAPABILITY = "oa.resignation.approval.prepare"
 RESIGNATION_APPROVE_CAPABILITY = "oa.resignation.approve"
 WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY = "oa.work_handover.approval.prepare"
 WORK_HANDOVER_APPROVE_CAPABILITY = "oa.work_handover.approve"
+FLIGHT_APPLICATION_APPROVAL_PREPARE_CAPABILITY = "oa.flight_application.approval.prepare"
+FLIGHT_APPLICATION_APPROVE_CAPABILITY = "oa.flight_application.approve"
 ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY = (
     "oa.attendance_confirmation.prepare"
 )
@@ -163,6 +168,12 @@ WORK_HANDOVER_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
     schema_version="agentbridge.oa_work_handover_approval_fields.v1",
     title="填写工作交接审批意见",
     effect="审批通过一条工作交接单",
+    submit_label="提交审批意见",
+)
+FLIGHT_APPLICATION_APPROVAL_FIELD_CARD_SCHEMA = _opinion_card(
+    schema_version="agentbridge.oa_flight_application_approval_fields.v1",
+    title="填写乘坐飞机申请审批意见",
+    effect="审批通过一条乘坐飞机申请单",
     submit_label="提交审批意见",
 )
 ATTENDANCE_CONFIRMATION_FIELD_CARD_SCHEMA = _opinion_card(
@@ -457,6 +468,28 @@ _PROFILES = {
         "authorize_label": "授权审批通过",
         "business_snapshot_policy": "work_handover_v1",
     },
+    "flight_application": {
+        "prepare_capability": FLIGHT_APPLICATION_APPROVAL_PREPARE_CAPABILITY,
+        "commit_capability": FLIGHT_APPLICATION_APPROVE_CAPABILITY,
+        "contract_version": "seeyon-flight-application-approval-v1",
+        "plan_schema": "agentbridge.oa_flight_application_approval_plan.v1",
+        "result_schema": "agentbridge.oa_flight_application_approval_result.v1",
+        "business_intent": "approve_flight_application",
+        "title_rule": {"kind": "prefix", "value": "【综合】乘坐飞机申请单"},
+        "required_fields": {"申请人", "出发时间"},
+        "allowed_fields": None,
+        "template_id": "-2302881233144493310",
+        "form_app_id": "2631521264809559746",
+        "node_policies": {"approve"},
+        "node_policy_names": {"审批"},
+        "action_kind": "approval",
+        "attitude_code": "agree",
+        "action_display": "审批通过",
+        "summary_title": "审批乘坐飞机申请单",
+        "summary_effect": "审批通过后该乘坐飞机申请将离开待办列表",
+        "authorize_label": "授权审批通过",
+        "business_snapshot_policy": "flight_application_v1",
+    },
     "attendance_confirmation": {
         "prepare_capability": ATTENDANCE_CONFIRMATION_PREPARE_CAPABILITY,
         "commit_capability": ATTENDANCE_CONFIRM_CAPABILITY,
@@ -554,6 +587,7 @@ _SPECIALIZED_TITLE_MARKERS = (
     "【采购】",
     "【用印】",
     "【知识产权】",
+    "乘坐飞机申请单",
 )
 
 
@@ -747,6 +781,26 @@ def approve_work_handover(
         worker,
         plan,
         profile_key="work_handover",
+        enter_commit_boundary=enter_commit_boundary,
+    )
+
+
+def prepare_flight_application_approval(adapter, worker, arguments: dict) -> dict:
+    return _prepare_pending_action(adapter, worker, arguments, "flight_application")
+
+
+def approve_flight_application(
+    adapter,
+    worker,
+    plan: dict,
+    *,
+    enter_commit_boundary: Callable[[], None],
+) -> dict:
+    return _commit_pending_action(
+        adapter,
+        worker,
+        plan,
+        profile_key="flight_application",
         enter_commit_boundary=enter_commit_boundary,
     )
 
@@ -978,11 +1032,11 @@ def _commit_pending_action(
                     collection="pending",
                     arguments={"limit": 100},
                 )
-                if profile_key == "work_handover" and (
+                if profile_key in {"work_handover", "flight_application"} and (
                     pending.get("coverage") or {}
                 ).get("status") != "complete":
                     raise PendingActionOutcomeUnknown(
-                        "The work-handover pending readback is incomplete; disappearance is not proven."
+                        "The pending readback is incomplete; disappearance is not proven."
                     )
                 if not any(
                     str(item.get("affair_id") or "") == affair_id
@@ -1158,6 +1212,16 @@ def _validate_target(
         try:
             signals = dict(signals)
             signals["business_snapshot"] = work_handover_business_snapshot(page)
+        except ValueError as exc:
+            raise PendingActionContractMismatch(str(exc)) from exc
+    elif profile.get("business_snapshot_policy") == "flight_application_v1":
+        if node_policy not in profile["node_policies"] or node_policy_name not in profile["node_policy_names"]:
+            raise PendingActionContractMismatch("The OA flight-application approval node identity is inconsistent.")
+        if not str(identity.get("form_record_id") or ""):
+            raise PendingActionContractMismatch("The OA flight-application form record identity is unavailable.")
+        try:
+            signals = dict(signals)
+            signals["business_snapshot"] = flight_application_business_snapshot(page)
         except ValueError as exc:
             raise PendingActionContractMismatch(str(exc)) from exc
     return signals
@@ -1879,6 +1943,8 @@ def _summary(
                 fields.append({"label": label, "value": snapshot[name]})
     elif profile_key == "work_handover":
         fields.extend(work_handover_summary_fields(target["business_snapshot"]))
+    elif profile_key == "flight_application":
+        fields.extend(flight_application_summary_fields(target["business_snapshot"]))
     elif profile_key == "weekly_report":
         for name in ("周报名称", "年度", "本周说明"):
             if values.get(name):

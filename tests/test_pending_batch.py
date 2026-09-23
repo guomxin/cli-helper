@@ -167,6 +167,12 @@ def test_selection_limits_filters_and_fail_closed(tmp_path):
         registry,
     )
     assert business_trip[0]["display_summary"]["profile"] == "business_trip"
+    flight = select_pending_batch_items(
+        pending([row(26, "【综合】乘坐飞机申请单")]),
+        {"workflow_types": ["flight_application"]},
+        registry,
+    )
+    assert flight[0]["display_summary"]["profile"] == "flight_application"
     assert len(select_pending_batch_items(pending(rows[:5]), {"keyword": "研发中心", "workflow_types": ["efficiency_data"]}, registry)) == 5
     cases = [
         (pending(rows), {}, "BATCH_LIMIT_EXCEEDED"),

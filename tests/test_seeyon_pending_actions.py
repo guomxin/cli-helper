@@ -499,12 +499,14 @@ class PendingActionTests(unittest.TestCase):
                 "overtime",
                 "leave",
                 "resignation",
+                "work_handover",
+                "flight_application",
                 "attendance_confirmation",
                 "weekly_report",
                 "standard_collaboration",
             )
         }
-        self.assertEqual(len(fingerprints), 11)
+        self.assertEqual(len(fingerprints), 13)
 
 
 class FakeAdapter:

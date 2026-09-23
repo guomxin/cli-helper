@@ -46,6 +46,8 @@ class SeeyonCentralWorkflowTests(unittest.TestCase):
                 "oa.document.certificate.search",
                 "oa.efficiency_data.approval.prepare",
                 "oa.efficiency_data.approve",
+                "oa.flight_application.approval.prepare",
+                "oa.flight_application.approve",
                 "oa.intellectual_property_declaration.approval.prepare",
                 "oa.intellectual_property_declaration.approve",
                 "oa.labor_contract_renewal.approval.prepare",

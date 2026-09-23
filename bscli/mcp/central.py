@@ -79,8 +79,10 @@ from bscli.adapters.seeyon_pending_actions import (
     OVERTIME_APPROVE_CAPABILITY,
     RESIGNATION_APPROVAL_PREPARE_CAPABILITY,
     WORK_HANDOVER_APPROVAL_PREPARE_CAPABILITY,
+    FLIGHT_APPLICATION_APPROVAL_PREPARE_CAPABILITY,
     RESIGNATION_APPROVE_CAPABILITY,
     WORK_HANDOVER_APPROVE_CAPABILITY,
+    FLIGHT_APPLICATION_APPROVE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVAL_PREPARE_CAPABILITY,
     STANDARD_COLLABORATION_APPROVE_CAPABILITY,
     TRAVEL_EXPENSE_APPROVAL_PREPARE_CAPABILITY,
@@ -246,6 +248,7 @@ AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
     "oa_leave_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_resignation_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_work_handover_approval_prepare": frozenset({"oa:write:approval"}),
+    "oa_flight_application_approval_prepare": frozenset({"oa:write:approval"}),
     "oa_attendance_confirmation_prepare": frozenset(
         {"oa:write:approval"}
     ),
@@ -1201,6 +1204,23 @@ def create_central_mcp_server(
                 "work-handover request leaves the complete pending collection."
             ),
             "commit_capability": WORK_HANDOVER_APPROVE_CAPABILITY,
+        },
+        {
+            "prepare_tool_name": "oa_flight_application_approval_prepare",
+            "prepare_title": "Prepare OA Flight Application Approval",
+            "prepare_description": (
+                "Bind one exact pending 乘坐飞机申请单. Validate its dedicated template, "
+                "read-only approval node and every itinerary leg; freeze the applicant, "
+                "route, dates and reasons. Pass any opinion already supplied by the user."
+            ),
+            "prepare_capability": FLIGHT_APPLICATION_APPROVAL_PREPARE_CAPABILITY,
+            "commit_tool_name": "oa_flight_application_approve",
+            "commit_title": "Approve Authorized OA Flight Application",
+            "commit_description": (
+                "Consume one approved authorization and verify that the exact "
+                "flight application leaves the complete pending collection."
+            ),
+            "commit_capability": FLIGHT_APPLICATION_APPROVE_CAPABILITY,
         },
         {
             "prepare_tool_name": "oa_attendance_confirmation_prepare",
@@ -2628,7 +2648,7 @@ def create_central_mcp_server(
         meta=interaction_tool_meta(),
         description=(
             "处理多条或全部OA待办时调用一次本工具，不要仅调用单条prepare后口头承诺继续。"
-            "支持补签、效能、差旅费、出差申请、劳动合同、知识产权、加班、请假、离职、考勤、周报和普通协同。"
+            "支持补签、效能、差旅费、出差申请、乘坐飞机申请、劳动合同、知识产权、加班、请假、离职、考勤、周报和普通协同。"
             "用户说上面的/选中的事项时，传已读取清单中的精确affair_ids；不能扩大为所有待办。"
             "也可用workflow_types和标题keyword选择当前待办，两者同时提供取交集。"
             "冻结清单后逐项独立填写和授权，核验成功才自动推进；新待办不加入。"
@@ -2644,7 +2664,7 @@ def create_central_mcp_server(
         workflow_types: list[Literal[
             "missed_punch", "efficiency_data", "travel_expense", "business_trip",
             "labor_contract_renewal", "intellectual_property_declaration", "overtime",
-            "leave", "resignation", "work_handover", "attendance_confirmation",
+            "leave", "resignation", "work_handover", "flight_application", "attendance_confirmation",
             "weekly_report", "standard_collaboration",
         ]] | None = None,
         keyword: Annotated[str | None, Field(max_length=200)] = None,

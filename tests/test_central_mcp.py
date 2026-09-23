@@ -344,6 +344,8 @@ class CentralMcpTests(unittest.TestCase):
             "oa_work_handover_approval_prepare",
             "oa_resignation_approve",
             "oa_work_handover_approve",
+            "oa_flight_application_approval_prepare",
+            "oa_flight_application_approve",
             "oa_attendance_confirmation_prepare",
             "oa_attendance_confirm",
             "oa_weekly_report_acknowledgement_prepare",
