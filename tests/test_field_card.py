@@ -39,6 +39,39 @@ class TrustedFieldCardTests(unittest.TestCase):
             self.assertIn("if (false && (platform || canPost || canNotify))", html)
             self.assertNotIn("telegram.org", html)
 
+    def test_card_renders_read_only_approval_context_before_input(self):
+        with TemporaryDirectory() as tmp:
+            store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")
+            schema = deepcopy(BUSINESS_TRIP_FIELD_CARD_SCHEMA)
+            schema["review"] = {
+                "title": "【综合】乘坐飞机申请单",
+                "effect": "审批通过后该事项将离开待办列表",
+                "fields": [
+                    {"label": "申请人", "value": "郑其荣"},
+                    {"label": "航段1 · 行程", "value": "济南 → 榆林"},
+                ],
+            }
+            submission = store.create(
+                user_subject="user-a",
+                system_id="oa",
+                session_id="session-a",
+                capability_name="oa.flight_application.approval.prepare",
+                capability_version="0.1.0",
+                create_operation_id="prepare-flight-1",
+                form_schema=schema,
+                card_base_url="http://127.0.0.1:8780",
+            )
+            app = TrustedFieldApplication(submission_store=store)
+
+            response = app.get_card(submission["submission_id"], secure_cookie=False)
+            html = response.body.decode("utf-8")
+
+            self.assertIn("审批依据", html)
+            self.assertIn("【综合】乘坐飞机申请单", html)
+            self.assertIn("郑其荣", html)
+            self.assertIn("济南 → 榆林", html)
+            self.assertLess(html.index("审批依据"), html.index('name="start_time"'))
+
     def test_card_renders_prefilled_meeting_values_and_real_room_options(self):
         with TemporaryDirectory() as tmp:
             store = FieldSubmissionStore(Path(tmp) / "agentbridge.db")

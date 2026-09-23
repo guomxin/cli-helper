@@ -3630,6 +3630,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
                             task_id=task_id, user_subject=user_subject, arguments=arguments,
                         )
                 dynamic_field_schema = None
+                preflight_result = None
                 if (
                     prepare_definition is not None
                     and not str(arguments.get("input_submission_id") or "").strip()
@@ -3652,7 +3653,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
                                     "trusted write preflight function is unavailable"
                                 )
                             try:
-                                preflight_function(
+                                preflight_result = preflight_function(
                                     adapter,
                                     worker,
                                     arguments,
@@ -3684,6 +3685,20 @@ class CentralCapabilityService(ControlledWriteExecutor):
                             session["session_id"],
                             state,
                         )
+                if (
+                    isinstance(preflight_result, dict)
+                    and isinstance(preflight_result.get("review"), dict)
+                ):
+                    schema = deepcopy(
+                        dynamic_field_schema or prepare_definition["field_schema"]
+                    )
+                    schema["review"] = deepcopy(preflight_result["review"])
+                    review_fingerprint = str(
+                        preflight_result.get("review_fingerprint") or ""
+                    ).strip()
+                    if review_fingerprint:
+                        schema["_agentbridge_review_fingerprint"] = review_fingerprint
+                    dynamic_field_schema = schema
                 if capability_name == PENDING_BATCH_PREPARE_CAPABILITY:
                     schema = deepcopy(dynamic_field_schema or prepare_definition["field_schema"])
                     schema["title"] += f"（第 {arguments['batch_ordinal']}/{arguments['batch_total']} 条）"

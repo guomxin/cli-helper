@@ -941,13 +941,26 @@ def preflight_pending_action(
     profile_key: str,
 ) -> dict:
     affair_id = _bounded_identifier(arguments.get("affair_id"), "affair_id")
-    _profile_value, source, _detail, _signals = _resolve_validated_target(
+    profile, source, detail, signals = _resolve_validated_target(
         adapter, worker, affair_id, profile_key
     )
+    target = _frozen_target(source, detail, signals, profile_key)
+    summary = _summary(profile_key, profile, target, detail, "")
+    review_fields = [
+        dict(field)
+        for field in summary.get("fields") or []
+        if field.get("label") != "处理意见"
+    ]
     return {
         "matched": True,
         "profile": profile_key,
         "affair_id": str(source.get("affair_id") or affair_id),
+        "review_fingerprint": target["review_fingerprint"],
+        "review": {
+            "title": str(source.get("title") or summary["title"]),
+            "effect": summary["effect"],
+            "fields": review_fields,
+        },
     }
 
 
@@ -1785,6 +1798,7 @@ def _frozen_target(
     }
     if signals.get("business_snapshot"):
         target["business_snapshot"] = dict(signals["business_snapshot"])
+    target["review_fingerprint"] = _fingerprint(target)
     return target
 
 
@@ -1811,6 +1825,10 @@ def _assert_frozen_target(expected: dict, actual: dict) -> None:
     if expected.get("business_snapshot") != actual.get("business_snapshot"):
         raise PendingActionContractMismatch(
             "The OA pending target business_snapshot changed after authorization."
+        )
+    if expected.get("review_fingerprint") != actual.get("review_fingerprint"):
+        raise PendingActionContractMismatch(
+            "The OA pending target review_fingerprint changed after authorization."
         )
 
 

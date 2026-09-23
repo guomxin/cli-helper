@@ -171,6 +171,34 @@ class SeeyonHomeParserTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_oa_detail_discards_form_ancestors_that_repeat_one_opinion(self):
+        html = """
+        <html><body>
+          <div class="cap4-form">
+            乘坐飞机申请单 申请人 郑其荣 出发地点 济南 到达地点 榆林
+            审批信息 流程处理意见 【同意】 同意 辛国茂 2026-09-23 14:15
+            <div>审批信息 流程处理意见 【同意】 同意 辛国茂 2026-09-23 14:15</div>
+            <div>流程处理意见 【同意】 同意 辛国茂 2026-09-23 14:15</div>
+          </div>
+          <div class="processLog">辛国茂 同意 2026-09-23 14:15 回复 ( ) 0</div>
+        </body></html>
+        """
+
+        result = parse_oa_detail(
+            html,
+            base_url="http://10.10.50.110/seeyon/collaboration/collaboration.do?method=summary",
+        )
+
+        self.assertEqual(
+            result["workflow"],
+            [{
+                "text": "辛国茂 同意 2026-09-23 14:15",
+                "handler": "辛国茂",
+                "opinion": "同意",
+                "time": "2026-09-23 14:15",
+            }],
+        )
+
     def test_parse_oa_detail_extracts_write_actions_from_page_script(self):
         html = """
         <html>

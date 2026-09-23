@@ -58,6 +58,25 @@ class ControlledWriteExecutor:
             raise RuntimeError("trusted write prepare function is unavailable")
         self._assert_write_allowed(context=context, system_id=session["system_id"])
         prepared = prepare_function(adapter, worker, arguments)
+        review_changed = False
+        if field_submission is not None:
+            expected_review_fingerprint = str(
+                field_submission.get("form_schema", {}).get(
+                    "_agentbridge_review_fingerprint"
+                )
+                or ""
+            ).strip()
+            actual_review_fingerprint = str(
+                prepared.get("plan", {}).get("target", {}).get(
+                    "review_fingerprint"
+                )
+                or ""
+            ).strip()
+            review_changed = bool(
+                expected_review_fingerprint
+                and actual_review_fingerprint
+                and expected_review_fingerprint != actual_review_fingerprint
+            )
         if field_submission is None:
             resume_arguments = {
                 name: arguments[name]
@@ -94,6 +113,18 @@ class ControlledWriteExecutor:
             or session.get("expected_principal_ref")
             or session["user_subject"],
         }
+        if review_changed:
+            summary["fields"] = [
+                {
+                    "label": "详情变化",
+                    "value": "填写意见后单据内容发生变化，请按当前详情重新核对本次授权。",
+                },
+                *list(summary.get("fields") or []),
+            ]
+            summary["authorization_notice"] = (
+                "单据内容在填写意见后发生变化；本授权卡展示并绑定最新详情。"
+                "请重新核对后再决定是否授权。"
+            )
         if context.spec.name == PENDING_BATCH_PREPARE_CAPABILITY:
             batch = self.tasks.get_batch_for_task(
                 parent_task_id=context.task_id, user_subject=session["user_subject"],

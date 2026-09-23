@@ -422,6 +422,7 @@ def _render_form(
     error_html = (
         f'<p class="form-error" role="alert">{escape(error)}</p>' if error else ""
     )
+    review_html = _render_review(schema.get("review"))
     return _document(
         title=str(schema.get("title") or "填写操作字段"),
         nonce=nonce,
@@ -437,6 +438,7 @@ def _render_form(
               </div>
             </header>
             {error_html}
+            {review_html}
             <form method="post" action="{_form_action(submission['submission_id'], presentation_id)}">
               <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
               <div class="form-grid">{controls}</div>
@@ -447,6 +449,39 @@ def _render_form(
           </section>
         </main>
         """,
+    )
+
+
+def _render_review(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    fields = value.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return ""
+    rows = []
+    for item in fields[:100]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        field_value = str(item.get("value") or "").strip()
+        if not label or not field_value:
+            continue
+        rows.append(
+            f"<div class=\"review-row\"><dt>{escape(label)}</dt>"
+            f"<dd>{escape(field_value)}</dd></div>"
+        )
+    if not rows:
+        return ""
+    title = escape(str(value.get("title") or "审批详情"))
+    effect = str(value.get("effect") or "").strip()
+    effect_html = (
+        f'<p class="review-effect">{escape(effect)}</p>' if effect else ""
+    )
+    return (
+        '<section class="review" aria-labelledby="review-title">'
+        '<p class="review-kicker">审批依据</p>'
+        f'<h2 id="review-title">{title}</h2>{effect_html}'
+        f'<dl>{"".join(rows)}</dl></section>'
     )
 
 
@@ -583,6 +618,16 @@ def _document(
     .eyebrow {{ margin:0 0 5px; color:var(--teal-dark); font-size:11px; font-weight:700; }}
     h1 {{ margin:0; font-size:24px; line-height:1.3; }}
     .system-name {{ margin:5px 0 0; color:var(--muted); font-size:12px; }}
+    .review {{ margin:0 0 24px; padding:18px; border:1px solid var(--line);
+      border-radius:6px; background:#f8faf8; }}
+    .review-kicker {{ margin:0 0 5px; color:var(--teal-dark); font-size:11px; font-weight:700; }}
+    .review h2 {{ margin:0; font-size:18px; line-height:1.45; }}
+    .review-effect {{ margin:7px 0 0; color:var(--muted); font-size:13px; line-height:1.55; }}
+    .review dl {{ display:grid; grid-template-columns:1fr 1fr; gap:0 18px; margin:16px 0 0; }}
+    .review-row {{ min-width:0; padding:10px 0; border-top:1px solid #e3e8e5; }}
+    .review dt {{ margin:0 0 4px; color:var(--muted); font-size:11px; font-weight:700; }}
+    .review dd {{ margin:0; color:var(--ink); font-size:14px; line-height:1.55;
+      overflow-wrap:anywhere; white-space:pre-wrap; }}
     .form-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:17px 16px; }}
     .field {{ min-width:0; }} .field.wide {{ grid-column:1 / -1; }}
     label,legend {{ display:block; margin:0 0 7px; color:#35423d; font-size:13px; font-weight:700; }}
@@ -615,7 +660,7 @@ def _document(
     .status-copy {{ margin:16px auto 0; max-width:380px; color:var(--muted); line-height:1.7; font-size:14px; }}
     @media (max-width:620px) {{ .shell {{ align-items:flex-start; padding:20px 10px; }}
       .card {{ padding:24px 18px; box-shadow:none; }} h1 {{ font-size:21px; }}
-      .form-grid {{ grid-template-columns:1fr; }} .field.wide {{ grid-column:auto; }} }}
+      .form-grid,.review dl {{ grid-template-columns:1fr; }} .field.wide {{ grid-column:auto; }} }}
     {EMBEDDED_SAFE_AREA_CSS}
   </style>
 </head>

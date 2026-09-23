@@ -670,7 +670,15 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             self._activate(service)
             with patch(
                 "bscli.core.write_catalog.preflight_pending_action",
-                return_value={"matched": True},
+                return_value={
+                    "matched": True,
+                    "review_fingerprint": "sha256:review-one",
+                    "review": {
+                        "title": "月度考勤确认单",
+                        "effect": "确认当前考勤",
+                        "fields": [{"label": "姓名", "value": "Alice"}],
+                    },
+                },
             ) as preflight:
                 response = service.invoke(
                     user_subject="user-a",
@@ -694,7 +702,83 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 submission["form_schema"]["fields"][0]["value"],
                 "确认无异议",
             )
+            self.assertEqual(
+                submission["form_schema"]["review"]["fields"],
+                [{"label": "姓名", "value": "Alice"}],
+            )
+            self.assertEqual(
+                submission["form_schema"]["_agentbridge_review_fingerprint"],
+                "sha256:review-one",
+            )
             preflight.assert_called_once()
+
+    def test_changed_detail_is_called_out_on_authorization_card(self):
+        with TemporaryDirectory() as tmp:
+            service = self._service(tmp, FakeWorker())
+            self._activate(service)
+            with patch(
+                "bscli.core.write_catalog.preflight_pending_action",
+                return_value={
+                    "matched": True,
+                    "review_fingerprint": "sha256:before-opinion",
+                    "review": {
+                        "title": "月度考勤确认单",
+                        "effect": "确认当前考勤",
+                        "fields": [{"label": "姓名", "value": "Alice"}],
+                    },
+                },
+            ):
+                started = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.attendance_confirmation.prepare",
+                    arguments={"affair_id": "attendance-affair"},
+                )
+            submission_id = started["nextAction"]["inputSubmissionId"]
+            csrf = service.field_submissions.issue_csrf(submission_id)
+            service.field_submissions.submit(
+                submission_id,
+                csrf_token=csrf,
+                csrf_cookie=csrf,
+                values={"opinion": "确认无异议"},
+            )
+            prepared_payload = {
+                "plan": {
+                    "business_intent": "confirm_attendance",
+                    "target": {"review_fingerprint": "sha256:after-opinion"},
+                    "exact_input": {"opinion": "确认无异议"},
+                },
+                "summary": {
+                    "title": "确认月度考勤",
+                    "system": "致远 OA",
+                    "effect": "确认当前考勤",
+                    "fields": [{"label": "处理意见", "value": "确认无异议"}],
+                },
+            }
+
+            with patch(
+                "bscli.core.write_catalog.prepare_attendance_confirmation",
+                return_value=prepared_payload,
+            ):
+                prepared = service.invoke(
+                    user_subject="user-a",
+                    capability_name="oa.attendance_confirmation.prepare",
+                    arguments={
+                        "affair_id": "attendance-affair",
+                        "input_submission_id": submission_id,
+                    },
+                )
+
+            authorization = service.write_authorizations.get(
+                prepared["nextAction"]["authorizationId"]
+            )
+            self.assertEqual(
+                authorization["summary"]["fields"][0],
+                {
+                    "label": "详情变化",
+                    "value": "填写意见后单据内容发生变化，请按当前详情重新核对本次授权。",
+                },
+            )
+            self.assertIn("最新详情", authorization["summary"]["authorization_notice"])
 
     def test_invoke_restores_session_and_persists_operation(self):
         with TemporaryDirectory() as tmp:

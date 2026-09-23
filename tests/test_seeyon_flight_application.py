@@ -12,7 +12,7 @@ from bscli.adapters.seeyon_flight_application import (
 from bscli.adapters.seeyon_pending_actions import (
     PendingActionContractMismatch, PendingActionOutcomeUnknown,
     approve_flight_application, pending_action_profile_for_title,
-    prepare_flight_application_approval,
+    preflight_pending_action, prepare_flight_application_approval,
 )
 from tests.test_seeyon_pending_actions import FakeAdapter, FakeWorker, _fixture, _inputs
 
@@ -91,6 +91,25 @@ def test_prepare_freezes_every_leg_and_commit_verifies_complete_readback(target)
     assert result["workflow_approved"] is True
     assert result["workflow_profile"] == "flight_application"
     assert worker.page.commit_payload["attitude_code"] == "agree"
+
+
+def test_preflight_returns_complete_read_only_review_for_opinion_card(target):
+    _, _, worker, adapter = target
+
+    result = preflight_pending_action(
+        adapter,
+        worker,
+        {"affair_id": "affair-1"},
+        "flight_application",
+    )
+
+    fields = result["review"]["fields"]
+    assert result["review_fingerprint"].startswith("sha256:")
+    assert result["review"]["title"] == "【综合】乘坐飞机申请单"
+    assert any(f["label"] == "申请人" and f["value"] == "测试申请人" for f in fields)
+    assert any(f["label"] == "航段1 · 到达地点" and f["value"] == "榆林" for f in fields)
+    assert any(f["label"] == "航段2 · 出发地点" and f["value"] == "榆林" for f in fields)
+    assert not any(f["label"] == "处理意见" for f in fields)
 
 
 @pytest.mark.parametrize("change", [

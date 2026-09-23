@@ -975,7 +975,33 @@ def _parse_detail_workflow(root: _Node) -> list[dict]:
                 break
         if len(workflow) >= 100:
             break
-    return workflow
+    return _remove_workflow_ancestor_text(workflow)
+
+
+def _remove_workflow_ancestor_text(workflow: list[dict]) -> list[dict]:
+    structured = [
+        item
+        for item in workflow
+        if all(item.get(name) for name in ("handler", "opinion", "time"))
+    ]
+    if not structured:
+        return workflow
+    ancestor_markers = ("审批信息", "审批意见", "流程处理意见", "处理人意见区")
+    filtered = []
+    for item in workflow:
+        if item in structured:
+            filtered.append(item)
+            continue
+        text = _clean(str(item.get("text") or ""), 1000)
+        if any(marker in text for marker in ancestor_markers) and any(
+            str(entry["handler"]) in text
+            and str(entry["opinion"]) in text
+            and str(entry["time"]).split()[0] in text
+            for entry in structured
+        ):
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def _clean_workflow_entries(text: str) -> list[dict]:
