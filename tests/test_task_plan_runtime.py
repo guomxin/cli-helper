@@ -55,6 +55,8 @@ class FakeTaskHub:
 
 class FakePlanService:
     def __init__(self, db_path):
+        from bscli.core.user_grants import UserGrants
+        self.user_grants = UserGrants(db_path)
         self.registry = CapabilityRegistry()
         self.registry.register(
             CapabilitySpec(
