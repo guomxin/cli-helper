@@ -1,3 +1,4 @@
+#requires -Version 7.0
 [CmdletBinding()]
 param(
     [string]$EnvironmentProfile = $env:AGENTBRIDGE_ENVIRONMENT_PROFILE,
