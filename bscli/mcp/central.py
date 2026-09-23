@@ -3284,8 +3284,8 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_work_log_my_list",
-        title="List My Taihua Work Logs",
-        description="List the authenticated user's Taihua work logs in one date range.",
+        title="日志系统：查询本人工作日志",
+        description="List the authenticated user's log-system work logs in one date range.",
         annotations=read_annotations,
         structured_output=True,
     )
@@ -3315,9 +3315,9 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_work_log_team_list",
-        title="List Taihua Team Work Logs",
+        title="日志系统：查询团队工作日志",
         description=(
-            "List team work logs within the authenticated Taihua user's data scope. "
+            "List team work logs within the authenticated log-system user's data scope. "
             "Filter by member, department, watch group, keyword, one log date, or a "
             "closed date range. Date filters automatically use logDate view mode. This is the ordinary log-system API, not database analytics. Do not use it as a fallback for an explicit database-analysis request."
         ),
@@ -3388,8 +3388,8 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_project_search",
-        title="Search Taihua Projects",
-        description="Search projects available to the authenticated Taihua user.",
+        title="日志系统：项目检索",
+        description="Search projects available to the authenticated log-system user.",
         annotations=read_annotations,
         structured_output=True,
     )
@@ -3412,11 +3412,11 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_work_log_create_prepare",
-        title="Prepare Taihua Work Log",
+        title="日志系统：准备工作日志",
         meta=interaction_tool_meta(),
         description=(
             "Open a prefilled trusted field card, validate the exact work-log fields, "
-            "and freeze a submission plan. This tool does not write to Taihua."
+            "and freeze a submission plan. This tool does not write to the log system."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -3458,10 +3458,10 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_work_log_create",
-        title="Create Authorized Taihua Work Log",
+        title="日志系统：提交已授权工作日志",
         meta=interaction_tool_meta(),
         description=(
-            "Consume one approved authorization, create the exact Taihua work log, "
+            "Consume one approved authorization, create the exact log-system work log, "
             "and verify it by authoritative readback."
         ),
         annotations=ToolAnnotations(
@@ -3540,8 +3540,8 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_session_status",
-        title="Verify Taihua Session Status",
-        description="Verify the authenticated caller's central Taihua token session.",
+        title="日志系统：检查会话状态",
+        description="Verify the authenticated caller's central log-system token session.",
         annotations=read_annotations,
         structured_output=True,
     )
@@ -3558,10 +3558,10 @@ def create_central_mcp_server(
 
     @mcp.tool(
         name="taihua_session_login",
-        title="Ensure Taihua Session Login",
+        title="日志系统：确保会话登录",
         meta=interaction_tool_meta(),
         description=(
-            "Reuse or refresh a valid Taihua token session. When login is required, "
+            "Reuse or refresh a valid log-system token session. When login is required, "
             "create a trusted credential card; credentials never enter MCP arguments."
         ),
         annotations=ToolAnnotations(

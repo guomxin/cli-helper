@@ -6027,7 +6027,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List the authenticated user's Taihua work logs in one date range.",
+      "description": "List the authenticated user's log-system work logs in one date range.",
       "inputSchema": {
         "properties": {
           "end_date": {
@@ -6099,7 +6099,7 @@
         "title": "taihua_work_log_my_listDictOutput",
         "type": "object"
       },
-      "title": "List My Taihua Work Logs"
+      "title": "日志系统：查询本人工作日志"
     },
     {
       "annotations": {
@@ -6108,7 +6108,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List team work logs within the authenticated Taihua user's data scope. Filter by member, department, watch group, keyword, one log date, or a closed date range. Date filters automatically use logDate view mode. This is the ordinary log-system API, not database analytics. Do not use it as a fallback for an explicit database-analysis request.",
+      "description": "List team work logs within the authenticated log-system user's data scope. Filter by member, department, watch group, keyword, one log date, or a closed date range. Date filters automatically use logDate view mode. This is the ordinary log-system API, not database analytics. Do not use it as a fallback for an explicit database-analysis request.",
       "inputSchema": {
         "properties": {
           "department": {
@@ -6301,7 +6301,7 @@
         "title": "taihua_work_log_team_listDictOutput",
         "type": "object"
       },
-      "title": "List Taihua Team Work Logs"
+      "title": "日志系统：查询团队工作日志"
     },
     {
       "annotations": {
@@ -6310,7 +6310,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Search projects available to the authenticated Taihua user.",
+      "description": "Search projects available to the authenticated log-system user.",
       "inputSchema": {
         "properties": {
           "idempotency_key": {
@@ -6356,7 +6356,7 @@
         "title": "taihua_project_searchDictOutput",
         "type": "object"
       },
-      "title": "Search Taihua Projects"
+      "title": "日志系统：项目检索"
     },
     {
       "_meta": {
@@ -6375,7 +6375,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Open a prefilled trusted field card, validate the exact work-log fields, and freeze a submission plan. This tool does not write to Taihua.",
+      "description": "Open a prefilled trusted field card, validate the exact work-log fields, and freeze a submission plan. This tool does not write to the log system.",
       "inputSchema": {
         "properties": {
           "content": {
@@ -6468,7 +6468,7 @@
         "title": "taihua_work_log_create_prepareDictOutput",
         "type": "object"
       },
-      "title": "Prepare Taihua Work Log"
+      "title": "日志系统：准备工作日志"
     },
     {
       "_meta": {
@@ -6487,7 +6487,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Consume one approved authorization, create the exact Taihua work log, and verify it by authoritative readback.",
+      "description": "Consume one approved authorization, create the exact log-system work log, and verify it by authoritative readback.",
       "inputSchema": {
         "properties": {
           "authorization_id": {
@@ -6522,7 +6522,7 @@
         "title": "taihua_work_log_createDictOutput",
         "type": "object"
       },
-      "title": "Create Authorized Taihua Work Log"
+      "title": "日志系统：提交已授权工作日志"
     },
     {
       "annotations": {
@@ -6629,7 +6629,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "Verify the authenticated caller's central Taihua token session.",
+      "description": "Verify the authenticated caller's central log-system token session.",
       "inputSchema": {
         "properties": {},
         "title": "taihua_session_statusArguments",
@@ -6641,7 +6641,7 @@
         "title": "taihua_session_statusDictOutput",
         "type": "object"
       },
-      "title": "Verify Taihua Session Status"
+      "title": "日志系统：检查会话状态"
     },
     {
       "_meta": {
@@ -6660,7 +6660,7 @@
         "openWorldHint": true,
         "readOnlyHint": false
       },
-      "description": "Reuse or refresh a valid Taihua token session. When login is required, create a trusted credential card; credentials never enter MCP arguments.",
+      "description": "Reuse or refresh a valid log-system token session. When login is required, create a trusted credential card; credentials never enter MCP arguments.",
       "inputSchema": {
         "properties": {
           "challenge_ttl_seconds": {
@@ -6680,7 +6680,7 @@
         "title": "taihua_session_loginDictOutput",
         "type": "object"
       },
-      "title": "Ensure Taihua Session Login"
+      "title": "日志系统：确保会话登录"
     },
     {
       "annotations": {
