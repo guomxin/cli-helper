@@ -261,11 +261,10 @@ class GovernanceRuntimeTests(unittest.TestCase):
                 reason="emergency stop",
                 actor="admin",
             )
-            result = service.invoke(
-                user_subject="user-a",
-                capability_name="oa.test.write",
-                arguments={},
-            )
+            from tests.authorization_fixtures import grant_permissions
+            grant_permissions(service.user_grants, "user-a", ["oa.leave.submit"])
+            with patch.dict("bscli.core.user_grants.CAPABILITY_PERMISSIONS", {"oa.test.write": "oa.leave.submit"}):
+                result = service.invoke(user_subject="user-a", capability_name="oa.test.write", arguments={})
 
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["error"]["code"], "WRITE_PAUSED")
@@ -284,7 +283,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             issued = identities.issue(
                 user_subject="user-a",
                 expected_principal_ref="Alice",
-                scopes=["oa:read"],
+                scopes=[],
                 ttl_seconds=3600,
             )
             service.tasks.ensure_endpoint(
@@ -329,7 +328,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             issued = identities.issue(
                 user_subject="user-a",
                 expected_principal_ref="Alice",
-                scopes=["oa:read"],
+                scopes=[],
                 ttl_seconds=3600,
             )
             workspace, _ = service.tasks.ensure_endpoint(
@@ -532,7 +531,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             issued = identities.issue(
                 user_subject="user-a",
                 expected_principal_ref="Alice",
-                scopes=["oa:read"],
+                scopes=[],
                 ttl_seconds=3600,
             )
             endpoint, _ = service.tasks.ensure_endpoint(
@@ -643,7 +642,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertFalse(resumed["awaiting_user_action"])
             self.assertEqual(resumed["interaction_state"], "consumed")
 
-    def test_token_issue_adds_base_read_scope_and_identity_sessions(self) -> None:
+    def test_token_issue_has_no_business_permissions_and_binds_explicit_systems(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
                 home=tmp,
@@ -659,7 +658,8 @@ class AdminControlPlaneTests(unittest.TestCase):
                 user_subject="user-a",
                 expected_principal_ref="principal-a",
                 label="OpenClaw",
-                scopes=["oa:write:submit", "taihua:write:worklog"],
+                scopes=[],
+                principal_bindings={"oa": "principal-a", "taihua": "principal-a"},
                 ttl_hours=24,
                 reason="client onboarding",
             )
@@ -667,7 +667,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertTrue(issued["token_secret"].startswith("abmcp_"))
             self.assertEqual(
                 set(issued["scopes"]),
-                {"oa:read", "oa:write:submit", "taihua:read", "taihua:write:worklog"},
+                {"agentbridge:connect"},
             )
             self.assertIsNotNone(service.sessions.find(user_subject="user-a", system_id="oa"))
             self.assertIsNotNone(service.sessions.find(user_subject="user-a", system_id="taihua"))
@@ -685,7 +685,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             issued = control.issue_token(
                 actor=actor, request_ip="127.0.0.1", user_subject="user-a",
                 expected_principal_ref="Alice", label="OpenClaw",
-                scopes=["oa:read"], ttl_hours=1, reason="client onboarding",
+                scopes=[], ttl_hours=1, reason="client onboarding",
             )
             saved = control.save_user_grants(
                 actor=actor, request_ip="127.0.0.1", user_subject="user-a",
@@ -714,7 +714,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             actor = {"account_id": "a", "username": "admin", "role": "admin"}
             control.issue_token(
                 actor=actor, request_ip="127.0.0.1", user_subject="user-a",
-                expected_principal_ref="Alice", label="initial", scopes=["oa:read"],
+                expected_principal_ref="Alice", label="initial", scopes=[],
                 ttl_hours=1, reason="initial access",
             )
             control.save_user_grants(
@@ -752,7 +752,7 @@ class AdminControlPlaneTests(unittest.TestCase):
                     "taihua": "alice.worklog",
                 },
                 label="OpenClaw",
-                scopes=["oa:read", "taihua:read"],
+                scopes=[],
                 ttl_hours=24,
                 reason="multi-system onboarding",
             )
@@ -790,7 +790,7 @@ class AdminControlPlaneTests(unittest.TestCase):
                 expected_principal_ref=None,
                 principal_bindings={},
                 label="OpenClaw rotated",
-                scopes=["oa:read", "taihua:read"],
+                scopes=[],
                 ttl_hours=24,
                 reason="credential rotation",
             )
@@ -815,7 +815,7 @@ class AdminControlPlaneTests(unittest.TestCase):
                 expected_principal_ref=None,
                 principal_bindings={"oa": "Alice OA", "taihua": "alice.worklog"},
                 label="OpenClaw",
-                scopes=["oa:read", "taihua:read"],
+                scopes=[],
                 ttl_hours=24,
                 reason="onboarding",
             )
@@ -879,7 +879,7 @@ class AdminControlPlaneTests(unittest.TestCase):
             self.assertFalse(projected["keepalive_active"])
             self.assertEqual(events[0]["reason"], "OA keepalive detected an expired session.")
 
-    def test_unknown_scope_is_rejected_before_identity_sessions_are_created(self) -> None:
+    def test_legacy_scope_is_rejected_before_identity_sessions_are_created(self) -> None:
         with TemporaryDirectory() as tmp:
             service = CentralCapabilityService(
                 home=tmp,
@@ -896,7 +896,7 @@ class AdminControlPlaneTests(unittest.TestCase):
                     user_subject="user-a",
                     expected_principal_ref="principal-a",
                     label="invalid",
-                    scopes=["oa:write:unknown"],
+                    scopes=["oa:read"],
                     ttl_hours=24,
                     reason="unit test",
                 )
@@ -934,7 +934,7 @@ class AdminHttpServerTests(unittest.TestCase):
             issued = control.issue_token(
                 actor={"account_id": "a", "username": "admin", "role": "admin"},
                 request_ip="127.0.0.1", user_subject="user-a",
-                expected_principal_ref="Alice", label="initial", scopes=["oa:read"],
+                expected_principal_ref="Alice", label="initial", scopes=[],
                 ttl_hours=1, reason="initial access",
             )
             for role in ("admin", "auditor"):
@@ -1166,6 +1166,14 @@ class AdminHttpServerTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(session["account"]["username"], "admin")
+                self.assertEqual(session["authorization_model"], "user_grants")
+                self.assertNotIn("scopes", session)
+                status, _, _ = _request(port, "POST", "/api/tokens",
+                    body={"user_subject": "legacy-attempt", "expected_principal_ref": "Alice",
+                          "scopes": ["oa:read"], "ttl_hours": 24, "reason": "retired scope rejected"},
+                    origin=origin, cookies=cookies, csrf=cookies["agentbridge_admin_csrf"])
+                self.assertEqual(status, 400)
+                self.assertEqual(control.list_tokens(user_subject="legacy-attempt"), [])
                 self.assertEqual(response_headers.get("X-Frame-Options"), "DENY")
 
                 status, _, issued = _request(
@@ -1176,7 +1184,7 @@ class AdminHttpServerTests(unittest.TestCase):
                         "user_subject": "user-a",
                         "expected_principal_ref": "principal-a",
                         "label": "test",
-                        "scopes": ["oa:read"],
+                        "scopes": [],
                         "ttl_hours": 24,
                         "reason": "server test",
                     },

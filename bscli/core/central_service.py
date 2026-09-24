@@ -319,8 +319,8 @@ class CentralCapabilityService(ControlledWriteExecutor):
             granted_scopes=granted_scopes,
         )
         grant = self.user_grants.get(user_subject) if user_subject else None
-        if grant is not None:
-            allowed = set(grant["permissions"])
+        if user_subject is not None:
+            allowed = set(grant["permissions"] if grant else [])
             from bscli.core.user_grants import CAPABILITY_PERMISSIONS
             catalog["capabilities"] = [
                 item for item in catalog.get("capabilities", [])
@@ -548,11 +548,10 @@ class CentralCapabilityService(ControlledWriteExecutor):
 
     def get_task_plan(self, *, user_subject: str, plan_id: str) -> dict:
         plan = self.task_plans.get(plan_id, user_subject=user_subject)
-        if self.user_grants.get(user_subject) is not None:
-            for step in plan["steps"]:
-                capability = step.get("capability_name")
-                if capability:
-                    self.user_grants.require_capability(user_subject, capability, step.get("arguments"))
+        for step in plan["steps"]:
+            capability = step.get("capability_name")
+            if capability:
+                self.user_grants.require_capability(user_subject, capability, step.get("arguments"))
         return {
             "protocolVersion": "0.1",
             "status": "succeeded",
@@ -1414,17 +1413,16 @@ class CentralCapabilityService(ControlledWriteExecutor):
 
     def list_operations(self, *, user_subject: str, limit: int = 100) -> dict:
         operations = self.operations.list(user_subject=user_subject, limit=limit)
-        if self.user_grants.get(user_subject) is not None:
-            visible = []
-            for operation in operations:
-                try:
-                    self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
-                    if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
-                        operation = {**operation, "result": self.user_grants.filter_templates(user_subject, operation["result"])}
-                except PermissionError:
-                    continue
-                visible.append(operation)
-            operations = visible
+        visible = []
+        for operation in operations:
+            try:
+                self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
+                if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
+                    operation = {**operation, "result": self.user_grants.filter_templates(user_subject, operation["result"])}
+            except PermissionError:
+                continue
+            visible.append(operation)
+        operations = visible
         return {
             "protocolVersion": "0.1",
             "count": len(operations),
@@ -1445,7 +1443,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
-        if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
+        if record.get("operation_id"):
             operation = self.operations.get(record["operation_id"])
             self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
         task_id = self.tasks.task_id_for_interaction(
@@ -1529,7 +1527,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
-        if self.user_grants.get(user_subject) is not None and record.get("operation_id"):
+        if record.get("operation_id"):
             operation = self.operations.get(record["operation_id"])
             self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
         task_id = self.tasks.task_id_for_interaction(
@@ -2537,8 +2535,6 @@ class CentralCapabilityService(ControlledWriteExecutor):
         }
 
     def require_task_result_access(self, *, user_subject: str, task_id: str) -> None:
-        if self.user_grants.get(user_subject) is None:
-            return
         for operation_id in self.tasks.operation_ids_for_task(task_id=task_id, user_subject=user_subject):
             operation = self.operations.get(operation_id)
             self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))

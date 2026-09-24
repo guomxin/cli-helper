@@ -1,3 +1,4 @@
+from tests.authorization_fixtures import authorized_service
 import sqlite3
 import threading
 import unittest
@@ -127,7 +128,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual([item["task_id"] for item in listed], [task["task_id"]])
 
     def test_central_service_adds_registry_effect_to_operation_events(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -744,7 +745,7 @@ class TaskHubStoreTests(unittest.TestCase):
         )
 
     def test_central_service_finishes_unreferenced_host_tasks(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2173,7 +2174,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertIsNotNone(repaired["finished_at"])
 
     def test_central_service_recovers_only_the_bound_users_pending_interaction(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2235,7 +2236,7 @@ class TaskHubStoreTests(unittest.TestCase):
             )
 
     def test_central_service_recovers_workspace_tasks_for_the_same_user(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2369,7 +2370,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual(reconciled["status"], "expired")
 
     def test_central_service_presents_one_authorization_on_multiple_endpoints(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2397,13 +2398,15 @@ class TaskHubStoreTests(unittest.TestCase):
             route={"channel": "wechat", "to": "wechat-user-a"},
             capabilities=["trusted_interaction", "direct_status"],
         )
+        operation, _ = service.operations.create(user_subject="user-a", capability_name="oa.leave.submit.prepare",
+            capability_version="1", input_summary={})
         authorization = service.write_authorizations.create(
             user_subject="user-a",
             system_id="oa",
             session_id="session-a",
             capability_name="oa.leave.submit",
             capability_version="1",
-            prepare_operation_id="prepare-a",
+            prepare_operation_id=operation["operation_id"],
             plan={"reason": "Test"},
             summary={"title": "Submit leave request", "fields": []},
             card_base_url="https://cards.example.test",
@@ -2484,8 +2487,9 @@ class TaskHubStoreTests(unittest.TestCase):
             terminal["notifications"][0]["message"],
         )
 
+
     def test_central_service_presents_task_artifact_to_companion_endpoint(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2560,7 +2564,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual(protected["state"], "ready")
 
     def test_central_service_delivers_private_plan_result_to_companion_only(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2678,7 +2682,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertNotIn("draft", str(plan_event["payload"]))
 
     def test_central_service_presents_business_input_on_multiple_endpoints(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2708,13 +2712,15 @@ class TaskHubStoreTests(unittest.TestCase):
             route={"channel": "telegram", "to": "1001"},
             capabilities=["trusted_interaction", "direct_status"],
         )
+        operation, _ = service.operations.create(user_subject="user-a", capability_name="oa.business_trip.submit.prepare",
+            capability_version="1", input_summary={})
         submission = service.field_submissions.create(
             user_subject="user-a",
             system_id="oa",
             session_id="session-a",
             capability_name="oa.business_trip.submit.prepare",
             capability_version="1",
-            create_operation_id="prepare-input",
+            create_operation_id=operation["operation_id"],
             form_schema={
                 "title": "Business trip",
                 "fields": [
@@ -2758,8 +2764,9 @@ class TaskHubStoreTests(unittest.TestCase):
             delivered["interaction"]["presentation"]["url"],
         )
 
+
     def test_central_service_claims_cross_endpoint_timeline_message(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2810,7 +2817,7 @@ class TaskHubStoreTests(unittest.TestCase):
         )
 
     def test_wechat_user_activity_reactivates_only_its_deferred_deliveries(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2904,7 +2911,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertEqual(reactivated["attempt_count"], 0)
 
     def test_central_service_returns_only_same_user_other_endpoint_context(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -2986,7 +2993,7 @@ class TaskHubStoreTests(unittest.TestCase):
         self.assertNotIn("Another user's private", serialized)
 
     def test_central_service_resolves_terminal_follow_up_and_ambiguous_tasks(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )
@@ -3139,7 +3146,7 @@ class TaskHubStoreTests(unittest.TestCase):
         )
 
     def test_workspace_task_does_not_overwrite_registered_endpoint(self):
-        service = CentralCapabilityService(
+        service = authorized_service(
             home=Path(self.temp.name),
             base_url="http://oa.example.test/seeyon/main.do?method=main",
         )

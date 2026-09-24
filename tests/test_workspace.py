@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service
 import base64
 from contextlib import ExitStack, closing
 from datetime import datetime, timedelta, timezone
@@ -810,13 +811,15 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 conversation_ref=account["openclaw_session_key"],
                 title="Submit leave request",
             )
+            operation, _ = service.operations.create(user_subject="user-a", capability_name="oa.leave.submit.prepare",
+                capability_version="1", input_summary={})
             authorization = service.write_authorizations.create(
                 user_subject="user-a",
                 system_id="oa",
                 session_id="session-a",
                 capability_name="oa.leave.submit",
                 capability_version="1",
-                prepare_operation_id="prepare-a",
+                prepare_operation_id=operation["operation_id"],
                 plan={"reason": "Test"},
                 summary={"title": "Submit leave request", "fields": []},
                 card_base_url="https://cards.example.test",
@@ -843,6 +846,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertEqual(presentation["endpointId"], account["endpoint_id"])
             self.assertIn("/present/", presentation["url"])
 
+
     def test_task_detail_exposes_all_parallel_interactions(self) -> None:
         with TemporaryDirectory() as tmp:
             service = _service(tmp)
@@ -868,13 +872,16 @@ class WorkspaceApplicationTests(unittest.TestCase):
                 ("efficiency", "Approve efficiency data"),
                 ("weekly", "Acknowledge weekly report"),
             ):
+                capability = "oa.efficiency_data.approve" if suffix == "efficiency" else "oa.weekly_report.acknowledge"
+                operation, _ = service.operations.create(user_subject="user-a", capability_name=capability,
+                    capability_version="1", input_summary={})
                 authorization = service.write_authorizations.create(
                     user_subject="user-a",
                     system_id="oa",
                     session_id="session-a",
-                    capability_name=f"oa.{suffix}.submit",
+                    capability_name=capability,
                     capability_version="1",
-                    prepare_operation_id=f"prepare-{suffix}",
+                    prepare_operation_id=operation["operation_id"],
                     plan={"target": suffix},
                     summary={"title": title, "fields": []},
                     card_base_url="https://cards.example.test",
@@ -910,6 +917,7 @@ class WorkspaceApplicationTests(unittest.TestCase):
             self.assertTrue(
                 all(item.get("linkedAt") for item in detail["interactions"])
             )
+
 
     def test_task_detail_exposes_owned_task_plan_without_private_arguments(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3197,7 +3205,7 @@ class WorkspaceStaticAssetTests(unittest.TestCase):
 
 
 def _service(tmp: str) -> CentralCapabilityService:
-    return CentralCapabilityService(
+    return authorized_service(
         home=tmp,
         base_url="http://127.0.0.1:8000/seeyon",
     )

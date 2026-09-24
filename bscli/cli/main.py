@@ -319,27 +319,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_token_issue.add_argument("--label")
     mcp_token_issue.add_argument("--ttl-hours", type=int, default=24)
-    mcp_token_issue.add_argument(
-        "--scope",
-        action="append",
-        choices=[
-            "oa:read",
-            "oa:read:addressbook",
-            "oa:write:draft",
-            "oa:write:approval",
-            "oa:write:meeting",
-            "oa:write:submit",
-            "oa:write:revoke",
-            "taihua:read",
-            "taihua:write:worklog",
-            "yuque:read",
-            "smartlight:read",
-            "smartlight:write:alarm_remark",
-            "smartlight:write:alarm_work_area_submit",
-            "smartlight:write:alarm_work_area_revoke",
-            "smartlight:write:alarm_disposition",
-        ],
-    )
     mcp_token_list = mcp_token_sub.add_parser("list")
     mcp_token_list.add_argument("--user-subject")
     mcp_token_list.add_argument("--limit", type=int, default=100)
@@ -662,6 +641,9 @@ def handle_capability(args: argparse.Namespace, home: Path) -> int:
     except (OperationConflictError, ValueError) as exc:
         print_json(_central_cli_error("INVALID_REQUEST", str(exc)))
         return 2
+    except PermissionError as exc:
+        print_json(_central_cli_error("PERMISSION_DENIED", str(exc)))
+        return 2
     print_json(response)
     return 0 if response["status"] in {"succeeded", "requires_user_action"} else 1
 
@@ -906,23 +888,12 @@ def handle_mcp(args: argparse.Namespace) -> int:
                 return 2
             try:
                 sessions = SessionRegistry(_central_db_path(home), _central_profile_root(home))
-                scopes = set(args.scope or ["oa:read"])
-                if any(scope.startswith("oa:") for scope in scopes):
-                    scopes.add("oa:read")
-                if any(scope.startswith("taihua:") for scope in scopes):
-                    scopes.add("taihua:read")
-                if any(scope.startswith("smartlight:") for scope in scopes):
-                    scopes.add("smartlight:read")
-                if any(scope.startswith("yuque:") for scope in scopes):
-                    scopes.add("yuque:read")
-                system_ids = {
-                    scope.split(":", 1)[0]
-                    for scope in scopes
-                    if scope.startswith(("oa:", "taihua:", "smartlight:", "yuque:"))
-                }
-                principal_bindings = _parse_system_principals(
-                    args.system_principal or []
-                )
+                principal_bindings = _parse_system_principals(args.system_principal or [])
+                grant = store.user_grants.get(args.user_subject)
+                system_ids = {p.split(".", 1)[0] for p in grant["permissions"]} if grant else set()
+                system_ids.update(principal_bindings)
+                if args.expected_principal:
+                    system_ids.add("oa")
                 resolved_bindings = sessions.ensure_principal_bindings(
                     user_subject=args.user_subject,
                     system_ids=system_ids,
@@ -932,13 +903,12 @@ def handle_mcp(args: argparse.Namespace) -> int:
                 token_principal = (
                     str(args.expected_principal or "").strip()
                     or resolved_bindings.get("oa")
-                    or resolved_bindings[sorted(resolved_bindings)[0]]
+                    or (resolved_bindings[sorted(resolved_bindings)[0]] if resolved_bindings else args.user_subject)
                 )
                 token = store.issue(
                     user_subject=args.user_subject,
                     expected_principal_ref=token_principal,
                     label=args.label,
-                    scopes=sorted(scopes),
                     ttl_seconds=args.ttl_hours * 3600,
                 )
             except (ValueError, SessionPrincipalMismatch) as exc:

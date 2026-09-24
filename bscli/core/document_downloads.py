@@ -422,8 +422,6 @@ class DocumentDownloadStore:
         from bscli.core.user_grants import UserGrants
         grants = UserGrants(self.db_path)
         subject = record["user_subject"]
-        if grants.get(subject) is None:
-            return
         kind = record["document_type"]
         if kind in {"patent_certificate", "software_copyright_certificate"}:
             grants.require(subject, "oa.certificate.read")

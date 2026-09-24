@@ -1344,7 +1344,7 @@ def create_central_mcp_server(
             }
         response["negotiation"] = negotiation
         allowed_tools = user_grants.available_tools(
-            identity["user_subject"], agent_facing_tools_for_scopes(identity["scopes"])
+            identity["user_subject"]
         )
         response["agentToolAccess"] = {
             "allowedToolNames": allowed_tools,
@@ -5339,7 +5339,7 @@ def create_central_mcp_server(
             minimum_level="L1",
         )
         allowed_tools = user_grants.available_tools(
-            identity["user_subject"], agent_facing_tools_for_scopes(identity["scopes"])
+            identity["user_subject"]
         )
         return {
             "schemaVersion": "agentbridge.host-identity-profile.v1",
@@ -6272,12 +6272,8 @@ def _request_identity(
     access_token = get_access_token()
     if access_token is None:
         raise PermissionError("MCP request is not authenticated")
-    grants = getattr(store, "user_grants", None)
-    if grants is not None:
-        current = store.resolve_client(access_token.client_id)
-        if grants.get(current["user_subject"]) is not None:
-            return current
-    return store.resolve_client(access_token.client_id, required_scopes=required_scopes)
+    # Business authorization is enforced by the current user grant at each tool boundary.
+    return store.resolve_client(access_token.client_id)
 
 
 def _request_meta(ctx: Context) -> Mapping[str, Any]:

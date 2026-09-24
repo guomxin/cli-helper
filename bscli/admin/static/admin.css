@@ -146,10 +146,6 @@ tbody tr:hover { background: #f8faf9; }
 .filter-empty { min-height: 88px; display: grid; place-items: center; color: var(--muted); background: #fff; border: 1px solid var(--line); border-top: 0; }
 .scope-pills { max-width: 420px; display: flex; flex-wrap: wrap; gap: 4px; white-space: normal; }
 .scope-pills span { display: inline-flex; min-height: 23px; align-items: center; padding: 2px 6px; color: #35524b; background: #e8eeeb; border-radius: 3px; font: 10px/1.2 var(--mono); }
-.scope-history { max-width: 280px; }
-.scope-history summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-size: 12px; font-weight: 600; }
-.scope-history summary:hover { text-decoration: underline; }
-.scope-history .scope-pills { max-width: 280px; margin-top: 8px; }
 .row-action-cell { width: 92px; text-align: right; }
 .row-menu-trigger { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 5px 9px; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .row-menu-trigger:hover, .row-menu-trigger[aria-expanded="true"] { color: var(--teal-dark); background: #eef6f8; border-color: #8fb9c2; }

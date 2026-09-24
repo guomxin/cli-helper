@@ -29,23 +29,6 @@ class UserGrantConflict(RuntimeError):
 
 
 class UserGrants:
-    @staticmethod
-    def migration_preview(tokens: list[dict]) -> dict:
-        candidates = []
-        for token in tokens:
-            if token["state"] != "active":
-                continue
-            scopes = set(token["scopes"])
-            permissions = sorted(name for name, item in PERMISSIONS.items()
-                                 if item["legacy_scopes"] and set(item["legacy_scopes"]).issubset(scopes))
-            candidates.append({"token_id": token["token_id"], "permissions": permissions})
-        common = set(candidates[0]["permissions"]) if candidates else set()
-        for candidate in candidates[1:]:
-            common.intersection_update(candidate["permissions"])
-        return {"tokens": candidates, "recommended_permissions": sorted(common),
-                "consistent": bool(candidates) and all(set(item["permissions"]) == common for item in candidates),
-                "rule": "intersection_of_unrevoked_tokens_including_expired"}
-
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,9 +107,6 @@ class UserGrants:
             raise PermissionError(f"user lacks business permission: {permission}")
 
     def require_capability(self, subject: str, capability: str, arguments: dict | None = None) -> None:
-        grant = self.get(subject)
-        if grant is None:
-            return
         permission = CAPABILITY_PERMISSIONS.get(capability)
         if permission:
             self.require(subject, permission)
@@ -143,11 +123,9 @@ class UserGrants:
 
     def require_tool(self, subject: str, tool: str, arguments: dict | None = None) -> None:
         grant = self.get(subject)
-        if grant is None:
-            return  # Per-user migration: legacy checks remain authoritative until cutover.
         if tool.startswith("agentbridge_"):
             return  # Platform tools enforce their own host, task and object bindings.
-        selected = set(grant["permissions"])
+        selected = set(grant["permissions"] if grant else [])
         args = arguments or {}
         permission = TOOL_PERMISSIONS.get(tool)
         if permission and permission not in selected:
@@ -192,11 +170,9 @@ class UserGrants:
         if tool not in TOOL_PERMISSIONS:
             raise PermissionError("business tool has no permission mapping")
 
-    def available_tools(self, subject: str, legacy_tools: list[str]) -> list[str]:
+    def available_tools(self, subject: str) -> list[str]:
         grant = self.get(subject)
-        if grant is None:
-            return legacy_tools
-        selected = set(grant["permissions"])
+        selected = set(grant["permissions"] if grant else [])
         available = []
         for tool in (*TOOL_PERMISSIONS, *SPECIAL_TOOLS):
             if tool.startswith("agentbridge_") or tool.startswith("database_"):
@@ -229,8 +205,6 @@ class UserGrants:
 
     def filter_templates(self, subject: str, result: dict) -> dict:
         grant = self.get(subject)
-        if grant is None:
-            return result
         from bscli.adapters.seeyon_business_trip import BUSINESS_TRIP_TEMPLATE_ID, BUSINESS_TRIP_FORM_APP_ID
         from bscli.adapters.seeyon_leave import LEAVE_TEMPLATE_ID, LEAVE_FORM_APP_ID
         from bscli.adapters.seeyon_missed_punch import MISSED_PUNCH_TEMPLATE_ID, MISSED_PUNCH_FORM_APP_ID
@@ -239,22 +213,22 @@ class UserGrants:
             (LEAVE_TEMPLATE_ID, LEAVE_FORM_APP_ID): {"oa.leave.draft", "oa.leave.submit"},
             (MISSED_PUNCH_TEMPLATE_ID, MISSED_PUNCH_FORM_APP_ID): {"oa.missed_punch.draft"},
         }
-        selected = set(grant["permissions"])
+        selected = set(grant["permissions"] if grant else [])
         items = [item for item in result.get("items", []) if selected.intersection(
             known.get((str(item.get("template_id", "")), str(item.get("form_app_id", ""))), set())
         )]
         return {"items": items, "count": len(items), "total": len(items), "permission_filtered": True}
 
-    def effective_legacy_scopes(self, subject: str) -> list[str] | None:
+    def effective_scopes(self, subject: str) -> list[str]:
+        """Project user grants for internal scope checks; token history never grants access."""
         grant = self.get(subject)
-        if grant is None:
-            return None
+        permissions = grant["permissions"] if grant else []
         scopes = {"agentbridge:connect"} | {
             scope
-            for permission in grant["permissions"]
+            for permission in permissions
             for scope in PERMISSIONS[permission]["legacy_scopes"]
         }
         for system in ("oa", "taihua", "smartlight", "yuque"):
-            if any(permission.startswith(system + ".") for permission in grant["permissions"]):
+            if any(permission.startswith(system + ".") for permission in permissions):
                 scopes.add(system + ":read")
         return sorted(scopes)

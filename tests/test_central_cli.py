@@ -216,8 +216,17 @@ class CentralCliTests(unittest.TestCase):
         self.assertIsNone(payload["checkedAt"])
         self.assertFalse((Path(tmp) / "profiles").exists())
 
+    def test_unconfigured_user_cannot_invoke_business_capability(self):
+        with TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()) as stdout:
+            code = main(["--home", tmp, "capability", "invoke", "oa.template.list", "--user-subject", "new-user"])
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(stdout.getvalue())["error"]["code"], "PERMISSION_DENIED")
+
     def test_capability_invoke_without_session_returns_login_action_and_operation(self):
         with TemporaryDirectory() as tmp:
+            from bscli.core.user_grants import UserGrants
+            UserGrants(Path(tmp) / "agentbridge.db").save("user-a", ["oa.leave.draft"],
+                expected_revision=0, actor="test-admin", reason="Authorize form catalog test")
             with redirect_stdout(io.StringIO()) as stdout:
                 exit_code = main(
                     [

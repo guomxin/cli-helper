@@ -1,3 +1,4 @@
+from tests.authorization_fixtures import issue_authorized_token, grant_permissions
 import asyncio
 import json
 import threading
@@ -37,6 +38,22 @@ from bscli.mcp.presentation import (
 
 
 class CentralMcpTests(unittest.TestCase):
+    def test_missing_user_grant_never_falls_back_to_historical_token_scopes(self):
+        from contextlib import closing
+        import sqlite3
+        with self._server() as (service, store, token, client):
+            with closing(sqlite3.connect(store.db_path)) as db, db:
+                db.execute("DELETE FROM user_business_grants WHERE user_subject = ?", ("user-a",))
+                db.execute("UPDATE mcp_identity_tokens SET scopes_json = ?", ('["oa:read", "oa:write:draft"]',))
+            catalog = self._request(client, "tools/call", request_id=1, token=token,
+                params={"name": "agentbridge_server_profile", "arguments": {}})
+            names = catalog.json()["result"]["structuredContent"]["agentToolAccess"]["allowedToolNames"]
+            self.assertNotIn("oa_workflow_pending_list", names)
+            denied = self._request(client, "tools/call", request_id=2, token=token,
+                params={"name": "oa_workflow_pending_list", "arguments": {}})
+            self.assertTrue(denied.json()["result"]["isError"])
+            service.invoke.assert_not_called()
+
     def test_slow_host_control_logs_non_sensitive_latency_context(self):
         with patch("bscli.mcp.central._LOGGER") as logger:
             result = asyncio.run(
@@ -113,7 +130,7 @@ class CentralMcpTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             service = MagicMock()
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
-            issued = store.issue(
+            issued = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 ttl_seconds=3600,
@@ -573,6 +590,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_meeting_create_prepare_rejects_room_only_first_call(self):
         with self._server() as (service, _store, token, client):
+            grant_permissions(_store.user_grants, "user-a", ["oa.meeting.create"])
             response = self._request(
                 client,
                 "tools/call",
@@ -595,7 +613,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_meeting_create_prepare_accepts_explicit_intent_without_forwarding_guard(self):
         with self._server() as (service, store, _token, client):
-            token = store.issue(
+            token = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 label="meeting-client",
@@ -637,7 +655,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_meeting_create_prepare_continuation_does_not_repeat_intent_guard(self):
         with self._server() as (service, store, _token, client):
-            token = store.issue(
+            token = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 label="meeting-client",
@@ -866,8 +884,8 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_business_trip_prepare_requires_write_scope_and_uses_server_identity(self):
         with self._server() as (service, store, read_token, client):
-            write_identity = store.issue(
-                user_subject="user-a",
+            write_identity = issue_authorized_token(store,
+                user_subject="write-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:draft"],
                 ttl_seconds=3600,
@@ -904,15 +922,15 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["result"]["isError"])
         call = service.invoke.call_args.kwargs
-        self.assertEqual(call["user_subject"], "user-a")
+        self.assertEqual(call["user_subject"], "write-identity")
         self.assertEqual(call["capability_name"], "oa.business_trip.prepare")
         self.assertEqual(call["idempotency_key"], "mcp-business-trip-prepare")
         self.assertEqual(call["arguments"], {})
 
-    def test_generic_pending_batch_requires_approval_scope(self):
-        self.assertNotIn("oa_workflow_pending_batch_prepare", agent_facing_tools_for_scopes(["oa:read"]))
-        self.assertIn("oa_workflow_pending_batch_prepare", agent_facing_tools_for_scopes(["oa:read", "oa:write:approval"]))
+
+    def test_generic_pending_batch_requires_workflow_permission(self):
         with self._server() as (service, store, read_token, client):
+            grant_permissions(store.user_grants, "user-a", [])
             denied = self._request(client, "tools/call", request_id=73, token=read_token,
                 params={"name": "oa_workflow_pending_batch_prepare", "arguments": {}})
             self.assertTrue(denied.json()["result"]["isError"])
@@ -920,8 +938,8 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_addressbook_tools_require_the_dedicated_read_scope(self):
         with self._server() as (service, store, read_token, client):
-            addressbook_identity = store.issue(
-                user_subject="user-a",
+            addressbook_identity = issue_authorized_token(store,
+                user_subject="addressbook-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:read:addressbook"],
                 ttl_seconds=3600,
@@ -968,12 +986,13 @@ class CentralMcpTests(unittest.TestCase):
             agent_facing_tools_for_scopes(["oa:read"]),
         )
 
+
     def test_configured_user_grant_overrides_old_token_scope_for_business_tools(self):
         from bscli.core.user_grants import UserGrants
 
         with self._server() as (service, store, read_token, client):
             UserGrants(store.db_path).save(
-                "user-a", ["oa.addressbook.read"], expected_revision=0,
+                "user-a", ["oa.addressbook.read"], expected_revision=1,
                 actor="admin", reason="granular migration",
             )
             service.invoke.return_value = {
@@ -1024,14 +1043,14 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_taihua_tools_enforce_read_and_worklog_scopes(self):
         with self._server() as (service, store, oa_read_token, client):
-            taihua_reader = store.issue(
-                user_subject="user-a",
+            taihua_reader = issue_authorized_token(store,
+                user_subject="taihua-reader",
                 expected_principal_ref="Alice",
                 scopes=["taihua:read"],
                 ttl_seconds=3600,
             )
-            taihua_writer = store.issue(
-                user_subject="user-a",
+            taihua_writer = issue_authorized_token(store,
+                user_subject="taihua-writer",
                 expected_principal_ref="Alice",
                 scopes=["taihua:read", "taihua:write:worklog"],
                 ttl_seconds=3600,
@@ -1082,16 +1101,17 @@ class CentralMcpTests(unittest.TestCase):
         self.assertTrue(write_denied.json()["result"]["isError"])
         self.assertFalse(write_allowed.json()["result"]["isError"])
 
+
     def test_smartlight_tools_separate_read_and_alarm_remark_write_scopes(self):
         with self._server() as (service, store, oa_read_token, client):
-            smartlight_reader = store.issue(
-                user_subject="user-a",
+            smartlight_reader = issue_authorized_token(store,
+                user_subject="smartlight-reader",
                 expected_principal_ref="无为",
                 scopes=["smartlight:read"],
                 ttl_seconds=3600,
             )
-            smartlight_writer = store.issue(
-                user_subject="user-a",
+            smartlight_writer = issue_authorized_token(store,
+                user_subject="smartlight-writer",
                 expected_principal_ref="无为",
                 scopes=[
                     "smartlight:read",
@@ -1231,28 +1251,29 @@ class CentralMcpTests(unittest.TestCase):
             {"alarm_id": "alarm-1"},
         )
 
+
     def test_submit_approval_and_meeting_tools_enforce_separate_scopes(self):
         with self._server() as (service, store, read_token, client):
-            approval_identity = store.issue(
-                user_subject="user-a",
+            approval_identity = issue_authorized_token(store,
+                user_subject="approval-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:approval"],
                 ttl_seconds=3600,
             )
-            meeting_identity = store.issue(
-                user_subject="user-a",
+            meeting_identity = issue_authorized_token(store,
+                user_subject="meeting-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:meeting"],
                 ttl_seconds=3600,
             )
-            submit_identity = store.issue(
-                user_subject="user-a",
+            submit_identity = issue_authorized_token(store,
+                user_subject="submit-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:submit"],
                 ttl_seconds=3600,
             )
-            revoke_identity = store.issue(
-                user_subject="user-a",
+            revoke_identity = issue_authorized_token(store,
+                user_subject="revoke-identity",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:revoke"],
                 ttl_seconds=3600,
@@ -1367,6 +1388,7 @@ class CentralMcpTests(unittest.TestCase):
                 "oa.workflow.revoke",
             ],
         )
+
 
     def test_authenticated_tool_uses_server_bound_identity_and_shared_service(self):
         with self._server() as (service, _store, token, client):
@@ -1538,7 +1560,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_yuque_login_defaults_to_fifteen_minute_challenge(self):
         with self._server() as (service, store, _token, client):
-            yuque_identity = store.issue(
+            yuque_identity = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 scopes=["yuque:read"],
@@ -1566,9 +1588,9 @@ class CentralMcpTests(unittest.TestCase):
         self.assertEqual(call["system_id"], "yuque")
         self.assertEqual(call["ttl_seconds"], 900)
 
-    def test_interaction_resume_requires_write_scope_for_business_input(self):
+    def test_interaction_resume_forwards_the_current_user_identity(self):
         with self._server() as (service, store, read_token, client):
-            write_identity = store.issue(
+            write_identity = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 scopes=["oa:read", "oa:write:draft"],
@@ -1591,16 +1613,6 @@ class CentralMcpTests(unittest.TestCase):
                 "status": "requires_user_action",
                 "resumedFromInteractionId": "interaction-123456",
             }
-            denied = self._request(
-                client,
-                "tools/call",
-                request_id=9,
-                token=read_token,
-                params={
-                    "name": "agentbridge_interaction_resume",
-                    "arguments": {"interaction_id": "interaction-123456"},
-                },
-            )
             response = self._request(
                 client,
                 "tools/call",
@@ -1615,7 +1627,6 @@ class CentralMcpTests(unittest.TestCase):
                 },
             )
 
-        self.assertTrue(denied.json()["result"]["isError"])
         self.assertFalse(response.json()["result"]["isError"])
         service.resume_interaction.assert_called_once_with(
             user_subject="user-a",
@@ -1640,7 +1651,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_each_bearer_token_routes_to_its_own_server_bound_user(self):
         with self._server() as (service, store, _token, client):
-            second = store.issue(
+            second = issue_authorized_token(store,
                 user_subject="user-b",
                 expected_principal_ref="Bob",
                 ttl_seconds=3600,
@@ -1981,7 +1992,7 @@ class CentralMcpTests(unittest.TestCase):
 
     def test_host_identity_profile_returns_scope_filtered_agent_tools(self):
         with self._server() as (service, store, _token, client):
-            issued = store.issue(
+            issued = issue_authorized_token(store,
                 user_subject="user-b",
                 expected_principal_ref="Bob",
                 label="limited-client",
@@ -2013,14 +2024,14 @@ class CentralMcpTests(unittest.TestCase):
                 },
             )
 
+            expected_tools = store.user_grants.available_tools("user-b")
+
         result = response.json()["result"]["structuredContent"]
         self.assertFalse(response.json()["result"]["isError"])
         self.assertEqual(result["identity"]["userSubject"], "user-b")
         self.assertEqual(
             result["agentToolAccess"]["allowedToolNames"],
-            agent_facing_tools_for_scopes(
-                ["oa:read", "oa:write:submit"]
-            ),
+            expected_tools,
         )
         self.assertIn(
             "oa_business_trip_submit_prepare",
@@ -2068,7 +2079,7 @@ class CentralMcpTests(unittest.TestCase):
             }
         ]
         with self._server() as (service, store, _token, client):
-            issued = store.issue(
+            issued = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 scopes=["oa:read"],
@@ -2129,7 +2140,7 @@ class CentralMcpTests(unittest.TestCase):
                 "goal": "汇总今日已办",
                 "steps": steps,
             },
-            granted_scopes=["oa:read"],
+            granted_scopes=["agentbridge:connect", "oa:read"],
             authority_identity=ANY,
             idempotency_key="reference-plan-1",
             coordinator_lease_version=3,
@@ -2453,11 +2464,12 @@ class CentralMcpTests(unittest.TestCase):
                 base_url="http://oa.example.test/seeyon/main.do?method=main",
             )
             store = McpIdentityTokenStore(home / "agentbridge.db")
-            issued = store.issue(
+            issued = issue_authorized_token(store,
                 user_subject="user-a",
                 expected_principal_ref="Alice",
                 ttl_seconds=3600,
             )
+            grant_permissions(store.user_grants, "user-a", ["oa.leave.draft"])
             config = validate_central_mcp_server_config(
                 host="127.0.0.1",
                 port=8790,
@@ -2627,7 +2639,7 @@ class CentralMcpFixture:
             "registration": self.service.require_host_registration.return_value,
         }
         self.store = McpIdentityTokenStore(Path(self.temp.name) / "agentbridge.db")
-        issued = self.store.issue(
+        issued = issue_authorized_token(self.store,
             user_subject="user-a",
             expected_principal_ref="Alice",
             label="test-client",

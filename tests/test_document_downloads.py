@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service, grant_permissions
+from bscli.core.user_grants import UserGrants
 from datetime import datetime, timedelta, timezone
 import re
 from pathlib import Path
@@ -92,6 +94,7 @@ class DocumentDownloadStoreTests(unittest.TestCase):
     def test_machine_prepare_is_user_bound_cached_and_reusable(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['oa.certificate.read', 'oa.certificate.download'])
             created = _create(store)
 
             with self.assertRaises(DocumentDownloadAccessDenied):
@@ -200,6 +203,7 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
     def test_card_fetches_pdf_only_after_csrf_bound_confirmation(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['oa.certificate.read', 'oa.certificate.download'])
             created = _create(store)
             application = TrustedDocumentDownloadApplication(
                 download_store=store,
@@ -234,6 +238,7 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
     def test_card_returns_jpeg_scan_with_safe_download_filename(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['oa.certificate.read', 'oa.certificate.download'])
             created = store.create(
                 user_subject="user-a",
                 system_id="oa",
@@ -275,6 +280,7 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
     def test_ready_file_is_served_without_refetching_oa(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['oa.certificate.read', 'oa.certificate.download'])
             created = _create(store)
             store.claim_for_prepare(created["download_id"], user_subject="user-a")
             store.mark_ready(
@@ -300,6 +306,7 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
     def test_fetch_failure_returns_retryable_card_state(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['oa.certificate.read', 'oa.certificate.download'])
             created = _create(store)
 
             def fail(_record):
@@ -329,7 +336,7 @@ class TrustedDocumentDownloadApplicationTests(unittest.TestCase):
 class CentralDocumentDownloadBindingTests(unittest.TestCase):
     def test_search_result_exposes_only_short_lived_url_not_oa_ids(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/main.do",
                 trusted_card_base_url="https://10.10.50.213:8780",
@@ -368,7 +375,7 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
 
     def test_prepare_download_fetches_once_and_returns_fast_media_url(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/main.do",
                 trusted_card_base_url="https://10.10.50.213:8780",
@@ -463,7 +470,7 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
 
     def test_expired_artifact_reissue_uses_current_session_and_same_card(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/main.do",
                 trusted_card_base_url="https://10.10.50.213:8780",
@@ -575,7 +582,7 @@ class CentralDocumentDownloadBindingTests(unittest.TestCase):
 
     def test_batch_prepare_fetches_selected_certificates_in_one_service_call(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/main.do",
                 trusted_card_base_url="https://10.10.50.213:8780",

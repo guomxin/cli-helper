@@ -14,31 +14,13 @@ from bscli.admin.stores import (
 )
 from bscli.core.central_service import CentralCapabilityService, session_response
 from bscli.core.mcp_identities import McpIdentityTokenStore
-from bscli.core.user_grants import PERMISSIONS, UserGrants
+from bscli.core.user_grants import PERMISSIONS
 from bscli.core.runtime_diagnostics import HOST_CONTROL_DIAGNOSTICS
 from bscli.core.sessions import SessionPrincipalMismatch
 from bscli.workspace.gateway import OpenClawGatewayClient
 from bscli.database.independent import DatabaseGrants, CAPABILITIES as DATABASE_CAPABILITIES
 
 
-MCP_SCOPES = (
-    "agentbridge:connect",
-    "oa:read",
-    "oa:read:addressbook",
-    "oa:write:draft",
-    "oa:write:approval",
-    "oa:write:meeting",
-    "oa:write:submit",
-    "oa:write:revoke",
-    "taihua:read",
-    "taihua:write:worklog",
-    "yuque:read",
-    "smartlight:read",
-    "smartlight:write:alarm_remark",
-    "smartlight:write:alarm_work_area_submit",
-    "smartlight:write:alarm_work_area_revoke",
-    "smartlight:write:alarm_disposition",
-)
 SYSTEM_LABELS = {
     "oa": "致远 OA",
     "taihua": "日志系统",
@@ -620,26 +602,18 @@ class AdminControlPlane:
         ):
             raise KeyError("中央账号不存在")
         saved = self.user_grants.get(user_subject)
-        tokens = self.identity_store.list(user_subject=user_subject, limit=1000)
-        legacy = [
-            {"token_id": item["token_id"], "scopes": item["scopes"],
-             "state": item["state"], "expires_at": item["expires_at"]}
-            for item in tokens
-        ]
         return {
             "user_subject": user_subject,
             "permissions": saved["permissions"] if saved else [],
             "revision": saved["revision"] if saved else 0,
-            "migration_state": "configured" if saved else "legacy_scopes",
+            "authorization_model": "user_grants",
+            "configured": saved is not None,
             "available": [
                 {"id": item["id"], "label": item["label"],
                  "system": item["id"].split(".", 1)[0],
-                 "legacy_scopes": item["legacy_scopes"],
                  "grantable": True}
                 for item in PERMISSIONS.values()
             ],
-            "legacy_tokens": legacy,
-            "migration_preview": self.user_grants.migration_preview(tokens),
         }
 
     def save_user_grants(
@@ -723,28 +697,14 @@ class AdminControlPlane:
         _require_admin(actor)
         if ttl_hours < 1 or ttl_hours > 90 * 24:
             raise ValueError("token lifetime must be between 1 hour and 90 days")
+        if scopes:
+            raise ValueError("令牌不再接受 Scope 授权，请在用户业务能力中配置权限")
         grant = self.user_grants.get(user_subject)
-        if grant is not None:
-            normalized_scopes = set(self.user_grants.effective_legacy_scopes(user_subject) or [])
-        else:
-            normalized_scopes = set(scopes)
-        if not normalized_scopes or not normalized_scopes.issubset(MCP_SCOPES):
-            raise ValueError("MCP identity token contains an unsupported scope")
-        if any(scope.startswith("oa:") for scope in normalized_scopes):
-            normalized_scopes.add("oa:read")
-        if any(scope.startswith("taihua:") for scope in normalized_scopes):
-            normalized_scopes.add("taihua:read")
-        if any(scope.startswith("yuque:") for scope in normalized_scopes):
-            normalized_scopes.add("yuque:read")
-        if any(scope.startswith("smartlight:") for scope in normalized_scopes):
-            normalized_scopes.add("smartlight:read")
-        system_ids = {
-            scope.split(":", 1)[0]
-            for scope in normalized_scopes
-            if scope.startswith(("oa:", "taihua:", "yuque:", "smartlight:"))
-        }
-        if grant is not None:
-            system_ids = {permission.split(".", 1)[0] for permission in grant["permissions"]}
+        system_ids = {permission.split(".", 1)[0] for permission in grant["permissions"]} if grant else set()
+        system_ids.update((principal_bindings or {}).keys())
+        system_ids.update(session["system_id"] for session in self.service.sessions.list(user_subject=user_subject))
+        if expected_principal_ref:
+            system_ids.add("oa")
         try:
             resolved_bindings = (
                 self.service.sessions.ensure_principal_bindings(
@@ -765,7 +725,7 @@ class AdminControlPlane:
             user_subject=user_subject,
             expected_principal_ref=token_principal,
             label=label,
-            scopes=sorted(normalized_scopes),
+            scopes=["agentbridge:connect"],
             ttl_seconds=ttl_hours * 3600,
         )
         secret = issued.pop("token")

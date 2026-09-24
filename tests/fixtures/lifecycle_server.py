@@ -54,10 +54,15 @@ def main():
     with closing(sqlite3.connect(service.db_path)) as db, db:
         db.execute('CREATE TABLE IF NOT EXISTS fixture_calls(owner TEXT,system TEXT,capability TEXT,arguments TEXT)')
     store = McpIdentityTokenStore(service.db_path)
+    from tests.authorization_fixtures import grant_permissions
+    from bscli.core.user_grants import PERMISSIONS
+    for user in ('alice', 'bob'):
+        if service.user_grants.get(user) is None:
+            grant_permissions(service.user_grants, user, PERMISSIONS)
     tokens_file = home/'fixture-tokens.json'
     if tokens_file.exists(): tokens=json.loads(tokens_file.read_text())
     else:
-        tokens={user:store.issue(user_subject=user,expected_principal_ref=user,scopes=['oa:read','smartlight:read','oa:write:submit'],ttl_seconds=3600)['token'] for user in ('alice','bob')}
+        tokens={user:store.issue(user_subject=user,expected_principal_ref=user,ttl_seconds=3600)['token'] for user in ('alice','bob')}
         tokens_file.write_text(json.dumps(tokens))
     listener=socket.socket()
     listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
@@ -102,10 +107,12 @@ def main():
                 user=message['user']
                 session=service.sessions.find(user_subject=user,system_id='oa')
                 spec=service.registry.get('oa.leave.submit')
+                operation,_=service.operations.create(user_subject=user,capability_name='oa.leave.submit.prepare',
+                    capability_version='1',input_summary={})
                 authorization=service.write_authorizations.create(
                     user_subject=user,system_id='oa',session_id=session['session_id'],
                     capability_name=spec.name,capability_version=spec.version,
-                    prepare_operation_id='fixture-prepare',
+                    prepare_operation_id=operation['operation_id'],
                     plan={'user_subject':user,'business_intent':'submit_leave_request',
                           'session_binding':{k:session[k] for k in ('session_id','expected_principal_ref','downstream_principal_ref','last_verified_at')}},
                     summary={'title':'Synthetic write','system':'fixture','fields':[]},

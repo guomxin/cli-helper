@@ -33,7 +33,7 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db", clock=lambda: clock[0])
             issued = store.issue(
                 user_subject="user-a", expected_principal_ref="Alice",
-                scopes=["oa:read"], ttl_seconds=300,
+                ttl_seconds=300,
             )
             clock[0] = now + timedelta(minutes=6)
             self.assertIsNone(store.verify(issued["token"]))
@@ -71,7 +71,7 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             path = Path(tmp) / "agentbridge.db"
             store = McpIdentityTokenStore(path)
             issued = store.issue(user_subject="user-a", expected_principal_ref="Alice",
-                                 scopes=["oa:read", "taihua:read"])
+                                 )
             historical = ["oa:read", "taihua:analytics:read", "taihua:analytics:export", "taihua:read"]
             with closing(sqlite3.connect(path)) as connection, connection:
                 connection.execute("UPDATE mcp_identity_tokens SET scopes_json=? WHERE token_id=?",
@@ -79,8 +79,8 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             expected = ["oa:read", "taihua:read"]
             self.assertEqual(store.get(issued["token_id"])["scopes"], expected)
             self.assertEqual(store.list()[0]["scopes"], expected)
-            self.assertEqual(store.verify(issued["token"], required_scopes={"oa:read"})["scopes"], expected)
-            self.assertEqual(store.resolve_client(issued["token_id"])["scopes"], expected)
+            self.assertIsNone(store.verify(issued["token"], required_scopes={"oa:read"}))
+            self.assertEqual(store.resolve_client(issued["token_id"])["scopes"], ["agentbridge:connect"])
             for scope in historical[1:3]:
                 self.assertIsNone(store.verify(issued["token"], required_scopes={scope}))
                 with self.assertRaises(PermissionError):
@@ -106,12 +106,12 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
                 label="desktop-agent",
                 ttl_seconds=3600,
             )
-            verified = store.verify(issued["token"], required_scopes={"oa:read"})
+            verified = store.verify(issued["token"], required_scopes={"agentbridge:connect"})
 
             self.assertTrue(issued["token"].startswith("abmcp_"))
             self.assertEqual(verified["user_subject"], "user-a")
             self.assertEqual(verified["expected_principal_ref"], "Alice")
-            self.assertEqual(verified["scopes"], ["oa:read"])
+            self.assertEqual(verified["scopes"], ["agentbridge:connect"])
             self.assertNotIn(issued["token"].encode("utf-8"), db_path.read_bytes())
             self.assertNotIn("token", store.get(issued["token_id"]))
 
@@ -178,165 +178,45 @@ class McpIdentityTokenStoreTests(unittest.TestCase):
             self.assertEqual(records[0]["token_id"], first["token_id"])
             self.assertNotIn("token", records[0])
 
-    def test_draft_write_scope_is_explicit_and_does_not_replace_read_scope(self):
+
+
+
+    def test_legacy_business_scopes_are_rejected_at_issuance(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
-            issued = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:write:draft"],
-            )
+            with self.assertRaisesRegex(ValueError, "no longer grant"):
+                store.issue(user_subject="user-a", expected_principal_ref="Alice", scopes=["oa:read"])
+            self.assertEqual(store.list(), [])
 
-            verified = store.verify(
-                issued["token"],
-                required_scopes={"oa:write:draft"},
-            )
-
-            self.assertEqual(verified["scopes"], ["oa:read", "oa:write:draft"])
-            self.assertIsNotNone(store.verify(issued["token"], required_scopes={"oa:read"}))
-
-    def test_approval_meeting_submit_and_revoke_scopes_are_independent(self):
+    def test_all_tokens_follow_user_grants_and_history_never_restores_access(self):
+        import sqlite3
+        from contextlib import closing
+        from tests.authorization_fixtures import grant_permissions
         with TemporaryDirectory() as tmp:
-            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
-            approval = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:write:approval"],
-            )
-            meeting = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:write:meeting"],
-            )
-            submit = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:write:submit"],
-            )
-            revoke = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:write:revoke"],
-            )
+            path = Path(tmp) / "agentbridge.db"
+            store = McpIdentityTokenStore(path)
+            first = store.issue(user_subject="user-a", expected_principal_ref="Alice")
+            second = store.issue(user_subject="user-a", expected_principal_ref="Alice")
+            other = store.issue(user_subject="user-b", expected_principal_ref="Bob")
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('UPDATE mcp_identity_tokens SET scopes_json = ? WHERE user_subject = ?',
+                           ('["oa:read", "oa:write:submit"]', 'user-a'))
+            for token in (first, second):
+                self.assertIsNone(store.verify(token["token"], required_scopes={"oa:read"}))
+                with self.assertRaises(PermissionError):
+                    store.resolve_client(token["token_id"], required_scopes={"oa:read"})
+            grant_permissions(store.user_grants, "user-a", ["oa.workflow.read"])
+            for token in (first, second):
+                self.assertIsNotNone(store.verify(token["token"], required_scopes={"oa:read"}))
+                self.assertIsNone(store.verify(token["token"], required_scopes={"oa:write:submit"}))
+            self.assertIsNone(store.verify(other["token"], required_scopes={"oa:read"}))
+            grant_permissions(store.user_grants, "user-a", [])
+            for token in (first, second):
+                self.assertIsNone(store.verify(token["token"], required_scopes={"oa:read"}))
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('DELETE FROM user_business_grants WHERE user_subject = ?', ('user-a',))
+            self.assertIsNone(store.verify(first["token"], required_scopes={"oa:read"}))
 
-            self.assertIsNotNone(
-                store.verify(
-                    approval["token"],
-                    required_scopes={"oa:write:approval"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    approval["token"],
-                    required_scopes={"oa:write:meeting"},
-                )
-            )
-            self.assertIsNotNone(
-                store.verify(
-                    meeting["token"],
-                    required_scopes={"oa:write:meeting"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    meeting["token"],
-                    required_scopes={"oa:write:approval"},
-                )
-            )
-            self.assertIsNotNone(
-                store.verify(
-                    submit["token"],
-                    required_scopes={"oa:write:submit"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    submit["token"],
-                    required_scopes={"oa:write:draft"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    submit["token"],
-                    required_scopes={"oa:write:revoke"},
-                )
-            )
-            self.assertIsNotNone(
-                store.verify(
-                    revoke["token"],
-                    required_scopes={"oa:write:revoke"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    revoke["token"],
-                    required_scopes={"oa:write:submit"},
-                )
-            )
-
-    def test_addressbook_read_scope_is_independent_from_general_oa_read(self):
-        with TemporaryDirectory() as tmp:
-            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
-            general = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read"],
-                ttl_seconds=3600,
-            )
-            addressbook = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["oa:read", "oa:read:addressbook"],
-                ttl_seconds=3600,
-            )
-
-            self.assertIsNone(
-                store.verify(
-                    general["token"], required_scopes={"oa:read:addressbook"}
-                )
-            )
-            self.assertIsNotNone(
-                store.verify(
-                    addressbook["token"],
-                    required_scopes={"oa:read:addressbook"},
-                )
-            )
-
-    def test_taihua_read_and_worklog_write_scopes_are_independent(self):
-        with TemporaryDirectory() as tmp:
-            store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")
-            read_only = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["taihua:read"],
-            )
-            writer = store.issue(
-                user_subject="user-a",
-                expected_principal_ref="Alice",
-                scopes=["taihua:read", "taihua:write:worklog"],
-            )
-
-            self.assertIsNotNone(
-                store.verify(
-                    read_only["token"],
-                    required_scopes={"taihua:read"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(
-                    read_only["token"],
-                    required_scopes={"taihua:write:worklog"},
-                )
-            )
-            self.assertIsNotNone(
-                store.verify(
-                    writer["token"],
-                    required_scopes={"taihua:write:worklog"},
-                )
-            )
-            self.assertIsNone(
-                store.verify(writer["token"], required_scopes={"oa:read"})
-            )
     def test_unsupported_scope_and_unsafe_subject_are_rejected(self):
         with TemporaryDirectory() as tmp:
             store = McpIdentityTokenStore(Path(tmp) / "agentbridge.db")

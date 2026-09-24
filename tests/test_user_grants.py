@@ -6,16 +6,33 @@ from bscli.core.user_grants import UserGrantConflict, UserGrants
 
 
 class UserGrantTests(unittest.TestCase):
-    def test_migration_preview_includes_expired_not_revoked_and_never_unions(self):
-        preview = UserGrants.migration_preview([
-            {"token_id": "a", "state": "active", "scopes": ["oa:read", "oa:read:addressbook"], "expires_at": "2099-01-01"},
-            {"token_id": "b", "state": "active", "scopes": ["oa:read"], "expires_at": "2000-01-01"},
-            {"token_id": "c", "state": "revoked", "scopes": []},
-        ])
-        self.assertFalse(preview["consistent"])
-        self.assertEqual([t["token_id"] for t in preview["tokens"]], ["a", "b"])
-        self.assertIn("oa.workflow.read", preview["recommended_permissions"])
-        self.assertNotIn("oa.addressbook.read", preview["recommended_permissions"])
+    def test_unconfigured_user_has_no_business_access_or_template_results(self):
+        with TemporaryDirectory() as temporary:
+            grants = UserGrants(Path(temporary) / "agentbridge.db")
+            with self.assertRaises(PermissionError):
+                grants.require_capability("missing", "oa.workflow.pending.list")
+            with self.assertRaises(PermissionError):
+                grants.require_tool("missing", "oa_workflow_pending_list")
+            self.assertNotIn("oa_workflow_pending_list", grants.available_tools("missing"))
+            self.assertEqual(grants.filter_templates("missing", {"items": [{"template_id": "anything"}], "raw": "secret"})["items"], [])
+            self.assertEqual(grants.effective_scopes("missing"), ["agentbridge:connect"])
+
+    def test_unconfigured_service_denies_execution_and_historical_operation(self):
+        from bscli.core.central_service import CentralCapabilityService
+        from bscli.core.document_downloads import DocumentDownloadStore
+        with TemporaryDirectory() as temporary:
+            service = CentralCapabilityService(home=temporary, base_url="http://oa.test/seeyon")
+            with self.assertRaises(PermissionError):
+                service.invoke(user_subject="missing", capability_name="oa.workflow.pending.list", arguments={})
+            operation, _ = service.operations.create(user_subject="missing", capability_name="oa.workflow.pending.list",
+                capability_version="1", input_summary={})
+            self.assertEqual(service.list_operations(user_subject="missing")["operations"], [])
+            with self.assertRaises(PermissionError):
+                service.get_operation(user_subject="missing", operation_id=operation["operation_id"])
+            self.assertEqual(service.planning_catalog(user_subject="missing", granted_scopes={"oa:read"})["capabilities"], [])
+            downloads = DocumentDownloadStore(service.db_path)
+            with self.assertRaises(PermissionError):
+                downloads.require_access({"user_subject": "missing", "document_type": "patent_certificate"})
 
     def test_audit_failure_rolls_back_grant_and_revision(self):
         with TemporaryDirectory() as temporary:
@@ -36,7 +53,7 @@ class UserGrantTests(unittest.TestCase):
             filtered = grants.filter_templates("user-a", {"items": [good, {**good, "form_app_id": "other"}], "raw": "secret"})
             self.assertEqual(filtered["items"], [good])
             self.assertNotIn("raw", filtered)
-            tools = grants.available_tools("user-a", [])
+            tools = grants.available_tools("user-a")
             self.assertIn("oa_template_list", tools)
             self.assertNotIn("oa_leave_save_draft", tools)
 
@@ -109,5 +126,5 @@ class UserGrantTests(unittest.TestCase):
                 grants.require_tool("user-a", "oa_certificate_prepare_download", {})
             self.assertNotIn(
                 "oa_certificate_prepare_download",
-                grants.available_tools("user-a", ["oa_certificate_prepare_download"]),
+                grants.available_tools("user-a"),
             )

@@ -123,7 +123,9 @@ class McpIdentityTokenStore:
         user_subject = _validate_user_subject(user_subject)
         expected_principal_ref = _validate_expected_principal(expected_principal_ref)
         normalized_label = _validate_label(label)
-        normalized_scopes = _validate_scopes(scopes or ["oa:read"])
+        normalized_scopes = _validate_scopes(scopes or ["agentbridge:connect"])
+        if normalized_scopes != ["agentbridge:connect"]:
+            raise ValueError("Token scopes no longer grant business access; configure user permissions instead")
         if ttl_seconds < 300 or ttl_seconds > 90 * 86400:
             raise ValueError("MCP identity token TTL must be between 5 minutes and 90 days")
 
@@ -167,11 +169,7 @@ class McpIdentityTokenStore:
             record = _record_from_row(row)
             if record["state"] != "active" or _parse_time(record["expires_at"]) <= now:
                 return None
-            grants = getattr(self, "user_grants", None)
-            if grants is not None:
-                projected = grants.effective_legacy_scopes(record["user_subject"])
-                if projected is not None:
-                    record["scopes"] = projected
+            record["scopes"] = self.user_grants.effective_scopes(record["user_subject"])
             if required_scopes and not required_scopes.issubset(set(record["scopes"])):
                 return None
             connection.execute(
@@ -186,11 +184,7 @@ class McpIdentityTokenStore:
         now = _as_utc(self.clock())
         if record["state"] != "active" or _parse_time(record["expires_at"]) <= now:
             raise PermissionError("MCP identity token is inactive or expired")
-        grants = getattr(self, "user_grants", None)
-        if grants is not None:
-            projected = grants.effective_legacy_scopes(record["user_subject"])
-            if projected is not None:
-                record["scopes"] = projected
+        record["scopes"] = self.user_grants.effective_scopes(record["user_subject"])
         if required_scopes and not required_scopes.issubset(set(record["scopes"])):
             raise PermissionError("MCP identity token does not grant the required scope")
         return record
@@ -345,7 +339,7 @@ def _record_from_row(row: sqlite3.Row) -> dict:
         "user_subject": row["user_subject"],
         "expected_principal_ref": row["expected_principal_ref"],
         "label": row["label"],
-        # Stored scopes are issuance history; only supported scopes are effective.
+        # Stored scopes are audit metadata; runtime access comes from user grants.
         # All readers (admin listing, authentication and client resolution) share
         # this projection so retired permissions cannot appear active again.
         "scopes": [scope for scope in json.loads(row["scopes_json"]) if scope in _ALLOWED_SCOPES],

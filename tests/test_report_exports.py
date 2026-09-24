@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service, grant_permissions
+from bscli.core.user_grants import UserGrants
 import csv
 from datetime import datetime, timezone
 from io import StringIO
@@ -76,6 +78,7 @@ class SmartlightReportExportTests(unittest.TestCase):
     def test_document_store_accepts_ready_csv_report(self):
         with TemporaryDirectory() as tmp:
             store = DocumentDownloadStore(Path(tmp) / "agentbridge.db")
+            grant_permissions(UserGrants(store.db_path), "user-a", ['smartlight.report.export', 'smartlight.alarm.read'])
             record = store.create(
                 user_subject="user-a",
                 system_id="smartlight",
@@ -119,7 +122,7 @@ class SmartlightReportExportTests(unittest.TestCase):
 
     def test_central_service_links_report_and_reissues_expired_artifact(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/",
                 smartlight_base_url="http://smartlight.example.test/smartlight/",
@@ -210,7 +213,7 @@ class SmartlightReportExportTests(unittest.TestCase):
 
     def test_central_service_materializes_and_reissues_addressbook_export(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/",
                 trusted_card_base_url="https://10.10.50.213:8780",

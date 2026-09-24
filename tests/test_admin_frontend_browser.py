@@ -42,7 +42,7 @@ def console(tmp_path):
         service.sessions.mark_awaiting_login(session["session_id"])
     control.identity_store.issue(
         user_subject="fixture-user", expected_principal_ref="fixture-user",
-        label="浏览器测试", scopes=["oa:read", "taihua:read"], ttl_seconds=86400,
+        label="浏览器测试", ttl_seconds=86400,
     )
     trace, _ = service.runtime_governance.ensure_trace(
         user_subject="fixture-user", request_id="browser-fixture", host_type="reference-host",
@@ -165,6 +165,7 @@ def test_console_views_interactions_and_layout(console):
 
         def layout():
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "page overflow"
+            page.wait_for_function("Array.from(document.images).every(i => i.complete)")
             assert page.locator("img").evaluate_all("images => images.every(i => i.complete && i.naturalWidth > 0)"), "broken icons"
 
         page.goto(origin)
@@ -232,8 +233,7 @@ def test_console_views_interactions_and_layout(console):
         expect(page.locator("#modal-title")).to_have_text("fixture-user · 业务能力")
         page.locator("#modal-cancel").click()
         expect(page.locator("#row-action-menu")).not_to_be_visible()
-        page.locator(".scope-history summary").click()
-        expect(page.locator(".scope-history .scope-pills span")).to_have_count(2)
+        expect(page.get_by_role("columnheader", name="历史 Scope")).to_have_count(0)
         page.locator('[data-filter-status="active"] [data-row-actions]').click()
         expect(page.locator('[data-renew-token]')).to_be_visible()
         page.locator('[data-renew-token]').click()
@@ -244,6 +244,8 @@ def test_console_views_interactions_and_layout(console):
         expect(page.locator("#row-action-menu")).not_to_be_visible()
         expect(page.get_by_role("button", name="fixture-user用户操作")).to_have_attribute("aria-expanded", "false")
         page.locator("[data-issue-token]").click()
+        expect(page.locator('input[name="scope"]')).to_have_count(0)
+        expect(page.locator("#modal-body")).to_contain_text("新用户默认无业务能力")
         expect(page.locator("#modal-title")).to_have_text("签发 MCP Token")
         page.locator("#modal-cancel").click()
         navigate("capabilities")

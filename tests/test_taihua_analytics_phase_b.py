@@ -14,7 +14,7 @@ class RetirementTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             service=CentralCapabilityService(home=root,base_url='http://127.0.0.1:1')
             identities=McpIdentityTokenStore(service.db_path)
-            identity=identities.issue(user_subject='a',expected_principal_ref='unused',scopes=['taihua:read'])
+            identity=identities.issue(user_subject='a',expected_principal_ref='unused')
             with closing(sqlite3.connect(service.db_path)) as c,c:
                 c.execute('UPDATE mcp_identity_tokens SET scopes_json=? WHERE token_id=?',
                     (json.dumps(['taihua:read','taihua:analytics:read','taihua:analytics:export']),identity['token_id']))

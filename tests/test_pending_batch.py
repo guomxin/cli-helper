@@ -147,7 +147,7 @@ def test_migrated_user_batch_checks_each_selected_business_approval(run):
     service, tid, _rows, _prepared, _committed = run
     service.user_grants.save(
         "user-a", ["oa.workflow.read", "oa.efficiency_data.approve"],
-        expected_revision=0, actor="admin", reason="efficiency approval only",
+        expected_revision=service.user_grants.get("user-a")["revision"], actor="admin", reason="efficiency approval only",
     )
     denied = start(service, tid, {"affair_ids": ["affair-3"]})
     assert denied["status"] == "failed"

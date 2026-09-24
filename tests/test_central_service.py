@@ -1,3 +1,4 @@
+from tests.authorization_fixtures import authorized_service
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -285,7 +286,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_smartlight_alarm_remark_uses_field_authorization_and_commit_chain(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url=BASE_URL,
                 smartlight_base_url=(
@@ -418,7 +419,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_smartlight_prepare_preserves_business_rule_rejection(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url=BASE_URL,
                 smartlight_base_url=(
@@ -483,7 +484,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
     def test_smartlight_rtu_action_skips_field_card_and_uses_authorization(self):
         with TemporaryDirectory() as tmp:
             worker = FakeWorker()
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url=BASE_URL,
                 smartlight_base_url="http://123.232.113.241:4101/smartlight",
@@ -1156,7 +1157,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                 worker.user_subject = session["user_subject"]
                 return worker
 
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url=BASE_URL,
                 worker_factory=worker_factory,
@@ -1509,7 +1510,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
 
     def test_same_user_browser_work_is_serialized_inside_service(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url=BASE_URL,
                 worker_factory=lambda _session, _adapter: FakeWorker(),
@@ -2780,7 +2781,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
             )
     @staticmethod
     def _service(tmp, worker, *, keepalive_lease_seconds=None):
-        return CentralCapabilityService(
+        return authorized_service(
             home=Path(tmp),
             base_url=BASE_URL,
             worker_factory=lambda _session, _adapter: worker,

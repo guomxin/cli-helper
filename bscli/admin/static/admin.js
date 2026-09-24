@@ -36,13 +36,6 @@ const statusClass = value => ["active", "succeeded", "approved", "submitted", "c
   ["failed", "unknown", "outcome_unknown", "expired", "quarantined", "revoked", "rejected", "user_action_failed", "unavailable", "breached"].includes(value) ? "bad" :
   ["pending", "partially_succeeded", "delivering", "deferred", "waiting_activity", "awaiting_login", "awaiting_user", "waiting_user", "waiting", "paused", "awaiting_selection", "outside_lease", "user_action_expired", "user_action_rejected", "open", "acknowledged", "investigating"].includes(value) ? "warn" :
   ["running", "resume", "follow_up", "pull", "direct"].includes(value) ? "info" : "neutral";
-const scopeGroups = [
-  { label: "致远 OA", items: ["oa:read", "oa:read:addressbook", "oa:write:draft", "oa:write:approval", "oa:write:meeting", "oa:write:submit", "oa:write:revoke"] },
-  { label: "日志系统", items: ["taihua:read", "taihua:write:worklog"] },
-  { label: "部门信息库", items: ["yuque:read"] },
-  { label: "照明实验室", items: ["smartlight:read", "smartlight:write:alarm_remark", "smartlight:write:alarm_work_area_submit", "smartlight:write:alarm_work_area_revoke", "smartlight:write:alarm_disposition"] },
-];
-
 const $ = selector => document.querySelector(selector);
 const content = $("#content");
 const modal = $("#modal");
@@ -127,10 +120,6 @@ function applyFilter(control) {
   }
 }
 function scopeBadges(scopes) { return `<div class="scope-pills">${scopes.map(scope => `<span>${escapeHtml(scope)}</span>`).join("")}</div>`; }
-function scopeHistory(scopes) {
-  if (!scopes.length) return "--";
-  return `<details class="scope-history"><summary>${scopes.length} 项历史权限</summary>${scopeBadges(scopes)}</details>`;
-}
 function rowMenuButton(label, items) {
   if (!items.length) return "--";
   return `<button type="button" class="row-menu-trigger" data-row-actions="${escapeHtml(JSON.stringify(items))}" aria-label="${escapeHtml(label)}操作" aria-haspopup="dialog" aria-expanded="false">操作 <span aria-hidden="true">⌄</span></button>`;
@@ -420,13 +409,13 @@ async function renderUsers() {
       { label: "管理员续期", attrs: { "data-renew-token": token.token_id, "data-expires-at": token.expires_at, "data-edit-revision": token.edit_revision } },
       { label: "撤销令牌", attrs: { "data-revoke-token": token.token_id }, danger: true },
     ] : [];
-    return filterRow(`${token.token_id} ${token.label} ${token.user_subject} ${token.scopes.join(" ")}`, displayState, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${scopeHistory(token.scopes)}</td><td>${badge(displayState)}</td><td>${fmtTime(token.expires_at)}</td><td class="row-action-cell">${rowMenuButton(`${token.label || "未命名"} ${token.token_id.slice(0, 8)}令牌`, items)}</td>`);
+    return filterRow(`${token.token_id} ${token.label} ${token.user_subject}`, displayState, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${badge(displayState)}</td><td>${fmtTime(token.expires_at)}</td><td class="row-action-cell">${rowMenuButton(`${token.label || "未命名"} ${token.token_id.slice(0, 8)}令牌`, items)}</td>`);
   });
   content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
     <p class="muted">数据库能力按中央账号和数据源配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
     ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", "操作"], userRows, "搜索用户或下游主体")}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>业务权限按用户配置；令牌用于认证、续期和撤销。管理员看不到已签发密钥。</p></div></div>
-    ${filteredTable(["Token ID", "标签", "用户", "历史 Scope", "状态", "到期时间", "操作"], tokenRows, "搜索 Token、用户或权限", ["active", "expired", "revoked"])} `;
+    ${filteredTable(["Token ID", "标签", "用户", "状态", "到期时间", "操作"], tokenRows, "搜索 Token 或用户", ["active", "expired", "revoked"])} `;
 }
 
 async function renderSessions() {
@@ -694,15 +683,14 @@ async function renderAudit() {
 async function openUserGrants(userSubject) {
   const config = await api(`/api/user-grants?user=${encodeURIComponent(userSubject)}`);
   const editable = state.account.role === "admin";
-  const selected = new Set(config.migration_state === "legacy_scopes" ? config.migration_preview.recommended_permissions : config.permissions);
+  const selected = new Set(config.permissions);
   const groups = ["oa", "smartlight", "taihua", "yuque"].map(system => {
     const labels = { oa: "致远 OA", smartlight: "照明系统", taihua: "日志系统", yuque: "语雀" };
     const items = config.available.filter(item => item.system === system);
     return `<fieldset class="scope-group"><legend>${labels[system]}</legend><div class="checkbox-grid">${items.map(item => `<label class="check"><input type="checkbox" name="business_permission" value="${escapeHtml(item.id)}" ${selected.has(item.id) ? "checked" : ""} ${editable && item.grantable ? "" : "disabled"}><span><strong>${escapeHtml(item.label)}${item.grantable ? "" : "（待开放）"}</strong><small>${escapeHtml(item.id)}</small></span></label>`).join("")}</div></fieldset>`;
   }).join("");
-  const oldScopes = [...new Set(config.legacy_tokens.map(item => item.scopes.join(", ")))];
-  const migrationNote = config.migration_state === "legacy_scopes" ? `<p class="muted">此用户尚未切换。已按全部未吊销令牌（含已到期令牌）的共同权限预选 ${selected.size} 项，避免合并时扩大权限。${config.migration_preview.consistent ? "各令牌权限一致。" : "各令牌权限不一致或无可迁移令牌，请核对后保存。"}保存后所有有效令牌使用同一用户权限；数据库授权继续单独管理。</p><details><summary>查看各令牌迁移依据（历史 Scope 共 ${oldScopes.length} 种）</summary>${config.migration_preview.tokens.map(item => `<p><strong>${escapeHtml(item.token_id)}</strong><br>${item.permissions.map(id => escapeHtml(config.available.find(p => p.id === id)?.label || id)).join("、") || "无业务权限"}</p>`).join("")}</details>` : `<p class="muted">保存后所有有效令牌下次调用生效，无需换发或重启。</p>`;
-  openModal({ title: `${userSubject} · 业务能力`, submit: editable ? "保存用户授权" : "关闭", body: `${migrationNote}${groups}<p class="muted">当前版本：${config.revision}。空列表撤销此用户全部非数据库业务能力。</p>${editable ? reasonField() : ""}`,
+  const grantNote = `<p class="muted">${config.configured ? "" : "尚未配置业务能力，默认无业务权限。"}保存后所有有效令牌下次调用生效，无需换发或重启。数据库能力单独配置。</p>`;
+  openModal({ title: `${userSubject} · 业务能力`, submit: editable ? "保存用户授权" : "关闭", body: `${grantNote}${groups}<p class="muted">当前版本：${config.revision}。空列表撤销此用户全部非数据库业务能力。</p>${editable ? reasonField() : ""}`,
     action: async form => { if (!editable) { closeModal(); return; } await api("/api/user-grants", { method: "POST", body: JSON.stringify({ user_subject: config.user_subject, permissions: form.getAll("business_permission"), expected_revision: config.revision, reason: form.get("reason") }) }); closeModal(); toast("用户业务授权已保存"); await loadView("users"); }
   });
 }
@@ -751,9 +739,8 @@ function openAdminAccount() {
   } });
 }
 function openIssueToken() {
-  const groups = scopeGroups.map(group => `<fieldset class="scope-group"><legend>${escapeHtml(group.label)}</legend><div class="checkbox-grid">${group.items.map(scope => `<label class="check"><input type="checkbox" name="scope" value="${scope}" ${scope === "oa:read" ? "checked" : ""}><span><strong>${escapeHtml(statusText[scope] || scope.split(":").slice(-1)[0])}</strong><small>${escapeHtml(scope)}</small></span></label>`).join("")}</div></fieldset>`).join("");
-  openModal({ title: "签发 MCP Token", submit: "签发", body: `<label>用户标识<input name="user_subject" required></label><div><strong>各系统预期主体</strong><p class="muted">已有绑定可以留空；首次开通某个系统时必须填写该系统识别到的账号或主体。</p></div><label>OA 主体<input name="principal_oa" maxlength="256"></label><label>日志系统主体<input name="principal_taihua" maxlength="256"></label><label>语雀主体<input name="principal_yuque" maxlength="256"></label><label>标签<input name="label" maxlength="120"></label><label>有效小时数<input name="ttl_hours" type="number" min="1" max="2160" value="720" required></label><div class="scope-groups"><strong>旧模式 Scope（仅未迁移用户使用）</strong><p class="muted">已配置用户业务授权的账号按用户权限执行，签发时的勾选不限制或扩大业务权限。</p>${groups}</div>${reasonField()}`,
-    action: async form => { const scopes = form.getAll("scope"); const principal_bindings = Object.fromEntries(["oa", "taihua", "yuque"].map(system => [system, String(form.get(`principal_${system}`) || "").trim()]).filter(([, principal]) => principal)); const issued = await api("/api/tokens", { method: "POST", body: JSON.stringify({ user_subject: form.get("user_subject"), principal_bindings, label: form.get("label"), ttl_hours: Number(form.get("ttl_hours")), scopes, reason: form.get("reason") }) }); openModal({ kicker: "只显示一次", title: "Token 已签发", submit: "完成", body: `<p>请将密钥配置到可信 MCP 客户端。关闭后无法再次查看。</p><div id="issued-secret" class="secret-box">${escapeHtml(issued.token_secret)}</div><button type="button" class="button secondary" data-copy-secret>复制密钥</button>`, action: async () => { closeModal(); await loadView("users"); } }); }
+  openModal({ title: "签发 MCP Token", submit: "签发", body: `<label>用户标识<input name="user_subject" required></label><div><strong>各系统预期主体</strong><p class="muted">已有绑定可以留空；首次开通某个系统时必须填写该系统识别到的账号或主体。</p></div><label>OA 主体<input name="principal_oa" maxlength="256"></label><label>日志系统主体<input name="principal_taihua" maxlength="256"></label><label>语雀主体<input name="principal_yuque" maxlength="256"></label><label>标签<input name="label" maxlength="120"></label><label>有效小时数<input name="ttl_hours" type="number" min="1" max="2160" value="720" required></label><p class="muted">令牌仅用于身份认证。已有用户沿用当前授权；新用户默认无业务能力，签发后请在用户操作中配置业务能力和数据库能力。</p>${reasonField()}`,
+    action: async form => { const principal_bindings = Object.fromEntries(["oa", "taihua", "yuque"].map(system => [system, String(form.get(`principal_${system}`) || "").trim()]).filter(([, principal]) => principal)); const issued = await api("/api/tokens", { method: "POST", body: JSON.stringify({ user_subject: form.get("user_subject"), principal_bindings, label: form.get("label"), ttl_hours: Number(form.get("ttl_hours")), reason: form.get("reason") }) }); openModal({ kicker: "只显示一次", title: "Token 已签发", submit: "完成", body: `<p>请将密钥配置到可信 MCP 客户端。关闭后无法再次查看。</p><div id="issued-secret" class="secret-box">${escapeHtml(issued.token_secret)}</div><button type="button" class="button secondary" data-copy-secret>复制密钥</button>`, action: async () => { closeModal(); await loadView("users"); } }); }
   });
 }
 function openRenewToken(target) {

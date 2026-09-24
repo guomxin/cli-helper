@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -235,7 +236,7 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
 
     def test_readiness_distinguishes_full_service_schema_from_bare_store(self) -> None:
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://127.0.0.1:8000/seeyon",
             )
@@ -245,7 +246,7 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
 
     def test_governance_cycle_runs_independently_from_session_keepalive(self) -> None:
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://127.0.0.1:8000/seeyon",
                 session_keepalive_lease_seconds=None,
@@ -307,7 +308,7 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
 
     def test_detector_finds_stalled_operation_task_and_delivery_without_business_calls(self) -> None:
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://127.0.0.1:8000/seeyon",
             )
@@ -369,7 +370,7 @@ class RuntimeGovernanceStoreTests(unittest.TestCase):
     def test_historical_orphans_do_not_pollute_current_incidents_or_slo(self) -> None:
         clock = MutableClock()
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://127.0.0.1:8000/seeyon",
             )

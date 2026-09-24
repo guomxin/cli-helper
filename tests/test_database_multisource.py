@@ -137,7 +137,7 @@ class MultiSourceTests(unittest.TestCase):
             self.assertFalse(any(x.name.startswith('taihua.analytics.') for x in service.registry.list()))
             self.assertFalse(any('taihua_personal_compare' in x.name for x in build_transform_registry().list()))
             identities=McpIdentityTokenStore(service.db_path)
-            token=identities.issue(user_subject='a',expected_principal_ref='unused',scopes=['taihua:read'])
+            token=identities.issue(user_subject='a',expected_principal_ref='unused')
             with closing(sqlite3.connect(service.db_path)) as c,c:
                 # Old stored metadata remains authenticatable, but no longer grants analytics.
                 table=c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%identity%' ").fetchall()

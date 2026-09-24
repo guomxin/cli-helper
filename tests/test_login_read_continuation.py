@@ -1,3 +1,4 @@
+from tests.authorization_fixtures import authorized_service
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +10,7 @@ from bscli.core.login_continuation import read_continuation_message
 
 
 def service_at(home):
-    return CentralCapabilityService(home=home, base_url="http://oa.test/seeyon")
+    return authorized_service(home=home, base_url="http://oa.test/seeyon")
 
 
 def logged_in_query(home, *, capability="oa.workflow.pending.list", arguments=None, client_type="web"):

@@ -11,24 +11,9 @@ from bscli.core.sessions import SessionRegistry
 
 
 class CentralMcpCliTests(unittest.TestCase):
-    def test_token_issue_accepts_addressbook_read_scope(self) -> None:
-        parser = build_parser()
-
-        args = parser.parse_args(
-            [
-                "--home",
-                "state",
-                "mcp",
-                "token",
-                "issue",
-                "--user-subject",
-                "user-1",
-                "--scope",
-                "oa:read:addressbook",
-            ]
-        )
-
-        self.assertEqual(args.scope, ["oa:read:addressbook"])
+    def test_token_issue_rejects_legacy_scope_option(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            build_parser().parse_args(["mcp", "token", "issue", "--user-subject", "user-a", "--scope", "oa:read"])
 
     def test_identity_token_issue_shows_secret_once_and_binds_session(self):
         with TemporaryDirectory() as tmp:
@@ -48,16 +33,6 @@ class CentralMcpCliTests(unittest.TestCase):
                         "desktop",
                         "--ttl-hours",
                         "12",
-                        "--scope",
-                        "oa:write:draft",
-                        "--scope",
-                        "oa:write:approval",
-                        "--scope",
-                        "oa:write:meeting",
-                        "--scope",
-                        "oa:write:submit",
-                        "--scope",
-                        "oa:write:revoke",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -74,15 +49,7 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertTrue(issued["bearerToken"].startswith("abmcp_"))
         self.assertEqual(issued["identityToken"]["expectedPrincipalRef"], "Alice")
         self.assertEqual(
-            issued["identityToken"]["scopes"],
-            [
-                "oa:read",
-                "oa:write:approval",
-                "oa:write:draft",
-                "oa:write:meeting",
-                "oa:write:revoke",
-                "oa:write:submit",
-            ],
+            issued["identityToken"]["scopes"], ["agentbridge:connect"],
         )
         self.assertEqual(listed["count"], 1)
         self.assertNotIn("bearerToken", listed)
@@ -101,10 +68,8 @@ class CentralMcpCliTests(unittest.TestCase):
                         "issue",
                         "--user-subject",
                         "user-a",
-                        "--expected-principal",
-                        "Alice",
-                        "--scope",
-                        "taihua:write:worklog",
+                        "--system-principal",
+                        "taihua=Alice",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -120,7 +85,7 @@ class CentralMcpCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(
             issued["identityToken"]["scopes"],
-            ["taihua:read", "taihua:write:worklog"],
+            ["agentbridge:connect"],
         )
         self.assertTrue(has_taihua_session)
         self.assertFalse(has_oa_session)
@@ -137,10 +102,8 @@ class CentralMcpCliTests(unittest.TestCase):
                         "issue",
                         "--user-subject",
                         "user-a",
-                        "--expected-principal",
-                        "无为",
-                        "--scope",
-                        "smartlight:read",
+                        "--system-principal",
+                        "smartlight=无为",
                     ]
                 )
             issued = json.loads(issued_stdout.getvalue())
@@ -157,7 +120,7 @@ class CentralMcpCliTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(issued["identityToken"]["scopes"], ["smartlight:read"])
+        self.assertEqual(issued["identityToken"]["scopes"], ["agentbridge:connect"])
         self.assertEqual(
             issued["identityToken"]["principalBindings"],
             {"smartlight": "无为"},

@@ -4,5 +4,5 @@
     "1682f577a15b"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed 1682f577a15b. This candidate only adjusts a Windows CI concurrency test timeout; installed runtime behavior, database schema, and grant semantics are unchanged. The release transaction must reject any SQLite schema difference."
+  "reason": "Reviewed against deployed 1682f577a15b: end legacy token-scope authorization. Existing configured users keep their current grants; unconfigured users have no business permissions. Identity issuance no longer accepts business scopes. No database schema or data rewrite; historical token metadata remains audit-only. Rollback must preserve current user grants and revocations."
 }

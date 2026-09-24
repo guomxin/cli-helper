@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -38,7 +39,7 @@ class YuqueIntegrationContractTests(unittest.TestCase):
 
     def test_yuque_login_challenge_and_resume_scope_are_system_specific(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=Path(tmp),
                 base_url="http://oa.example.test/seeyon/main.do?method=main",
                 yuque_base_url="https://tc-aiot.yuque.com",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.authorization_fixtures import authorized_service
 import re
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -751,7 +752,7 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
 
     def test_central_service_keeps_oa_and_taihua_sessions_separate(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/",
                 taihua_base_url="http://10.10.50.101",
@@ -789,7 +790,7 @@ class TaihuaCentralAdapterTests(unittest.TestCase):
 
     def test_central_service_routes_taihua_read_to_http_runtime(self):
         with TemporaryDirectory() as tmp:
-            service = CentralCapabilityService(
+            service = authorized_service(
                 home=tmp,
                 base_url="http://oa.example.test/seeyon/",
                 taihua_base_url="http://10.10.50.101",

@@ -1,4 +1,5 @@
 """Real central stores and plan runner; all downstream systems are simulated."""
+from tests.authorization_fixtures import authorized_service, grant_permissions
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         worker = central_fixtures.FakeWorker()
-        self.service = CentralCapabilityService(
+        self.service = authorized_service(
             home=Path(self.temp.name), base_url=central_fixtures.BASE_URL,
             taihua_base_url="http://taihua.example.test", worker_factory=lambda *_: worker,
         )
@@ -41,9 +42,11 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         self.service._adapters_by_system["taihua"] = self.write
         self.tokens = McpIdentityTokenStore(self.service.db_path)
         self.origin = self.tokens.issue(user_subject="user-a", expected_principal_ref="Alice",
-            scopes=["oa:read", "taihua:write:worklog"], ttl_seconds=300)
+            ttl_seconds=300)
         self.other = self.tokens.issue(user_subject="user-a", expected_principal_ref="Alice",
-            scopes=["taihua:write:worklog"])
+            )
+        self.origin = self.tokens.resolve_client(self.origin["token_id"])
+        self.other = self.tokens.resolve_client(self.other["token_id"])
         self.service.set_task_plan_authority_resolver(
             lambda token, scopes: self.tokens.resolve_client(token, required_scopes=scopes))
         self.read_calls = 0
@@ -239,7 +242,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         self.assertIsNone(self.write.created_payload)
         self.assertEqual(self.service.write_authorizations.get(self.auth_id)["state"], "superseded")
 
-    def test_origin_expiry_and_scope_reduction_block_authorization_resume(self):
+    def test_origin_expiry_and_user_permission_reduction_block_authorization_resume(self):
         for condition in ("expired", "reduced"):
             with self.subTest(condition=condition):
                 case = PlanWriteBoundaryTests()
@@ -250,9 +253,7 @@ class PlanWriteBoundaryTests(unittest.TestCase):
                     if condition == "expired":
                         case.tokens.clock = lambda: datetime.now(timezone.utc) + timedelta(seconds=301)
                     else:
-                        with case.tokens._connect() as connection:
-                            connection.execute("UPDATE mcp_identity_tokens SET scopes_json = ? WHERE token_id = ?",
-                                (json.dumps(["taihua:write:worklog"]), case.origin["token_id"]))
+                        grant_permissions(case.service.user_grants, "user-a", ["taihua.work_log.create"])
                     result = case.resume(case.authorization)
                     self.assertEqual(result["error"]["code"], "PLAN_AUTHORITY_INVALID")
                     self.assertIsNone(case.write.created_payload)

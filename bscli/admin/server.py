@@ -13,7 +13,7 @@ import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from bscli.admin.application import AdminControlPlane, MCP_SCOPES
+from bscli.admin.application import AdminControlPlane
 from bscli.auth.server import validate_auth_server_config
 from bscli.core.mcp_identities import TokenEditConflict
 from bscli.core.user_grants import UserGrantConflict
@@ -154,7 +154,7 @@ def create_admin_http_server(
                         {
                             "authenticated": True,
                             "account": actor,
-                            "scopes": list(MCP_SCOPES),
+                            "authorization_model": "user_grants",
                         },
                     )
                 return
