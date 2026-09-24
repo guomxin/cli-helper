@@ -820,7 +820,7 @@ class CentralCapabilityServiceTests(unittest.TestCase):
 
             def invoke_capability(_name, _worker, _arguments):
                 started.set()
-                release.wait(timeout=5)
+                release.wait(timeout=30)
                 return {"count": 0, "items": []}
 
             service.adapter.invoke_capability = invoke_capability
@@ -834,21 +834,21 @@ class CentralCapabilityServiceTests(unittest.TestCase):
                         "document_type": "software_copyright_certificate",
                     },
                 )
-                self.assertTrue(started.wait(timeout=1))
-                second_future = pool.submit(
-                    service.invoke,
-                    user_subject="user-a",
-                    capability_name="oa.document.certificate.search",
-                    arguments={
-                        "name": "系统乙",
-                        "document_type": "software_copyright_certificate",
-                    },
-                )
                 try:
-                    second = second_future.result(timeout=4)
+                    self.assertTrue(started.wait(timeout=15))
+                    second_future = pool.submit(
+                        service.invoke,
+                        user_subject="user-a",
+                        capability_name="oa.document.certificate.search",
+                        arguments={
+                            "name": "系统乙",
+                            "document_type": "software_copyright_certificate",
+                        },
+                    )
+                    second = second_future.result(timeout=10)
                 finally:
                     release.set()
-                first_result = first.result(timeout=2)
+                first_result = first.result(timeout=10)
 
             self.assertEqual(second["status"], "failed")
             self.assertEqual(second["error"]["code"], "SESSION_BUSY")
