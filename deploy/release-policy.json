@@ -1,8 +1,14 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "1682f577a15b"
+    "a7cbf642813a"
   ],
-  "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed 1682f577a15b: end legacy token-scope authorization. Existing configured users keep their current grants; unconfigured users have no business permissions. Identity issuance no longer accepts business scopes. No database schema or data rewrite; historical token metadata remains audit-only. Rollback must preserve current user grants and revocations."
+  "dataCompatibility": "reviewed-schema-transition",
+  "reason": "Add five Skill configuration, audit, immutable version, run binding and task binding tables plus their primary-key indexes. Existing schemas and business rows are unchanged. Do not restore live business data during rollback. Skill grants remain separate from business permissions.",
+  "schemaTransitions": {
+    "agentbridge.db": {
+      "beforeSha256": "668dc3ebf0c3d73003c5e96acee8867ca10730e92de18a8dc25f741d886b4e55",
+      "afterSha256": "1ba85ddc07771b34d1b1b7e4e15cf195bdebd201b965d9a70df8d682ec0d1c19"
+    }
+  }
 }
