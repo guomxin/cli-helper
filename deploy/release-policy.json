@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "6d3c08a870ec"
+    "4778f7b67712"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Reviewed against deployed 6d3c08a870ec. Subsequent changes only adjust release scripts, tests, documentation, and log-system tool titles and descriptions; no database schema or grant semantics change. The release transaction must reject any SQLite schema difference."
+  "reason": "Reviewed against deployed 4778f7b67712. This candidate changes the admin console's row action presentation, browser tests, and acceptance documentation; database schema and grant semantics are unchanged. The release transaction must reject any SQLite schema difference."
 }
