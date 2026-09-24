@@ -13,6 +13,7 @@ from bscli.admin.application import AdminControlPlane
 from bscli.admin.server import create_admin_http_server, validate_admin_server_config
 from bscli.core.central_service import CentralCapabilityService
 from bscli.core.mcp_identities import McpIdentityTokenStore
+from tests.database_fixtures import configured_source
 
 
 pytestmark = pytest.mark.skipif(
@@ -32,12 +33,17 @@ def console(tmp_path):
         yuque_base_url="https://fixture.yuque.com",
         yuque_organization_id=1,
     )
+    configured_source(tmp_path)
     control = AdminControlPlane(service=service, identity_store=McpIdentityTokenStore(service.db_path))
     for role in ("admin", "auditor"):
         control.accounts.create(username=role, password=PASSWORD, role=role, must_change_password=False)
     for system in ("oa", "taihua", "yuque", "smartlight"):
         session = service.sessions.get_or_create(user_subject="fixture-user", system_id=system)
         service.sessions.mark_awaiting_login(session["session_id"])
+    control.identity_store.issue(
+        user_subject="fixture-user", expected_principal_ref="fixture-user",
+        label="浏览器测试", scopes=["oa:read", "taihua:read"], ttl_seconds=86400,
+    )
     trace, _ = service.runtime_governance.ensure_trace(
         user_subject="fixture-user", request_id="browser-fixture", host_type="reference-host",
         request_kind="write", system_id="oa", capability_name="oa.meeting_room.cancel",
@@ -96,23 +102,28 @@ def test_database_grant_editor_persists_and_auditor_cannot_edit(console):
                 page.locator('[name="password"]').fill(PASSWORD)
                 page.locator('#login-form button[type="submit"]').click()
                 page.locator('#nav [data-view="users"]').click()
+                page.get_by_role("button", name="fixture-user用户操作").click()
                 page.locator('[data-database-grants="fixture-user"]').click()
-                expect(page.locator("#modal-title")).to_have_text("fixture-user · 数据库能力")
+                expect(page.locator("#modal-title")).to_have_text("fixture-user · 选择数据源")
+                page.locator("#modal-submit").click()
+                expect(page.locator("#modal-title")).to_have_text("fixture-user · taihua_primary")
                 choices = page.locator('#modal input[name="database_capability"]')
-                expect(choices).to_have_count(7)
+                expect(choices).to_have_count(8)
                 if role == "admin":
                     expect(page.locator('#modal input:checked')).to_have_count(0)
                     for choice in choices.all():
                         choice.check()
-                    page.locator('#modal [name="reason"]').fill("isolated fixture: all seven capabilities")
+                    page.locator('#modal [name="reason"]').fill("isolated fixture: all eight capabilities")
                     page.locator('#modal-submit').click()
                     expect(page.locator("#modal")).not_to_be_visible()
-                    expect(page.locator("#content")).to_contain_text("已授权 7 项")
+                    expect(page.locator("#content")).to_contain_text("8 项；按源配置")
+                    page.get_by_role("button", name="fixture-user用户操作").click()
                     page.locator('[data-database-grants="fixture-user"]').click()
+                    page.locator("#modal-submit").click()
                 else:
-                    expect(page.locator('#modal input:disabled')).to_have_count(7)
+                    expect(page.locator('#modal input:disabled')).to_have_count(8)
                     expect(page.locator('#modal-submit')).to_have_text("关闭")
-                expect(page.locator('#modal input:checked')).to_have_count(7)
+                expect(page.locator('#modal input:checked')).to_have_count(8)
                 page.screenshot(path=str(output / f"{role}-desktop.png"))
                 page.set_viewport_size({"width": 390, "height": 844})
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -198,7 +209,40 @@ def test_console_views_interactions_and_layout(console):
         page.locator('[data-governance-tab="events"]').press("ArrowRight")
         expect(page.locator('[data-governance-tab="observations"]')).to_be_focused()
 
+        navigate("databases")
+        page.get_by_role("button", name="taihua_primary taihua_primary数据源操作").click()
+        expect(page.locator("#row-action-menu .row-menu-item")).to_have_count(4)
+        page.locator('[data-source-edit="taihua_primary"]').click()
+        expect(page.locator("#modal-title")).to_contain_text("taihua_primary")
+        page.locator("#modal-cancel").click()
+        navigate("sessions")
+        page.get_by_role("button", name="fixture-user oa会话操作").click()
+        expect(page.locator("#row-action-menu .row-menu-item")).to_have_count(3)
+        page.locator("[data-session-history]").click()
+        expect(page.locator("#modal-title")).to_have_text("会话状态历史")
+        page.locator("#modal-cancel").click()
         navigate("users")
+        expect(page.get_by_role("button", name="fixture-user用户操作")).to_be_visible()
+        expect(page.locator('[data-user-grants="fixture-user"]')).to_have_count(0)
+        page.get_by_role("button", name="fixture-user用户操作").click()
+        expect(page.locator("#row-action-menu")).to_be_visible()
+        expect(page.locator('[data-user-grants="fixture-user"]')).to_be_visible()
+        expect(page.locator('[data-pause-user="fixture-user"]')).to_be_visible()
+        page.locator('[data-user-grants="fixture-user"]').click()
+        expect(page.locator("#modal-title")).to_have_text("fixture-user · 业务能力")
+        page.locator("#modal-cancel").click()
+        expect(page.locator("#row-action-menu")).not_to_be_visible()
+        page.locator(".scope-history summary").click()
+        expect(page.locator(".scope-history .scope-pills span")).to_have_count(2)
+        page.locator('[data-filter-status="active"] [data-row-actions]').click()
+        expect(page.locator('[data-renew-token]')).to_be_visible()
+        page.locator('[data-renew-token]').click()
+        expect(page.locator("#modal-title")).to_have_text("管理员续期")
+        page.locator("#modal-cancel").click()
+        page.get_by_role("button", name="fixture-user用户操作").click()
+        page.locator("#row-action-menu .row-menu-item").first.press("Escape")
+        expect(page.locator("#row-action-menu")).not_to_be_visible()
+        expect(page.get_by_role("button", name="fixture-user用户操作")).to_have_attribute("aria-expanded", "false")
         page.locator("[data-issue-token]").click()
         expect(page.locator("#modal-title")).to_have_text("签发 MCP Token")
         page.locator("#modal-cancel").click()
@@ -231,6 +275,13 @@ def test_console_views_interactions_and_layout(console):
                 navigate(view)
                 layout()
                 page.screenshot(path=str(output / f"{view}-{width}.png"), full_page=True)
+                if view == "users" and width == 390:
+                    page.get_by_role("button", name="fixture-user用户操作").click()
+                    assert page.locator("#row-action-menu").evaluate(
+                        "e => { const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight; }"
+                    )
+                    page.screenshot(path=str(output / "users-mobile-menu.png"))
+                    page.locator("#row-action-menu .row-menu-item").first.press("Escape")
         assert writes == [origin + "/api/login"], "read-only acceptance issued a management write"
         assert not errors
 
@@ -249,5 +300,9 @@ def test_console_views_interactions_and_layout(console):
         expect(page.locator("[data-incident-action]")).to_have_count(0)
         navigate("users")
         expect(page.locator("[data-issue-token]")).to_have_count(0)
+        page.get_by_role("button", name="fixture-user用户操作").click()
+        expect(page.locator('[data-user-grants="fixture-user"]')).to_contain_text("查看业务能力")
+        expect(page.locator("[data-pause-user]")).to_have_count(0)
+        expect(page.locator("[data-renew-token]")).to_have_count(0)
         assert not errors
         browser.close()

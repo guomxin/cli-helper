@@ -127,6 +127,54 @@ function applyFilter(control) {
   }
 }
 function scopeBadges(scopes) { return `<div class="scope-pills">${scopes.map(scope => `<span>${escapeHtml(scope)}</span>`).join("")}</div>`; }
+function scopeHistory(scopes) {
+  if (!scopes.length) return "--";
+  return `<details class="scope-history"><summary>${scopes.length} 项历史权限</summary>${scopeBadges(scopes)}</details>`;
+}
+function rowMenuButton(label, items) {
+  if (!items.length) return "--";
+  return `<button type="button" class="row-menu-trigger" data-row-actions="${escapeHtml(JSON.stringify(items))}" aria-label="${escapeHtml(label)}操作" aria-haspopup="dialog" aria-expanded="false">操作 <span aria-hidden="true">⌄</span></button>`;
+}
+let activeMenuTrigger = null;
+function closeRowActions(restoreFocus = false) {
+  const menu = content.querySelector("#row-action-menu");
+  if (menu?.matches(":popover-open")) menu.hidePopover();
+  if (activeMenuTrigger) {
+    activeMenuTrigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus && activeMenuTrigger.isConnected) activeMenuTrigger.focus();
+  }
+  activeMenuTrigger = null;
+}
+function openRowActions(trigger) {
+  const wasOpen = activeMenuTrigger === trigger && content.querySelector("#row-action-menu")?.matches(":popover-open");
+  closeRowActions(wasOpen);
+  if (wasOpen) return;
+  let menu = content.querySelector("#row-action-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.id = "row-action-menu";
+    menu.className = "row-action-menu";
+    menu.setAttribute("popover", "auto");
+    menu.setAttribute("role", "dialog");
+    menu.addEventListener("toggle", event => {
+      if (event.newState === "closed" && !menu.matches(":popover-open")) closeRowActions();
+    });
+    content.append(menu);
+  }
+  const items = JSON.parse(trigger.dataset.rowActions);
+  menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
+  menu.innerHTML = items.map(item => `<button type="button" class="row-menu-item${item.danger ? " danger-text" : ""}" ${Object.entries(item.attrs).map(([key, value]) => `${key}="${escapeHtml(value)}"`).join(" ")}>${escapeHtml(item.label)}</button>`).join("");
+  menu.showPopover();
+  const anchor = trigger.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  menu.style.left = `${Math.max(12, Math.min(anchor.right - width, window.innerWidth - width - 12))}px`;
+  menu.style.top = `${anchor.bottom + height + 8 > window.innerHeight ? Math.max(12, anchor.top - height - 6) : anchor.bottom + 6}px`;
+  activeMenuTrigger = trigger;
+  trigger.setAttribute("aria-expanded", "true");
+  trigger.setAttribute("aria-controls", menu.id);
+  menu.querySelector("button")?.focus();
+}
 function csrfToken() {
   const prefix = "agentbridge_admin_csrf=";
   const item = document.cookie.split(";").map(value => value.trim()).find(value => value.startsWith(prefix));
@@ -160,6 +208,7 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => node.classList.add("hidden"), 3600);
 }
 function showLogin() {
+  closeRowActions();
   state.readController?.abort();
   state.viewRevision++;
   state.detailRevision++;
@@ -203,6 +252,7 @@ async function initialize() {
 async function loadView(view) {
   if (!state.account || state.account.must_change_password) return;
   if (!titles[view]) return;
+  closeRowActions();
   state.readController?.abort();
   state.readController = new AbortController();
   const revision = ++state.viewRevision;
@@ -308,7 +358,15 @@ async function renderDatabases() {
     const c = r.active || r.draft;
     const status = {enabled:"已启用",disabled:"已停用",draft:"草稿"}[r.state];
     const check = {passed:"预检通过",failed:"预检失败",pending:"待预检",migrated:"原配置已迁入"}[r.preflight?.status] || "待预检";
-    return filterRow(`${c.name} ${r.source_id}`, r.state, `<td><strong>${escapeHtml(c.name)}</strong><div class="muted">${escapeHtml(r.source_id)}</div></td><td>PostgreSQL<div class="muted">${c.template_pack === "taihua_logs" ? "日志系统" : "通用只读"}</div></td><td>${status}<div class="muted">${check} · 版本 ${r.revision}</div>${r.preflight?.code ? `<p class="form-error">${escapeHtml(r.preflight.code)}</p>` : ""}</td><td>${c.allowed_relations.length} 个开放对象</td><td><div class="actions"><button class="button secondary small" data-source-edit="${escapeHtml(r.source_id)}">${admin ? "配置" : "查看"}</button><button class="button secondary small" data-source-grants="${escapeHtml(r.source_id)}">账号授权</button>${admin ? `<button class="button secondary small" data-source-action="preflight" data-source-id="${escapeHtml(r.source_id)}">只读预检</button><button class="button secondary small" data-source-action="${r.state === "enabled" ? "disable" : "enable"}" data-source-id="${escapeHtml(r.source_id)}">${r.state === "enabled" ? "停用" : "启用"}</button>` : ""}</div></td>`);
+    const items = [
+      { label: admin ? "配置数据源" : "查看数据源", attrs: { "data-source-edit": r.source_id } },
+      { label: "账号授权", attrs: { "data-source-grants": r.source_id } },
+      ...(admin ? [
+        { label: "只读预检", attrs: { "data-source-action": "preflight", "data-source-id": r.source_id } },
+        { label: r.state === "enabled" ? "停用数据源" : "启用数据源", attrs: { "data-source-action": r.state === "enabled" ? "disable" : "enable", "data-source-id": r.source_id }, danger: r.state === "enabled" },
+      ] : []),
+    ];
+    return filterRow(`${c.name} ${r.source_id}`, r.state, `<td><strong>${escapeHtml(c.name)}</strong><div class="muted">${escapeHtml(r.source_id)}</div></td><td>PostgreSQL<div class="muted">${c.template_pack === "taihua_logs" ? "日志系统" : "通用只读"}</div></td><td>${status}<div class="muted">${check} · 版本 ${r.revision}</div>${r.preflight?.code ? `<p class="form-error">${escapeHtml(r.preflight.code)}</p>` : ""}</td><td>${c.allowed_relations.length} 个开放对象</td><td class="row-action-cell">${rowMenuButton(`${c.name} ${r.source_id}数据源`, items)}</td>`);
   });
   content.innerHTML = `<div class="toolbar"><div><strong>独立数据源</strong><p class="muted">先配置与预检，再启用并按账号授权。保存授权无需更换 Token。</p></div>${admin ? '<button class="button primary" data-source-new>接入数据库</button>' : ""}</div>${filteredTable(["数据源","引擎与能力包","状态","开放范围","操作"],rows,"搜索数据源")}`;
 }
@@ -347,13 +405,28 @@ async function openSource(sourceId) {
 
 async function renderUsers() {
   const [users, tokens] = await Promise.all([api("/api/users"), api("/api/tokens")]);
-  const userRows = users.items.map(user => filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><span class="muted">数据库 ${user.database_grants?.capabilities?.length || 0} 项；按源配置</span><div class="actions"><button class="button secondary small" data-user-grants="${escapeHtml(user.user_subject)}">${state.account.role === "admin" ? "配置业务能力" : "查看业务能力"}</button><button class="button secondary small" data-database-grants="${escapeHtml(user.user_subject)}">${state.account.role === "admin" ? "配置数据库能力" : "查看数据库能力"}</button></div></td><td><div class="actions">${state.account.role === "admin" ? `<button class="button secondary small" data-pause-user="${escapeHtml(user.user_subject)}">暂停写入</button>` : ""}</div></td>`));
-  const tokenRows = tokens.items.map(token => { const displayState = token.state === "active" && new Date(token.expires_at).getTime() <= Date.now() ? "expired" : token.state; return filterRow(`${token.token_id} ${token.label} ${token.user_subject} ${token.scopes.join(" ")}`, displayState, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${scopeBadges(token.scopes)}</td><td>${badge(displayState)}</td><td>${fmtTime(token.expires_at)}</td><td><div class="actions">${state.account.role === "admin" && token.state === "active" ? `<button class="button secondary small" data-renew-token="${token.token_id}" data-expires-at="${escapeHtml(token.expires_at)}" data-edit-revision="${token.edit_revision}">续期</button><button class="button secondary small" data-revoke-token="${token.token_id}">撤销</button>` : ""}</div></td>`); });
+  const admin = state.account.role === "admin";
+  const userRows = users.items.map(user => {
+    const items = [
+      { label: admin ? "配置业务能力" : "查看业务能力", attrs: { "data-user-grants": user.user_subject } },
+      { label: admin ? "配置数据库能力" : "查看数据库能力", attrs: { "data-database-grants": user.user_subject } },
+      ...(admin ? [{ label: "暂停写入", attrs: { "data-pause-user": user.user_subject }, danger: true }] : []),
+    ];
+    return filterRow(`${user.user_subject} ${Object.values(user.principal_bindings || {}).flatMap(value => [value.expected, value.verified]).join(" ")}`, "", `<td><strong>${escapeHtml(user.user_subject)}</strong></td><td>${principalBindingSummary(user)}</td><td>${user.active_token_count} / ${user.token_count}</td><td>${Object.entries(user.sessions).map(([system, value]) => `${escapeHtml(system)} ${badge(value)}`).join(" ") || "--"}</td><td><span class="muted">${user.database_grants?.capabilities?.length || 0} 项；按源配置</span></td><td class="row-action-cell">${rowMenuButton(`${user.user_subject}用户`, items)}</td>`);
+  });
+  const tokenRows = tokens.items.map(token => {
+    const displayState = token.state === "active" && new Date(token.expires_at).getTime() <= Date.now() ? "expired" : token.state;
+    const items = admin && displayState === "active" ? [
+      { label: "管理员续期", attrs: { "data-renew-token": token.token_id, "data-expires-at": token.expires_at, "data-edit-revision": token.edit_revision } },
+      { label: "撤销令牌", attrs: { "data-revoke-token": token.token_id }, danger: true },
+    ] : [];
+    return filterRow(`${token.token_id} ${token.label} ${token.user_subject} ${token.scopes.join(" ")}`, displayState, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${scopeHistory(token.scopes)}</td><td>${badge(displayState)}</td><td>${fmtTime(token.expires_at)}</td><td class="row-action-cell">${rowMenuButton(`${token.label || "未命名"} ${token.token_id.slice(0, 8)}令牌`, items)}</td>`);
+  });
   content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
     <p class="muted">数据库能力按中央账号和数据源配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
-    ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", ""], userRows, "搜索用户或下游主体")}
+    ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", "操作"], userRows, "搜索用户或下游主体")}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>业务权限按用户配置；令牌用于认证、续期和撤销。管理员看不到已签发密钥。</p></div></div>
-    ${filteredTable(["Token ID", "标签", "用户", "历史 Scope", "状态", "到期时间", ""], tokenRows, "搜索 Token、用户或权限", ["active", "expired", "revoked"])} `;
+    ${filteredTable(["Token ID", "标签", "用户", "历史 Scope", "状态", "到期时间", "操作"], tokenRows, "搜索 Token、用户或权限", ["active", "expired", "revoked"])} `;
 }
 
 async function renderSessions() {
@@ -361,9 +434,15 @@ async function renderSessions() {
   const rows = data.items.map(session => {
     const latest = session.latest_event || {};
     const latestSummary = [latest.source, latest.reason].filter(Boolean).join(" · ");
-    return filterRow(`${session.user_subject} ${session.system_id} ${session.expected_principal_ref} ${session.downstream_principal_ref} ${session.last_error} ${latestSummary}`, session.state, `<td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.expected_principal_ref || "--")}</td><td>${escapeHtml(session.downstream_principal_ref || "--")}</td><td>${sessionStateBadge(session)}</td><td title="${escapeHtml(session.keepalive_explanation || "")}">${badge(session.keepalive_state || "not_configured")}</td><td>${fmtTime(session.last_user_activity_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td>${fmtTime(session.keepalive_eligible_until)}</td><td class="truncate" title="${escapeHtml(latestSummary || session.last_error || "")}">${escapeHtml(latestSummary || session.last_error || "--")}</td><td><div class="actions"><button class="button secondary small" data-session-history="${session.session_id}">历史</button>${state.account.role === "admin" ? `<button class="button secondary small" data-check-session="${session.session_id}">实时检查</button><button class="button secondary small" data-rebind-session="${session.session_id}" data-expected-principal="${escapeHtml(session.expected_principal_ref || "")}">修改绑定</button>${session.state === "active" ? `<button class="button secondary small" data-invalidate-session="${session.session_id}">失效</button>` : ""}` : ""}</div></td>`);
+    const items = [{ label: "会话历史", attrs: { "data-session-history": session.session_id } }];
+    if (state.account.role === "admin") {
+      items.push({ label: "实时检查", attrs: { "data-check-session": session.session_id } });
+      items.push({ label: "修改绑定", attrs: { "data-rebind-session": session.session_id, "data-expected-principal": session.expected_principal_ref || "" } });
+      if (session.state === "active") items.push({ label: "使会话失效", attrs: { "data-invalidate-session": session.session_id }, danger: true });
+    }
+    return filterRow(`${session.user_subject} ${session.system_id} ${session.expected_principal_ref} ${session.downstream_principal_ref} ${session.last_error} ${latestSummary}`, session.state, `<td>${escapeHtml(session.user_subject)}</td><td>${escapeHtml(session.system_id)}</td><td>${escapeHtml(session.expected_principal_ref || "--")}</td><td>${escapeHtml(session.downstream_principal_ref || "--")}</td><td>${sessionStateBadge(session)}</td><td title="${escapeHtml(session.keepalive_explanation || "")}">${badge(session.keepalive_state || "not_configured")}</td><td>${fmtTime(session.last_user_activity_at)}</td><td>${fmtTime(session.last_keepalive_at)}</td><td>${fmtTime(session.keepalive_eligible_until)}</td><td class="truncate" title="${escapeHtml(latestSummary || session.last_error || "")}">${escapeHtml(latestSummary || session.last_error || "--")}</td><td class="row-action-cell">${rowMenuButton(`${session.user_subject} ${session.system_id}会话`, items)}</td>`);
   });
-  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>“上次确认有效”表示注册表没有发现失效，但当前未做实时保证；“未保活（超期）”表示超过最近用户活动租约，后台已主动停止保活。实时检查不会延长租约。</p></div></div>${filteredTable(["用户", "系统", "预期主体", "已验证主体", "登录状态", "保活资格", "最近用户活动", "最近保活", "自动保活资格至", "最近事件", ""], rows, "搜索用户、系统、主体或事件", ["active", "expired", "awaiting_login", "new", "quarantined"])}`;
+  content.innerHTML = `<div class="view-head"><div><h2>用户 × 系统会话矩阵</h2><p>“上次确认有效”表示注册表没有发现失效，但当前未做实时保证；“未保活（超期）”表示超过最近用户活动租约，后台已主动停止保活。实时检查不会延长租约。</p></div></div>${filteredTable(["用户", "系统", "预期主体", "已验证主体", "登录状态", "保活资格", "最近用户活动", "最近保活", "自动保活资格至", "最近事件", "操作"], rows, "搜索用户、系统、主体或事件", ["active", "expired", "awaiting_login", "new", "quarantined"])}`;
 }
 
 async function renderCapabilities() {
@@ -730,6 +809,8 @@ content.addEventListener("click", async event => {
   const governanceTab = event.target.closest("[data-governance-tab]"); if (governanceTab) { selectGovernanceTab(governanceTab.dataset.governanceTab); return; }
   const tab = event.target.closest("[data-coordination-tab]"); if (tab) { selectCoordinationTab(tab.dataset.coordinationTab); return; }
   const target = event.target.closest("button"); if (!target) return;
+  if (target.hasAttribute("data-row-actions")) { openRowActions(target); return; }
+  if (target.closest("#row-action-menu")) closeRowActions();
   if (target.dataset.openView) loadView(target.dataset.openView);
   else if (target.dataset.incidentDetail) await selectIncident(target.dataset.incidentDetail);
   else if (target.dataset.traceDetail) await openTraceDetail(target.dataset.traceDetail);
@@ -776,7 +857,7 @@ document.addEventListener("click", event => {
   }
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape") { setNavigation(false); $("#account-menu").classList.add("hidden"); $("#account-button").setAttribute("aria-expanded", "false"); }
+  if (event.key === "Escape") { closeRowActions(true); setNavigation(false); $("#account-menu").classList.add("hidden"); $("#account-button").setAttribute("aria-expanded", "false"); }
   const tab = event.target.closest("[data-governance-tab]");
   if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
     event.preventDefault();

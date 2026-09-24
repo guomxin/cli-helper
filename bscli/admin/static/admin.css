@@ -146,6 +146,19 @@ tbody tr:hover { background: #f8faf9; }
 .filter-empty { min-height: 88px; display: grid; place-items: center; color: var(--muted); background: #fff; border: 1px solid var(--line); border-top: 0; }
 .scope-pills { max-width: 420px; display: flex; flex-wrap: wrap; gap: 4px; white-space: normal; }
 .scope-pills span { display: inline-flex; min-height: 23px; align-items: center; padding: 2px 6px; color: #35524b; background: #e8eeeb; border-radius: 3px; font: 10px/1.2 var(--mono); }
+.scope-history { max-width: 280px; }
+.scope-history summary { width: fit-content; color: var(--teal-dark); cursor: pointer; font-size: 12px; font-weight: 600; }
+.scope-history summary:hover { text-decoration: underline; }
+.scope-history .scope-pills { max-width: 280px; margin-top: 8px; }
+.row-action-cell { width: 92px; text-align: right; }
+.row-menu-trigger { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 5px 9px; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.row-menu-trigger:hover, .row-menu-trigger[aria-expanded="true"] { color: var(--teal-dark); background: #eef6f8; border-color: #8fb9c2; }
+.row-menu-trigger span { color: var(--muted); font-size: 16px; line-height: 1; }
+.row-action-menu { position: fixed; inset: auto; width: 190px; margin: 0; padding: 5px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 14px 34px rgba(20,38,48,.18); }
+.row-menu-item { display: block; width: 100%; min-height: 38px; padding: 8px 10px; color: var(--ink); background: transparent; border: 0; border-radius: 3px; text-align: left; font-size: 12px; }
+.row-menu-item:hover, .row-menu-item:focus-visible { background: #eef6f8; }
+.row-menu-item.danger-text { margin-top: 4px; padding-top: 10px; color: var(--red); border-top: 1px solid var(--line); border-radius: 0 0 3px 3px; }
+.row-menu-item.danger-text:hover, .row-menu-item.danger-text:focus-visible { background: var(--red-soft); }
 .boundary { display: inline-flex; min-height: 24px; align-items: center; padding: 3px 7px; color: #304b45; background: #e9efec; border-left: 3px solid var(--teal); font: 10px/1.2 var(--mono); }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); }
 .detail-grid > div { min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -236,7 +249,7 @@ tbody tr:hover { background: #f8faf9; }
 /* Control-plane shell and shared operational surfaces. */
 html { scrollbar-gutter: stable; }
 body { line-height: 1.5; }
-button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
 button:disabled { opacity: .5; cursor: wait; }
 .ui-icon { display: inline-block; width: 20px; height: 20px; flex: 0 0 20px; vertical-align: middle; }
 .brand-mark, .brand-mark.small { background: transparent; box-shadow: none; flex-shrink: 0; }
