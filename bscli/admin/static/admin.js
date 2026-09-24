@@ -398,6 +398,7 @@ async function renderUsers() {
   const userRows = users.items.map(user => {
     const items = [
       { label: admin ? "配置业务能力" : "查看业务能力", attrs: { "data-user-grants": user.user_subject } },
+      { label: admin ? "配置业务助手" : "查看业务助手", attrs: { "data-skill-user": user.user_subject } },
       { label: admin ? "配置数据库能力" : "查看数据库能力", attrs: { "data-database-grants": user.user_subject } },
       ...(admin ? [{ label: "暂停写入", attrs: { "data-pause-user": user.user_subject }, danger: true }] : []),
     ];
@@ -411,7 +412,7 @@ async function renderUsers() {
     ] : [];
     return filterRow(`${token.token_id} ${token.label} ${token.user_subject}`, displayState, `<td class="code">${shortId(token.token_id)}</td><td>${escapeHtml(token.label || "未命名")}</td><td>${escapeHtml(token.user_subject)}</td><td>${badge(displayState)}</td><td>${fmtTime(token.expires_at)}</td><td class="row-action-cell">${rowMenuButton(`${token.label || "未命名"} ${token.token_id.slice(0, 8)}令牌`, items)}</td>`);
   });
-  content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
+  content.innerHTML = `<div class="toolbar"><div><strong>身份绑定</strong><button class="button" data-skill-global>业务助手全局状态</button><div class="muted">令牌密钥只在签发时显示一次；各系统主体独立绑定。</div></div>${state.account.role === "admin" ? '<button class="button primary" data-issue-token>签发令牌</button>' : ""}</div>
     <p class="muted">数据库能力按中央账号和数据源配置，保存即生效，无需重启 OpenClaw 或重新签发 Token。</p>
     ${filteredTable(["用户标识", "各系统下游主体", "有效 / 全部令牌", "系统会话", "数据库能力", "操作"], userRows, "搜索用户或下游主体")}
     <div class="view-head section-spaced"><div><h2>MCP Token</h2><p>业务权限按用户配置；令牌用于认证、续期和撤销。管理员看不到已签发密钥。</p></div></div>
@@ -680,6 +681,30 @@ async function renderAudit() {
   content.innerHTML = `<div class="view-head"><div><h2>独立管理审计</h2><p>管理事件仅追加写入，包含操作人、来源、原因和前后状态。</p></div></div>${filteredTable(["时间", "管理员", "动作", "对象类型", "对象 ID", "原因", "结果", "来源 IP"], rows, "搜索管理员、动作、对象或原因", ["succeeded", "failed"])}`;
 }
 
+async function openSkillConfig(userSubject = null) {
+  const config = await api(`/api/skills${userSubject ? `?user=${encodeURIComponent(userSubject)}` : ""}`);
+  const editable = state.account.role === "admin";
+  const labels = { review: "复核", track: "追踪", search: "检索", preview: "仅预览", fill: "填写日志", single: "单条办理", batch: "批量办理" };
+  const rows = config.items.map(item => {
+    const selected = config.value[item.id];
+    if (!userSubject) return `<label>${escapeHtml(item.name)} · ${escapeHtml(item.version)}<select name="status:${item.id}">${["enabled", "trial", "disabled"].map(status => `<option value="${status}" ${(selected || item.default_status) === status ? "selected" : ""}>${{enabled:"可用",trial:"试用",disabled:"停用"}[status]}</option>`).join("")}</select></label>`;
+    const reasons = Object.values(item.profiles).flatMap(p => p.missing);
+    return `<fieldset class="scope-group"><legend><label class="check"><input type="checkbox" name="skill" value="${item.id}" ${selected ? "checked" : ""}>${escapeHtml(item.name)}</label></legend><p>${escapeHtml(item.description)}</p><p class="muted">${escapeHtml(item.status === "trial" ? "试用" : item.status === "disabled" ? "全局已停用" : "可用")} · ${escapeHtml(reasons.join("；") || "执行时再次检查权限与所选来源")}</p><div class="checkbox-grid">${item.profile_choices.map(p => `<label class="check"><input type="checkbox" name="profiles:${item.id}" value="${p}" ${!selected || selected.profiles.includes(p) ? "checked" : ""}>${labels[p] || escapeHtml(p)}</label>`).join("")}</div>${item.requires_source ? `<label>默认数据源（可留空，使用时选择）<input name="source:${item.id}" value="${escapeHtml(selected?.source_id || "")}" maxlength="64"></label>` : ""}<label>输出详细程度<select name="detail:${item.id}">${["brief","standard","detailed"].map(d => `<option value="${d}" ${(selected?.detail || "standard") === d ? "selected" : ""}>${{brief:"简要",standard:"标准",detailed:"详细"}[d]}</option>`).join("")}</select></label></fieldset>`;
+  }).join("");
+  openModal({title:userSubject ? `业务助手 · ${userSubject}` : "业务助手全局状态", submit:editable ? "保存" : "关闭",
+    body:`<p>业务助手不增加业务权限。保存后下次调用生效，无需换发令牌；已提交操作继续核验。</p><fieldset ${editable ? "" : "disabled"}>${rows}</fieldset>${editable ? reasonField() : ""}`,
+    action:async form => {
+      if (!editable) { closeModal(); return; }
+      const value = {};
+      for (const item of config.items) {
+        if (!userSubject) value[item.id] = form.get(`status:${item.id}`);
+        else if (form.getAll("skill").includes(item.id)) value[item.id] = {profiles:form.getAll(`profiles:${item.id}`),source_id:form.get(`source:${item.id}`) || "",detail:form.get(`detail:${item.id}`)};
+      }
+      await api("/api/skills", {method:"POST",body:JSON.stringify({user_subject:userSubject,value,expected_revision:config.revision,reason:form.get("reason")})});
+      closeModal(); toast("业务助手配置已保存");
+    }});
+}
+
 async function openUserGrants(userSubject) {
   const config = await api(`/api/user-grants?user=${encodeURIComponent(userSubject)}`);
   const editable = state.account.role === "admin";
@@ -811,6 +836,8 @@ content.addEventListener("click", async event => {
   else if (target.dataset.sourceAction) await sourceAction(target.dataset.sourceId, target.dataset.sourceAction);
   else if (target.dataset.sourceGrants) await sourceGrantUser(target.dataset.sourceGrants);
   else if (target.dataset.userGrants) await openUserGrants(target.dataset.userGrants);
+  else if (target.dataset.skillUser) await openSkillConfig(target.dataset.skillUser);
+  else if (target.hasAttribute("data-skill-global")) await openSkillConfig();
   else if (target.dataset.databaseGrants) await openDatabaseGrants(target.dataset.databaseGrants);
   else if (target.dataset.pauseUser) openPause({ scopeType: "user", scopeValue: target.dataset.pauseUser, title: `暂停 ${target.dataset.pauseUser} 的写入` });
   else if (target.dataset.pauseCapability) openPause({ scopeType: "capability", scopeValue: target.dataset.pauseCapability, version: target.dataset.version, title: "暂停具体能力" });

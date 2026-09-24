@@ -596,6 +596,40 @@ class AdminControlPlane:
                               for name,description in DATABASE_CAPABILITIES.items() if name in available],
                 'effective': 'next_call', 'token_reissue_required': False, 'gateway_restart_required': False}
 
+    def skill_config(self, user_subject=None):
+        from bscli.core.business_skills import skill_catalog
+        if user_subject:
+            self.user_grant_config(user_subject)
+            return {"user_subject": user_subject, **skill_catalog(self.service, user_subject, include_all=True),
+                    **self.service.skills.config("user:" + user_subject)}
+        return {**self.service.skills.config("global"), "items": [
+            {"id": sid, "name": item["manifest"]["name"], "version": item["manifest"]["version"],
+             "default_status": item["manifest"].get("status", "trial")}
+            for sid, item in self.service.skills.registry.items.items()]}
+
+    def save_skill_config(self, *, actor, request_ip, user_subject, value, expected_revision, reason):
+        _require_admin(actor)
+        if user_subject is not None:
+            self.user_grant_config(user_subject)
+        owner = "user:" + user_subject if user_subject else "global"
+        saved = self.service.skills.save(owner, value, expected_revision=expected_revision,
+            actor=actor["username"], reason=reason,
+            audit_callback=lambda connection, before, after: self.audit.append(
+                actor=actor, action="skills.config.update", target_type="skill_config", target_id=owner,
+                request_ip=request_ip, reason=reason, before=before, after=after, result="succeeded", connection=connection))
+        with closing(self.service.skills.connect()) as db:
+            rows = db.execute("SELECT t.task_id,t.user_subject FROM skill_task_bindings t JOIN skill_bindings b ON b.binding_id=t.binding_id WHERE b.revoked=1" + (" AND t.user_subject=?" if user_subject else ""), (user_subject,) if user_subject else ()).fetchall()
+        cleanup = []
+        for row in rows:
+            try:
+                task = self.service.tasks.get_task(row["task_id"], user_subject=row["user_subject"])
+                if task["status"] == "waiting_user":
+                    result = self.service.cancel_unsubmitted_task(user_subject=row["user_subject"], task_id=row["task_id"])
+                    cleanup.append({"task_id": row["task_id"], "status": result["status"]})
+            except (KeyError, ValueError, PermissionError):
+                cleanup.append({"task_id": row["task_id"], "status": "guarded_pending_cleanup"})
+        return {**saved, "task_cleanup": cleanup}
+
     def user_grant_config(self, user_subject: str) -> dict:
         if not isinstance(user_subject, str) or not any(
             user["user_subject"] == user_subject for user in self.users()

@@ -14,6 +14,7 @@ COMPOSED_TASK_POLICY_VERSION = "agentbridge.composed-task-planning-policy.v1"
 
 COMPOSED_TASK_PLANNING_POLICY = {
     "schemaVersion": COMPOSED_TASK_POLICY_VERSION,
+    "skillProtocol": "agentbridge.skills.v1",
     "appliesTo": "authenticated_agentbridge_business_turns",
     "modelContext": "\n".join(
         (
@@ -27,8 +28,6 @@ COMPOSED_TASK_PLANNING_POLICY = {
             "- 数据库实体先同源目录消歧：空候选可缩短关键词重查；重名按父级/ID区分，不混用其他系统ID或凭历史对话认定现时层级。部门本级用 department_id，多部门用 department_ids（互斥）；公司/组织整体范围使用 include_descendants=true，在数据库核实下级。依据 resolved_department_scope 说明当前归属、包含范围与限制；未知 status 不作排除条件。目录截断保持条件用 next_after_id 作为 after_id 继续读取。",
             "- 数据库总结分别检查范围确认、记录读完、事项覆盖。先建立事项清单，区分已发生进展、进行中、计划、问题和未知，再按用户所需详细度归纳；各项进展不能遗漏独立交付、安全、验收、阻塞事项。逐项核对引用是否支持结论，不把剩余计划写成成果；排序判断标明依据。",
             "- 事项复核、连续追踪和案例检索复用现有数据库能力，不创建新能力或持久计划。普通账号用已授权的标准查询及 content_analyze；复杂条件可用获准自由 SQL，但不能因无此权限就拒绝标准查询可完成的分析。先查询完整范围与计数，再按预算分批读取；不可只读首批后承诺整体总结。",
-            "- 连续追踪先确定事项对象、发现窗口和跟进窗口；关键词仅发现候选，检查候选全文及同一范围相关上下文，避免遗漏省略项目名的后续。同项目的不同故障不能合并；无唯一标识时说明关联依据、疑似与冲突。按日期保留计划、实施、验证和复发，建议不等于实施、已处理不等于复测正常；未找到后续只限于已查范围。",
-            "- 相似案例先在明确范围内扩展少量同义词/别名，再读完候选正文，剔除相邻但不同问题；同篇多事项拆开、同一事件多日记录归并并保留引用。输出问题、措施、明确结果、适用条件和差异；原文只说已处理时不能写已验证有效。说明词语命中与截断不代表语义全量，无命中不虚构案例。",
             "- 自由 SQL 先读 schema 与单项参数；函数受白名单限制，不用 strpos 或递归 CTE。LIKE/ILIKE 中 %、_ 为通配符，用户要求字面匹配时优先标准 keywords，不能改变匹配语义。自由SQL结果不自带标准段落来源，需要引用的日志按返回ID用现有日志查询核对全文及版本；不得编造原文URL。",
             "- 数据库先选 source_id；多个库不猜来源。比较两段时间用获准的 database.free.read 一次 SQL，不建立专用计划。CSV 使用 database_execute 的 database.report.export，参数 query_capability/query_arguments/request_key；这是重新查询，结果可能变化，再用 database.report.download(report_id) 交付附件。文件为短期交付，不存在历史结果读取；不得输出 base64 或编造链接。",
             "- 日志系统日报类型与日期范围不能混淆：用户说‘周报’时，先澄清是 WEEKLY 周报还是一周 DAILY 日报汇总，不猜测类型。独立 database_execute 可以筛选 WEEKLY，但无记录时不得改查 DAILY 或称已有周报口径。不得把日报结果标为周报。",

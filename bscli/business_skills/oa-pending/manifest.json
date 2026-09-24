@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "agentbridge.skills.v1",
+  "id": "oa-pending",
+  "version": "1.0.0",
+  "name": "OA 待办办理",
+  "description": "定位已支持类型的 OA 待办，查看业务依据并通过可信卡单条或逐项办理。",
+  "executionMode": "controlled_action",
+  "status": "enabled",
+  "entrypoint": "SKILL.md",
+  "resources": [],
+  "profiles": {
+    "single": {
+      "all": [
+        "oa.workflow.read"
+      ],
+      "any": [
+        "oa.missed_punch.approve",
+        "oa.leave.approve",
+        "oa.business_trip.approve",
+        "oa.flight_application.approve",
+        "oa.work_handover.approve",
+        "oa.standard_collaboration.approve",
+        "oa.weekly_report.approve",
+        "oa.attendance_confirmation.approve",
+        "oa.efficiency_data.approve",
+        "oa.travel_expense.approve",
+        "oa.labor_contract_renewal.approve",
+        "oa.intellectual_property_declaration.approve",
+        "oa.overtime.approve",
+        "oa.resignation.approve"
+      ]
+    },
+    "batch": {
+      "all": [
+        "oa.workflow.read"
+      ],
+      "any": [
+        "oa.missed_punch.approve",
+        "oa.leave.approve",
+        "oa.business_trip.approve",
+        "oa.flight_application.approve",
+        "oa.work_handover.approve",
+        "oa.standard_collaboration.approve",
+        "oa.weekly_report.approve",
+        "oa.attendance_confirmation.approve",
+        "oa.efficiency_data.approve",
+        "oa.travel_expense.approve",
+        "oa.labor_contract_renewal.approve",
+        "oa.intellectual_property_declaration.approve",
+        "oa.overtime.approve",
+        "oa.resignation.approve"
+      ]
+    }
+  }
+}

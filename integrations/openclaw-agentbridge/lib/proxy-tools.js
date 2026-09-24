@@ -3,6 +3,7 @@ import {
   AGENTBRIDGE_USER_TURN_SOURCE_TOOLS,
 } from "./tool-catalog.js";
 import { extractToolPayload } from "./mcp-client.js";
+import { skillBindingMeta, rememberSkillBinding, skillRunKey } from "./business-skills.js";
 import {
   HOST_CONTEXT_META_KEY,
   TASK_CONTEXT_META_KEY,
@@ -239,6 +240,11 @@ function createProxyTool({
         });
       }
       const normalizedParams = normalizeParams(rawParams);
+      const skillRun = taskRunRefResolver?.(toolCallId, context.sessionKey, "agentbridge_skill_get");
+      const skillContext = { ...context, runId: context.runId || (skillRun && skillRun !== toolCallId ? skillRun : null) };
+      if (descriptor.name === "agentbridge_skill_get" && !skillRunKey(skillContext, identity)) {
+        return jsonToolResult({ status: "rejected", error: { code: "SKILL_RUN_CONTEXT_REQUIRED", message: "当前宿主缺少独立回合上下文，无法安全加载业务助手。" } });
+      }
       if (isTaskEligibleTool(descriptor.name)) {
         const stopped = terminalPlanGuard?.({ sessionKey: context.sessionKey, runId: context.runId, toolCallId, toolName: descriptor.name });
         if (stopped) return jsonToolResult(stopped);
@@ -351,6 +357,7 @@ function createProxyTool({
             signal,
             meta: {
               ...hostContextMeta(),
+              ...skillBindingMeta(identityRouter, skillContext, identity),
               ...(taskId
                 ? {
                   [TASK_CONTEXT_META_KEY]: {
@@ -386,6 +393,9 @@ function createProxyTool({
           });
         }
         throw error;
+      }
+      if (descriptor.name === "agentbridge_skill_get") {
+        rememberSkillBinding(identityRouter, skillContext, identity, extractToolPayload(result));
       }
       if (["agentbridge_task_cancel", "agentbridge_task_plan_cancel"].includes(descriptor.name)) {
         const payload = extractToolPayload(result);

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "agentbridge.skills.v1",
+  "id": "similar-cases",
+  "version": "1.0.0",
+  "name": "相似案例检索",
+  "description": "检索类似问题，比较处理措施、明确结果、适用条件和差异；相关性仍需核对。",
+  "executionMode": "read_exploration",
+  "status": "trial",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    "references/evidence.md"
+  ],
+  "profiles": {
+    "search": {
+      "database": {
+        "all": [
+          "database.directory"
+        ],
+        "any": [
+          "database.logs.query",
+          "database.logs.content_analyze"
+        ]
+      }
+    }
+  }
+}

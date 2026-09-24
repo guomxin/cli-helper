@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "agentbridge.skills.v1",
+  "id": "issue-tracking",
+  "version": "1.0.0",
+  "name": "事项进展追踪",
+  "description": "按请求梳理同一问题的处理时间线、当前证据状态和缺口，不含自动监控。",
+  "executionMode": "read_exploration",
+  "status": "enabled",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    "references/evidence.md"
+  ],
+  "profiles": {
+    "track": {
+      "database": {
+        "all": [
+          "database.directory"
+        ],
+        "any": [
+          "database.logs.query",
+          "database.logs.content_analyze"
+        ]
+      }
+    }
+  }
+}

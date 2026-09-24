@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "agentbridge.skills.v1",
+  "id": "log-review",
+  "version": "1.0.0",
+  "name": "日志总结与事项复核",
+  "description": "汇总指定范围的工作进展、问题和待办，并逐来源检查事项覆盖。",
+  "executionMode": "read_exploration",
+  "status": "enabled",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    "references/evidence.md"
+  ],
+  "profiles": {
+    "review": {
+      "database": {
+        "all": [
+          "database.directory"
+        ],
+        "any": [
+          "database.logs.query",
+          "database.logs.content_analyze"
+        ]
+      }
+    }
+  }
+}

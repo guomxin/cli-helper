@@ -75,6 +75,8 @@ def inspect_wheel(wheel, source):
         # All tracked package resources and Python modules must survive packaging.
         expected = [p.relative_to(source).as_posix() for p in (source / "bscli").rglob("*")
                     if p.is_file() and p.suffix in {".py", ".js", ".mjs", ".html", ".css", ".svg"}]
+        expected += [p.relative_to(source).as_posix() for p in (source / "bscli/business_skills").rglob("*")
+                     if p.is_file() and p.suffix in {".json", ".md"}]
         for name in expected:
             if name not in names or archive.read(name) != (source / name).read_bytes():
                 raise ValueError(f"Wheel/source mismatch: {name}")

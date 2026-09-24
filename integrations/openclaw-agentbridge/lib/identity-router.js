@@ -406,6 +406,7 @@ function normalizePlanningPolicy(value) {
   }
   return Object.freeze({
     schemaVersion: value.schemaVersion,
+    skillProtocol: value.skillProtocol === "agentbridge.skills.v1" ? value.skillProtocol : null,
     modelContext: value.modelContext.slice(0, 6_000),
   });
 }

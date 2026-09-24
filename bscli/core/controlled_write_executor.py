@@ -384,11 +384,13 @@ class ControlledWriteExecutor:
                 capability_name=context.spec.name,
                 capability_version=context.spec.version,
                 commit_operation_id=context.operation_id,
-                before_consume=lambda connection: self.task_plans.guard_authorization_consumption(
+                before_consume=lambda connection: (self.guard_skill_authorization(
+                    connection, authorization_id, session["user_subject"]
+                ), self.task_plans.guard_authorization_consumption(
                     connection, authorization_id=authorization_id,
                     user_subject=session["user_subject"], operation_id=context.operation_id,
                     validate=self.validate_task_plan_execution,
-                ),
+                )),
             )
             boundary_entered = True
 

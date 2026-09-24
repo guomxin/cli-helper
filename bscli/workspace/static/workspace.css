@@ -1578,3 +1578,7 @@ td {
   margin: 10px 0 0;
   box-sizing: border-box;
 }
+
+#view-skills { padding: 24px; overflow: auto; }
+#skill-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+.skill-card { padding: 20px; border: 1px solid #dce3ec; border-radius: 12px; background: #fff; }

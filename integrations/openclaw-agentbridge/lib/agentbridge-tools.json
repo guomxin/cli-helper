@@ -2,6 +2,90 @@
   "schemaVersion": "agentbridge.openclaw-tool-catalog.v1",
   "tools": [
     {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "列出当前用户获分配的业务 Skill、版本、可用功能和依赖。选择合适助手后用 agentbridge_skill_get 加载；普通原子请求无需强制使用 Skill。",
+      "inputSchema": {
+        "properties": {},
+        "title": "agentbridge_skill_catalogArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_skill_catalog",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_skill_catalogDictOutput",
+        "type": "object"
+      },
+      "title": "业务助手目录"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true
+      },
+      "description": "加载已分配的业务 Skill。使用目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和绑定，由宿主为后续调用传递。不能扩大权限。",
+      "inputSchema": {
+        "properties": {
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Version"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "resource": {
+            "default": "SKILL.md",
+            "title": "Resource",
+            "type": "string"
+          },
+          "skill_id": {
+            "title": "Skill Id",
+            "type": "string"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Id"
+          }
+        },
+        "required": [
+          "skill_id",
+          "profile"
+        ],
+        "title": "agentbridge_skill_getArguments",
+        "type": "object"
+      },
+      "name": "agentbridge_skill_get",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "agentbridge_skill_getDictOutput",
+        "type": "object"
+      },
+      "title": "加载业务助手"
+    },
+    {
       "_meta": {
         "ui": {
           "resourceUri": "ui://agentbridge/trusted-interaction.html",

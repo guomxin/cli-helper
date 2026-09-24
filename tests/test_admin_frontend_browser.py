@@ -137,6 +137,53 @@ def test_database_grant_editor_persists_and_auditor_cannot_edit(console):
             browser.close()
 
 
+def test_skill_configuration_is_scoped_and_auditor_is_readonly(console):
+    browser_api = pytest.importorskip("playwright.sync_api")
+    expect = browser_api.expect
+    origin, _, _ = console
+    output = Path("output/business-skills-browser")
+    output.mkdir(parents=True, exist_ok=True)
+    with browser_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            for role in ("admin", "auditor"):
+                context = browser.new_context(viewport={"width": 1280, "height": 900})
+                page = context.new_page()
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                page.goto(origin)
+                page.locator('[name="username"]').fill(role)
+                page.locator('[name="password"]').fill(PASSWORD)
+                page.locator('#login-form button[type="submit"]').click()
+                page.locator('#nav [data-view="users"]').click()
+                page.get_by_role("button", name="fixture-user用户操作").click()
+                page.locator('[data-skill-user="fixture-user"]').click()
+                expect(page.locator('#modal')).to_be_visible()
+                expect(page.locator('#modal input[name="skill"]')).to_have_count(5)
+                if role == "admin":
+                    page.locator('#modal input[name="skill"][value="oa-work-log"]').check()
+                    page.locator('#modal [name="profiles:oa-work-log"][value="fill"]').uncheck()
+                    page.locator('#modal [name="reason"]').fill("isolated Skill fixture: preview only")
+                    page.locator('#modal-submit').click()
+                    expect(page.locator('#modal')).not_to_be_visible()
+                    page.get_by_role("button", name="fixture-user用户操作").click()
+                    page.locator('[data-skill-user="fixture-user"]').click()
+                    expect(page.locator('#modal')).to_be_visible()
+                expect(page.locator('#modal input[name="skill"]:checked')).to_have_count(1)
+                expect(page.locator('#modal [name="profiles:oa-work-log"][value="fill"]')).not_to_be_checked()
+                if role == "auditor":
+                    expect(page.locator('#modal input[name="skill"]:disabled')).to_have_count(5)
+                page.screenshot(path=str(output / f"{role}-desktop.png"))
+                page.set_viewport_size({"width": 390, "height": 844})
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert page.locator('#modal').evaluate("e => e.scrollWidth <= e.clientWidth")
+                page.screenshot(path=str(output / f"{role}-mobile.png"))
+                assert not errors
+                context.close()
+        finally:
+            browser.close()
+
+
 def test_console_views_interactions_and_layout(console):
     browser_api = pytest.importorskip("playwright.sync_api")
     expect = browser_api.expect

@@ -218,6 +218,8 @@ def create_admin_http_server(
                     self._json(200, {"items": control_plane.users()})
                 elif route.path == "/api/database-grants":
                     self._json(200, control_plane.database_grant_config(_query_value(query, "user"),_query_value(query,"source") or 'taihua_primary'))
+                elif route.path == "/api/skills":
+                    self._json(200, control_plane.skill_config(_query_value(query, "user")))
                 elif route.path == "/api/user-grants":
                     self._json(200, control_plane.user_grant_config(_query_value(query, "user")))
                 elif route.path == "/api/database-sources":
@@ -349,6 +351,12 @@ def create_admin_http_server(
                         user_subject=_required_string(body, 'user_subject'), capabilities=body['capabilities'],
                         expected_revision=body['expected_revision'], reason=_required_string(body, 'reason'), source_id=body.get('source_id','taihua_primary'))
                     self._json(200, result)
+                    return
+                if route.path == "/api/skills":
+                    if set(body) != {"user_subject", "value", "expected_revision", "reason"}:
+                        raise ValueError("invalid Skill configuration fields")
+                    self._json(200, control_plane.save_skill_config(actor=actor, request_ip=self.client_address[0],
+                        user_subject=body["user_subject"], value=body["value"], expected_revision=body["expected_revision"], reason=body["reason"]))
                     return
                 if route.path == "/api/user-grants":
                     if set(body) != {"user_subject", "permissions", "expected_revision", "reason"}:

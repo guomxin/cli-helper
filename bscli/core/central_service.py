@@ -72,6 +72,7 @@ from bscli.browser.http import CentralHttpWorker
 from bscli.core.auth_challenges import AuthChallengeStore
 from bscli.core.capability import CapabilityRegistry
 from bscli.core.user_grants import UserGrants
+from bscli.core.business_skills import SkillStore, SkillRejected, validate_binding
 from bscli.core.capability_runtime import (
     CapabilityRejected,
     CapabilityContext,
@@ -200,6 +201,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         self.home = Path(home)
         self.db_path = self.home / "agentbridge.db"
         self.user_grants = UserGrants(self.db_path)
+        self.skills = SkillStore(self.db_path)
         if registry is None:
             self.registry = build_central_capability_registry()
             for spec in build_taihua_capability_registry().list():
@@ -460,6 +462,10 @@ class CentralCapabilityService(ControlledWriteExecutor):
             )
 
     def validate_task_plan_execution(self, plan: dict) -> None:
+        try:
+            self.validate_skill_task(plan["user_subject"], plan["parent_task_id"])
+        except SkillRejected as exc:
+            raise PlanValidationError(exc.code, str(exc)) from exc
         if plan["state"] not in ACTIVE_PLAN_STATES:
             raise PlanValidationError("PLAN_NOT_ACTIVE", "任务计划已结束，不能继续执行。")
         self.validate_task_plan_authority(plan)
@@ -545,6 +551,19 @@ class CentralCapabilityService(ControlledWriteExecutor):
                 },
             },
         }
+
+    def validate_skill_task(self, user_subject, task_id, *, capability=None, connection=None):
+        binding = self.skills.for_task(user_subject, task_id, connection)
+        if binding:
+            validate_binding(self, user_subject, binding, capability=capability)
+
+    def guard_skill_authorization(self, connection, authorization_id, user_subject):
+        rows = connection.execute(
+            "SELECT ti.task_id FROM task_interactions ti JOIN interactions i ON i.interaction_id=ti.interaction_id "
+            "WHERE i.resource_id=? AND ti.user_subject=?", (authorization_id, user_subject)
+        ).fetchall()
+        for row in rows:
+            self.validate_skill_task(user_subject, row[0], connection=connection)
 
     def get_task_plan(self, *, user_subject: str, plan_id: str) -> dict:
         plan = self.task_plans.get(plan_id, user_subject=user_subject)
@@ -667,6 +686,7 @@ class CentralCapabilityService(ControlledWriteExecutor):
         if capability_name.startswith('taihua.analytics.'):
             return {'status':'rejected','result':None,'error':{'code':'CAPABILITY_RETIRED','message':'旧数据库分析已退役，请使用 database_capabilities/database_execute。'}}
 
+        self.validate_skill_task(user_subject, task_id, capability=capability_name)
         self.user_grants.require_capability(user_subject, capability_name, arguments)
         grant_before = self.user_grants.get(user_subject)
 
@@ -3176,6 +3196,8 @@ class CentralCapabilityService(ControlledWriteExecutor):
             user_subject=user_subject,
             interaction_id=interaction_id,
         )
+        if not resource.get("commit_operation_id") and not resource.get("consume_operation_id"):
+            self.validate_skill_task(user_subject, self.tasks.task_id_for_interaction(interaction_id, user_subject=user_subject))
         plan_binding = self.task_plans.step_for_interaction(
             interaction_id,
             user_subject=user_subject,

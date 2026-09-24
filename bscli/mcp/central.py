@@ -206,6 +206,8 @@ _LOGGER = logging.getLogger("uvicorn.error")
 
 
 AGENT_FACING_TOOL_SCOPE_REQUIREMENTS: Mapping[str, frozenset[str]] = {
+    "agentbridge_skill_catalog": frozenset(),
+    "agentbridge_skill_get": frozenset(),
     "database_capabilities": frozenset(),
     "database_execute": frozenset(),
     "agentbridge_server_profile": frozenset(),
@@ -947,6 +949,69 @@ def create_central_mcp_server(
             "of unrelated tool calls, and never put private commit or resume tools in a plan."
         )
 
+    async def require_skill_context(ctx, identity, *, capability=None, source_id=None):
+        from bscli.core.business_skills import META_KEY, SkillRejected, validate_binding
+        meta = _request_meta(ctx).get(META_KEY)
+        task_id = _request_task_id(ctx)
+        if meta:
+            if not isinstance(meta, dict) or set(meta) != {"bindingId"} or not isinstance(meta["bindingId"], str):
+                raise SkillRejected("SKILL_BINDING_INVALID", "业务助手上下文无效")
+            await _require_registered_host_call(ctx, service=service, identity=identity,
+                minimum_level="L3" if task_id else "L1", task_id=task_id, require_coordinator_lease=bool(task_id))
+            binding = await asyncio.to_thread(service.skills.binding, identity["user_subject"], meta["bindingId"])
+            validate_binding(service, identity["user_subject"], binding, capability=capability)
+            if source_id and binding["settings"]["source_id"] and source_id != binding["settings"]["source_id"]:
+                raise SkillRejected("SKILL_SOURCE_MISMATCH", "数据源与本次业务助手选择不一致")
+            if task_id:
+                await asyncio.to_thread(service.skills.attach, identity["user_subject"], task_id, meta["bindingId"])
+        await asyncio.to_thread(service.validate_skill_task, identity["user_subject"], task_id, capability=capability)
+
+    @mcp.tool(name="agentbridge_skill_catalog", title="业务助手目录",
+        description="列出当前用户获分配的业务 Skill、版本、可用功能和依赖。选择合适助手后用 agentbridge_skill_get 加载；普通原子请求无需强制使用 Skill。",
+        annotations=read_annotations, structured_output=True)
+    async def agentbridge_skill_catalog() -> dict[str, Any]:
+        from bscli.core.business_skills import skill_catalog
+        identity = _request_identity(identity_store)
+        return await asyncio.to_thread(skill_catalog, service, identity["user_subject"])
+
+    @mcp.tool(name="agentbridge_skill_get", title="加载业务助手",
+        description="加载已分配的业务 Skill。使用目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和绑定，由宿主为后续调用传递。不能扩大权限。",
+        annotations=read_annotations, structured_output=True)
+    async def agentbridge_skill_get(ctx: Context, skill_id: str, profile: str,
+        source_id: str | None = None, expected_version: str | None = None,
+        resource: str = "SKILL.md") -> dict[str, Any]:
+        from bscli.core.business_skills import SkillRejected, dependency_state, META_KEY
+        identity = _request_identity(identity_store)
+        await _require_registered_host_call(ctx, service=service, identity=identity, minimum_level="L1")
+        try:
+            current = _request_meta(ctx).get(META_KEY)
+            if current:
+                binding = service.skills.binding(identity["user_subject"], current.get("bindingId"))
+                if binding["skill_id"] != skill_id or binding["profile"] != profile or (source_id and source_id != binding["settings"]["source_id"]):
+                    raise SkillRejected("SKILL_TASK_CONFLICT", "当前任务已绑定另一助手或范围，请在独立任务中使用")
+                binding_id = binding["binding_id"]
+            else:
+                item = service.skills.registry.get(skill_id)
+                settings = service.skills.config("user:" + identity["user_subject"])["value"].get(skill_id, {})
+                if profile not in item["manifest"]["profiles"]:
+                    raise SkillRejected("SKILL_PROFILE_INVALID", "业务助手功能不存在")
+                state = dependency_state(service, identity["user_subject"], item["manifest"], profile, source_id or settings.get("source_id"))
+                if not state["available"]:
+                    return {"status": "rejected", "error": {"code": "SKILL_DEPENDENCY_UNAVAILABLE", "message": "请选择获准的数据源或检查所需业务权限"}, **state}
+                if resource not in item["resources"]:
+                    raise SkillRejected("SKILL_RESOURCE_NOT_FOUND", "参考资料不存在")
+                binding_id = service.skills.bind(identity["user_subject"], skill_id, profile, source_id, expected_version)
+                binding = service.skills.binding(identity["user_subject"], binding_id)
+            snapshot = binding["snapshot"]
+            if resource not in snapshot["resources"]:
+                raise SkillRejected("SKILL_RESOURCE_NOT_FOUND", "参考资料不存在")
+            return {"status": "succeeded", "skill_id": skill_id, "version": binding["version"],
+                "content_hash": snapshot["content_hash"], "binding_id": binding_id,
+                "settings": binding["settings"], "profile": profile, "resource": resource,
+                "content": snapshot["resources"][resource], "resources": list(snapshot["resources"])}
+        except SkillRejected as exc:
+            return {"status": "rejected", "error": {"code": exc.code, "message": str(exc)}}
+
     async def invoke(
         ctx: Context,
         capability_name: str,
@@ -959,6 +1024,7 @@ def create_central_mcp_server(
             required_scopes=required_scopes or {"oa:read"},
         )
         request_id = str(ctx.request_id)
+        await require_skill_context(ctx, identity, capability=capability_name)
         runtime_context = _request_runtime_context(ctx)
         mcp_started_at = datetime.now(timezone.utc).isoformat()
         mcp_started = perf_counter()
@@ -1462,6 +1528,10 @@ def create_central_mcp_server(
         )
         runtime_context = _request_runtime_context(ctx)
         lease_value = runtime_context.get("coordinatorLeaseVersion")
+        await require_skill_context(ctx, identity)
+        for step in proposal["steps"]:
+            if step.get("capabilityName"):
+                service.validate_skill_task(identity["user_subject"], task_id, capability=step["capabilityName"])
         response = await asyncio.to_thread(
             service.prepare_task_plan,
             user_subject=identity["user_subject"],
@@ -3514,12 +3584,14 @@ def create_central_mcp_server(
     async def database_execute(ctx: Context, capability: str, arguments: dict[str, Any], source_id: str = "taihua_primary") -> dict[str, Any]:
         from bscli.database.independent import IndependentDatabase, DatabaseRejected, rejection_result
         identity = _request_identity(identity_store)
+        await require_skill_context(ctx, identity, source_id=source_id)
         try:
             result = await asyncio.to_thread(IndependentDatabase(service.home, original_base_url=workspace_base_url).execute,
                                             identity['user_subject'], capability, arguments, source_id)
         except DatabaseRejected as exc:
             return rejection_result(exc)
         _request_identity(identity_store)
+        await require_skill_context(ctx, identity, source_id=source_id)
         if capability == 'database.report.download':
             task_id = _request_task_id(ctx)
             if task_id:

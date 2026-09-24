@@ -259,6 +259,10 @@ def create_workspace_http_server(
             query = parse_qs(route.query)
             try:
                 original_match = re.fullmatch(r'/api/database/logs/([a-z][a-z0-9_-]{0,63})/([0-9]{1,19})', route.path)
+                if route.path == "/api/skills":
+                    from bscli.core.business_skills import skill_catalog
+                    self._json(200, skill_catalog(application.service, account["user_subject"]))
+                    return
                 if original_match:
                     from bscli.database.independent import DatabaseRejected, rejection_result
                     try:

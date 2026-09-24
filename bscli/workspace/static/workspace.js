@@ -96,6 +96,7 @@ function bindActions() {
   $("#refresh-tasks").addEventListener("click", loadTasks);
   $("#active-only").addEventListener("change", loadTasks);
   $("#refresh-endpoints").addEventListener("click", loadEndpoints);
+  $("#refresh-skills").addEventListener("click", loadSkills);
   $$(".nav-item").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
   });
@@ -291,6 +292,34 @@ function switchView(view) {
     loadTasks();
   }
   if (view === "endpoints") loadEndpoints();
+  if (view === "skills") loadSkills();
+}
+
+async function loadSkills() {
+  const container = $("#skill-list");
+  container.replaceChildren();
+  try {
+    const result = await api("/api/skills");
+    if (!result.items.length) container.textContent = "尚未分配业务助手，请联系管理员配置。原有查询仍可在对话中使用。";
+    for (const item of result.items) {
+      const card = document.createElement("article");
+      card.className = "skill-card";
+      const title = document.createElement("h3"); title.textContent = item.name;
+      const text = document.createElement("p"); text.textContent = item.description;
+      const note = document.createElement("p");
+      const eligible = Object.values(item.profiles).some(p => p.available || p.needs_source);
+      note.textContent = item.status === "disabled" ? "已停用" : !eligible ? Object.values(item.profiles).flatMap(p => p.missing).join("；") : item.status === "trial" ? "试用 · 结果请结合来源核对" : "可用";
+      const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = "使用此助手";
+      button.disabled = item.status === "disabled" || !eligible;
+      button.addEventListener("click", () => {
+        switchView("chat");
+        const input = $("#chat-form textarea[name='message']");
+        input.value = `请使用“${item.name}”（${item.id}）助手，`;
+        input.focus();
+      });
+      card.append(title, text, note, button); container.append(card);
+    }
+  } catch { container.textContent = "业务助手暂时无法加载，请稍后刷新。"; }
 }
 
 async function loadGatewayStatus() {

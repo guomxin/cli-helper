@@ -88,6 +88,7 @@
         <button class="nav-item active" type="button" data-view="chat"><span aria-hidden="true">⌁</span><span>对话</span></button>
         <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">☷</span><span>任务</span><span id="active-task-count" class="count-badge">0</span></button>
         <button class="nav-item" type="button" data-view="endpoints"><span aria-hidden="true">◎</span><span>端点</span></button>
+        <button class="nav-item" type="button" data-view="skills"><span aria-hidden="true">◇</span><span>业务助手</span></button>
       </nav>
 
       <main class="workspace-main">
@@ -154,6 +155,7 @@
             </table>
           </div>
         </section>
+      <section id="view-skills" class="workspace-view" hidden><header class="view-header"><div><h2>我的业务助手</h2><p>选择助手后描述需求，业务操作仍按你的权限执行。</p></div><button id="refresh-skills" type="button" class="secondary">刷新</button></header><div id="skill-list"></div></section>
       </main>
       <div id="toast-region" class="toast-region" aria-live="polite"></div>
     </div>

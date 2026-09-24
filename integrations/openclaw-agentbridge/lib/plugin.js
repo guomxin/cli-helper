@@ -1,4 +1,5 @@
 import { resolvePluginConfig } from "./config.js";
+import { businessSkillContext } from "./business-skills.js";
 import {
   createInteractionSharedState,
   InteractionCoordinator,
@@ -22,7 +23,7 @@ import {
 import { createHostRuntimeReporter } from "./runtime-reporter.js";
 import { TimelinePublisher } from "./timeline.js";
 
-export const PLUGIN_VERSION = "0.4.100";
+export const PLUGIN_VERSION = "0.4.101";
 
 const CROSS_ENDPOINT_CONTEXT_MAX_AGE_MINUTES = 360;
 const CROSS_ENDPOINT_CONTEXT_LIMIT = 12;
@@ -610,7 +611,14 @@ async function composedTaskPlanningContext({ context, identityRouter }) {
   if (!identity?.bound) {
     return null;
   }
-  return identityRouter.planningPolicyForBinding?.(identity.binding)?.modelContext || null;
+  const planning = identityRouter.planningPolicyForBinding?.(identity.binding);
+  const policy = planning?.modelContext || "";
+  if (planning?.skillProtocol !== "agentbridge.skills.v1") return policy || null;
+  try {
+    return [policy, await businessSkillContext(identity)].filter(Boolean).join("\n\n") || null;
+  } catch {
+    return [policy, "当前业务助手目录暂不可用，不使用旧缓存新开 Skill 任务。普通原子工具仍按原权限使用；不可绕过来源派生写入约束。"].filter(Boolean).join("\n\n");
+  }
 }
 
 async function resolveTaskContinuationContext({
