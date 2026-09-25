@@ -1,9 +1,9 @@
 {
   "schemaVersion": "agentbridge.skills.v1",
   "id": "oa-pending",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "OA 待办办理",
-  "description": "定位已支持类型的 OA 待办，查看业务依据并通过可信卡单条或逐项办理。",
+  "description": "办理已支持类型的 OA 待办，核对依据后通过可信卡单条或逐项处理；只读查看待办无需加载本 Skill。",
   "executionMode": "controlled_action",
   "status": "enabled",
   "entrypoint": "SKILL.md",

@@ -29,7 +29,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "加载已分配的业务 Skill。使用目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和绑定，由宿主为后续调用传递。不能扩大权限。",
+      "description": "仅在任务需要业务 Skill 流程时加载已分配的 Skill；查看、筛选或统计 OA 待办直接用 oa_workflow_pending_list，无需加载 Skill。使用目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和绑定，由宿主为后续调用传递。不能扩大权限。",
       "inputSchema": {
         "properties": {
           "expected_version": {
@@ -2591,7 +2591,7 @@
         "openWorldHint": true,
         "readOnlyHint": true
       },
-      "description": "List pending workflows for the authenticated OA user.",
+      "description": "List, search or count pending workflows for the authenticated OA user. This read-only request needs no business Skill; call this tool directly.",
       "inputSchema": {
         "properties": {
           "idempotency_key": {

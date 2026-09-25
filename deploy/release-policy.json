@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "2999c0336b40"
+    "0b3dbff8c517"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Show admin renewal for expired but unrevoked tokens. No schema, permission or host changes."
+  "reason": "Clarify that read-only OA pending queries use the atomic tool without loading the OA handling Skill. No schema, permission or host changes."
 }
