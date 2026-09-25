@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "042c97304a76"
+    "2999c0336b40"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Refine similar-case keyword batching and distinct evidence coverage counts in Skill 1.0.3. No schema, permission or host changes."
+  "reason": "Show admin renewal for expired but unrevoked tokens. No schema, permission or host changes."
 }

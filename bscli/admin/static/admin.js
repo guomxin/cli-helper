@@ -406,7 +406,7 @@ async function renderUsers() {
   });
   const tokenRows = tokens.items.map(token => {
     const displayState = token.state === "active" && new Date(token.expires_at).getTime() <= Date.now() ? "expired" : token.state;
-    const items = admin && displayState === "active" ? [
+    const items = admin && token.state === "active" ? [
       { label: "管理员续期", attrs: { "data-renew-token": token.token_id, "data-expires-at": token.expires_at, "data-edit-revision": token.edit_revision } },
       { label: "撤销令牌", attrs: { "data-revoke-token": token.token_id }, danger: true },
     ] : [];
