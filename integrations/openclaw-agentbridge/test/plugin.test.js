@@ -7781,3 +7781,35 @@ test("native CSV delivery survives missing middleware and strips bytes on succes
     assert.equal(harness.sentPayloads.length, fail ? 0 : 1);
   }
 });
+
+
+test("Skills use authenticated Workspace turns without per-tool hook context", async () => {
+  const harness = fakeApi({ autoPoll: false });
+  const coordinator = registerAgentBridgeInteractions(harness.api, { mcpClient: null });
+  const sessionKey = "agent:main:agentbridge-workspace:direct:skill-user";
+  const resolve = (id, key, name) => coordinator.taskRunRefForToolCall(id, key, name);
+  assert.equal(resolve("load", sessionKey, "agentbridge_skill_get"), null);
+  coordinator.bindWorkspaceTurn(sessionKey, "turn-one", "使用日志助手");
+  assert.equal(resolve("load", sessionKey, "agentbridge_skill_get"), "workspace:turn-one");
+  assert.equal(resolve("read", sessionKey, "agentbridge_skill_get"), "workspace:turn-one");
+  assert.equal(resolve("read", "other-session", "agentbridge_skill_get"), null);
+  const calls = [];
+  const client = {
+    async callTool() { return { status: "succeeded" }; },
+    async callToolResult(name, args, options) {
+      calls.push({ name, meta: options.meta });
+      return { structuredContent: { status: "succeeded", binding_id: "skill-one" } };
+    },
+  };
+  const identityRouter = { resolveToolContext: () => ({ bound: true, binding: {key:"alice"}, client }) };
+  const makeTools = runId => createAgentBridgeProxyTools({ context:{sessionKey,runId},
+    serverName:"agentbridge", identityRouter, taskRunRefResolver:resolve });
+  await makeTools("per-tool-1").find(t=>t.name==="agentbridge_skill_get").execute("load",{skill_id:"log-review",profile:"review"});
+  await makeTools("per-tool-2").find(t=>t.name==="agentbridge_skill_catalog").execute("read",{});
+  assert.equal(calls[1].meta["agentbridge/skill"].bindingId,"skill-one");
+  coordinator.bindWorkspaceTurn(sessionKey, "turn-two", "另一个任务");
+  await makeTools("per-tool-3").find(t=>t.name==="agentbridge_skill_catalog").execute("new-turn",{});
+  assert.equal(calls[2].meta["agentbridge/skill"],undefined);
+  bindToolCall(harness,{toolCallId:"foreign",sessionKey:"other-session",runId:"other-run"});
+  assert.equal(resolve("foreign",sessionKey,"agentbridge_skill_get"),null);
+});

@@ -310,6 +310,13 @@ export class InteractionCoordinator {
     this.prunePlanningRepairs();
     const normalized = normalizeToolCallId(toolCallId);
     const binding = normalized ? this.toolBindings.get(normalized) : null;
+    // Deferred native tools may execute without a before_tool_call binding.
+    // Workspace's server-validated turn (or the channel's inbound message)
+    // still supplies the shared user-turn identity; never use a tool-call ID.
+    if (toolName === "agentbridge_skill_get") {
+      if (binding?.sessionKey && binding.sessionKey !== sessionKey) return null;
+      return this.recentUserMessages.get(sessionKey)?.taskRunRef || binding?.runId || null;
+    }
     if (!binding || (binding.sessionKey && binding.sessionKey !== sessionKey)) {
       return normalized;
     }

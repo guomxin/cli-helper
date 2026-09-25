@@ -241,7 +241,7 @@ function createProxyTool({
       }
       const normalizedParams = normalizeParams(rawParams);
       const skillRun = taskRunRefResolver?.(toolCallId, context.sessionKey, "agentbridge_skill_get");
-      const skillContext = { ...context, runId: context.runId || (skillRun && skillRun !== toolCallId ? skillRun : null) };
+      const skillContext = { ...context, runId: (skillRun && skillRun !== toolCallId ? skillRun : null) || context.runId };
       if (descriptor.name === "agentbridge_skill_get" && !skillRunKey(skillContext, identity)) {
         return jsonToolResult({ status: "rejected", error: { code: "SKILL_RUN_CONTEXT_REQUIRED", message: "当前宿主缺少独立回合上下文，无法安全加载业务助手。" } });
       }
