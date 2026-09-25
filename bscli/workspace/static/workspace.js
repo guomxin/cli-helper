@@ -1582,8 +1582,10 @@ function renderSkillCard(event) {
 }
 
 async function hydrateSkillCards({ render = true } = {}) {
+  const account = state.account;
   try {
     const result = await api("/api/skills/history");
+    if (state.account !== account) return;
     for (const event of result.items || []) {
       if (!state.skillCards.has(event.event_id)) {
         state.skillCards.set(event.event_id, renderSkillCard(event));

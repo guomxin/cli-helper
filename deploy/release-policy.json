@@ -1,14 +1,14 @@
 {
-  "compatibleFrom": [
-    "04cfeaa852bd"
-  ],
   "schemaVersion": "agentbridge.release-policy.v1",
+  "compatibleFrom": [
+    "09d3608fe8d3"
+  ],
   "dataCompatibility": "reviewed-schema-transition",
   "schemaTransitions": {
     "agentbridge.db": {
-      "beforeSha256": "1ba85ddc07771b34d1b1b7e4e15cf195bdebd201b965d9a70df8d682ec0d1c19",
-      "afterSha256": "fc3be6bfd85d0223ef405d8f140b4f3083f6dae28699d634cad9fe2a45cb59e9"
+      "beforeSha256": "ad6d416c1583137af019fd1693e2e44075edcc29a6003466fcef495f75339072",
+      "afterSha256": "ad6d416c1583137af019fd1693e2e44075edcc29a6003466fcef495f75339072"
     }
   },
-  "reason": "Add isolated Skill load observation records; preserve all existing tables and grants. Fix owned plan transform readback and atomic cancellation of pending batch cards. Previous runtime ignores the added observation table."
+  "reason": "Recover the reviewed additive Skill observation schema already installed by 09d3608fe8d3. Exact live comparison found only the intended new table and indexes, with no changed or removed existing objects. Preserve the original failed receipt; no data restoration or historical task rewriting."
 }
