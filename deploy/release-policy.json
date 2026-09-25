@@ -1,14 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "09d3608fe8d3"
+    "6415993718cb"
   ],
-  "dataCompatibility": "reviewed-schema-transition",
-  "schemaTransitions": {
-    "agentbridge.db": {
-      "beforeSha256": "ad6d416c1583137af019fd1693e2e44075edcc29a6003466fcef495f75339072",
-      "afterSha256": "ad6d416c1583137af019fd1693e2e44075edcc29a6003466fcef495f75339072"
-    }
-  },
-  "reason": "Recover the reviewed additive Skill observation schema already installed by 09d3608fe8d3. Exact live comparison found only the intended new table and indexes, with no changed or removed existing objects. Preserve the original failed receipt; no data restoration or historical task rewriting."
+  "dataCompatibility": "no-migration",
+  "reason": "Refine similar-case follow-up evidence lookup in Skill version 1.0.2. No runtime schema, permission or host changes."
 }
