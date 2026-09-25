@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "6415993718cb"
+    "042c97304a76"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Refine similar-case follow-up evidence lookup in Skill version 1.0.2. No runtime schema, permission or host changes."
+  "reason": "Refine similar-case keyword batching and distinct evidence coverage counts in Skill 1.0.3. No schema, permission or host changes."
 }
