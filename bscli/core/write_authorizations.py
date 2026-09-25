@@ -526,7 +526,7 @@ class WriteAuthorizationStore:
             row = self._select(connection, authorization_id)
         return _authorization_from_row(row, include_plan=False)
 
-    def supersede(self, authorization_id: str, *, user_subject: str, pending_only: bool = False) -> None:
+    def supersede(self, authorization_id: str, *, user_subject: str, pending_only: bool = False, before_supersede: Callable[[sqlite3.Connection], None] | None = None) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self._select(connection, authorization_id)
@@ -536,6 +536,8 @@ class WriteAuthorizationStore:
                 raise WriteAuthorizationStateError("write authorization is no longer pending")
             if row["state"] not in {"pending", "approved"}:
                 return
+            if before_supersede:
+                before_supersede(connection)
             now = _format_time(_as_utc(self.clock()))
             connection.execute(
                 "UPDATE write_authorizations SET state = 'superseded', csrf_hash = NULL, updated_at = ? WHERE authorization_id = ?",

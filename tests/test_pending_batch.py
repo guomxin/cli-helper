@@ -289,3 +289,33 @@ def test_atomic_profile_guards_are_rechecked_before_commit(run, monkeypatch, gua
     assert result["error"]["code"] == code
     assert not committed
     assert service.write_authorizations.get(auth["nextAction"]["authorizationId"])["state"] != "consumed"
+
+
+@pytest.mark.parametrize("at_authorization", [False, True])
+def test_cancel_batch_is_terminal_after_poll_and_late_callback(run, at_authorization):
+    service, tid, _rows, _prepared, committed = run
+    field = start(service, tid)
+    waiting = authorize(service, field) if at_authorization else field
+    response = service.cancel_unsubmitted_task(user_subject="user-a", task_id=tid)
+    assert response["task"]["status"] == "canceled"
+    for _ in range(2):
+        service.get_interaction(user_subject="user-a", interaction_id=waiting["interaction"]["interactionId"])
+        service.tasks.fail_current_batch_item(parent_task_id=tid, user_subject="user-a",
+            operation_id=None, expected_ordinal=1, item_state="superseded", error_code="INTERACTION_SUPERSEDED")
+    assert service.tasks.get_task(tid, user_subject="user-a")["status"] == "canceled"
+    batch = service.tasks.get_batch_for_task(parent_task_id=tid, user_subject="user-a")
+    assert batch["state"] == "canceled"
+    assert all(item["state"] == "canceled" for item in batch["items"])
+    assert committed == []
+
+
+def test_submitted_batch_card_cannot_be_canceled(run):
+    service, tid, _rows, _prepared, committed = run
+    field = start(service, tid)
+    sid = field["nextAction"]["inputSubmissionId"]
+    csrf = service.field_submissions.issue_csrf(sid)
+    service.field_submissions.submit(sid, csrf_token=csrf, csrf_cookie=csrf, values={"opinion": "同意"})
+    response = service.cancel_unsubmitted_task(user_subject="user-a", task_id=tid)
+    assert response["error"]["code"] == "TASK_ACTION_ALREADY_STARTED"
+    assert service.tasks.get_batch_for_task(parent_task_id=tid, user_subject="user-a")["state"] == "waiting_user"
+    assert committed == []

@@ -2776,6 +2776,16 @@ class WorkspaceHttpServerTests(unittest.TestCase):
                 self.assertTrue(completed["authenticated"])
                 cookies.update(_cookies(headers))
 
+                service.skills.record_load("user-a", "oa-work-log", "preview", "SKILL.md",
+                    {"status": "succeeded", "binding_id": "owned", "version": "1.0.0"})
+                service.skills.record_load("user-b", "oa-pending", "batch", "SKILL.md",
+                    {"status": "rejected", "error": {"code": "SKILL_UNAVAILABLE"}})
+                denied, _, _ = _request(port, "GET", "/api/skills/history")
+                self.assertEqual(denied, 401)
+                status, _, history = _request(port, "GET", "/api/skills/history", cookies=cookies)
+                self.assertEqual(status, 200)
+                self.assertEqual([x["skill_id"] for x in history["items"]], ["oa-work-log"])
+
                 original_path = '/api/database/logs/taihua_primary/123'
                 with patch.object(application, 'database_original', return_value={
                     'author': '测试作者', 'paragraphs': [{'number': 1, 'text': '<img src=x onerror=evil()>'}],

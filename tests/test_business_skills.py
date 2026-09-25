@@ -145,6 +145,17 @@ class BusinessSkillsTests(unittest.TestCase):
         self.assertNotIn("resources", result["items"][0])
         self.assertTrue(all("SKILL.md" in item["resources"] for item in self.store.registry.items.values()))
 
+    def test_load_cards_are_deduplicated_and_scoped_to_user(self):
+        result = {"status": "succeeded", "binding_id": "binding", "version": "1.0.0"}
+        for resource in ("SKILL.md", "SKILL.md", "references/evidence.md"):
+            self.store.record_load("alice", "log-review", "review", resource, result)
+        self.store.record_load("bob", "oa-work-log", "fill", "SKILL.md",
+            {"status": "rejected", "error": {"code": "SKILL_UNAVAILABLE", "message": "未分配"}})
+        self.assertEqual(len(self.store.load_history("alice")), 1)
+        self.assertEqual(self.store.load_history("alice")[0]["name"], "日志总结与事项复核")
+        self.assertEqual(self.store.load_history("bob")[0]["status"], "rejected")
+        self.assertEqual(self.store.load_history("unknown"), [])
+
     def test_real_mcp_host_load_revoke_and_cross_user_binding(self):
         from starlette.testclient import TestClient
         from bscli.core.mcp_identities import McpIdentityTokenStore
@@ -167,6 +178,7 @@ class BusinessSkillsTests(unittest.TestCase):
             result = call("agentbridge_skill_get", {"skill_id":"oa-work-log", "profile":"preview", "expected_version":"1.0.0"})
             self.assertFalse(result.get("isError"), result)
             binding = result["structuredContent"]["binding_id"]
+            self.assertEqual(self.store.load_history("alice")[0]["status"], "succeeded")
             denied = call("agentbridge_skill_get", {"skill_id":"oa-work-log", "profile":"preview"}, user="bob", binding=binding)
             self.assertEqual(denied["structuredContent"]["error"]["code"], "SKILL_BINDING_INVALID")
             with patch.object(self.service, "invoke", return_value={"status":"succeeded"}) as invoke:

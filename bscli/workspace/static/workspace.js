@@ -25,6 +25,7 @@ const state = {
   localMessages: new Map(),
   syncedMessages: new Map(),
   taskCards: new Map(),
+  skillCards: new Map(),
   taskCardMeta: new Map(),
   queryGroupOpen: new Map(),
   taskSyncTimers: new Map(),
@@ -268,6 +269,7 @@ async function logout() {
   state.localMessages.clear();
   state.syncedMessages.clear();
   state.taskCards.clear();
+  state.skillCards.clear();
   state.taskCardMeta.clear();
   state.queryGroupOpen.clear();
   state.composerAttachments = [];
@@ -657,6 +659,7 @@ function renderChatTimeline() {
     ...state.localMessages.values(),
     ...state.syncedMessages.values(),
     ...state.taskCards.values(),
+    ...state.skillCards.values(),
   ].filter(Boolean);
   stable.sort((left, right) => {
     const time =
@@ -1554,7 +1557,44 @@ function scrollChat() {
   container.scrollTop = container.scrollHeight;
 }
 
+function skillProfileLabel(profile) {
+  return ({review: "总结与复核", track: "进展追踪", search: "相似案例检索",
+    preview: "草稿预览", fill: "准备填写", single: "单项办理", batch: "批量办理"})[profile] || profile || "";
+}
+
+function renderSkillCard(event) {
+  const card = document.createElement("article");
+  card.className = "skill-activity-card";
+  const heading = document.createElement("strong");
+  heading.textContent = `业务助手 · ${event.name}`;
+  const status = document.createElement("span");
+  status.className = "skill-activity-status";
+  status.textContent = event.status === "succeeded" ? "已加载" : "加载失败";
+  const description = document.createElement("p");
+  description.textContent = event.status === "succeeded"
+    ? `${skillProfileLabel(event.profile)} · 版本 ${event.version}。已加载处理规则，业务执行结果请查看后续任务。`
+    : (event.message || "助手未能加载，本次不能视为已使用该助手。");
+  const time = document.createElement("small");
+  time.textContent = formatTime(event.created_at);
+  card.append(heading, status, description, time);
+  setTimelineNode(card, {key: `skill:${event.event_id}`, createdAt: event.created_at});
+  return card;
+}
+
+async function hydrateSkillCards({ render = true } = {}) {
+  try {
+    const result = await api("/api/skills/history");
+    for (const event of result.items || []) {
+      if (!state.skillCards.has(event.event_id)) {
+        state.skillCards.set(event.event_id, renderSkillCard(event));
+      }
+    }
+    if (render) renderChatTimeline();
+  } catch { /* Keep existing evidence; absence of a response is not a failed Skill. */ }
+}
+
 async function hydrateTaskCards({ render = true } = {}) {
+  await hydrateSkillCards({ render: false });
   try {
     const [taskResponse, historyResponse] = await Promise.allSettled([
       api("/api/tasks?active_only=false&limit=30"),
@@ -1793,6 +1833,9 @@ function upsertTaskCardVariant(
       `${eventLabel(latestEvent.event_type)} · ${formatTime(latestEvent.created_at)}`,
     );
   }
+  addDetail(facts, "业务助手", result.skill
+    ? `${result.skill.name} · ${skillProfileLabel(result.skill.profile)} · ${result.skill.version}${result.skill.revoked ? "（已撤销）" : ""}`
+    : "未关联 Skill");
   if (result.plan) {
     addDetail(facts, "计划进度", taskPlanProgress(result.plan));
   }
@@ -2056,6 +2099,9 @@ function renderTaskDetail(result) {
   addDetail(metadata, "来源", task.agent_host);
   addDetail(metadata, "创建时间", formatTime(task.created_at));
   addDetail(metadata, "更新时间", formatTime(task.updated_at));
+  addDetail(metadata, "业务助手", result.skill
+    ? `${result.skill.name} · ${skillProfileLabel(result.skill.profile)} · ${result.skill.version}${result.skill.revoked ? "（已撤销）" : ""}`
+    : "未关联 Skill");
   addDetail(metadata, "任务编号", task.task_id);
   detail.append(metadata);
 
@@ -2225,6 +2271,7 @@ async function reconcileTimeline() {
   } catch {
   } finally {
     state.timelineReconcileActive = false;
+    await hydrateSkillCards();
   }
 }
 

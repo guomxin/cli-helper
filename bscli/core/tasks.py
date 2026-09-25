@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -2637,11 +2637,14 @@ class TaskHubStore:
         user_subject: str,
         reason: str,
         causation_ref: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> dict:
         normalized_reason = _required_text(reason, "reason", 120)
         now = _utc_now()
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        own_connection = connection is None
+        with (self._connect() if own_connection else nullcontext(connection)) as connection:
+            if own_connection:
+                connection.execute("BEGIN IMMEDIATE")
             task = self._select_owned_task(connection, task_id, user_subject)
             if task["status"] == "canceled":
                 return _task_from_row(task)
@@ -2663,6 +2666,21 @@ class TaskHubStore:
                 current_interaction_id=task["current_interaction_id"],
                 now=now,
             )
+            batch = connection.execute("SELECT * FROM task_batches WHERE parent_task_id=? AND user_subject=?",
+                                       (task_id, user_subject)).fetchone()
+            if batch is not None and batch["state"] in ACTIVE_BATCH_STATES:
+                connection.execute(
+                    "UPDATE task_batch_items SET state='canceled', updated_at=?, finished_at=? "
+                    "WHERE batch_id=? AND state IN ('queued','preparing','waiting_user')",
+                    (now, now, batch["batch_id"]),
+                )
+                connection.execute(
+                    "UPDATE task_batches SET state='canceled', version=version+1, updated_at=?, finished_at=? WHERE batch_id=?",
+                    (now, now, batch["batch_id"]),
+                )
+                batch = self._select_owned_batch_for_task(connection, task_id, user_subject)
+                self._sync_batch_task_summary(connection, task, batch, now=now, task_status="canceled",
+                    current_operation_id=task["current_operation_id"], current_interaction_id=task["current_interaction_id"])
             self._append_event(
                 connection,
                 task_id=task_id,

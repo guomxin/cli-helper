@@ -983,34 +983,38 @@ def create_central_mcp_server(
         from bscli.core.business_skills import SkillRejected, dependency_state, META_KEY
         identity = _request_identity(identity_store)
         await _require_registered_host_call(ctx, service=service, identity=identity, minimum_level="L1")
-        try:
-            current = _request_meta(ctx).get(META_KEY)
-            if current:
-                binding = service.skills.binding(identity["user_subject"], current.get("bindingId"))
-                if binding["skill_id"] != skill_id or binding["profile"] != profile or (source_id and source_id != binding["settings"]["source_id"]):
-                    raise SkillRejected("SKILL_TASK_CONFLICT", "当前任务已绑定另一助手或范围，请在独立任务中使用")
-                binding_id = binding["binding_id"]
-            else:
-                item = service.skills.registry.get(skill_id)
-                settings = service.skills.config("user:" + identity["user_subject"])["value"].get(skill_id, {})
-                if profile not in item["manifest"]["profiles"]:
-                    raise SkillRejected("SKILL_PROFILE_INVALID", "业务助手功能不存在")
-                state = dependency_state(service, identity["user_subject"], item["manifest"], profile, source_id or settings.get("source_id"))
-                if not state["available"]:
-                    return {"status": "rejected", "error": {"code": "SKILL_DEPENDENCY_UNAVAILABLE", "message": "请选择获准的数据源或检查所需业务权限"}, **state}
-                if resource not in item["resources"]:
+        def load():
+            try:
+                current = _request_meta(ctx).get(META_KEY)
+                if current:
+                    binding = service.skills.binding(identity["user_subject"], current.get("bindingId"))
+                    if binding["skill_id"] != skill_id or binding["profile"] != profile or (source_id and source_id != binding["settings"]["source_id"]):
+                        raise SkillRejected("SKILL_TASK_CONFLICT", "当前任务已绑定另一助手或范围，请在独立任务中使用")
+                    binding_id = binding["binding_id"]
+                else:
+                    item = service.skills.registry.get(skill_id)
+                    settings = service.skills.config("user:" + identity["user_subject"])["value"].get(skill_id, {})
+                    if profile not in item["manifest"]["profiles"]:
+                        raise SkillRejected("SKILL_PROFILE_INVALID", "业务助手功能不存在")
+                    state = dependency_state(service, identity["user_subject"], item["manifest"], profile, source_id or settings.get("source_id"))
+                    if not state["available"]:
+                        return {"status": "rejected", "error": {"code": "SKILL_DEPENDENCY_UNAVAILABLE", "message": "请选择获准的数据源或检查所需业务权限"}, **state}
+                    if resource not in item["resources"]:
+                        raise SkillRejected("SKILL_RESOURCE_NOT_FOUND", "参考资料不存在")
+                    binding_id = service.skills.bind(identity["user_subject"], skill_id, profile, source_id, expected_version)
+                    binding = service.skills.binding(identity["user_subject"], binding_id)
+                snapshot = binding["snapshot"]
+                if resource not in snapshot["resources"]:
                     raise SkillRejected("SKILL_RESOURCE_NOT_FOUND", "参考资料不存在")
-                binding_id = service.skills.bind(identity["user_subject"], skill_id, profile, source_id, expected_version)
-                binding = service.skills.binding(identity["user_subject"], binding_id)
-            snapshot = binding["snapshot"]
-            if resource not in snapshot["resources"]:
-                raise SkillRejected("SKILL_RESOURCE_NOT_FOUND", "参考资料不存在")
-            return {"status": "succeeded", "skill_id": skill_id, "version": binding["version"],
-                "content_hash": snapshot["content_hash"], "binding_id": binding_id,
-                "settings": binding["settings"], "profile": profile, "resource": resource,
-                "content": snapshot["resources"][resource], "resources": list(snapshot["resources"])}
-        except SkillRejected as exc:
-            return {"status": "rejected", "error": {"code": exc.code, "message": str(exc)}}
+                return {"status": "succeeded", "skill_id": skill_id, "version": binding["version"],
+                    "content_hash": snapshot["content_hash"], "binding_id": binding_id,
+                    "settings": binding["settings"], "profile": profile, "resource": resource,
+                    "content": snapshot["resources"][resource], "resources": list(snapshot["resources"])}
+            except SkillRejected as exc:
+                return {"status": "rejected", "error": {"code": exc.code, "message": str(exc)}}
+        result = await asyncio.to_thread(load)
+        await asyncio.to_thread(service.skills.record_load, identity["user_subject"], skill_id, profile, resource, result)
+        return result
 
     async def invoke(
         ctx: Context,

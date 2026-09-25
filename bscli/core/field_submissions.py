@@ -528,7 +528,7 @@ class FieldSubmissionStore:
             self._verify_integrity(row, include_values=True)
         return _submission_from_row(row, include_values=False)
 
-    def supersede(self, submission_id: str, *, user_subject: str, pending_only: bool = False) -> None:
+    def supersede(self, submission_id: str, *, user_subject: str, pending_only: bool = False, before_supersede: Callable[[sqlite3.Connection], None] | None = None) -> None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self._select(connection, submission_id)
@@ -538,6 +538,8 @@ class FieldSubmissionStore:
                 raise FieldSubmissionStateError("field submission is no longer pending")
             if row["state"] not in {"pending", "submitted"}:
                 return
+            if before_supersede:
+                before_supersede(connection)
             now = _format_time(_as_utc(self.clock()))
             connection.execute(
                 "UPDATE field_submissions SET state = 'superseded', csrf_hash = NULL, updated_at = ? WHERE submission_id = ?",

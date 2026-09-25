@@ -1,8 +1,14 @@
 {
-  "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "f864c38f1c96"
+    "04cfeaa852bd"
   ],
-  "dataCompatibility": "no-migration",
-  "reason": "Fix Skill run identity for deferred native tools using the existing authenticated user-turn reference. No database schema change or business grant changes; retain existing Skill configuration and bindings on rollback."
+  "schemaVersion": "agentbridge.release-policy.v1",
+  "dataCompatibility": "reviewed-schema-transition",
+  "schemaTransitions": {
+    "agentbridge.db": {
+      "beforeSha256": "1ba85ddc07771b34d1b1b7e4e15cf195bdebd201b965d9a70df8d682ec0d1c19",
+      "afterSha256": "fc3be6bfd85d0223ef405d8f140b4f3083f6dae28699d634cad9fe2a45cb59e9"
+    }
+  },
+  "reason": "Add isolated Skill load observation records; preserve all existing tables and grants. Fix owned plan transform readback and atomic cancellation of pending batch cards. Previous runtime ignores the added observation table."
 }

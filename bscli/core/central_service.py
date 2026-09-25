@@ -590,6 +590,11 @@ class CentralCapabilityService(ControlledWriteExecutor):
             return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
                     "message": "只能取消尚未提交的填写或授权任务；已完成、执行中及结果未知的业务不能通过此入口撤销。"}}
         interaction = self.interactions.get(interaction_id, user_subject=user_subject)
+        batch = self.tasks.get_batch_for_task(parent_task_id=task_id, user_subject=user_subject)
+        def cancel_batch(connection):
+            self.tasks.cancel_task(task_id=task_id, user_subject=user_subject,
+                reason="user_canceled_unsubmitted_task", causation_ref=interaction_id, connection=connection)
+        retire_options = {"before_supersede": cancel_batch} if batch else {}
         # Check and retire the pending resource in its own write transaction;
         # approval/submission that wins this race must never be called canceled.
         try:
@@ -609,9 +614,9 @@ class CentralCapabilityService(ControlledWriteExecutor):
                 # Authentication can serve other tasks. Cancel only this read;
                 # the same task lock serializes cancellation with read resume.
             elif interaction["interaction_type"] == "business_input":
-                self.field_submissions.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
+                self.field_submissions.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True, **retire_options)
             elif interaction["interaction_type"] == "execution_authorization":
-                self.write_authorizations.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True)
+                self.write_authorizations.supersede(interaction["resource_id"], user_subject=user_subject, pending_only=True, **retire_options)
             else:
                 return {"status": "rejected", "error": {"code": "TASK_NOT_CANCELABLE",
                         "message": "该交互不是独立业务填写或授权卡，不能在此取消。"}}
@@ -2555,8 +2560,22 @@ class CentralCapabilityService(ControlledWriteExecutor):
         }
 
     def require_task_result_access(self, *, user_subject: str, task_id: str) -> None:
+        plan = self.task_plans.get_for_task(parent_task_id=task_id, user_subject=user_subject)
+        transform_operations = {}
+        if plan:
+            # Transforms inherit access from the owned plan's business sources.
+            # A name prefix alone must never exempt an operation from authorization.
+            self.get_task_plan(user_subject=user_subject, plan_id=plan["plan_id"])
+            transform_operations = {
+                step["operation_id"]: f"transform.{step['transform_name']}"
+                for step in plan["steps"]
+                if step["kind"] == "transform" and step.get("operation_id")
+            }
         for operation_id in self.tasks.operation_ids_for_task(task_id=task_id, user_subject=user_subject):
             operation = self.operations.get(operation_id)
+            if transform_operations.get(operation_id) == operation["capability_name"]:
+                self.transforms.get(operation["capability_name"].removeprefix("transform."))
+                continue
             self.user_grants.require_capability(user_subject, operation["capability_name"], operation.get("input_summary"))
             if operation["capability_name"] == "oa.template.list" and isinstance(operation.get("result"), dict):
                 visible = self.user_grants.filter_templates(user_subject, operation["result"])

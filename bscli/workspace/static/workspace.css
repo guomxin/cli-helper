@@ -1582,3 +1582,8 @@ td {
 #view-skills { padding: 24px; overflow: auto; }
 #skill-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .skill-card { padding: 20px; border: 1px solid #dce3ec; border-radius: 12px; background: #fff; }
+
+.skill-activity-card { width: min(100%, 720px); align-self: center; padding: 16px 20px; border: 1px solid #c9dcd4; border-radius: 12px; background: #f2f8f5; color: #244d43; }
+.skill-activity-card p { margin: 10px 0; line-height: 1.6; }
+.skill-activity-status { float: right; font-size: 12px; padding: 3px 8px; border-radius: 6px; background: #e1eee7; }
+.skill-activity-card small { color: #65776f; }

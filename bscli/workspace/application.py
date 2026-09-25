@@ -239,6 +239,7 @@ class WorkspaceApplication:
         )
         return {
             "task": _public_task(task),
+            "skill": self.service.skills.task_presentation(account["user_subject"], task_id),
             "plan": task_plan_response(plan) if plan is not None else None,
             "events": [_public_event(event) for event in events],
             "artifacts": [_public_artifact(item) for item in artifacts],

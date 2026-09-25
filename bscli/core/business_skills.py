@@ -91,6 +91,11 @@ class SkillStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect()) as db, db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS skill_load_events (
+                    event_id TEXT PRIMARY KEY, user_subject TEXT NOT NULL, dedupe_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
+                    UNIQUE(user_subject, dedupe_key));
+                CREATE INDEX IF NOT EXISTS skill_load_events_user_time ON skill_load_events(user_subject, created_at);
                 CREATE TABLE IF NOT EXISTS skill_config (
                     owner TEXT PRIMARY KEY, value_json TEXT NOT NULL, revision INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS skill_events (
@@ -118,6 +123,39 @@ class SkillStore:
         db = sqlite3.connect(self.db_path, timeout=30)
         db.row_factory = sqlite3.Row
         return db
+
+    def record_load(self, subject, sid, profile, resource, result):
+        if result.get("status") == "succeeded" and resource != "SKILL.md":
+            return  # Loading a reference does not trigger another assistant.
+        item = self.registry.items.get(sid)
+        payload = {"skill_id": sid[:80], "name": item["manifest"]["name"] if item else "未知业务助手",
+                   "profile": profile[:80], "status": result.get("status"),
+                   "version": result.get("version"), "error_code": (result.get("error") or {}).get("code"),
+                   "message": (result.get("error") or {}).get("message")}
+        event_id = str(uuid4())
+        dedupe = result.get("binding_id") or event_id
+        with closing(self.connect()) as db, db:
+            db.execute("INSERT OR IGNORE INTO skill_load_events VALUES (?,?,?,?,?)",
+                       (event_id, subject, dedupe, _json(payload), datetime.now(timezone.utc).isoformat()))
+
+    def load_history(self, subject, limit=50):
+        with closing(self.connect()) as db:
+            return [{"event_id": row["event_id"], "created_at": row["created_at"], **json.loads(row["payload_json"])}
+                    for row in db.execute("SELECT * FROM skill_load_events WHERE user_subject=? ORDER BY created_at DESC LIMIT ?",
+                                          (subject, min(max(limit, 1), 100)))]
+
+    def task_presentation(self, subject, task_id):
+        # Historical attribution remains visible after revocation; it grants no access.
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT b.* FROM skill_bindings b JOIN skill_task_bindings t USING(binding_id) "
+                             "WHERE t.task_id=? AND t.user_subject=? AND b.user_subject=?", (task_id, subject, subject)).fetchone()
+            if not row:
+                return None
+            version = db.execute("SELECT payload_json FROM skill_versions WHERE skill_id=? AND version=?",
+                                 (row["skill_id"], row["version"])).fetchone()
+            manifest = json.loads(version[0])["manifest"] if version else {}
+            return {"skill_id": row["skill_id"], "name": manifest.get("name", row["skill_id"]),
+                    "version": row["version"], "profile": row["profile"], "revoked": bool(row["revoked"])}
 
     def config(self, owner, connection=None):
         if connection is None:

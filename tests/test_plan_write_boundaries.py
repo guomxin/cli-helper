@@ -111,6 +111,17 @@ class PlanWriteBoundaryTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(self.service.cancel_task_plan, user_subject="user-a", plan_id=self.plan_id).result(timeout=5)
 
+    def test_plan_details_allow_bound_transforms_but_recheck_source_permissions(self):
+        self.start()
+        self.service.require_task_result_access(user_subject="user-a", task_id=self.task_id)
+        snapshot = self.service.get_host_task_snapshot(user_subject="user-a", agent_host="test-host",
+            endpoint_key="audit-endpoint", task_id=self.task_id)
+        self.assertEqual(snapshot["plan"]["state"], "waiting_user")
+        self.assertIsNotNone(snapshot["interaction"])
+        grant_permissions(self.service.user_grants, "user-a", ["taihua.work_log.create"])
+        with self.assertRaises(PermissionError):
+            self.service.require_task_result_access(user_subject="user-a", task_id=self.task_id)
+
     def test_cancel_retires_pending_field_card_and_prevents_submission(self):
         self.start()
         submission = self.waiting["nextAction"]["inputSubmissionId"]

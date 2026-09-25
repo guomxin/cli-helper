@@ -90,3 +90,20 @@ test("incomplete source plan shows safe stop with source counts and no business 
   assert.doesNotMatch(result.message, /OA 已发/);
   assert.equal(failurePresentation({ terminalReason: "OTHER" }), null);
 });
+
+
+test("Skill cards distinguish rule loading from business success and render text safely", () => {
+  const node = () => ({ children: [], append(...items) { this.children.push(...items); } });
+  const begin = source.indexOf("function skillProfileLabel(");
+  const end = source.indexOf("async function hydrateSkillCards(", begin);
+  const render = runInNewContext(`${source.slice(begin, end)}; renderSkillCard;`, {
+    document: { createElement: node }, formatTime: String, setTimelineNode() {},
+  });
+  const success = render({name: "<img onerror=bad>", status: "succeeded", profile: "fill", version: "1.0.0"});
+  assert.equal(success.children[0].textContent, "业务助手 · <img onerror=bad>");
+  assert.equal(success.children[1].textContent, "已加载");
+  assert.match(success.children[2].textContent, /准备填写.*业务执行结果请查看后续任务/);
+  const failure = render({name: "助手", status: "rejected", message: "未分配"});
+  assert.equal(failure.children[1].textContent, "加载失败");
+  assert.equal(failure.children[2].textContent, "未分配");
+});
