@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "76cadfb3c082"
+    "9301ac6132db"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Unify goal-based business Skill selection and published descriptions; remove OA-specific selection exceptions. No schema or permission migration."
+  "reason": "Clarify explicit Skill selection precedence and separate Skill loading from atomic or durable execution routes. No schema or permission migration."
 }
