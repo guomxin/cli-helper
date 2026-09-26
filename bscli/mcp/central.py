@@ -967,7 +967,7 @@ def create_central_mcp_server(
         await asyncio.to_thread(service.validate_skill_task, identity["user_subject"], task_id, capability=capability)
 
     @mcp.tool(name="agentbridge_skill_catalog", title="业务助手目录",
-        description="列出当前用户获分配的业务 Skill、版本、可用功能和依赖。选择合适助手后用 agentbridge_skill_get 加载；普通原子请求无需强制使用 Skill。",
+        description="列出当前用户获分配的业务 Skill、任务目标、版本、可用功能和依赖，供选择适用助手。目录不包含完整执行规则。",
         annotations=read_annotations, structured_output=True)
     async def agentbridge_skill_catalog() -> dict[str, Any]:
         from bscli.core.business_skills import skill_catalog
@@ -975,7 +975,7 @@ def create_central_mcp_server(
         return await asyncio.to_thread(skill_catalog, service, identity["user_subject"])
 
     @mcp.tool(name="agentbridge_skill_get", title="加载业务助手",
-        description="仅在任务需要业务 Skill 流程时加载已分配的 Skill；查看、筛选或统计 OA 待办直接用 oa_workflow_pending_list，无需加载 Skill。使用目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和绑定，由宿主为后续调用传递。不能扩大权限。",
+        description="加载已选定业务 Skill 的规则或参考资料。使用当前目录中的 skill_id、profile 和 version；数据库助手须选择 source_id。返回规则和任务绑定，由宿主为后续调用传递。加载不授予业务权限。",
         annotations=read_annotations, structured_output=True)
     async def agentbridge_skill_get(ctx: Context, skill_id: str, profile: str,
         source_id: str | None = None, expected_version: str | None = None,
@@ -1784,7 +1784,7 @@ def create_central_mcp_server(
     @mcp.tool(
         name="oa_workflow_pending_list",
         title="List Pending OA Workflows",
-        description="List, search or count pending workflows for the authenticated OA user. This read-only request needs no business Skill; call this tool directly.",
+        description="List pending workflows for the authenticated OA user, optionally filtered by keyword.",
         annotations=read_annotations,
         structured_output=True,
     )

@@ -76,13 +76,15 @@ class BusinessSkillsTests(unittest.TestCase):
         binding = self.store.bind("alice", "oa-work-log", "preview")
         registry = SkillRegistry()
         registry.items = copy.deepcopy(registry.items)
+        original_version = registry.items["oa-work-log"]["manifest"]["version"]
         registry.items["oa-work-log"]["content_hash"] = "changed"
         with self.assertRaisesRegex(ValueError, "increment version"):
             SkillStore(self.store.db_path, registry)
-        registry.items["oa-work-log"]["manifest"]["version"] = "1.0.1"
+        major, minor, patch = map(int, original_version.split("."))
+        registry.items["oa-work-log"]["manifest"]["version"] = f"{major}.{minor}.{patch + 1}"
         newer = SkillStore(self.store.db_path, registry)
-        self.assertEqual(newer.binding("alice", binding)["version"], "1.0.0")
-        with self.assertRaises(SkillRejected): newer.bind("alice", "oa-work-log", "preview", expected_version="1.0.0")
+        self.assertEqual(newer.binding("alice", binding)["version"], original_version)
+        with self.assertRaises(SkillRejected): newer.bind("alice", "oa-work-log", "preview", expected_version=original_version)
 
     def test_packaged_resources_reject_path_escape(self):
         root = Path(self.temp.name) / "packages"
@@ -175,7 +177,7 @@ class BusinessSkillsTests(unittest.TestCase):
                 return client.post("/mcp", headers=headers, json={"jsonrpc":"2.0", "id":name, "method":"tools/call", "params":{"name":name,"arguments":args or {},"_meta":context}}).json()["result"]
             self.assertEqual(call("agentbridge_skill_catalog")["structuredContent"]["items"], [])
             self.assign()
-            result = call("agentbridge_skill_get", {"skill_id":"oa-work-log", "profile":"preview", "expected_version":"1.0.0"})
+            result = call("agentbridge_skill_get", {"skill_id":"oa-work-log", "profile":"preview", "expected_version":self.store.registry.get("oa-work-log")["manifest"]["version"]})
             self.assertFalse(result.get("isError"), result)
             binding = result["structuredContent"]["binding_id"]
             self.assertEqual(self.store.load_history("alice")[0]["status"], "succeeded")

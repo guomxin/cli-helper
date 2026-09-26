@@ -1,9 +1,9 @@
 {
   "schemaVersion": "agentbridge.skills.v1",
   "id": "log-review",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "日志总结与事项复核",
-  "description": "汇总指定范围的工作进展、问题和待办，并逐来源检查事项覆盖。",
+  "description": "汇总指定范围的工作日志，逐来源核对事项覆盖，区分成果、进行中、计划和问题，输出进展总结、待复核事项及出处。",
   "executionMode": "read_exploration",
   "status": "enabled",
   "entrypoint": "SKILL.md",

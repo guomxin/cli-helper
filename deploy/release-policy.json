@@ -1,8 +1,8 @@
 {
   "schemaVersion": "agentbridge.release-policy.v1",
   "compatibleFrom": [
-    "0b3dbff8c517"
+    "76cadfb3c082"
   ],
   "dataCompatibility": "no-migration",
-  "reason": "Clarify that read-only OA pending queries use the atomic tool without loading the OA handling Skill. No schema, permission or host changes."
+  "reason": "Unify goal-based business Skill selection and published descriptions; remove OA-specific selection exceptions. No schema or permission migration."
 }

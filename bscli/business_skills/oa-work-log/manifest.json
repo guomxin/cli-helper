@@ -1,9 +1,9 @@
 {
   "schemaVersion": "agentbridge.skills.v1",
   "id": "oa-work-log",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "OA 事项生成工作日志",
-  "description": "依据已办和已发事项生成有来源的日志草稿，可预览或通过可信卡核对后提交。",
+  "description": "将 OA 已办和已发事项按来源合并、转换为工作日志草稿，校验来源完整性，提供预览或可信卡核对后提交。",
   "executionMode": "durable_plan",
   "status": "enabled",
   "entrypoint": "SKILL.md",
